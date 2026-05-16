@@ -1,0 +1,11 @@
+world,history_year_from,history_year_to,land_friction_multiplier,sea_friction_multiplier,cross_continent_weight_multiplier,route_types_disabled
+default,-999999,-50001,2.50,,0.015,sea
+default,-50000,-2501,1.28,1.06,0.032,
+default,-2500,-801,1.143,1.000,0.038,
+default,-800,-101,1.071,0.600,0.052,
+default,-100,599,0.929,0.400,0.068,
+default,600,1499,0.971,0.430,0.18,
+default,1500,1829,0.814,0.300,0.58,
+default,1830,1879,0.643,0.140,0.85,
+default,1880,2019,0.043,0.110,0.95,
+default,2020,,0.100,0.040,1.000,

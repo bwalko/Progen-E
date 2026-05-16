@@ -1,0 +1,63 @@
+﻿ethnic,kin_m,kin_f,hails_from,sur_kin_rate,sur_hails_rate,sur_lookup_rate,sur_none_rate,num_first_names,num_last_names,sep_first_names,sep_last_names,suppress_constructed
+Alemannic,$ing,$ing,von ,6,2,18,1,1;1,1;1,,,1
+Ancient Greek,$ides,$is,of ,9,2,27,1,1;1,1;1,,,1
+Anglo-Norman,Fitz$,daughter of $,de ,9,2,27,1,1;1,1;1,,,1
+Aquitanian/Vasconic,$itz,$itz,de ,6,2,18,1,1;1,1;1,,,1
+Basque,$ez,$ez,de ,6,3,18,1,1;1,1;1,,,1
+Bavarian,$sen,$tochter,von ,3,3,9,1,1;1,1;1,,,1
+Burgundian,$ing,$ing,of ,9,1,27,1,1;1,1;1,,,1
+Celtiberian,$ez,$ez,de ,6,2,18,1,1;1,1;1,,,1
+Cisalpine Celtic,Map $,Daughter of $,of ,9,1,27,1,1;1,1;1,,,1
+Cornish,ap $,verch $,of ,9,1,27,1,1;1,1;1,,,1
+Cumbric,ap $,verch $,of ,9,1,27,1,1;1,1;1,,,1
+Curonian,$aitis,$aite,of ,6,1,18,1,1;1,1;1,,,1
+Dacian,$escu,$easca,of ,6,2,18,1,1;1,1;1,,,1
+Estonian,$poeg,$tutar,of ,3,2,9,1,1;1,1;1,,,1
+Etruscan,$clan,$sec,of ,6,1,18,1,1;1,1;1,,,1
+Frankish,$ing,$ing,of ,9,1,27,1,1;1,1;1,,,1
+Galician-Portuguese,$es,$es,de ,6,3,18,1,1;1,1;1,,,1
+Gaulish,Map $,Daughter of $,of ,9,1,27,1,1;1,1;1,,,1
+Gothic,$ing,$ing,of ,9,1,27,1,1;1,1;1,,,1
+Illyrian,$ides,$is,of ,6,2,18,1,1;1,1;1,,,1
+Irish Gaelic,Ó $,Ní $,of ,12,1,36,1,1;1,1;1,,,1
+Karelian,$poika,$tytär,of ,6,2,18,1,1;1,1;1,,,1
+Latin/Roman,$ianus,$iana,de ,6,2,18,1,1;2,1;1,,,1
+Latvian/Latgalian,$sons,$meita,no ,6,1,18,1,1;1,1;1,,,1
+Livonian,$poeg,$tütar,of ,6,1,18,1,1;1,1;1,,,1
+Lombard,$ing,$ing,de ,9,1,27,1,1;1,1;1,,,1
+Messapic,$ides,$is,of ,6,2,18,1,1;1,1;1,,,1
+Middle Dutch,$sz,$dr,van ,0,1,0,1,1;1,1;1,,,1
+Middle English,$son,daughter of $,of ,3,1,9,1,1;1,1;1,,,1
+Middle German,$sen,daughter of $,von ,0,1,0,1,1;1,1;1,,,1
+Middle Scots,Mac $,Nic $,of ,6,1,18,1,1;1,1;1,,,1
+Mycenaean Greek,$ides,$is,of ,9,2,27,1,1;1,1;1,,,1
+Norman Norse-French Hybrid,Fitz$,daughter of $,de ,12,2,36,1,1;1,1;1,,,1
+Old Catalan,$ez,$ez,de ,3,4,9,1,1;1,1;1,,,1
+Old Czech/Moravian,$ovic,$ova,z ,6,2,18,1,1;1,1;1,,,1
+Old Danish,$sen,$datter,af ,12,1,36,1,1;1,1;1,,,1
+Old East Slavic,$ovich,$ovna,iz ,9,1,27,1,1;1,1;1,,,1
+Old English,Fitz$,daughter of $,of ,6,2,18,1,1;1,1;1,,,1
+Old Finnish,$poika,$tytär,of ,6,2,18,1,1;1,1;1,,,1
+Old French,Fitz$,fille de $,de ,6,3,18,1,1;1,1;1,,,1
+Old High German,$sen,$tochter,von ,3,3,9,1,1;1,1;1,,,1
+Old Lithuanian,$aitis,$aitė,iš ,6,1,18,1,1;1,1;1,,,1
+Old Norse,$sson,$sdottir,of ,12,1,36,1,1;1,1;1,,,1
+Old Occitan,$ez,$a,de ,3,4,9,1,1;1,1;1,,,1
+Old Polish/West Slavic,$owicz,$ówna,z ,6,2,18,1,1;1,1;1,,,1
+Old Prussian,$aitis,$aite,of ,6,1,18,1,1;1,1;1,,,1
+Old Slavic,$ovich,$ovna,iz ,9,1,27,1,1;1,1;1,,,1
+Old Spanish/Castilian,$ez,$a,de ,6,3,18,1,1;1,1;1,,,1
+Old Swedish,$sson,$dotter,af ,12,1,36,1,1;1,1;1,,,1
+Old West Norse,$sson,$dottir,af ,12,1,36,1,1;1,1;1,,,1
+Pictish/Brittonic Substrate,ap $,verch $,of ,9,1,27,1,1;1,1;1,,,1
+Romanian/Aromanian,$escu,$easca,de ,6,2,18,1,1;1,1;1,,,1
+Sardinian,$eddu,$edda,de ,3,4,9,1,1;1,1;1,,,1
+Scottish Gaelic,Mac $,Nic $,of ,12,1,36,1,1;1,1;1,,,1
+Sorbian/Wendish,$owic,$owa,z ,6,2,18,1,1;1,1;1,,,1
+South Slavic,$ović,$ovna,iz ,9,1,27,1,1;1,1;1,,,1
+Thracian,$ides,$is,of ,6,2,18,1,1;1,1;1,,,1
+Vandal,$ing,$ing,of ,9,1,27,1,1;1,1;1,,,1
+Venetic,$ikos,$ika,of ,6,2,18,1,1;1,1;1,,,1
+Visigothic,$ing,$ing,of ,9,1,27,1,1;1,1;1,,,1
+Welsh,ap $,ferch $,of ,9,1,27,1,1;1,1;1,,,1
+Exotic,$da,$ma,en,3,1,9,1,1;3,1;1,,,1

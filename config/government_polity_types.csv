@@ -1,0 +1,8 @@
+polity_type_id,era_id,parent_polity_type_id,jurisdiction_grain,head_title_id,min_population_to_form,max_population_before_split,default_male_weight,can_be_vassalized,can_have_vassals
+band,band,,settlement,band_elder,1,80,0.55,0,0
+tribe,tribal,,region,chief,1,500,0.90,1,0
+city_state,city_state,,settlement,king_of_city,5,800,0.85,1,0
+kingdom,feudal,,region,king,1000000,99999999,0.97,1,1
+duchy,feudal,kingdom,region,duke,50000,1000000,0.97,1,1
+county,feudal,duchy,settlement,count,5000,50000,0.92,1,0
+republic,modern,,region,president,1,999999,0.52,0,0

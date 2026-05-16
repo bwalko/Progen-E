@@ -1,0 +1,1029 @@
+﻿Culture,Category,Original Meaning,Affix,Archaic Affix,Archaic Example,Intermediate Example,Modern Example
+Alemannic,Engineering,farm,$hofen,$hofun,Bero-hofun,Berhofen,Berghofen
+Alemannic,Engineering,hamlet,$wil,$wilari,Adal-wilari,Adelwil,Adelwil
+Alemannic,Engineering,people,$ingen,$ingun,Suno-ingun,Suningen,Singen
+Alemannic,Engineering,small farm,$wil,$wilari,Adal-wilari,Adelwil,Adelwil
+Alemannic,Fortification,castle,$burg,$burg,Rapp-burg,Rappburg,Rapperswil
+Alemannic,Topography,forest,$wald,$walt,Schwarz-walt,Schwarzwald,Black Forest
+Alemannic,Topography,hill,$berg,$berg,Albis-berg,Albisberg,Albisberg
+Alemannic,Topography,marsh clearing,$ried,$riot,Moor-riot,Moorried,Möriken
+Alemannic,Topography,mountain,$berg,$berg,Albis-berg,Albisberg,Albisberg
+Alemannic,Topography,reed bed,$ried,$riot,Moor-riot,Moorried,Möriken
+Alemannic,Topography,stream,$ach,$aha,Dorn-aha,Dornach,Dornach
+Ancient Greek,Engineering,city,$asty,$astu,Meg-astu,Megastion,Megasto
+Ancient Greek,Engineering,city,$polis,$polis,Kalli-polis,Callipolis,Gallipoli
+Ancient Greek,Engineering,district,$demos,$demos,Leuko-demos,Leucodemus,Leucodeme
+Ancient Greek,Engineering,high city,$akropolis,$akropolis,Megale-akropolis,Megalacropolis,Megacrop
+Ancient Greek,Engineering,marketplace,$agora,$agora,Kaine-agora,Cenagora,Cenagor
+Ancient Greek,Engineering,settlement,$chora,$chora,Eu-chora,Euchora,Euchor
+Ancient Greek,Engineering,settlement,$kome,$kome,Nea-kome,Neakome,Neacombe
+Ancient Greek,Engineering,town,$and,$anda,Alab-anda,Alabanda,Alaband
+Ancient Greek,Engineering,town,$asty,$astu,Meg-astu,Megastion,Megasto
+Ancient Greek,Engineering,town,$ind,$inda,Lar-inda,Larinda,Larind
+Ancient Greek,Engineering,town,$mnos,$mn,Kalyd-mn,Kalymnos,Calymnos
+Ancient Greek,Engineering,tribe,$phyle,$phyle,Asty-phyle,Astyphyle,Astifil
+Ancient Greek,Engineering,village,$kome,$kome,Nea-kome,Neakome,Neacombe
+Ancient Greek,Fortification,fortified town,$nthos,$nthos,Zaky-nthos,Zakynthos,Zante
+Ancient Greek,Fortification,fortified town,$ssos,$ssos,Parna-ssos,Parnassos,Parnassus
+Ancient Greek,Fortification,fortified town,$ttos,$ttos,Hymet-tos,Hymettos,Hymettus
+Ancient Greek,Fortification,tower,$pyrgos,$pyrgos,Petra-pyrgos,Petropyrgos,Petropurg
+Ancient Greek,Sacred,sacred grove,$alsos,$alsos,Hiera-alsos,Hieralsos,Hieralse
+Ancient Greek,Sacred,sacred place,$hieron,$hieron,Apollo-hieron,Apollonhieron,Apollonier
+Ancient Greek,Sacred,sacred place,$temenos,$temenos,Dios-temenos,Diostemenos,Dostemen
+Ancient Greek,Sacred,sanctuary,$alsos,$alsos,Hiera-alsos,Hieralsos,Hieralse
+Ancient Greek,Sacred,sanctuary,$hieron,$hieron,Apollo-hieron,Apollonhieron,Apollonier
+Ancient Greek,Sacred,sanctuary,$temenos,$temenos,Dios-temenos,Diostemenos,Dostemen
+Ancient Greek,Topography,harbor,$limen,$limen,Kalos-limen,Calolimen,Calimen
+Ancient Greek,Topography,headland,$akra,$akra,Leuk-akra,Leucacra,Leucra
+Ancient Greek,Topography,headland,$cra,$akra,Leuk-akra,Leucacra,Leucra
+Ancient Greek,Topography,island,$nesos,$nesos,Makra-nesos,Macronessos,Macronese
+Ancient Greek,Topography,land,$chora,$chora,Eu-chora,Euchora,Euchor
+Ancient Greek,Topography,mountain,$oros,$oros,Chrys-oros,Chrysoros,Chrysores
+Ancient Greek,Topography,plain,$pede,$pedion,Leuko-pedion,Leucopedion,Leucopede
+Ancient Greek,Topography,plain,$pedion,$pedion,Leuko-pedion,Leucopedion,Leucopede
+Ancient Greek,Topography,river,$potam,$potamos,Melan-potamos,Melampotamos,Melpotam
+Ancient Greek,Topography,river,$potamos,$potamos,Melan-potamos,Melampotamos,Melpotam
+Ancient Greek,Topography,salt water,$thalasse,$thalassa,Nea-thalassa,Neothalassa,Neothalasse
+Ancient Greek,Topography,sea,$thalasse,$thalassa,Nea-thalassa,Neothalassa,Neothalasse
+Ancient Greek,Topography,shore,$akto,$akte,Leuk-akte,Leucacte,Leucate
+Ancient Greek,Topography,spring,$krene,$krene,Argyro-krene,Argyrokrene,Argyrene
+Ancient Greek,Topography,spring,$pey,$pege,Hiera-pege,Hierapege,Hierapey
+Anglo-Norman,Engineering,bridge,$pont,$pont,Long-pont,Longpont,Longpont
+Anglo-Norman,Engineering,court manor,$court,$court,Hugh-court,Hucourt,Hughcourt
+Anglo-Norman,Engineering,farm,$villiers,$villiers,Villers-le-bosc,Villiers,Villiers
+Anglo-Norman,Engineering,outlying village,$villiers,$villiers,Villers-le-bosc,Villiers,Villiers
+Anglo-Norman,Engineering,village,$ville,$ville,Gren-ville,Greneville,Greenville
+Anglo-Norman,Fortification,castle,$chateau,$castel,Neuf-castel,Neufchastel,Newcastle
+Anglo-Norman,Fortification,fort,$fort,$fort,Beau-fort,Beaufort,Beaufort
+Anglo-Norman,Fortification,stronghold,$fort,$fort,Beau-fort,Beaufort,Beaufort
+Anglo-Norman,Sacred,church,$eglise,$eglise,Sainte-eglise,Sainteglise,Sainteglise
+Anglo-Norman,Status,beautiful,Beau$,Beau $,Beau-lieu,Beaulieu,Beaulieu
+Anglo-Norman,Status,beautiful,Bel$,Bel $,Bel-voir,Belvoir,Belvoir
+Anglo-Norman,Status,new,Neuf$,Neuf $,Neuf-marche,Neufmarche,Newmarket
+Anglo-Norman,Topography,field,$champ,$champ,Beau-champ,Beauchamp,Beauchamp
+Anglo-Norman,Topography,hill,$mont,$mont,Beau-mont,Beaumont,Beaumont
+Anglo-Norman,Topography,hill,Mont$,Mont $,Mont-aigu,Montaigu,Montacute
+Anglo-Norman,Topography,mountain,$mont,$mont,Beau-mont,Beaumont,Beaumont
+Anglo-Norman,Topography,mountain,Mont$,Mont $,Mont-aigu,Montaigu,Montacute
+Anglo-Norman,Topography,open country,$champ,$champ,Beau-champ,Beauchamp,Beauchamp
+Anglo-Norman,Topography,spring,$fontaine,$fontaine,Belle-fontaine,Bellefontaine,Bellefontaine
+Anglo-Norman,Topography,valley,$val,$val,Beau-val,Beauval,Beauval
+Anglo-Norman,Topography,wood,$bois,$bois,Theydon-bois,Theydon Bois,Theydon Bois
+Aquitanian/Vasconic,Engineering,settlement,$ain,$ain,Ander-ain,Anderain,Andrain
+Aquitanian/Vasconic,Engineering,settlement,$os,$os,Burdin-os,Burdinos,Burdos
+Aquitanian/Vasconic,Engineering,settlement,$osse,$osse,Iri-osse,Iriosse,Irosse
+Aquitanian/Vasconic,Topography,valley,$aran,$aran,Beltz-aran,Beltzaran,Belzaran
+Basque,Engineering,bridge,$zubi,$zubi,Harri-zubi,Harrizubi,Harrizubi
+Basque,Engineering,house,$etxe,$etxe,Harri-etxe,Harrietxe,Harretxe
+Basque,Engineering,pasture,$larre,$larre,Zabal-larre,Zaballarre,Zallarre
+Basque,Engineering,port,$port,$portu,Itsas-portu,Itsasportu,Itsasport
+Basque,Engineering,road,$bide,$bide,Errege-bide,Erregebide,Erbide
+Basque,Engineering,settlement,$iri,$iri,Zahar-iri,Zahariri,Zahiri
+Basque,Engineering,town,$hiri,$hiri,Berri-hiri,Berrihiri,Berriri
+Basque,Engineering,town,$iri,$iri,Zahar-iri,Zahariri,Zahiri
+Basque,Engineering,wagonway,$bide,$bide,Errege-bide,Erregebide,Erbide
+Basque,Fortification,castle,$gaztel,$gaztelu,Harri-gaztelu,Harrigaztelu,Hargaztel
+Basque,Sacred,church,$eliza,$eliza,Mendi-eliza,Mendieliza,Mendeliza
+Basque,Status,black,Bels$,Beltz$,Beltz-ibar,Beltzibar,Belsibar
+Basque,Status,large,Handi$,Handi$,Handi-mendi,Handimendi,Handimendi
+Basque,Status,new,Berri$,Berri$,Berri-hiri,Berrihiri,Berriri
+Basque,Status,old,Zarr$,Zahar$,Zahar-etxe,Zaharetxe,Zarreche
+Basque,Status,small,Txiki$,Txiki$,Txiki-hiri,Txikihiri,Txikiri
+Basque,Status,white,Zuri$,Zuri$,Zuri-mendi,Zurimendi,Zurimendi
+Basque,Topography,field,$zelai,$zelai,Zabal-zelai,Zabalzelai,Zabalzale
+Basque,Topography,forest,$baso,$baso,Beltz-baso,Beltzbaso,Belbaso
+Basque,Topography,meadow,$larre,$larre,Zabal-larre,Zaballarre,Zallarre
+Basque,Topography,meadow,$zelai,$zelai,Zabal-zelai,Zabalzelai,Zabalzale
+Basque,Topography,mountain,$mendi,$mendi,Gorri-mendi,Gorrimendi,Gorrimendi
+Basque,Topography,river,$ur,$ur,Beltz-ur,Beltzur,Belsur
+Basque,Topography,rock,$harri,$harri,Gorri-harri,Gorriharri,Gorriarri
+Basque,Topography,spring,$iturri,$iturri,Urre-iturri,Urreiturri,Urreturi
+Basque,Topography,stone,$harri,$harri,Gorri-harri,Gorriharri,Gorriarri
+Basque,Topography,stream,$erra,$erreka,Harri-erreka,Harrierreka,Harrera
+Basque,Topography,valley,$ibar,$ibar,Zabal-ibar,Zabalibar,Zalibar
+Bavarian,Engineering,people,$ing,$ingas,Pabo-ingas,Pabing,Pabing
+Bavarian,Fortification,fortified place,$burg,$burg,Regan-burg,Regensburg,Regensburg
+Bavarian,Sacred,church,$kirchen,$chirihha,Alten-chirihha,Altenkirchen,Altenkirchen
+Bavarian,Sacred,monastery,$zell,$cella,Munch-cella,Munczell,Munchzell
+Bavarian,Topography,lake,$see,$seo,Teger-seo,Tegernsee,Tegernsee
+Bavarian,Topography,moss bog,$moos,$mos,Dach-mos,Dachmoos,Dachmoos
+Bavarian,Topography,slope,$leiten,$lita,Hoch-lita,Hochleiten,Hochleiten
+Bavarian,Topography,stream,$ach,$aha,Salz-aha,Salzach,Salzach
+Bavarian,Topography,wetland,$moos,$mos,Dach-mos,Dachmoos,Dachmoos
+Burgundian,Engineering,home,$heim,$haim,Gund-heim,Gundheim,Gundheim
+Burgundian,Fortification,fortified place,$burg,$burg,Gund-burg,Gundburg,Gondbourg
+Burgundian,Topography,field,$feld,$feld,Ragin-feld,Rainfeld,Rainfroy
+Burgundian,Topography,march,$mark,$marka,Burgund-marka,Burgundmark,Bourgmarche
+Celtiberian,Engineering,estate,$acon,$akon,Bili-acon,Biliacum,Billac
+Celtiberian,Engineering,village,$acon,$akon,Bili-acon,Biliacum,Billac
+Celtiberian,Fortification,fortress,$dunum,$dunom,Belo-dunom,Belodunum,Belodon
+Celtiberian,Fortification,hill fort,$briga,$briga,Sego-briga,Segobriga,Segorbe
+Celtiberian,Sacred,sacred grove,$nemet,$nemeton,Lugo-nemeton,Lugonemeton,Lunemet
+Celtiberian,Sacred,sanctuary,$nemet,$nemeton,Lugo-nemeton,Lugonemeton,Lunemet
+Celtiberian,Topography,ford,$riton,$riton,Aro-riton,Arroritum,Arroyo
+Celtiberian,Topography,plain,$mago,$magos,Aro-magos,Aromagus,Aromago
+Celtiberian,Topography,river,$ibon,$abona,Turi-abona,Turiabona,Turibon
+Cisalpine Celtic,Engineering,people,$ate,$ates,Insubr-ates,Insubrates,Insubria
+Cisalpine Celtic,Fortification,fortified town,$dun,$dunon,Como-dunon,Comodunum,Comodun
+Cisalpine Celtic,Regional,high,$brica,$briga,Albo-briga,Albobrica,Albric
+Cisalpine Celtic,Topography,clearing,$ialo,$ialon,Vindo-ialon,Vindoialon,Vignale
+Cisalpine Celtic,Topography,open land,$ialo,$ialon,Vindo-ialon,Vindoialon,Vignale
+Cisalpine Celtic,Topography,river,$onna,$onna,Tic-onna,Ticonna,Ticino
+Cornish,Engineering,dwelling,Bod$,Bod$,Bod-min,Bodmin,Bodmin
+Cornish,Engineering,dwelling,Bos$,Bos$,Bos-cawen,Boscawen,Boscawen
+Cornish,Engineering,farm,Tre$,Tre$,Tre-gony,Tregony,Tregony
+Cornish,Engineering,house,Chy$,Chy$,Chy-an-hal,Chyanhal,Chyanhal
+Cornish,Engineering,landing place,Porth$,Porth$,Porth-curno,Porthcurno,Porthcurno
+Cornish,Engineering,mine,Bal$,Bal$,Bal-dhu,Baldhu,Baldhu
+Cornish,Engineering,mine,Wheal$,Wheal$,Wheal-jane,Wheal Jane,Wheal Jane
+Cornish,Engineering,mine working,Bal$,Bal$,Bal-dhu,Baldhu,Baldhu
+Cornish,Engineering,mine working,Wheal$,Wheal$,Wheal-jane,Wheal Jane,Wheal Jane
+Cornish,Engineering,settlement,Tre$,Tre$,Tre-gony,Tregony,Tregony
+Cornish,Fortification,fort,Car$,Caer$,Caer-hays,Carhays,Caerhays
+Cornish,Sacred,sacred place,Lan$,Lan$,Lan-hydrock,Lanhydrock,Lanhydrock
+Cornish,Sacred,sanctuary,Lan$,Lan$,Lan-hydrock,Lanhydrock,Lanhydrock
+Cornish,Topography,downland moor,Goon$,Goon$,Goon-hilly,Goonhilly,Goonhilly
+Cornish,Topography,harbor cove,Porth$,Porth$,Porth-curno,Porthcurno,Porthcurno
+Cornish,Topography,headland,Pen$,Pen$,Pen-zans,Pensans,Penzance
+Cornish,Topography,hollow,Tol$,Tol$,Tol-pedn,Tolpedn,Tolpedn
+Cornish,Topography,moor heath,Ros$,Ros$,Ros-kear,Roskear,Roskear
+Cornish,Topography,pond,Pol$,Pol$,Pol-zeath,Polseyth,Polzeath
+Cornish,Topography,promontory,Pen$,Pen$,Pen-zans,Pensans,Penzance
+Cornish,Topography,promontory,Ros$,Ros$,Ros-kear,Roskear,Roskear
+Cornish,Topography,rock,Men$,Men$,Men-an-tol,Menantol,Men-an-Tol
+Cornish,Topography,rock pile,Carn$,Carn$,Carn-brea,Carnbre,Carn Brea
+Cornish,Topography,rounded hill,Tol$,Tol$,Tol-pedn,Tolpedn,Tolpedn
+Cornish,Topography,sea,Mor$,Mor$,Mor-wenstow,Morwenstow,Morwenstow
+Cornish,Topography,small lake,Pol$,Pol$,Pol-zeath,Polseyth,Polzeath
+Cornish,Topography,stone,Men$,Men$,Men-an-tol,Menantol,Men-an-Tol
+Cornish,Topography,unenclosed land,Goon$,Goon$,Goon-hilly,Goonhilly,Goonhilly
+Cornish,Topography,valley,Nans$,Nans$,Nans-ledan,Nansledan,Nansledan
+Cumbric,Engineering,farm,Trev$,Tre$,Trev-cair,Trevcair,Trecar
+Cumbric,Engineering,settlement,Trev$,Tre$,Trev-cair,Trevcair,Trecar
+Cumbric,Fortification,fortress,Din$,Dun$,Din-baer,Dinbair,Dunbar
+Cumbric,Topography,ford,Rhyd$,Ryd$,Rhyd-glas,Rydglas,Rydale
+Cumbric,Topography,headland,Pen$,Pen$,Pen-ros,Penros,Penrith
+Cumbric,Topography,pond,$linn,$lin,Pen-linn,Penlinn,Penlin
+Cumbric,Topography,promontory,Pen$,Pen$,Pen-ros,Penros,Penrith
+Cumbric,Topography,river mouth,Aber$,Aber$,Aber-linn,Aberlin,Aberlin
+Cumbric,Topography,small lake,$linn,$lin,Pen-linn,Penlinn,Penlin
+Curonian,Engineering,village,$ciems,$kaimis,Kura-kaimis,Kurciems,Kurciems
+Curonian,Topography,hill,$kalns,$kalnas,Kura-kalnas,Kurkalns,Kurkalns
+Curonian,Topography,island,$sala,$sala,Kura-sala,Kursala,Kursala
+Curonian,Topography,lagoon,$mari,$marios,Kura-marios,Kurmarios,Kurmar
+Curonian,Topography,river,$upe,$upe,Venta-upe,Ventupe,Ventupe
+Curonian,Topography,sea-water,$mari,$marios,Kura-marios,Kurmarios,Kurmar
+Dacian,Engineering,settlement,$deva,$deva,Arci-deva,Arcideva,Deva
+Dacian,Engineering,settlement,$scos,$skos,Daci-scos,Daciscos,Dacesco
+Dacian,Engineering,town,$dava,$dava,Piro-bori-dava,Piroboridava,Piroboridav
+Dacian,Fortification,fortified place,Sarmi$,Sarmize$,Sarmi-zegetusa,Sarmizegetusa,Sarmizegetusa
+Dacian,Fortification,fortified town,$dava,$dava,Piro-bori-dava,Piroboridava,Piroboridav
+Dacian,Topography,mountain,Carp$,Karp$,Carp-dava,Carpdava,Carpeda
+Dacian,Topography,river,$apa,$apa,Alba-apa,Albapa,Apa Alba
+Dacian,Topography,rocky,Carp$,Karp$,Carp-dava,Carpdava,Carpeda
+Estonian,Engineering,village,$kula,$kula,Uus-kula,Uuskula,Uuskula
+Estonian,Topography,bay,$laht,$laht,Suur-laht,Suurlaht,Suurlaht
+Estonian,Topography,bog,$soo,$soo,Must-soo,Mustsoo,Mustsoo
+Estonian,Topography,hill,$magi,$magi,Suur-magi,Suurmagi,Suurmae
+Estonian,Topography,island,$saare,$saar,Suur-saar,Suursaar,Suursaare
+Estonian,Topography,lake,$jarv,$jarv,Must-jarv,Mustjarv,Mustjarve
+Estonian,Topography,river,$jogi,$jogi,Valge-jogi,Valgejogi,Valgejogi
+Estonian,Topography,stream,$oja,$oja,Kivi-oja,Kivioja,Kivioja
+Etruscan,Engineering,city,$spur,$spur,Vel-spur,Velspur,Velsper
+Etruscan,Engineering,settlement,$clu,$clu,Tarchu-clu,Tarchuclu,Tarchul
+Etruscan,Engineering,settlement,$ena,$ena,Rasen-ena,Rasena,Rasena
+Etruscan,Engineering,settlement,$na,$na,Velath-na,Velathna,Volterra
+Etruscan,Engineering,settlement,$perna,$perna,Puplu-perna,Pupluperna,Populpern
+Etruscan,Engineering,settlement,Vel$,Vel$,Vel-zna,Velzna,Volsinii
+Etruscan,Sacred,divine,Ais$,Ais$,Ais-na,Aisna,Esna
+Etruscan,Topography,borderland,$tular,$tular,Ara-tular,Aratular,Artular
+Etruscan,Topography,march,$tular,$tular,Ara-tular,Aratular,Artular
+Etruscan,Topography,river,$arna,$arna,Ar-na,Arna,Arno
+Etruscan,Topography,river,Clan$,Clan$,Clan-na,Clanna,Clane
+Frankish,Engineering,court manor,$court,$curtis,Ragin-curtis,Raincourt,Raincourt
+Frankish,Engineering,estate,$ville,$villa,Franco-villa,Francheville,Francheville
+Frankish,Engineering,home,$em,$haim,Fara-haim,Farahem,Farem
+Frankish,Engineering,village,$ville,$villa,Franco-villa,Francheville,Francheville
+Frankish,Fortification,fortified place,$bourg,$burg,Hagan-burg,Hagenbourg,Haguenau
+Frankish,Fortification,guard post,$guard,$warda,Franco-warda,Francward,Franguard
+Frankish,Fortification,watch place,$guard,$warda,Franco-warda,Francward,Franguard
+Frankish,Topography,brook,$beck,$baki,Hard-baki,Hardbec,Harbeck
+Frankish,Topography,clearing,$rode,$roden,Hagan-roden,Hainrode,Hénin
+Frankish,Topography,hill,$mont,$mont,Francon-berg,Franconmont,Francmont
+Frankish,Topography,march,$mark,$marka,Flandra-marka,Flandremark,Flandermark
+Frankish,Topography,mountain,$mont,$mont,Francon-berg,Franconmont,Francmont
+Frankish,Topography,open land,$rode,$roden,Hagan-roden,Hainrode,Hénin
+Frankish,Topography,stream,$beck,$baki,Hard-baki,Hardbec,Harbeck
+Frankish,Topography,wood,$hel,$holt,Aski-holt,Ascholte,Auchel
+Galician-Portuguese,Engineering,bridge,$ponte,$pons,Nova-ponte,Novaponte,Ponte Nova
+Galician-Portuguese,Engineering,port,$porto,$portus,Bo-porto,Boporto,Porto Novo
+Galician-Portuguese,Engineering,town,$vila,$villa,Nova-vila,Novavila,Vilanova
+Galician-Portuguese,Fortification,fortified town,$castro,$castrum,Alto-castro,Altocastro,Castro Alto
+Galician-Portuguese,Sacred,church,$igrexa,$ecclesia,Nova-igrexa,Novaigrexa,Igrexa Nova
+Galician-Portuguese,Topography,chestnut grove,$souto,$saltus,Grande-souto,Grandesouto,Soutogrande
+Galician-Portuguese,Topography,field,$campo,$campus,Novo-campo,Novocampo,Campo Novo
+Galician-Portuguese,Topography,mountain,$monte,$mons,Alto-monte,Altomonte,Montelo
+Galician-Portuguese,Topography,river bank,$ribeira,$riparia,Alta-ribeira,Altaribeira,Ribeira Alta
+Galician-Portuguese,Topography,shore,$ribeira,$riparia,Alta-ribeira,Altaribeira,Ribeira Alta
+Galician-Portuguese,Topography,spring,$fonte,$fons,Clara-fonte,Clarafonte,Fonte Clara
+Galician-Portuguese,Topography,woodland,$souto,$saltus,Grande-souto,Grandesouto,Soutogrande
+Gaulish,Engineering,bridge,$briva,$briva,Samarobriva,Samarobriva,Amiens
+Gaulish,Engineering,estate,$acon,$akon,Alisi-acon,Alisiacum,Alise
+Gaulish,Engineering,market field,$magos,$magos,Roto-magos,Rotomagus,Rouen
+Gaulish,Engineering,market town,$duron,$duron,Divio-duron,Diviodurum,Metz
+Gaulish,Engineering,people,$tais,$ates,Nanto-ates,Nantoates,Nantais
+Gaulish,Engineering,road,$car,$carro,Magno-carro,Magnocarro,Magcar
+Gaulish,Engineering,settlement,$bona,$bona,Vindo-bona,Vindobona,Vienna
+Gaulish,Engineering,settlement,$lano,$lano,Mediolanon,Mediolanum,Milan
+Gaulish,Engineering,village,$acon,$akon,Alisi-acon,Alisiacum,Alise
+Gaulish,Engineering,wagonway,$car,$carro,Magno-carro,Magnocarro,Magcar
+Gaulish,Fortification,fortress,$dun,$dunon,Lugo-dunon,Lugdunum,Lyon
+Gaulish,Fortification,gate enclosed place,$duron,$duron,Divio-duron,Diviodurum,Metz
+Gaulish,Regional,central,Medio$,Medio$,Mediolanon,Mediolanum,Milan
+Gaulish,Regional,high,$briga,$briga,Sego-briga,Segobriga,Segorbe
+Gaulish,Regional,middle,Medio$,Medio$,Mediolanon,Mediolanum,Milan
+Gaulish,Sacred,sacred grove,$nemeton,$nemeton,Nanto-nemeton,Nantonemeton,Nemeton
+Gaulish,Sacred,sanctuary,$nemeton,$nemeton,Nanto-nemeton,Nantonemeton,Nemeton
+Gaulish,Status,white,Alb$,Albo-,Albo-magos,Albomagus,Aumage
+Gaulish,Status,white,Vendo$,Vindo-,Vindo-magos,Vindomagus,Vendome
+Gaulish,Topography,clearing,$ialo,$ialon,Nanto-ialon,Nantialon,Nanteuil
+Gaulish,Topography,field,$magos,$magos,Roto-magos,Rotomagus,Rouen
+Gaulish,Topography,ford,$riton,$riton,Novo-riton,Novoritum,Nevers
+Gaulish,Topography,headland,$penn,$pennon,Penn-dunon,Pendunum,Pendon
+Gaulish,Topography,open land,$ialo,$ialon,Nanto-ialon,Nantialon,Nanteuil
+Gaulish,Topography,plain,$lano,$lano,Mediolanon,Mediolanum,Milan
+Gaulish,Topography,promontory,$penn,$pennon,Penn-dunon,Pendunum,Pendon
+Gaulish,Topography,river,$borne,$abona,Isar-abona,Isarabona,Isborne
+Gaulish,Topography,river,$dubron,$dubros,Duro-dubron,Durodubrum,Dover
+Gaulish,Topography,valley stream,Nant$,Nanto-,Nanto-briga,Nantobriga,Nanterre
+Gaulish,Topography,wood,$cet,$ceton,Duro-ceton,Duroceton,Drocet
+Gothic,Engineering,enclosure,$gards,$gards,Wulf-gards,Wulfgards,Wolfgard
+Gothic,Engineering,home,$haims,$haims,Thiuda-haims,Thiudahaims,Tudheim
+Gothic,Engineering,pasture,$winja,$winja,Grone-winja,Gronewinja,Greenwin
+Gothic,Engineering,town,$staths,$staths,Guta-staths,Gutstaths,Goodstead
+Gothic,Engineering,village,$haims,$haims,Thiuda-haims,Thiudahaims,Tudheim
+Gothic,Fortification,fortified place,$baurgs,$baurgs,Athaulfs-baurgs,Athulfbaurgs,Athelburg
+Gothic,Sacred,sacred enclosure,$alhs,$alhs,Guta-alhs,Gutalhs,Goodhall
+Gothic,Sacred,temple,$alhs,$alhs,Guta-alhs,Gutalhs,Goodhall
+Gothic,Topography,borderland,$marka,$marka,Guta-marka,Gutamarka,Gotmark
+Gothic,Topography,march,$marka,$marka,Guta-marka,Gutamarka,Gotmark
+Gothic,Topography,meadow,$winja,$winja,Grone-winja,Gronewinja,Greenwin
+Gothic,Topography,river,$ahwa,$ahwa,Swinth-ahwa,Swinthawa,Swina
+Illyrian,Engineering,settlement,$ana,$ana,Liss-ana,Lissana,Lisan
+Illyrian,Engineering,settlement,$este,$este,Terg-este,Tergeste,Trieste
+Illyrian,Engineering,settlement,$issus,$issos,Issa-issus,Issos,Issa
+Illyrian,Engineering,settlement,$ona,$ona,Scard-ona,Scardona,Skradin
+Illyrian,Regional,high,$briga,$briga,Dalm-briga,Dalmbriga,Dalbrig
+Illyrian,Topography,river,Drin$,Drinos,Drin-ona,Drinona,Drin
+Irish Gaelic,Engineering,pasture,Cloon$,Cluain $,Cluain Fada,Cloonfad,Cloonfad
+Irish Gaelic,Engineering,town farmstead,Bally$,Baile $,Baile Meadhonach,Ballymena,Ballymena
+Irish Gaelic,Fortification,fort,Dun$,Dun $,Dun Mor,Dunmore,Dunmore
+Irish Gaelic,Fortification,fort,Lis$,Lios $,Lios na gCearrbhach,Liscarroll,Liscarroll
+Irish Gaelic,Fortification,ringfort,Rath$,Rath $,Rath Fearnain,Rathfarnham,Rathfarnham
+Irish Gaelic,Fortification,stronghold,Dun$,Dun $,Dun Mor,Dunmore,Dunmore
+Irish Gaelic,Sacred,church,Kil$,Cill $,Cill Airne,Killarney,Killarney
+Irish Gaelic,Sacred,church,Temple$,Teampall $,Teampall Mor,Templemore,Templemore
+Irish Gaelic,Sacred,monastic cell,Kil$,Cill $,Cill Airne,Killarney,Killarney
+Irish Gaelic,Sacred,temple,Temple$,Teampall $,Teampall Mor,Templemore,Templemore
+Irish Gaelic,Topography,ford,Ath$,Ath $,Ath Luain,Athlone,Athlone
+Irish Gaelic,Topography,height,Ard$,Ard $,Ard Mhacha,Armagh,Armagh
+Irish Gaelic,Topography,hill,Knock$,Cnoc $,Cnoc na Riabh,Knocknarea,Knocknarea
+Irish Gaelic,Topography,lake,Lough$,Loch $,Loch Riach,Loughrea,Loughrea
+Irish Gaelic,Topography,meadow,Cloon$,Cluain $,Cluain Fada,Cloonfad,Cloonfad
+Irish Gaelic,Topography,oak clearing,Derry$,Doire $,Doire Calgaigh,Derry,Derry
+Irish Gaelic,Topography,oak grove,Derry$,Doire $,Doire Calgaigh,Derry,Derry
+Irish Gaelic,Topography,raised strip of land,Drum$,Druim $,Druim Conrach,Drumcondra,Drumcondra
+Irish Gaelic,Topography,ridge,Drum$,Druim $,Druim Conrach,Drumcondra,Drumcondra
+Irish Gaelic,Topography,rock,Carrick$,Carraig $,Carraig Fhearghais,Carrickfergus,Carrickfergus
+Irish Gaelic,Topography,small wood,Killy$,Coillidh $,Coillidh Bheag,Killybegs,Killybegs
+Irish Gaelic,Topography,valley,Glen$,Gleann $,Gleann Da Loch,Glendalough,Glendalough
+Irish Gaelic,Topography,wood,Killy$,Coillidh $,Coillidh Bheag,Killybegs,Killybegs
+Karelian,Engineering,village,$kyla,$kyla,Uuzi-kyla,Uuzikyla,Uusikyla
+Karelian,Topography,deep forest,$korpi,$korpi,Syva-korpi,Syvakorpi,Syvakorpi
+Karelian,Topography,lake,$jarvi,$jarvi,Valge-jarvi,Valkeajarvi,Valkjarvi
+Karelian,Topography,rapids,$koski,$koski,Musta-koski,Mustakoski,Mustkoski
+Karelian,Topography,river,$jogi,$jogi,Kivi-jogi,Kivijogi,Kivijoki
+Latin/Roman,Engineering,colony,$colony,$colonia,Colonia-camulodunum,Colneceaster,Colchester
+Latin/Roman,Engineering,paved road,$strat,$strata,Strata-ford,Straetford,Stratford
+Latin/Roman,Engineering,paved road,$street,$strata,Strata-via,Strete,Street
+Latin/Roman,Engineering,port,$port,$portus,Portus-magnus,Portesmuthe,Portsmouth
+Latin/Roman,Engineering,settlement,$colony,$colonia,Colonia-camulodunum,Colneceaster,Colchester
+Latin/Roman,Fortification,military camp,$castra,$castra,Lindum-castra,Lindecastra,Lincoln
+Latin/Roman,Fortification,military ground,$camp,$campus,Campus-magnus,Campmagna,Campden
+Latin/Roman,Fortification,wall rampart,$wall,$vallum,Vallum-hadriani,Walton,Walton
+Latin/Roman,Sacred,monastery,$minster,$monasterium,Monasterium-west,Westmonasterium,Westminster
+Latin/Roman,Topography,field,$camp,$campus,Campus-magnus,Campmagna,Campden
+Latin/Roman,Topography,harbor,$port,$portus,Portus-magnus,Portesmuthe,Portsmouth
+Latvian/Latgalian,Engineering,bridge,$tilts,$tilts,Vecs-tilts,Vectilts,Vectilts
+Latvian/Latgalian,Engineering,manor,$muiza,$muiza,Jauna-muiza,Jaunamuiza,Jaunmuiza
+Latvian/Latgalian,Engineering,village,$ciems,$ciems,Vecs-ciems,Vecciems,Veciems
+Latvian/Latgalian,Fortification,castle,$pils,$pils,Jauna-pils,Jaunpils,Jaunpils
+Latvian/Latgalian,Topography,bog,$purvs,$purvs,Melns-purvs,Melnpurvs,Melpurvs
+Latvian/Latgalian,Topography,field,$lauks,$lauks,Garais-lauks,Garaislauks,Garalauks
+Latvian/Latgalian,Topography,forest,$mezs,$mezs,Vecs-mezs,Vecmezs,Vecmezs
+Latvian/Latgalian,Topography,hill,$kalns,$kalns,Augsts-kalns,Augstkalns,Augstkalns
+Latvian/Latgalian,Topography,island,$sala,$sala,Liela-sala,Lielasala,Lielsala
+Latvian/Latgalian,Topography,lake,$ezers,$ezers,Melns-ezers,Melnezers,Melnezers
+Latvian/Latgalian,Topography,marsh,$purvs,$purvs,Melns-purvs,Melnpurvs,Melpurvs
+Latvian/Latgalian,Topography,river,$upe,$upe,Balta-upe,Baltupe,Baltupe
+Livonian,Engineering,village,$kula,$kula,Uz-kula,Uzkula,Uzkula
+Livonian,Topography,island,$sar,$sar,Suur-sar,Suursar,Suursaar
+Livonian,Topography,lowland,$land,$lond,Musta-lond,Mustaland,Mustland
+Livonian,Topography,river,$jog,$joga,Valda-joga,Valdajog,Valdjog
+Livonian,Topography,shore,$rand,$randa,Liiv-randa,Liivrand,Liivrand
+Livonian,Topography,wetland,$land,$lond,Musta-lond,Mustaland,Mustland
+Lombard,Engineering,enclosure,$gard,$gard,Wini-gard,Vinegard,Vingard
+Lombard,Engineering,farm,$dof,$hof,Waldo-hof,Valdof,Valdof
+Lombard,Engineering,kin-group,Fara$,Fara$,Fara-adda,Fara d Adda,Fara
+Lombard,Engineering,manor,$sal,$sala,Ragin-sala,Rainsala,Ransal
+Lombard,Engineering,people,$engo,$ingas,Albo-ingas,Albengo,Albenga
+Lombard,Fortification,hill fort,$bard,$bergo,Longo-bargo,Longobargo,Lombard
+Lombard,Fortification,military camp,Fara$,Fara$,Fara-adda,Fara d Adda,Fara
+Lombard,Topography,borderland,$mark,$marka,Lango-marka,Langmark,Lambric
+Lombard,Topography,march,$mark,$marka,Lango-marka,Langmark,Lambric
+Lombard,Topography,wood,$vald,$wald,Gero-wald,Girovaldo,Givald
+Messapic,Engineering,settlement,$ales,$ales,Balet-ales,Baletales,Baletium
+Messapic,Engineering,settlement,$ion,$ion,Uzent-ion,Uzentium,Ugento
+Messapic,Engineering,settlement,$uba,$uba,Sal-uba,Saluba,Salve
+Messapic,Engineering,settlement,Brunda$,Brunda$,Brund-a,Brunda,Brindisi
+Middle Dutch,Engineering,bridge,$brug,$brugge,Amstel-brugge,Amstelbrug,Amstelbrug
+Middle Dutch,Engineering,dam,$dam,$damme,Amstel-redamme,Amsteldam,Amsterdam
+Middle Dutch,Engineering,dike,$dijk,$dijc,Zee-dijc,Zeedijk,Zeedijk
+Middle Dutch,Engineering,home,$hem,$heem,Arn-heem,Arnem,Arnhem
+Middle Dutch,Engineering,house,$huizen,$husen,Blaric-husen,Blarikhusen,Blaricum
+Middle Dutch,Engineering,lock,$sluis,$sluse,Middel-sluse,Middelsluis,Middelsluis
+Middle Dutch,Engineering,port,$haven,$haven,Rotter-haven,Rotterdam,Rotterdam
+Middle Dutch,Engineering,reclaimed lowland,$polder,$polder,Nieuw-polder,Nieuwpolder,Nieuwpolder
+Middle Dutch,Engineering,settlement,$hem,$heem,Arn-heem,Arnem,Arnhem
+Middle Dutch,Engineering,settlement,$land,$lant,Water-lant,Waterlant,Waterland
+Middle Dutch,Engineering,settlement,$wijk,$wic,Bever-wic,Beverwijk,Beverwijk
+Middle Dutch,Engineering,settlement cluster,$huizen,$husen,Blaric-husen,Blarikhusen,Blaricum
+Middle Dutch,Engineering,shipyard,$werf,$werf,Scheeps-werf,Scheepswerf,Scheepswerf
+Middle Dutch,Engineering,sluice,$sluis,$sluse,Middel-sluse,Middelsluis,Middelsluis
+Middle Dutch,Engineering,village,$dorp,$dorp,Middle-dorp,Middendorp,Middendorp
+Middle Dutch,Engineering,wharf,$werf,$werf,Scheeps-werf,Scheepswerf,Scheepswerf
+Middle Dutch,Fortification,fortified town,$burg,$burch,Middel-burch,Middelburgh,Middelburg
+Middle Dutch,Sacred,church,$kerk,$kerke,Nieu-kerke,Nieuwerkerk,Nieuwerkerk
+Middle Dutch,Topography,field,$veld,$velt,Hoge-velt,Hoogeveld,Hoogeveld
+Middle Dutch,Topography,ford,$foort,$voort,Amers-voort,Amersfoort,Amersfoort
+Middle Dutch,Topography,harbor,$haven,$haven,Rotter-haven,Rotterdam,Rotterdam
+Middle Dutch,Topography,lake,$meer,$mere,Zoeter-mere,Soetermeer,Zoetermeer
+Middle Dutch,Topography,land,$land,$lant,Water-lant,Waterlant,Waterland
+Middle Dutch,Topography,marsh,$broek,$broec,Hoge-broec,Hoogebroek,Hoogebroek
+Middle Dutch,Topography,mere,$meer,$mere,Zoeter-mere,Soetermeer,Zoetermeer
+Middle Dutch,Topography,open land,$veld,$velt,Hoge-velt,Hoogeveld,Hoogeveld
+Middle Dutch,Topography,peatland,$veen,$ven,Hoog-ven,Hoogeveen,Hoogeveen
+Middle Dutch,Topography,pond,$plas,$plas,Nieuw-plas,Nieuwplas,Nieuwplas
+Middle Dutch,Topography,river island,$waard,$weerd,Bommeler-weerd,Bommelerwaard,Bommelerwaard
+Middle Dutch,Topography,river meadow,$waard,$weerd,Bommeler-weerd,Bommelerwaard,Bommelerwaard
+Middle Dutch,Topography,small lake,$plas,$plas,Nieuw-plas,Nieuwplas,Nieuwplas
+Middle Dutch,Topography,small wood,$hout,$hout,Berken-hout,Berkenhout,Berkenhout
+Middle Dutch,Topography,timber,$hout,$hout,Berken-hout,Berkenhout,Berkenhout
+Middle Dutch,Topography,wet meadow,$broek,$broec,Hoge-broec,Hoogebroek,Hoogebroek
+Middle Dutch,Topography,wood,$bos,$bosch,Den-bosch,Den Bosch,Den Bosch
+Middle Dutch,Topography,wooded clearing,$loo,$lo,Water-lo,Waterlo,Waterloo
+Middle English,Engineering,bridge,$bridge,$brycge,Grant-brycge,Grentebrige,Cambridge
+Middle English,Engineering,common land,$common,$commune,West-commune,Westcommon,West Common
+Middle English,Engineering,landing place,$quay,$kay,New-kay,Newkay,Newquay
+Middle English,Engineering,lane,$lane,$lane,Mille-lane,Millelane,Mill Lane
+Middle English,Engineering,major street,$street,$strete,Watling-strete,Watlingstrete,Watling Street
+Middle English,Engineering,market,$market,$market,Stane-market,Stonmarket,Stowmarket
+Middle English,Engineering,mill,$mill,$mille,Bourne-mille,Bournemille,Bournemill
+Middle English,Engineering,milling site,$mill,$mille,Bourne-mille,Bournemille,Bournemill
+Middle English,Engineering,narrow road,$lane,$lane,Mille-lane,Millelane,Mill Lane
+Middle English,Engineering,open common,$green,$grene,Est-grene,Estgrene,East Green
+Middle English,Engineering,paved road,$street,$strete,Watling-strete,Watlingstrete,Watling Street
+Middle English,Engineering,quay,$quay,$kay,New-kay,Newkay,Newquay
+Middle English,Engineering,quay,$wharf,$wharf,Stane-wharf,Stanewharf,Stone Wharf
+Middle English,Engineering,street,$gate,$gata,Mickle-gata,Mikelgate,Micklegate
+Middle English,Engineering,village,$ville,$ville,Bourne-ville,Bournville,Bournville
+Middle English,Engineering,village green,$green,$grene,Est-grene,Estgrene,East Green
+Middle English,Engineering,water landing,$wharf,$wharf,Stane-wharf,Stanewharf,Stone Wharf
+Middle English,Fortification,fortified place,$borough,$burgh,Mere-burgh,Mereburgh,Mereborough
+Middle English,Fortification,fortified place,$brough,$burgh,Stan-burgh,Stanburgh,Stanbrough
+Middle English,Regional,eastern,East$,Est$,Est-ham,Estham,Eastham
+Middle English,Regional,end,$end,$ende,Wode-ende,Wodende,Woodend
+Middle English,Regional,high,Upper$,Over$,Over-ton,Overton,Upperton
+Middle English,Regional,lower,Lower$,Nether$,Nether-ton,Netherton,Lowerton
+Middle English,Regional,lower,Nether$,Nether$,Nether-burgh,Netherburgh,Netherbury
+Middle English,Regional,northern,North$,North$,North-wic,Northwic,Northwich
+Middle English,Regional,southern,South$,South$,South-wic,Southwic,Southwick
+Middle English,Regional,upstream,Upper$,Over$,Over-ton,Overton,Upperton
+Middle English,Regional,western,West$,West$,West-ham,Westham,Westham
+Middle English,Sacred,chapel,$chapel,$chapele,West-chapele,Westchapel,Westchapel
+Middle English,Sacred,monastery,$minster,$mynster,West-mynster,Westminstre,Westminster
+Middle English,Sacred,monastic estate,$abbey,$abbaye,Thorn-abbaye,Thornabbey,Thorn Abbey
+Middle English,Status,large,Great$,Magna$,Magna-by,Greatby,Greatby
+Middle English,Status,new,New$,Neowe$,Neowe-burgh,Neweburgh,Newburgh
+Middle English,Status,old,Old$,Olde$,Olde-tun,Oldton,Oldton
+Middle English,Status,primary,Great$,Magna$,Magna-by,Greatby,Greatby
+Middle English,Status,secondary,Little$,Parva$,Parva-ton,Littleton,Littleton
+Middle English,Status,small,Little$,Parva$,Parva-ton,Littleton,Littleton
+Middle German,Engineering,bridge,$bruck,$brucke,Inns-bruck,Inspruck,Innsbruck
+Middle German,Engineering,city,$stadt,$stat,Koning-stat,Konigstat,Konigstadt
+Middle German,Engineering,cluster of houses,$hausen,$hausen,Muhl-hausen,Mulhusen,Muhlhausen
+Middle German,Engineering,estate,$leben,$leiba,Aschers-leiba,Aschersleben,Aschersleben
+Middle German,Engineering,farm,$hof,$hof,Königs-hof,Konigshof,Königshof
+Middle German,Engineering,hamlet,$weiler,$wilari,Burg-wilari,Burgwilre,Burgweiler
+Middle German,Engineering,home,$heim,$heim,Hof-heim,Hofem,Hofheim
+Middle German,Engineering,mill,$muhle,$mulin,Neue-mulin,Neumulin,Neumuhle
+Middle German,Engineering,milling site,$muhle,$mulin,Neue-mulin,Neumulin,Neumuhle
+Middle German,Engineering,people,$ingen,$ingen,Sigmaring-ingen,Sigmaringen,Sigmaringen
+Middle German,Engineering,settlement,$heim,$heim,Hof-heim,Hofem,Hofheim
+Middle German,Engineering,settlement,$leben,$leiba,Aschers-leiba,Aschersleben,Aschersleben
+Middle German,Engineering,small settlement,$weiler,$wilari,Burg-wilari,Burgwilre,Burgweiler
+Middle German,Engineering,town,$stadt,$stat,Koning-stat,Konigstat,Konigstadt
+Middle German,Engineering,village,$dorf,$dorf,Duss-dorf,Dusseldorp,Dusseldorf
+Middle German,Fortification,castle,$burg,$burg,Ham-burg,Hammaburg,Hamburg
+Middle German,Sacred,church,$kirchen,$kirchen,Berg-kirchen,Bergkirchen,Bergkirchen
+Middle German,Topography,corner edge,$eck,$ecke,Berg-eck,Bergeck,Bergeck
+Middle German,Topography,field,$feld,$feld,Rosen-feld,Rosenfeld,Rosenfeld
+Middle German,Topography,ford,$furt,$furt,Frankon-furt,Frankenford,Frankfurt
+Middle German,Topography,forest,$wald,$wald,Schwarzen-wald,Swartzwald,Schwarzwald
+Middle German,Topography,forest clearing,$rode,$rode,Werniger-rode,Wernigerode,Wernigerode
+Middle German,Topography,lake,$see,$see,Konigs-see,Konigsee,Königssee
+Middle German,Topography,low land,$grund,$grunt,Wies-grunt,Wiesgrund,Wiesengrund
+Middle German,Topography,mountain,$berg,$berg,Königs-berg,Konigsberg,Kaliningrad
+Middle German,Topography,open land,$feld,$feld,Rosen-feld,Rosenfeld,Rosenfeld
+Middle German,Topography,ridge end,$eck,$ecke,Berg-eck,Bergeck,Bergeck
+Middle German,Topography,river,$ach,$aha,Salz-aha,Salzach,Salzach
+Middle German,Topography,river crossing,$furt,$furt,Frankon-furt,Frankenford,Frankfurt
+Middle German,Topography,river island,$au,$ouwa,Rhein-ouwa,Rheinau,Rheinau
+Middle German,Topography,rock,$stein,$stein,Falken-stein,Falkenstein,Falkenstein
+Middle German,Topography,spring,$brunn,$brunnen,Heil-brunn,Heilbrunn,Heilbronn
+Middle German,Topography,stone,$stein,$stein,Falken-stein,Falkenstein,Falkenstein
+Middle German,Topography,stream,$ach,$aha,Salz-aha,Salzach,Salzach
+Middle German,Topography,stream,$bach,$bach,An-bach,Onoltesbach,Ansbach
+Middle German,Topography,thicket,$horst,$horst,Adler-horst,Adlerhorst,Adlerhorst
+Middle German,Topography,valley,$tal,$tal,Rosen-tal,Rosental,Rosental
+Middle German,Topography,valley,$thal,$thal,Rosen-thal,Rosenthal,Rosenthal
+Middle German,Topography,valley floor,$grund,$grunt,Wies-grunt,Wiesgrund,Wiesengrund
+Middle German,Topography,wet meadow,$au,$ouwa,Rhein-ouwa,Rheinau,Rheinau
+Middle German,Topography,wooded clearing,$reuth,$riuti,Bayrisch-riuti,Bayerreuth,Bayreuth
+Middle German,Topography,wooded rise,$horst,$horst,Adler-horst,Adlerhorst,Adlerhorst
+Middle Scots,Engineering,building,$biggin,$bigging,Auld-bigging,Auldbiggin,Auldbiggin
+Middle Scots,Engineering,settlement,$biggin,$bigging,Auld-bigging,Auldbiggin,Auldbiggin
+Middle Scots,Engineering,town,Bal$,Bal$,Bal-gonie,Balgony,Balgonie
+Middle Scots,Engineering,town farmstead,$town,$toun,New-toun,Newtoun,Newtown
+Middle Scots,Engineering,village,$town,$toun,New-toun,Newtoun,Newtown
+Middle Scots,Fortification,hill fort,Dun$,Dun$,Dun-idean,Dunedin,Edinburgh
+Middle Scots,Regional,high,High$,Heich$,Heich-brae,Hiebrae,Highbrae
+Middle Scots,Regional,lower,Nether$,Nether$,Nether-kirk,Netherkirk,Netherkirk
+Middle Scots,Regional,upper,High$,Heich$,Heich-brae,Hiebrae,Highbrae
+Middle Scots,Regional,upper,Over$,Over$,Over-muir,Overmuir,Overmuir
+Middle Scots,Sacred,chapel,$chapel,$chapel,White-chapel,Quhitchapel,Whitechapel
+Middle Scots,Sacred,church,$kirk,$kirk,Fawkirk,Fawkirk,Falkirk
+Middle Scots,Sacred,religious site,$chapel,$chapel,White-chapel,Quhitchapel,Whitechapel
+Middle Scots,Status,old,Auld$,Auld$,Auld-toun,Auldtoun,Auldton
+Middle Scots,Topography,bog,$moss,$mos,Green-mos,Greenmoss,Greenmoss
+Middle Scots,Topography,island,$inch,$innis,Innis-keith,Inchekeith,Inchkeith
+Middle Scots,Topography,island,Inch$,Innis$,Innis-keith,Inchekeith,Inchkeith
+Middle Scots,Topography,lake,$loch,$loch,Loch-side,Lochside,Lochside
+Middle Scots,Topography,lake,Loch$,Loch$,Loch-side,Lochside,Lochside
+Middle Scots,Topography,large stream,$burn,$burn,Bannoc-burn,Bannockburne,Bannockburn
+Middle Scots,Topography,moor,$muir,$mure,Blak-mure,Blakmuir,Blackmuir
+Middle Scots,Topography,mossland,$moss,$mos,Green-mos,Greenmoss,Greenmoss
+Middle Scots,Topography,open upland,$muir,$mure,Blak-mure,Blakmuir,Blackmuir
+Middle Scots,Topography,prominent hill,$law,$hlaw,Hwit-hlaw,Whytelaw,Whitelaw
+Middle Scots,Topography,raised strip of land,$rig,$rig,Lang-rig,Langrig,Langrig
+Middle Scots,Topography,ridge,$rig,$rig,Lang-rig,Langrig,Langrig
+Middle Scots,Topography,river meadow,$haugh,$haugh,Nether-haugh,Netherhaugh,Netherhaugh
+Middle Scots,Topography,river meadow,$inch,$innis,Innis-keith,Inchekeith,Inchkeith
+Middle Scots,Topography,river meadow,Inch$,Innis$,Innis-keith,Inchekeith,Inchkeith
+Middle Scots,Topography,river mouth,Aber$,Aber$,Aber-deen,Abirdeen,Aberdeen
+Middle Scots,Topography,river mouth,Inver$,Inbhir $,Inbhir Nis,Inverness,Inverness
+Middle Scots,Topography,sea inlet,$loch,$loch,Loch-side,Lochside,Lochside
+Middle Scots,Topography,sea inlet,Loch$,Loch$,Loch-side,Lochside,Lochside
+Middle Scots,Topography,slope,$brae,$brae,Heach-brae,Hiebrae,Highbrae
+Middle Scots,Topography,small enclosed valley,$hope,$hop,Stan-hop,Stanhop,Stanhope
+Middle Scots,Topography,steep-sided ravine,$cleuch,$cleuch,Deip-cleuch,Deepcleuch,Deepcleuch
+Mycenaean Greek,Engineering,district,$deme,$damo,Aro-damo,Arodamon,Arodeme
+Mycenaean Greek,Engineering,estate,$ijo,$i-jo,A-ke-re-i-jo,Akreijo,Acrio
+Mycenaean Greek,Engineering,gathering,$agor,$agora,Kera-agoro,Keragora,Keragor
+Mycenaean Greek,Engineering,house,$wick,$woikos,Pera-woikos,Perwoikos,Perwick
+Mycenaean Greek,Engineering,market place,$agor,$agora,Kera-agoro,Keragora,Keragor
+Mycenaean Greek,Engineering,settlement,$awa,$uwa,Ku-ta-uwa,Kytauwa,Kytawa
+Mycenaean Greek,Engineering,settlement,$ipo,$i-po,Ra-ke-i-po,Lakeipo,Lacipo
+Mycenaean Greek,Sacred,sacred place,$temen,$temenos,Po-ti-ni-ja-temeno,Potnia-temenos,Potnitemen
+Mycenaean Greek,Sacred,sanctuary,$temen,$temenos,Po-ti-ni-ja-temeno,Potnia-temenos,Potnitemen
+Mycenaean Greek,Topography,river,$water,$wodor,Akro-wodor,Acrowodor,Acrowater
+Norman Norse-French Hybrid,Engineering,enclosure,$gard,$gardr,Vieux-gard,Viegard,Vigard
+Norman Norse-French Hybrid,Engineering,estate,$ville,$villa,Toki-ville,Tocqueville,Tocqueville
+Norman Norse-French Hybrid,Engineering,home,$tot,$toft,Yve-tot,Yvetot,Yvetot
+Norman Norse-French Hybrid,Engineering,village,$ville,$villa,Toki-ville,Tocqueville,Tocqueville
+Norman Norse-French Hybrid,Topography,brook,$bec,$bekkr,Caude-bec,Caudebec,Caudebec
+Norman Norse-French Hybrid,Topography,grove,$londe,$lundr,La-londe,Lalonde,La Londe
+Norman Norse-French Hybrid,Topography,hill,$hougue,$haugr,La-hougue,Lahougue,La Hougue
+Norman Norse-French Hybrid,Topography,island,$homme,$holm,Le-hom,Lehomme,Le Hom
+Norman Norse-French Hybrid,Topography,pond,$mare,$marr,Rouge-mare,Rougemare,Roumare
+Norman Norse-French Hybrid,Topography,small lake,$mare,$marr,Rouge-mare,Rougemare,Roumare
+Norman Norse-French Hybrid,Topography,stream,$bec,$bekkr,Caude-bec,Caudebec,Caudebec
+Norman Norse-French Hybrid,Topography,valley,$dal,$dalr,Diep-dal,Dieppedal,Dieppedalle
+Norman Norse-French Hybrid,Topography,water meadow,$homme,$holm,Le-hom,Lehomme,Le Hom
+Norman Norse-French Hybrid,Topography,wood,$londe,$lundr,La-londe,Lalonde,La Londe
+Old Catalan,Engineering,bridge,$pont,$pont,Nou-pont,Noupont,Nopont
+Old Catalan,Engineering,port,$port,$portus,Bon-port,Bonport,Bonport
+Old Catalan,Engineering,town,$vila,$villa,Nova-vila,Novavila,Novila
+Old Catalan,Fortification,castle,$castell,$castellum,Bell-castell,Bellcastell,Bellcastell
+Old Catalan,Topography,hill,$puig,$podium,Alt-puig,Altpuig,Puigalt
+Old Catalan,Topography,mountain,$mont,$mont,Clar-mont,Clarmont,Claramunt
+Old Catalan,Topography,plain,$pla,$planum,Nou-pla,Noupla,Noupla
+Old Catalan,Topography,river,$riu,$rivus,Bell-riu,Bellriu,Bellriu
+Old Catalan,Topography,spring,$font,$font,Clara-font,Clarafont,Clarafont
+Old Catalan,Topography,valley,$vall,$vallis,Bella-vall,Bellavall,Bellvall
+Old Czech/Moravian,Engineering,estate,$ov,$ovu,Mirosl-avu,Miroslav,Miroslav
+Old Czech/Moravian,Engineering,people,$ice,$ici,Lito-ici,Litomice,Litomice
+Old Czech/Moravian,Engineering,village,$ves,$vesu,Stara-vesu,Staraves,Stara Ves
+Old Czech/Moravian,Fortification,castle,$hrad,$gradh,Vyse-hradh,Vysehrad,Vysehrad
+Old Czech/Moravian,Topography,ford,$brod,$brodh,Havličkův-brod,Havlicuvbrod,Havličkův Brod
+Old Czech/Moravian,Topography,mountain,$hora,$gora,Kutna-hora,Kutnahora,Kutna Hora
+Old Danish,Engineering,bridge,$bro,$bro,Sten-bro,Stenbro,Stenbro
+Old Danish,Engineering,farm,$by,$by,Svein-by,Sveinby,Svenby
+Old Danish,Engineering,farm,$torp,$thorp,Niels-thorp,Nielsthorp,Nelstrup
+Old Danish,Engineering,house,$toft,$toft,Rolf-toft,Rolftoft,Rolftoft
+Old Danish,Engineering,village,$by,$by,Svein-by,Sveinby,Svenby
+Old Danish,Topography,ford,$vad,$vad,Heste-vad,Hestevad,Hestvad
+Old Danish,Topography,forest,$skov,$skogr,Ege-skov,Egeskov,Egeskov
+Old Danish,Topography,grove,$lund,$lund,Aske-lund,Askelund,Askelund
+Old Danish,Topography,harbor,$havn,$hofn,God-hofn,Godhavn,Godhavn
+Old Danish,Topography,headland,$naes,$nes,Lang-nes,Langnes,Langnaes
+Old Danish,Topography,island,$holm,$holm,Lang-holm,Langholm,Langholm
+Old Danish,Topography,promontory,$naes,$nes,Lang-nes,Langnes,Langnaes
+Old Danish,Topography,water meadow,$holm,$holm,Lang-holm,Langholm,Langholm
+Old East Slavic,Engineering,free settlement,$sloboda,$sloboda,Nova-sloboda,Novasloboda,Sloboda
+Old East Slavic,Engineering,portage,$volok,$voloku,Vysh-voloku,Vyshvolok,Vyshny Volochek
+Old East Slavic,Engineering,settlement,$posad,$posadh,Torg-posadh,Torgposad,Posad
+Old East Slavic,Engineering,tax-privileged village,$sloboda,$sloboda,Nova-sloboda,Novasloboda,Sloboda
+Old East Slavic,Engineering,town,$gorod,$gorodh,Nov-gorodh,Novgorod,Novgorod
+Old East Slavic,Fortification,fortified inner citadel,$kreml,$kreml,Beli-kreml,Belikreml,Belkreml
+Old East Slavic,Topography,hill,$holm,$holmu,Krasni-holmu,Krasny Holm,Kholm
+Old East Slavic,Topography,lake,$ozero,$ozero,Belo-ozero,Beloozero,Belozero
+Old East Slavic,Topography,pine forest,$bor,$boru,Cerni-boru,Chernibor,Chernobor
+Old English,Engineering,animal pen,$fold,$falod,Sceap-falod,Shepfold,Sheepfold
+Old English,Engineering,assembly place,$stowe,$stowe,Edwines-stowe,Edwinstow,Edwinstowe
+Old English,Engineering,cottage shelter,$cot,$cot,Aelf-cot,Alfcote,Alcott
+Old English,Engineering,cottage shelter,$cott,$cot,Brade-cot,Bradecote,Bradcott
+Old English,Engineering,cottage shelter,Cot$,Cot$,Aelf-cot,Alfcote,Alcott
+Old English,Engineering,cottage shelter,Cott$,Cot$,Brade-cot,Bradecote,Bradcott
+Old English,Engineering,cultivated land,$land,$land,Ead-land,Edland,Edland
+Old English,Engineering,dwelling,$wich,$wic,Sand-wic,Sandwic,Sandwich
+Old English,Engineering,dwelling,$wick,$wic,Sand-wic,Sandwic,Sandwich
+Old English,Engineering,enclosed farm,$ton,$'s tun,Beorthelm's tun,Beorthelmstun,Brighton
+Old English,Engineering,enclosed homestead,$worth,$worth,Tamere-worth,Tameworde,Tamworth
+Old English,Engineering,farm dependent,$stock,$stoc,Wudu-stoc,Wudestoc,Woodstock
+Old English,Engineering,farm dependent,$stoke,$stoc,Stoc-ham,Stocham,Stokeham
+Old English,Engineering,farm dependent,Stock$,Stoc$,Wudu-stoc,Wudestoc,Woodstock
+Old English,Engineering,farm dependent,Stoke$,Stoc$,Stoc-ham,Stocham,Stokeham
+Old English,Engineering,homestead,$stead,$stede,Ham-stede,Hamstede,Hampstead
+Old English,Engineering,homestead,$sted,$stede,Stede-ham,Stedeham,Stedham
+Old English,Engineering,homestead,Sted$,Stede$,Stede-ham,Stedeham,Stedham
+Old English,Engineering,homestead,Stede$,Stede$,Ham-stede,Hamstede,Hampstead
+Old English,Engineering,house,$house,$hus,Stan-hus,Stanhus,Stonehouse
+Old English,Engineering,large residence,$hall,$heall,Haga-heall,Hagehalle,Hagley Hall
+Old English,Engineering,manor,$burgh,$burh,Eadmundes-burh,Edmundesbury,Bury St Edmunds
+Old English,Engineering,manor,$bury,$burh,Eadmundes-burh,Edmundesbury,Bury St Edmunds
+Old English,Engineering,manor house,$hall,$heall,Haga-heall,Hagehalle,Hagley Hall
+Old English,Engineering,mill,$mill,$mylen,Mylen-tun,Mylentun,Milton
+Old English,Engineering,mill,Mill$,Mylen$,Mylen-tun,Mylentun,Milton
+Old English,Engineering,settlement,$land,$land,Ead-land,Edland,Edland
+Old English,Engineering,small dwelling,$cot,$cot,Aelf-cot,Alfcote,Alcott
+Old English,Engineering,small dwelling,$cott,$cot,Brade-cot,Bradecote,Bradcott
+Old English,Engineering,small dwelling,Cot$,Cot$,Aelf-cot,Alfcote,Alcott
+Old English,Engineering,small dwelling,Cott$,Cot$,Brade-cot,Bradecote,Bradcott
+Old English,Engineering,small enclosed field,$croft,$croft,Tun-croft,Tuncroft,Towncroft
+Old English,Engineering,small enclosed field,Croft$,Croft$,Tun-croft,Tuncroft,Towncroft
+Old English,Engineering,substantial dwelling,$house,$hus,Stan-hus,Stanhus,Stonehouse
+Old English,Engineering,village manor,$ham,$ham,Cippen-ham,Chippeham,Chippenham
+Old English,Engineering,water landing,$hythe,$hyth,Hyth,Hithe,Hythe
+Old English,Fortification,fortified enclosure,$burgh,$burh,Eadmundes-burh,Edmundesbury,Bury St Edmunds
+Old English,Fortification,fortified enclosure,$bury,$burh,Eadmundes-burh,Edmundesbury,Bury St Edmunds
+Old English,Fortification,military camp,$caster,$castra,Venta-castra,Wintanceastre,Winchester
+Old English,Fortification,military camp,$chester,$castra,Venta-castra,Wintanceastre,Winchester
+Old English,Sacred,church,$church,$cirice,Cirice-ham,Chircham,Churcham
+Old English,Sacred,church,Church$,Cirice$,Cirice-ham,Chircham,Churcham
+Old English,Sacred,religious boundary,$cross,$cros,Cros-tun,Crostun,Croston
+Old English,Sacred,religious boundary,Cross$,Cros$,Cros-tun,Crostun,Croston
+Old English,Topography,ash tree,Ash$,Aesc$,Aesc-tun,Ashton,Ashton
+Old English,Topography,brook,$brook,$broc,Broc-ham,Brocham,Brookham
+Old English,Topography,brook,Brook$,Broc$,Broc-ham,Brocham,Brookham
+Old English,Topography,cliff,$cliff,$clif,Hwite-clif,Whitclif,Whitcliffe
+Old English,Topography,fen,$fen,$fenn,Fenn-tun,Fentun,Fenton
+Old English,Topography,heath,$heath,$haeth,Haeth-feld,Hethefeld,Heathfield
+Old English,Topography,heath,Heath$,Haeth$,Haeth-feld,Hethefeld,Heathfield
+Old English,Topography,hill,$don,$tun,Dun-tun,Duntun,Dunton
+Old English,Topography,hill,$down,$tun,Dun-tun,Duntun,Dunton
+Old English,Topography,hill,$hill,$hyll,Hyll-tun,Hiltun,Hilton
+Old English,Topography,hill,Hill$,Hyll$,Hyll-tun,Hiltun,Hilton
+Old English,Topography,island,$ea,$ig,Suth-ig,Sutheye,Suthey
+Old English,Topography,island,$ey,$ig,Suth-ig,Sutheye,Suthey
+Old English,Topography,lake,$mere,$mere,Mere-tun,Meretun,Merton
+Old English,Topography,lake,Mere$,Mere$,Mere-tun,Meretun,Merton
+Old English,Topography,marsh,$marsh,$mersc,Mersc-tun,Merstun,Marston
+Old English,Topography,marsh,Marsh$,Mersc$,Mersc-tun,Merstun,Marston
+Old English,Topography,marshland,$fen,$fenn,Fenn-tun,Fentun,Fenton
+Old English,Topography,moor,$moor,$mor,Blac-mor,Blakemore,Blackmore
+Old English,Topography,oak clearing,$oak,$ac,Ac-leah,Aclei,Oakley
+Old English,Topography,oak clearing,Oak$,Ac$,Ac-leah,Aclei,Oakley
+Old English,Topography,oak grove,$oak,$ac,Ac-leah,Aclei,Oakley
+Old English,Topography,oak grove,Oak$,Ac$,Ac-leah,Aclei,Oakley
+Old English,Topography,open land,$field,$feld,Sceap-feld,Shefeld,Sheffield
+Old English,Topography,open upland,$moor,$mor,Blac-mor,Blakemore,Blackmore
+Old English,Topography,pond,$pool,$pol,Pol-stede,Polstede,Poolstead
+Old English,Topography,pond,Pool$,Pol$,Pol-stede,Polstede,Poolstead
+Old English,Topography,raised strip of land,$ridge,$hrycg,Hrycg-leah,Ridgeley,Ridgely
+Old English,Topography,raised strip of land,Ridge$,Hrycg$,Hrycg-leah,Ridgeley,Ridgely
+Old English,Topography,ridge,$ridge,$hrycg,Hrycg-leah,Ridgeley,Ridgely
+Old English,Topography,ridge,Ridge$,Hrycg$,Hrycg-leah,Ridgeley,Ridgely
+Old English,Topography,river mouth,$mouth,$mutha,Ea-mutha,Emuthe,Yarmouth
+Old English,Topography,shallow river crossing,$ford,$ford,Oxna-ford,Oxeneford,Oxford
+Old English,Topography,small lake,$pool,$pol,Pol-stede,Polstede,Poolstead
+Old English,Topography,small lake,Pool$,Pol$,Pol-stede,Polstede,Poolstead
+Old English,Topography,small port,$hythe,$hyth,Hyth,Hithe,Hythe
+Old English,Topography,small wood copse,$shaw,$sceaga,Brere-sceaga,Breshawe,Breshaw
+Old English,Topography,spring,$well,$wella,Brad-wella,Bradewelle,Bradwell
+Old English,Topography,steep bank,$cliff,$clif,Hwite-clif,Whitclif,Whitcliffe
+Old English,Topography,stream,$bourne,$burna,Winter-burna,Winterburne,Winterbourne
+Old English,Topography,stream,$brook,$broc,Broc-ham,Brocham,Brookham
+Old English,Topography,stream,$burn,$burna,Burn-ham,Burnham,Burnham
+Old English,Topography,stream,$fleet,$fleot,Fleot-wic,Fletwic,Fleetwick
+Old English,Topography,stream,Brook$,Broc$,Broc-ham,Brocham,Brookham
+Old English,Topography,stream,Burn$,Burna$,Burn-ham,Burnham,Burnham
+Old English,Topography,stream,Fleet$,Fleot$,Fleot-wic,Fletwic,Fleetwick
+Old English,Topography,thicket,$shaw,$sceaga,Brere-sceaga,Breshawe,Breshaw
+Old English,Topography,thorn bush,$thorn,$thorn,Thorn-leah,Thornlei,Thornley
+Old English,Topography,thorn bush,Thorn$,Thorn$,Thorn-leah,Thornlei,Thornley
+Old English,Topography,thorn clearing,$thorn,$thorn,Thorn-leah,Thornlei,Thornley
+Old English,Topography,thorn clearing,Thorn$,Thorn$,Thorn-leah,Thornlei,Thornley
+Old English,Topography,tidal inlet creek,$fleet,$fleot,Fleot-wic,Fletwic,Fleetwick
+Old English,Topography,tidal inlet creek,Fleet$,Fleot$,Fleot-wic,Fletwic,Fleetwick
+Old English,Topography,valley,$combe,$cumb,Cumb-cot,Combecote,Coombe
+Old English,Topography,valley,$dale,$dael,Deor-dael,Deordale,Dirdale
+Old English,Topography,valley,$den,$denu,Aesc-denu,Ashdene,Ashden
+Old English,Topography,valley,$dene,$denu,Cumb-denu,Combedene,Combe Dene
+Old English,Topography,valley,Combe$,Cumb$,Cumb-cot,Combecote,Coombe
+Old English,Topography,wood,$holt,$holt,Aesc-holt,Asholt,Asholt
+Old English,Topography,wood,$wood,$wudu,Hara-wudu,Harwode,Harwood
+Old English,Topography,wooded clearing,$leigh,$leah,Eofor-leah,Everlei,Everleigh
+Old English,Topography,wooded clearing,$ley,$leah,Eofor-leah,Everlei,Everleigh
+Old English,Topography,wooded highland,$weald,$weald,Weald-ham,Wealdham,Waltham
+Old English,Topography,wooded hill,$hurst,$hyrst,Scir-hyrst,Shirhirst,Sherhurst
+Old Finnish,Engineering,village,$kyla,$kyla,Uusi-kyla,Uusikyla,Uusikyla
+Old Finnish,Fortification,castle,$linna,$linna,Hame-linna,Hameenlinna,Hameenlinna
+Old Finnish,Topography,bay,$lahti,$lahti,Pitka-lahti,Pitkalahti,Pitkalahti
+Old Finnish,Topography,bog,$suo,$suo,Musta-suo,Mustasuo,Mustasuo
+Old Finnish,Topography,cape,$niemi,$niemi,Kapea-niemi,Kapeaniemi,Kapeaniemi
+Old Finnish,Topography,deep forest,$korpi,$korpi,Synkka-korpi,Synkkakorpi,Synkkakorpi
+Old Finnish,Topography,field,$pelto,$pelto,Uusi-pelto,Uusipelto,Uusipelto
+Old Finnish,Topography,glade,$aho,$aho,Koivu-aho,Koivuaho,Koivaho
+Old Finnish,Topography,grove,$lehto,$lehto,Koivu-lehto,Koivulehto,Koivulehto
+Old Finnish,Topography,heath,$kangas,$kangas,Hiekka-kangas,Hiekkakangas,Hiekkakangas
+Old Finnish,Topography,hill,$maki,$maki,Iso-maki,Isomaki,Isomaki
+Old Finnish,Topography,hill,$vaara,$vaara,Korkea-vaara,Korkeavaara,Korkeavaara
+Old Finnish,Topography,island,$saari,$saari,Iso-saari,Isosaari,Isosaari
+Old Finnish,Topography,lake,$jarvi,$jarvi,Sini-jarvi,Sinijarvi,Sinijarvi
+Old Finnish,Topography,marsh,$suo,$suo,Musta-suo,Mustasuo,Mustasuo
+Old Finnish,Topography,meadow,$aho,$aho,Koivu-aho,Koivuaho,Koivaho
+Old Finnish,Topography,meadow,$niitty,$niitty,Kukka-niitty,Kukkaniitty,Kukkaniitty
+Old Finnish,Topography,peninsula,$niemi,$niemi,Kapea-niemi,Kapeaniemi,Kapeaniemi
+Old Finnish,Topography,pond,$lampi,$lampi,Pieni-lampi,Pienilampi,Pienlampi
+Old Finnish,Topography,rapids,$koski,$koski,Kivi-koski,Kivikoski,Kivikoski
+Old Finnish,Topography,river,$joki,$joki,Hieta-joki,Hietajoki,Hietajoki
+Old Finnish,Topography,shore,$ranta,$ranta,Hieta-ranta,Hietaranta,Hietaranta
+Old Finnish,Topography,small lake,$lampi,$lampi,Pieni-lampi,Pienilampi,Pienlampi
+Old Finnish,Topography,strait,$salmi,$salmi,Kapea-salmi,Kapeasalmi,Kapeasalmi
+Old Finnish,Topography,wilderness,$korpi,$korpi,Synkka-korpi,Synkkakorpi,Synkkakorpi
+Old Finnish,Topography,wooded rise,$vaara,$vaara,Korkea-vaara,Korkeavaara,Korkeavaara
+Old French,Engineering,bridge,$pont,$pons,Beau-pont,Beaupont,Beaupont
+Old French,Engineering,estate farm,$ville,$ville,Neuve-ville,Neuville,Neuville
+Old French,Engineering,port,$port,$portus,Bon-port,Bonport,Bonport
+Old French,Engineering,road,$voie,$via,Haute-voie,Hautevoie,Hautvoie
+Old French,Engineering,town,$ville,$ville,Neuve-ville,Neuville,Neuville
+Old French,Engineering,wagonway,$voie,$via,Haute-voie,Hautevoie,Hautvoie
+Old French,Fortification,castle,$chastel,$castellum,Beau-chastel,Beauchastel,Beaucastel
+Old French,Fortification,fortified town,$bourg,$burgus,Franc-bourg,Francbourg,Frambourg
+Old French,Sacred,church,$eglise,$ecclesia,Haute-eglise,Hauteglise,Hauteglise
+Old French,Topography,field,$champ,$campus,Beau-champ,Beauchamp,Beauchamp
+Old French,Topography,hill,$mont,$mons,Clair-mont,Clermont,Clermont
+Old French,Topography,mountain,$mont,$mons,Clair-mont,Clermont,Clermont
+Old French,Topography,river bank,$riviere,$riparia,Haute-riviere,Hauteriviere,Hauterive
+Old French,Topography,rock,$roche,$rocca,Haute-roche,Hauteroche,Hauteroche
+Old French,Topography,shore,$riviere,$riparia,Haute-riviere,Hauteriviere,Hauterive
+Old French,Topography,spring,$font,$fons,Claire-font,Clairefont,Clairefontaine
+Old French,Topography,valley,$val,$vallis,Bon-val,Bonval,Bonval
+Old French,Topography,wood,$bois,$boscus,Vert-bois,Vertbois,Verbois
+Old High German,Engineering,farm,$hof,$hof,Bruno-hof,Brunhof,Brunhof
+Old High German,Engineering,home,$heim,$heim,Adal-heim,Adelheim,Adelheim
+Old High German,Engineering,manor,$hof,$hof,Bruno-hof,Brunhof,Brunhof
+Old High German,Engineering,road,$weg,$weg,Stein-weg,Steinweg,Steinweg
+Old High German,Engineering,town,$stadt,$stat,Karl-stat,Karlstat,Karlstadt
+Old High German,Engineering,village,$dorf,$dorf,Diet-dorf,Dietdorf,Diedorf
+Old High German,Engineering,wagonway,$weg,$weg,Stein-weg,Steinweg,Steinweg
+Old High German,Fortification,fortified place,$burg,$burg,Wurz-burg,Wurzburg,Wurzburg
+Old High German,Sacred,church,$kirch,$kirihha,Neu-kirihha,Neukirche,Neukirch
+Old High German,Topography,borderland,$mark,$marca,Ost-marca,Ostmark,Ostmark
+Old High German,Topography,brook,$bach,$bah,Lauter-bah,Lauterbach,Lauterbach
+Old High German,Topography,field,$feld,$feld,Rosen-feld,Rosenfeld,Rosenfeld
+Old High German,Topography,ford,$furt,$furt,Francono-furt,Frankonofurt,Frankfurt
+Old High German,Topography,forest,$wald,$walt,Grun-walt,Grunwald,Grunwald
+Old High German,Topography,hill,$berg,$berg,Frei-berg,Friberg,Freiberg
+Old High German,Topography,lake,$see,$seo,Boden-seo,Bodensee,Bodensee
+Old High German,Topography,march,$mark,$marca,Ost-marca,Ostmark,Ostmark
+Old High German,Topography,mountain,$berg,$berg,Frei-berg,Friberg,Freiberg
+Old High German,Topography,open land,$feld,$feld,Rosen-feld,Rosenfeld,Rosenfeld
+Old High German,Topography,river crossing,$furt,$furt,Francono-furt,Frankonofurt,Frankfurt
+Old High German,Topography,river island,$au,$ouwa,Rhein-ouwa,Rheinau,Rheinau
+Old High German,Topography,river meadow,$au,$ouwa,Rhein-ouwa,Rheinau,Rheinau
+Old High German,Topography,rock,$stein,$stein,Hohen-stein,Hohenstein,Hohenstein
+Old High German,Topography,spring,$bronn,$brunno,Heil-brunno,Heilbrunn,Heilbronn
+Old High German,Topography,stone,$stein,$stein,Hohen-stein,Hohenstein,Hohenstein
+Old High German,Topography,stream,$ach,$aha,Salz-aha,Salzach,Salzach
+Old High German,Topography,stream,$bach,$bah,Lauter-bah,Lauterbach,Lauterbach
+Old High German,Topography,valley,$tal,$tal,Wiesen-tal,Wiesental,Wiesental
+Old High German,Topography,wood,$loh,$loh,Birken-loh,Birkenloh,Birkenlohe
+Old Lithuanian,Engineering,bridge,$tiltis,$tiltas,Senas-tiltas,Senatiltas,Sentiltis
+Old Lithuanian,Engineering,village,$kaimas,$kaimas,Naujas-kaimas,Naujaskaimas,Naujakimis
+Old Lithuanian,Fortification,castle,$pilis,$pilis,Auksta-pilis,Aukstapilis,Aukstapilis
+Old Lithuanian,Status,black,Juod$,Juod$,Juod-ezeras,Juodezeras,Juodezeris
+Old Lithuanian,Status,white,Balt$,Balt$,Balt-upe,Baltupe,Baltupe
+Old Lithuanian,Topography,bog,$pelke,$pelke,Juoda-pelke,Juodapelke,Juodpelke
+Old Lithuanian,Topography,field,$laukas,$laukas,Platus-laukas,Platlaukas,Plateliukas
+Old Lithuanian,Topography,ford,$brastis,$brasta,Balta-brasta,Baltabrasta,Baltabrastis
+Old Lithuanian,Topography,forest,$nisks,$miskas,Senas-miskas,Senamiskas,Seniskis
+Old Lithuanian,Topography,hill,$kalnas,$kalnas,Aukstas-kalnas,Aukstakalnas,Aukstakalnis
+Old Lithuanian,Topography,island,$sala,$sala,Didzioji-sala,Didziosala,Didziasalis
+Old Lithuanian,Topography,lake,$ezeras,$ezeras,Juodas-ezeras,Juodasezeras,Juodezeris
+Old Lithuanian,Topography,marsh,$pelke,$pelke,Juoda-pelke,Juodapelke,Juodpelke
+Old Lithuanian,Topography,mountain,$kalnas,$kalnas,Aukstas-kalnas,Aukstakalnas,Aukstakalnis
+Old Lithuanian,Topography,open ground,$laukas,$laukas,Platus-laukas,Platlaukas,Plateliukas
+Old Lithuanian,Topography,pine forest,$silas,$silas,Zalias-silas,Zalisilas,zalisilis
+Old Lithuanian,Topography,river,$upe,$upe,Balta-upe,Baltupe,Baltupe
+Old Lithuanian,Topography,rock,$akmuo,$akmuo,Didis-akmuo,Didiakmuo,Didakmenis
+Old Lithuanian,Topography,stone,$akmuo,$akmuo,Didis-akmuo,Didiakmuo,Didakmenis
+Old Norse,Engineering,enclosure,$garth,$garthr,Saer-garthr,Sayergarth,Sayergarth
+Old Norse,Engineering,farm,$by,$'s byr,Grimr's byr,Grimesbi,Grimsby
+Old Norse,Engineering,farm,$thorpe,$thorp,Skarp-thorp,Scardetorp,Scunthorpe
+Old Norse,Engineering,home,$toft,$toft,Lowis-toft,Lowestoft,Lowestoft
+Old Norse,Engineering,hut,$scale,$skali,Saetr-skali,Seterscale,Seterscale
+Old Norse,Engineering,hut,$skel,$skali,Orm-skali,Ormeskel,Ormskell
+Old Norse,Engineering,plot,$toft,$toft,Lowis-toft,Lowestoft,Lowestoft
+Old Norse,Engineering,shelter,$scale,$skali,Saetr-skali,Seterscale,Seterscale
+Old Norse,Engineering,shelter,$skel,$skali,Orm-skali,Ormeskel,Ormskell
+Old Norse,Engineering,town,$by,$'s byr,Grimr's byr,Grimesbi,Grimsby
+Old Norse,Sacred,church,$kirk,$kirkja,Ormr-kirkja,Ormeskirke,Ormskirk
+Old Norse,Topography,bay creek,$wick,$vik,Sker-vik,Skervik,Skirwick
+Old Norse,Topography,fjord,$firth,$fjord,Straum-fjord,Strumfirth,Strumfirth
+Old Norse,Topography,forest clearing,$waite,$thveit,Braith-thveit,Braidewait,Braithwaite
+Old Norse,Topography,grove,$lund,$lundr,Eik-lundr,Ekelund,Ekelund
+Old Norse,Topography,headland,$ness,$ness,Skeg-ness,Skegness,Skegness
+Old Norse,Topography,hill,$howe,$haugr,Orm-haugr,Ormeshou,Ormeshowe
+Old Norse,Topography,inlet,$wick,$vik,Sker-vik,Skervik,Skirwick
+Old Norse,Topography,island,$ay,$ey,Grims-ey,Grimsey,Grimsay
+Old Norse,Topography,island,$holm,$holmr,Grims-holmr,Grimesholm,Grimsholme
+Old Norse,Topography,island,$holme,$holmr,Holm-ey,Holmey,Holme
+Old Norse,Topography,island,Holme$,Holmr$,Holm-ey,Holmey,Holme
+Old Norse,Topography,low meadow,$haugh,$hagi,Grim-hagi,Grimhaugh,Grimhaugh
+Old Norse,Topography,mountain,$fell,$fell,Snaefell,Snefell,Snaefell
+Old Norse,Topography,narrow valley,$gill,$gil,Raud-gil,Redgil,Redgill
+Old Norse,Topography,notch,$scar,$skarth,Skarth,Scard,Scar
+Old Norse,Topography,promontory,$ness,$ness,Skeg-ness,Skegness,Skegness
+Old Norse,Topography,raised strip of land,$rigg,$hryggr,Lang-hryggr,Langrigg,Langrigg
+Old Norse,Topography,ridge,$rigg,$hryggr,Lang-hryggr,Langrigg,Langrigg
+Old Norse,Topography,river meadow,$holm,$holmr,Grims-holmr,Grimesholm,Grimsholme
+Old Norse,Topography,river meadow,$holme,$holmr,Holm-ey,Holmey,Holme
+Old Norse,Topography,river meadow,Holme$,Holmr$,Holm-ey,Holmey,Holme
+Old Norse,Topography,rocky cliff gap,$scar,$skarth,Skarth,Scard,Scar
+Old Norse,Topography,shallow valley,$slack,$slakki,Grim-slakki,Grimslack,Grimslack
+Old Norse,Topography,small mountain lake,$tarn,$tjorn,Lang-tjorn,Langtern,Langtarn
+Old Norse,Topography,small stream,$sike,$sik,Myrk-sik,Mirkesike,Miresike
+Old Norse,Topography,small wood,$lund,$lundr,Eik-lundr,Ekelund,Ekelund
+Old Norse,Topography,spring,$keld,$kelda,Kaldr-kelda,Caldekeld,Caldkeld
+Old Norse,Topography,streak,$beck,$bekr,Hol-bekr,Holbeck,Holbeck
+Old Norse,Topography,stream,$gill,$gil,Raud-gil,Redgil,Redgill
+Old Norse,Topography,valley,$dale,$dalr,Hrafn-dalr,Rafndale,Ravendale
+Old Norse,Topography,waterfall,$force,$foss,Aira-foss,Aireforce,Aira Force
+Old Norse,Topography,waterfall,$foss,$foss,Wil-foss,Wilfoss,Wilfoss
+Old Occitan,Engineering,bridge,$pont,$pont,Nòu-pont,Noupont,Nopont
+Old Occitan,Engineering,town,$ville,$vila,Nova-vila,Novavila,Noville
+Old Occitan,Fortification,castle,$castel,$castellum,Bel-castel,Belcastel,Belcastel
+Old Occitan,Topography,hill,$puech,$pueg,Naut-pueg,Nautpuech,Puech
+Old Occitan,Topography,meadow,$prat,$prat,Bel-prat,Belprat,Belprat
+Old Occitan,Topography,mountain,$mont,$mont,Clarmont,Clarmont,Clermont
+Old Occitan,Topography,spring,$font,$font,Clara-font,Clarafont,Clarefont
+Old Occitan,Topography,stream,$riu,$riu,Clar-riu,Clarriu,Clairieu
+Old Occitan,Topography,valley,$val,$val,Bon-val,Bonval,Bonval
+Old Occitan,Topography,wood,$bosc,$bosc,Verd-bosc,Verdbosc,Verbosc
+Old Polish/West Slavic,Engineering,estate,$ow,$ovu,Jan-ovu,Janow,Janów
+Old Polish/West Slavic,Engineering,people,$ice,$ici,Kat-ici,Katice,Katowice
+Old Polish/West Slavic,Engineering,village,$wies,$vesu,Stara-vesu,Starawies,Stara Wieś
+Old Polish/West Slavic,Fortification,fortified town,$grod,$grodh,Nowy-grodh,Nowogrod,Nowogród
+Old Polish/West Slavic,Topography,field,$pole,$polje,Opole,Opole,Opole
+Old Polish/West Slavic,Topography,forest,$las,$lesu,Bialy-las,Bialylas,Bielas
+Old Polish/West Slavic,Topography,open land,$pole,$polje,Opole,Opole,Opole
+Old Polish/West Slavic,Topography,river bank,$brzeg,$bergu,Bialy-brzeg,Bialybrzeg,Brzeg
+Old Polish/West Slavic,Topography,rock,$kamien,$kamy,Bialy-kamy,Bialykamien,Kamień
+Old Polish/West Slavic,Topography,shore,$brzeg,$bergu,Bialy-brzeg,Bialybrzeg,Brzeg
+Old Polish/West Slavic,Topography,stone,$kamien,$kamy,Bialy-kamy,Bialykamien,Kamień
+Old Prussian,Engineering,settlement,$kaym,$kaimis,Nawa-kaimis,Nawakaym,Nawakaym
+Old Prussian,Engineering,village,$kaym,$kaimis,Nawa-kaimis,Nawakaym,Nawakaym
+Old Prussian,Fortification,fortified place,$pil,$pils,Tawra-pils,Tawrapil,Taurpil
+Old Prussian,Topography,field,$lauks,$lauks,Nawa-lauks,Nawalauks,Nawlauk
+Old Prussian,Topography,forest,$median,$median,Swenta-median,Swentamedian,Swentmed
+Old Prussian,Topography,hill,$garbis,$garbis,Wysso-garbis,Wissogarbis,Wissgarb
+Old Prussian,Topography,river,$ape,$ape,Balta-ape,Baltape,Baltape
+Old Prussian,Topography,stream,$ape,$ape,Meln-ape,Melnape,Melnape
+Old Slavic,Engineering,bridge,$most,$mosth,Beli-mosth,Belimost,Belmost
+Old Slavic,Engineering,village,$selo,$selo,Novo-selo,Novoselo,Novosel
+Old Slavic,Fortification,fortified town,$grad,$gradh,Bel-gradh,Belgrad,Belgrade
+Old Slavic,Status,black,Chern$,Chrnu$,Chrn-gora,Cernagora,Czernogor
+Old Slavic,Status,new,Nov$,Novu$,Nov-gradh,Novgrad,Novgorod
+Old Slavic,Status,old,Star$,Staru$,Star-gradh,Starigrad,Stargard
+Old Slavic,Status,white,Bel$,Belu$,Bel-gradh,Belgrad,Belgrade
+Old Slavic,Topography,field,$polje,$polje,Belo-polje,Belopolje,Belopole
+Old Slavic,Topography,ford,$brod,$brodh,Stari-brodh,Staribrod,Starbrod
+Old Slavic,Topography,forest,$les,$lesu,Temen-lesu,Temenles,Temles
+Old Slavic,Topography,island,$ostrov,$ostrovu,Nov-ostrovu,Novostrov,Novostrov
+Old Slavic,Topography,mountain,$gora,$gora,Cerna-gora,Cernagora,Cernagor
+Old Slavic,Topography,oak clearing,$dub,$dubu,Zelen-dubu,Zelendub,Zeldub
+Old Slavic,Topography,oak grove,$dub,$dubu,Zelen-dubu,Zelendub,Zeldub
+Old Slavic,Topography,plain,$polje,$polje,Belo-polje,Belopolje,Belopole
+Old Slavic,Topography,river,$reka,$reka,Bela-reka,Belareka,Belrek
+Old Slavic,Topography,river bend,$luka,$luka,Velja-luka,Veljaluka,Velika Luka
+Old Slavic,Topography,river island,$ostrov,$ostrovu,Nov-ostrovu,Novostrov,Novostrov
+Old Slavic,Topography,rock,$kamen,$kamy,Beli-kamy,Belikamen,Belkamen
+Old Slavic,Topography,stone,$kamen,$kamy,Beli-kamy,Belikamen,Belkamen
+Old Slavic,Topography,valley,$dol,$dolu,Sveti-dolu,Svetidol,Svetdol
+Old Slavic,Topography,wooded upland,$gora,$gora,Cerna-gora,Cernagora,Cernagor
+Old Spanish/Castilian,Engineering,bridge,$puente,$pons,Nueva-puente,Nuevapuente,Puente Nuevo
+Old Spanish/Castilian,Engineering,port,$puerto,$portus,Buen-puerto,Buenpuerto,Puerto Bueno
+Old Spanish/Castilian,Engineering,town,$villa,$villa,Nueva-villa,Nuevavilla,Villanueva
+Old Spanish/Castilian,Fortification,castle,$castillo,$castellum,Nuevo-castillo,Nuevocastillo,Castillo Nuevo
+Old Spanish/Castilian,Fortification,fort,$castro,$castrum,Alto-castro,Altocastro,Castroalto
+Old Spanish/Castilian,Fortification,old fortified settlement,$castro,$castrum,Alto-castro,Altocastro,Castroalto
+Old Spanish/Castilian,Topography,field,$campo,$campus,Nuevo-campo,Nuevocampo,Campo Nuevo
+Old Spanish/Castilian,Topography,mountain,$monte,$mons,Alto-monte,Altomonte,Montelto
+Old Spanish/Castilian,Topography,river,$rio,$rivus,Blanco-rio,Blancorio,Rio Blanco
+Old Spanish/Castilian,Topography,spring,$fuente,$fons,Clara-fuente,Clarafuente,Fuente Clara
+Old Spanish/Castilian,Topography,valley,$valle,$vallis,Nuevo-valle,Nuevovalle,Valnuevo
+Old Spanish/Castilian,Topography,wooded hill,$monte,$mons,Alto-monte,Altomonte,Montelto
+Old Swedish,Engineering,enclosed farm,$tuna,$tuna,Sig-tuna,Sigtuna,Sigtuna
+Old Swedish,Engineering,farm,$by,$by,Ulf-by,Ulfby,Ulvby
+Old Swedish,Engineering,farm,$torp,$thorp,Karl-thorp,Karlthorp,Karlstorp
+Old Swedish,Engineering,town,$stad,$stadr,Karl-stadr,Karlstad,Karlstad
+Old Swedish,Engineering,village,$by,$by,Ulf-by,Ulfby,Ulvby
+Old Swedish,Topography,bay,$vik,$vik,Djup-vik,Djupvik,Djupvik
+Old Swedish,Topography,grove,$lund,$lund,Eke-lund,Ekelund,Ekelund
+Old Swedish,Topography,hill,$berg,$berg,Sund-berg,Sundberg,Sundberg
+Old Swedish,Topography,lake,$sjo,$sjór,Stor-sjor,Storsjo,Storsjö
+Old Swedish,Topography,mountain,$berg,$berg,Sund-berg,Sundberg,Sundberg
+Old Swedish,Topography,rapids,$fors,$fors,Sten-fors,Stenfors,Stenfors
+Old Swedish,Topography,river,$a,$a,Svart-a,Svarta,Svartån
+Old Swedish,Topography,waterfall,$fors,$fors,Sten-fors,Stenfors,Stenfors
+Old Swedish,Topography,wood,$hult,$hult,Ask-hult,Askhult,Askhult
+Old West Norse,Engineering,enclosed farm,$gard,$gardr,as-gardr,Asgard,Asgard
+Old West Norse,Engineering,farm,$byr,$byr,Grimr-byr,Grimsbyr,Grimsby
+Old West Norse,Engineering,farm,$stad,$stadr,Haraldr-stadr,Haraldstad,Harstad
+Old West Norse,Engineering,shieling,$saetr,$saetr,Sel-saetr,Selseter,Selset
+Old West Norse,Engineering,summer pasture,$saetr,$saetr,Sel-saetr,Selseter,Selset
+Old West Norse,Engineering,village,$byr,$byr,Grimr-byr,Grimsbyr,Grimsby
+Old West Norse,Topography,bay,$vik,$vik,Breid-vik,Breidvik,Breivik
+Old West Norse,Topography,fjord,$fjord,$fjordr,Lang-fjordr,Langfjord,Langfjord
+Old West Norse,Topography,headland,$nes,$nes,Lang-nes,Langnes,Langnes
+Old West Norse,Topography,island,$ey,$ey,Sand-ey,Sandey,Sanday
+Old West Norse,Topography,promontory,$nes,$nes,Lang-nes,Langnes,Langnes
+Old West Norse,Topography,sea inlet,$fjord,$fjordr,Lang-fjordr,Langfjord,Langfjord
+Old West Norse,Topography,valley,$dal,$dalr,Groen-dalr,Grondal,Grøndal
+Old West Norse,Topography,waterfall,$foss,$foss,Hvita-foss,Hvitafoss,Whitefoss
+Pictish/Brittonic Substrate,Engineering,estate,Pit$,Pett$,Pett-cairn,Pitcairn,Pitcairn
+Pictish/Brittonic Substrate,Fortification,fort,Caer$,Cair$,Cair-carden,Caircarden,Carden
+Pictish/Brittonic Substrate,Fortification,fort,Dun$,Dun$,Dun-nechtain,Dunnechtain,Dunnichen
+Pictish/Brittonic Substrate,Sacred,church,Eglwys$,Eglwys$,Eglwys-fair,Eglwysfair,Eccles
+Pictish/Brittonic Substrate,Topography,mountain,Monid$,Monid$,Monid-ruadh,Monidruadh,Monadh Ruadh
+Pictish/Brittonic Substrate,Topography,pond,Linn$,Linn$,Linn-dee,Linndee,Linn Dee
+Pictish/Brittonic Substrate,Topography,river mouth,Aber$,Aber$,Aber-deen,Aberdeen,Aberdeen
+Pictish/Brittonic Substrate,Topography,small lake,Linn$,Linn$,Linn-dee,Linndee,Linn Dee
+Pictish/Brittonic Substrate,Topography,thicket,Carden$,Carden$,Carden-ach,Cardenach,Carden
+Pictish/Brittonic Substrate,Topography,upland,Monid$,Monid$,Monid-ruadh,Monidruadh,Monadh Ruadh
+Romanian/Aromanian,Engineering,bridge,$pod,$pons,Nou-pod,Noupod,Podnou
+Romanian/Aromanian,Engineering,marketplace,$targ,$targ,Nou-targ,Noutarg,Targu Nou
+Romanian/Aromanian,Engineering,village,$sat,$sat,Nou-sat,Nousat,Satnou
+Romanian/Aromanian,Engineering,well,$fantana,$fontana,Alba-fantana,Albafantana,Fantana Alba
+Romanian/Aromanian,Fortification,fortress,$cetate,$civitas,Alba-cetate,Albacetate,Cetatea Alba
+Romanian/Aromanian,Topography,field,$camp,$campus,Nou-camp,Noucamp,Campnou
+Romanian/Aromanian,Topography,forest,$padure,$padule,Neagra-padure,Neagrapadure,Padurea Neagra
+Romanian/Aromanian,Topography,fountain,$fantana,$fontana,Alba-fantana,Albafantana,Fantana Alba
+Romanian/Aromanian,Topography,mountain,$munte,$mons,Negru-munte,Negrumunte,Munte Negru
+Romanian/Aromanian,Topography,river,$rau,$rivus,Alb-rau,Albrau,Raul Alb
+Romanian/Aromanian,Topography,valley,$vale,$vallis,Noua-vale,Nouavale,Valea Noua
+Sardinian,Engineering,port,$portu,$portus,Bonu-portu,Bonuportu,Portobono
+Sardinian,Engineering,village,$bidda,$villa,Bona-bidda,Bonabidda,Bonabidda
+Sardinian,Fortification,stone tower,$nur,$nuraghe,Nur-aru,Nuraru,Nurra
+Sardinian,Topography,field,$campu,$campus,Bellu-campu,Bellucampu,Campubellu
+Sardinian,Topography,mountain,$monte,$mons,Monte-ruju,Monteruju,Monteruju
+Sardinian,Topography,spring,$funtana,$fontana,Bella-funtana,Bellafuntana,Funtanabella
+Sardinian,Topography,stream,$arriu,$rivus,Longu-arriu,Longuarriu,Arriulongo
+Scottish Gaelic,Engineering,town farmstead,Bal$,Baile $,Baile Ailein,Balallan,Balallan
+Scottish Gaelic,Sacred,church,Kil$,Cill $,Cill Mhicheil,Kilmichael,Kilmichael
+Scottish Gaelic,Sacred,church,Kilm$,Cill Mo $,Cill MoChalmog,Kilmachalmag,Kilmachalmag
+Scottish Gaelic,Sacred,monastic cell,Kil$,Cill $,Cill Mhicheil,Kilmichael,Kilmichael
+Scottish Gaelic,Topography,field,Auch$,Achadh $,Achadh nan Leac,Auchinleck,Auchinleck
+Scottish Gaelic,Topography,field,Auchen$,Achadh nan $,Achadh nan Leac,Auchenleck,Auchinleck
+Scottish Gaelic,Topography,field,Dal$,Dail $,Dail Riata,Dalriada,Dalriada
+Scottish Gaelic,Topography,headland,Kin$,Ceann $,Ceann Loch,Kinloch,Kinloch
+Scottish Gaelic,Topography,height,Aird$,Aird $,Àird Chlach,Airdclach,Airdclach
+Scottish Gaelic,Topography,height,Ard$,Aird $,Àird Fheàrna,Ardfern,Ardfern
+Scottish Gaelic,Topography,hill,Knock$,Cnoc $,Cnoc Breac,Knockbreck,Knockbreck
+Scottish Gaelic,Topography,hill,Torr$,Tòrr $,Tòrr Donaidh,Torridon,Torridon
+Scottish Gaelic,Topography,hill,Tully$,Tulach $,Tulach Ard,Tullyard,Tullyard
+Scottish Gaelic,Topography,hollow,Lag$,Lag $,Lag a Mhuilinn,Lagavulin,Lagavulin
+Scottish Gaelic,Topography,island,Inch$,Innis $,Innis Chluaidh,Inchclutha,Inch Clutha
+Scottish Gaelic,Topography,knoll,Knock$,Cnoc $,Cnoc Breac,Knockbreck,Knockbreck
+Scottish Gaelic,Topography,lake,Loch$,Loch $,Loch Aillse,Lochalsh,Lochalsh
+Scottish Gaelic,Topography,low place,Lag$,Lag $,Lag a Mhuilinn,Lagavulin,Lagavulin
+Scottish Gaelic,Topography,mound,Tully$,Tulach $,Tulach Ard,Tullyard,Tullyard
+Scottish Gaelic,Topography,mountain,Ben$,Beinn $,Beinn Nibheis,Ben Nevis,Ben Nevis
+Scottish Gaelic,Topography,promontory,Kin$,Ceann $,Ceann Loch,Kinloch,Kinloch
+Scottish Gaelic,Topography,raised strip of land,Drum$,Druim $,Druim Albainn,Drumalban,Drumalban
+Scottish Gaelic,Topography,ridge,Drum$,Druim $,Druim Albainn,Drumalban,Drumalban
+Scottish Gaelic,Topography,river meadow,Inch$,Innis $,Innis Chluaidh,Inchclutha,Inch Clutha
+Scottish Gaelic,Topography,river valley,Strath$,Srath $,Srath Spe,Strathspey,Strathspey
+Scottish Gaelic,Topography,rock,Craig$,Creag $,Creag Eileachaidh,Craigellachie,Craigellachie
+Scottish Gaelic,Topography,rocky eminence,Torr$,Tòrr $,Tòrr Donaidh,Torridon,Torridon
+Scottish Gaelic,Topography,sea inlet,Loch$,Loch $,Loch Aillse,Lochalsh,Lochalsh
+Scottish Gaelic,Topography,valley,Glen$,Gleann $,Gleann Comhann,Glencoe,Glencoe
+Sorbian/Wendish,Engineering,estate,$ow,$ovu,Luk-ovu,Lukow,Luckau
+Sorbian/Wendish,Engineering,people,$itz,$ici,Bud-ici,Buditz,Budziszyn
+Sorbian/Wendish,Fortification,fortified town,$grad,$gradh,Star-gradh,Stargard,Stargard
+Sorbian/Wendish,Topography,oak clearing,Dub$,Dub$,Dub-ici,Dubitz,Dubitz
+Sorbian/Wendish,Topography,oak grove,Dub$,Dub$,Dub-ici,Dubitz,Dubitz
+Sorbian/Wendish,Topography,river,Spree$,Sprjewja$,Sprjewja-grad,Spreegrad,Spreeburg
+South Slavic,Engineering,market town,$varos,$varosu,Donja-varosь,Donjavaros,Varos
+South Slavic,Engineering,town,$varos,$varosu,Donja-varosь,Donjavaros,Varos
+South Slavic,Engineering,village,$selo,$selo,Novo-selo,Novoselo,Novo Selo
+South Slavic,Fortification,fortified town,$grad,$gradh,Stari-gradh,Starigrad,Starigrad
+South Slavic,Fortification,fortress,$tvrdava,$tvrdjava,Bela-tvrdjava,Belatvrdjava,Tvrdava
+South Slavic,Topography,harbor meadow,$luka,$luka,Velika-luka,Velikaluka,Velika Luka
+South Slavic,Topography,hill,$brdo,$brdo,Belo-brdo,Belobrdo,Belo Brdo
+South Slavic,Topography,island,$otok,$otoku,Velji-otoku,Veljiotok,Veliki Otok
+South Slavic,Topography,spring,$vrelo,$vrelo,Studen-vrelo,Studenvrelo,Vrelo
+Thracian,Engineering,settlement,$bria,$bria,Mesem-bria,Mesembria,Nessebar
+Thracian,Engineering,settlement,$dava,$dava,Pulpudeva,Pulpudeva,Plovdiv
+Thracian,Engineering,settlement,$para,$para,Bessa-para,Bessapara,Bessapar
+Thracian,Engineering,town,$bria,$bria,Mesem-bria,Mesembria,Nessebar
+Thracian,Engineering,village,$para,$para,Bessa-para,Bessapara,Bessapar
+Thracian,Fortification,fortress,$diza,$diza,Tiriz-diza,Tirizdiza,Tirizis
+Thracian,Fortification,walled place,$diza,$diza,Tiriz-diza,Tirizdiza,Tirizis
+Thracian,Topography,mountain,$pene,$pene,Rhodo-pene,Rhodopene,Rhodope
+Thracian,Topography,river,$estr,$estros,Istr-os,Istros,Ister
+Thracian,Topography,upland,$pene,$pene,Rhodo-pene,Rhodopene,Rhodope
+Vandal,Engineering,home,$haim,$haims,Wandal-haim,Wandalhaim,Vandalheim
+Vandal,Engineering,settlement,$haim,$haims,Wandal-haim,Wandalhaim,Vandalheim
+Vandal,Fortification,fortified place,$burg,$baurgs,Gaiseric-burg,Gaisericburg,Gaiserburg
+Vandal,Topography,borderland,$mark,$marka,Africa-marka,Africamark,Afrimark
+Vandal,Topography,march,$mark,$marka,Africa-marka,Africamark,Afrimark
+Vandal,Topography,strait,$sund,$sund,Wandal-sund,Wandalsund,Vandalsund
+Venetic,Engineering,estate,$ico,$iko,Acel-iko,Acelico,Azelico
+Venetic,Engineering,settlement,$ago,$ago,Tarv-ago,Tarvago,Tarvisio
+Venetic,Engineering,settlement,$este,$este,At-este,Ateste,Este
+Venetic,Topography,river,$av,$ava,Medu-ava,Meduava,Meduna
+Visigothic,Engineering,enclosure,$gard,$gards,Roderic-gards,Rodericgard,Ruygard
+Visigothic,Engineering,estate,$villa,$villa,Goth-villa,Godovilla,Godella
+Visigothic,Engineering,home,$heim,$haims,Alaric-haims,Alarichem,Alarheim
+Visigothic,Engineering,village,$villa,$villa,Goth-villa,Godovilla,Godella
+Visigothic,Fortification,fortified place,$burg,$baurgs,Wamba-burg,Wambaburg,Wamburg
+Visigothic,Topography,field,$campo,$campus,Goth-campo,Goticampo,Godcampo
+Visigothic,Topography,hill,$berg,$bairgahei,Goth-berg,Gotberg,Godberga
+Visigothic,Topography,mountain,$berg,$bairgahei,Goth-berg,Gotberg,Godberga
+Welsh,Engineering,bridge,Pont$,Pont$,Pont-y-pridd,Pontypridd,Pontypridd
+Welsh,Engineering,settlement,Tre$,Tre$,Tre-degar,Tredegar,Tredegar
+Welsh,Engineering,village,Pentre$,Pentre$,Pentre-bach,Pentrebach,Pentrebach
+Welsh,Fortification,castle,Castell$,Castell$,Castell-nedd,Castellnedd,Neath
+Welsh,Fortification,fort,Caer$,Caer$,Caer-dydd,Caerdyf,Cardiff
+Welsh,Fortification,fort,Din$,Din$,Din-bych,Dinbych,Denbigh
+Welsh,Fortification,stronghold,Din$,Din$,Din-bych,Dinbych,Denbigh
+Welsh,Sacred,church,Llan$,Llan$,Llan-fair,Llanfair,Llanfair
+Welsh,Sacred,parish,Llan$,Llan$,Llan-fair,Llanfair,Llanfair
+Welsh,Topography,field,Cae$,Cae$,Cae-rhun,Caerhun,Caerhun
+Welsh,Topography,field,Maes$,Maes$,Maes-teg,Maesteg,Maesteg
+Welsh,Topography,ford,Rhyd$,Rhyd$,Rhyd-y-felin,Rhydfelin,Rhydfelin
+Welsh,Topography,headland,Pen$,Pen$,Pen-y-bont,Penybont,Penybont
+Welsh,Topography,hill,Bryn$,Bryn$,Bryn-mawr,Brynmawr,Brynmawr
+Welsh,Topography,lake,Llyn$,Llyn$,Llyn-teg,Llynteg,Llynteg
+Welsh,Topography,meadow,Dol$,Dol$,Dol-gellau,Dolgelleu,Dolgellau
+Welsh,Topography,moor heath,Rhos$,Rhos$,Rhos-llannerch,Rhosllannerch,Rhosllanerchrugog
+Welsh,Topography,mountain,Mynydd$,Mynydd$,Mynydd-mawr,Mynyddmawr,Mynydd Mawr
+Welsh,Topography,open plain,Maes$,Maes$,Maes-teg,Maesteg,Maesteg
+Welsh,Topography,promontory,Pen$,Pen$,Pen-y-bont,Penybont,Penybont
+Welsh,Topography,promontory,Rhos$,Rhos$,Rhos-llannerch,Rhosllannerch,Rhosllanerchrugog
+Welsh,Topography,river,Afon$,Afon$,Afon-taf,Afontaf,Afontaf
+Welsh,Topography,river,Avon$,Afon$,Afon-wen,Avonwen,Avonwen
+Welsh,Topography,river bank,Glan$,Glan$,Glan-afon,Glanafon,Glanafon
+Welsh,Topography,river mouth,Aber$,Aber$,Aber-tawe,Abertawe,Swansea
+Welsh,Topography,river source,Blaen$,Blaen$,Blaen-afon,Blaenavon,Blaenavon
+Welsh,Topography,river valley,Ystrad$,Ystrad$,Ystrad-gynlais,Ystradgynlais,Ystradgynlais
+Welsh,Topography,stream valley,Nant$,Nant$,Nant-gwyn,Nantgwyn,Nantgwyn
+Welsh,Topography,upland,Mynydd$,Mynydd$,Mynydd-mawr,Mynyddmawr,Mynydd Mawr
+Welsh,Topography,upper end,Blaen$,Blaen$,Blaen-afon,Blaenavon,Blaenavon
+Welsh,Topography,valley,Cwm$,Cwm$,Cwm-bran,Cwmbran,Cwmbran
+Welsh,Topography,valley,Glyn$,Glyn$,Glyn-ceiriog,Glynceiriog,Glyn Ceiriog
+Welsh,Topography,water meadow,Dol$,Dol$,Dol-gellau,Dolgelleu,Dolgellau
+Welsh,Topography,wood,Coed$,Coed$,Coed-poeth,Coedpoeth,Coedpoeth

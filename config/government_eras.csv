@@ -1,0 +1,6 @@
+world,era_id,history_year_from,history_year_to,allowed_polity_type_ids,default_succession_style,notes
+default,band,-999999,-3301,band,salic,prehistoric band settlements
+default,tribal,-3300,-1201,tribe,salic,bronze-age chiefdoms
+default,city_state,-1200,499,city_state,cognatic_primogeniture,iron-age city-states
+default,feudal,500,1499,kingdom;duchy;county,salic_primogeniture,medieval petty kingdoms per region
+default,modern,1500,999999,republic,election_by_council,modern republics

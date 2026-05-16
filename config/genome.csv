@@ -1,0 +1,31 @@
+trait,deficient deviation,optimal centerpoint,excess deviation,gender_skew_high,gender_skew_low,deficient description,optimal description,excess description
+physical,frailty,peak fitness,hypermetabolic,male,female,frail,fit,deformed
+intellect,cognitive deficiency,peak intellect,cognitive instability,none,none,dim-witted,intelligent,deranged
+symmetry,left asymmetry,peak symmetry,right asymmetry,none,none,unsightly,beautiful,unsightly
+mating drive,absent mating drive,reproductive mating drive,compulsive mating drive,none,none,frigid,amorous,lustful
+neurochemical,emotionally suppressed,emotionally stabile,emotionally volatile,female,male,detached,stable,unhinged
+courage,coward,courageous,reckless,male,female,cowardly,brave,reckless
+temperance,indulgent,wisdom,inhibited,none,none,indulgent,wise,inhibited
+patience,impulsive,patient,passive,female,male,impulsive,patient,passive
+wit,boorish,witty,buffoon,none,none,humorless,witty,foolish
+friendliness,cantankerous,friendly,obsequious,female,male,grumpy,friendly,fawning
+modesty,shameless,modest,shy,none,none,shameless,modest,shy
+ambition,sloth,ambitious,ruthless,none,none,lazy,ambitious,ruthless
+frugality,wasteful,frugal,miserly,none,none,wasteful,frugal,miserly
+persuasion,unconvincing,persuasive,manipulative,none,none,unconvincing,persuasive,manipulative
+curiosity,dogmatic,curious,distracted,none,none,dogmatic,curious,distractible
+justice,criminal,just,zealot,none,none,lawless,just,zealous
+humility,vain,humble,recluse,none,none,vain,humble,reclusive
+generosity,envious,generous,extravagant,female,male,selfish,generous,extravagant
+empathy,callous,empathic,overidentification,female,male,callous,empathetic,oversensitive
+discipline,negligent,disciplined,compulsive,none,none,negligent,disciplined,compulsive
+adaptability,rigid,adaptive,indecisive,none,none,rigid,adaptable,indecisive
+resilience,fragile,resilient,desensitized,none,none,fragile,resilient,desensitized
+focus,scatterbrained,focused,fixated,none,none,scatterbrained,focused,fixated
+honesty,deceitful,truthful,tactless,none,none,deceitful,honest,tactless
+creativity,unimaginative,creative,delusion,female,male,unimaginative,creative,delusional
+assertiveness,submissive,assertive,brutal,male,female,submissive,assertive,domineering
+loyalty,disloyal,commitment,sycophant,female,male,disloyal,loyal,sycophantic
+nurturance,neglectful,nurturing,smothering,female,male,neglectful,nurturing,smothering
+perception,oblivious,perceptive,hypervigilant,male,female,oblivious,perceptive,paranoid
+civics,authoritarian,civil,subversive,none,none,authoritarian,civic-minded,subversive

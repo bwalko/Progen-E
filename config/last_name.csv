@@ -1,0 +1,5461 @@
+name,ethnic,rate
+Zahringen,Alemannic,3
+Hohenstaufen,Alemannic,3
+Swabing,Alemannic,3
+Breisgauer,Alemannic,3
+Bodensee,Alemannic,3
+Reichenauer,Alemannic,3
+Alpgauer,Alemannic,3
+Hirsauer,Alemannic,3
+Welfing,Alemannic,3
+Aargauer,Alemannic,3
+Thurgauer,Alemannic,2
+Rheingauer,Alemannic,2
+Schwarzach,Alemannic,2
+Altdorf,Alemannic,2
+Uracher,Alemannic,2
+Rottweiler,Alemannic,2
+Hugoing,Alemannic,2
+Hugomann,Alemannic,2
+Hugowald,Alemannic,2
+Hugohart,Alemannic,2
+Hugobert,Alemannic,2
+Immoing,Alemannic,2
+Immomann,Alemannic,2
+Immowald,Alemannic,2
+Immohart,Alemannic,1
+Immobert,Alemannic,1
+Ottoing,Alemannic,1
+Ottomann,Alemannic,1
+Ottowald,Alemannic,1
+Ottohart,Alemannic,1
+Ottobert,Alemannic,1
+Hattoing,Alemannic,1
+Hattomann,Alemannic,1
+Hattowald,Alemannic,1
+Hattohart,Alemannic,1
+Hattobert,Alemannic,1
+Alaricing,Alemannic,1
+Alaricmann,Alemannic,1
+Alaricwald,Alemannic,1
+Alarichart,Alemannic,1
+Alaricbert,Alemannic,1
+Alboining,Alemannic,1
+Alboinmann,Alemannic,1
+Alboinwald,Alemannic,1
+Alboinhart,Alemannic,1
+Alboinbert,Alemannic,1
+Anselming,Alemannic,1
+Anselmann,Alemannic,1
+Athenaios,Ancient Greek,3
+Korinthios,Ancient Greek,3
+Thebaios,Ancient Greek,3
+Spartaios,Ancient Greek,3
+Argaios,Ancient Greek,3
+Akhaios,Ancient Greek,3
+Ionios,Ancient Greek,3
+Aiakides,Ancient Greek,3
+Alkmaionid,Ancient Greek,3
+Eurypontid,Ancient Greek,3
+Agiad,Ancient Greek,2
+Herakleid,Ancient Greek,2
+Kodrid,Ancient Greek,2
+Battiad,Ancient Greek,2
+Kypselid,Ancient Greek,2
+Peisistratid,Ancient Greek,2
+Philaid,Ancient Greek,2
+Seleukid,Ancient Greek,2
+Bionides,Ancient Greek,2
+Bioniad,Ancient Greek,2
+Bionios,Ancient Greek,2
+Bioneus,Ancient Greek,2
+Bionid,Ancient Greek,2
+Damonides,Ancient Greek,2
+Damoniad,Ancient Greek,1
+Damonios,Ancient Greek,1
+Damoneus,Ancient Greek,1
+Damonid,Ancient Greek,1
+Kleonides,Ancient Greek,1
+Kleoniad,Ancient Greek,1
+Kleonios,Ancient Greek,1
+Kleoneus,Ancient Greek,1
+Kleonid,Ancient Greek,1
+Admetides,Ancient Greek,1
+Admetiad,Ancient Greek,1
+Admetios,Ancient Greek,1
+Admeteus,Ancient Greek,1
+Admetid,Ancient Greek,1
+Kallides,Ancient Greek,1
+Kalliad,Ancient Greek,1
+Kallios,Ancient Greek,1
+Kallieus,Ancient Greek,1
+Kallid,Ancient Greek,1
+Charitides,Ancient Greek,1
+Charitiad,Ancient Greek,1
+Charitios,Ancient Greek,1
+Chariteus,Ancient Greek,1
+Charitid,Ancient Greek,1
+Euboulides,Ancient Greek,1
+Eubouliad,Ancient Greek,1
+Euboulios,Ancient Greek,1
+Eubouleus,Ancient Greek,1
+Euboulid,Ancient Greek,1
+Leonidides,Ancient Greek,1
+Beaumont,Anglo-Norman,3
+Beauchamp,Anglo-Norman,3
+Mortimer,Anglo-Norman,3
+Mowbray,Anglo-Norman,3
+Neville,Anglo-Norman,3
+Percy,Anglo-Norman,3
+Warenne,Anglo-Norman,3
+Lacy,Anglo-Norman,3
+Clare,Anglo-Norman,3
+Bigod,Anglo-Norman,3
+Talbot,Anglo-Norman,2
+Courcy,Anglo-Norman,2
+Fitzalan,Anglo-Norman,2
+Fitzosbern,Anglo-Norman,2
+Fitzwalter,Anglo-Norman,2
+Devere,Anglo-Norman,2
+Montfort,Anglo-Norman,2
+Bohun,Anglo-Norman,2
+FitzGuy,Anglo-Norman,2
+DeGuy,Anglo-Norman,2
+Guyville,Anglo-Norman,2
+Guymont,Anglo-Norman,2
+Guycourt,Anglo-Norman,2
+FitzIvo,Anglo-Norman,2
+DeIvo,Anglo-Norman,1
+Ivoville,Anglo-Norman,1
+Ivomont,Anglo-Norman,1
+Ivocourt,Anglo-Norman,1
+FitzOdo,Anglo-Norman,1
+DeOdo,Anglo-Norman,1
+Odoville,Anglo-Norman,1
+Odomont,Anglo-Norman,1
+Odocourt,Anglo-Norman,1
+FitzAdam,Anglo-Norman,1
+DeAdam,Anglo-Norman,1
+Adamville,Anglo-Norman,1
+Adamont,Anglo-Norman,1
+Adamcourt,Anglo-Norman,1
+FitzAlan,Anglo-Norman,1
+DeAlan,Anglo-Norman,1
+Alanville,Anglo-Norman,1
+Alanmont,Anglo-Norman,1
+Alancourt,Anglo-Norman,1
+FitzFulk,Anglo-Norman,1
+DeFulk,Anglo-Norman,1
+Fulkville,Anglo-Norman,1
+Fulkmont,Anglo-Norman,1
+Fulkcourt,Anglo-Norman,1
+Tarbelli,Aquitanian/Vasconic,3
+Auscius,Aquitanian/Vasconic,3
+Elimberris,Aquitanian/Vasconic,3
+Lapurdi,Aquitanian/Vasconic,3
+Iluro,Aquitanian/Vasconic,3
+Bigerri,Aquitanian/Vasconic,3
+Vascon,Aquitanian/Vasconic,3
+Garona,Aquitanian/Vasconic,3
+Convenae,Aquitanian/Vasconic,3
+Sibusates,Aquitanian/Vasconic,3
+Oscidates,Aquitanian/Vasconic,2
+Benearni,Aquitanian/Vasconic,2
+Lugdunon,Aquitanian/Vasconic,2
+Aturris,Aquitanian/Vasconic,2
+Belsunce,Aquitanian/Vasconic,2
+Urdunia,Aquitanian/Vasconic,2
+Arccoez,Aquitanian/Vasconic,2
+Arccoitz,Aquitanian/Vasconic,2
+Arccoena,Aquitanian/Vasconic,2
+Arccoaga,Aquitanian/Vasconic,2
+Arccola,Aquitanian/Vasconic,2
+Belexez,Aquitanian/Vasconic,2
+Belexitz,Aquitanian/Vasconic,2
+Belexena,Aquitanian/Vasconic,2
+Belexaga,Aquitanian/Vasconic,1
+Belexola,Aquitanian/Vasconic,1
+Cisonez,Aquitanian/Vasconic,1
+Cisonitz,Aquitanian/Vasconic,1
+Cisonena,Aquitanian/Vasconic,1
+Cisonaga,Aquitanian/Vasconic,1
+Cisonola,Aquitanian/Vasconic,1
+Lurcoez,Aquitanian/Vasconic,1
+Lurcoitz,Aquitanian/Vasconic,1
+Lurcoena,Aquitanian/Vasconic,1
+Lurcoaga,Aquitanian/Vasconic,1
+Lurcola,Aquitanian/Vasconic,1
+Ossonez,Aquitanian/Vasconic,1
+Ossonitz,Aquitanian/Vasconic,1
+Ossonena,Aquitanian/Vasconic,1
+Ossonaga,Aquitanian/Vasconic,1
+Ossonola,Aquitanian/Vasconic,1
+Anderez,Aquitanian/Vasconic,1
+Anderitz,Aquitanian/Vasconic,1
+Anderena,Aquitanian/Vasconic,1
+Anderaga,Aquitanian/Vasconic,1
+Anderola,Aquitanian/Vasconic,1
+Ilunnoez,Aquitanian/Vasconic,1
+Ilunnoitz,Aquitanian/Vasconic,1
+Etxeberria,Basque,3
+Goikoetxea,Basque,3
+Ibarra,Basque,3
+Mendieta,Basque,3
+Zabala,Basque,3
+Aguirre,Basque,3
+Ochoa,Basque,3
+Garate,Basque,3
+Arrieta,Basque,3
+Elizondo,Basque,3
+Loyola,Basque,2
+Ugarte,Basque,2
+Arostegui,Basque,2
+Echevarria,Basque,2
+Larralde,Basque,2
+Zubizarreta,Basque,2
+Mendiola,Basque,2
+Arana,Basque,2
+Argiez,Basque,2
+Argitz,Basque,2
+Argiena,Basque,2
+Argiaga,Basque,2
+Argiola,Basque,2
+Ederez,Basque,2
+Ederitz,Basque,1
+Ederena,Basque,1
+Ederaga,Basque,1
+Ederola,Basque,1
+Ibaiez,Basque,1
+Ibaitz,Basque,1
+Ibaiena,Basque,1
+Ibaiaga,Basque,1
+Ibaiola,Basque,1
+Ikerez,Basque,1
+Ikeritz,Basque,1
+Ikerena,Basque,1
+Ikeraga,Basque,1
+Ikerola,Basque,1
+Lopez,Basque,1
+Lopeitz,Basque,1
+Lopena,Basque,1
+Lopeaga,Basque,1
+Lopeola,Basque,1
+Oierez,Basque,1
+Oieritz,Basque,1
+Oierena,Basque,1
+Oieraga,Basque,1
+Oierola,Basque,1
+Peruez,Basque,1
+Peruitz,Basque,1
+Peruena,Basque,1
+Peruaga,Basque,1
+Peruola,Basque,1
+Unaiez,Basque,1
+Welf,Bavarian,3
+Wittelsbach,Bavarian,3
+Andechs,Bavarian,3
+Scheyern,Bavarian,3
+Tegernsee,Bavarian,3
+Freising,Bavarian,3
+Isaring,Bavarian,3
+Leching,Bavarian,3
+Inngauer,Bavarian,3
+Donaugauer,Bavarian,3
+Passauer,Bavarian,2
+Regensburger,Bavarian,2
+Babenberg,Bavarian,2
+Traungauer,Bavarian,2
+Vohburg,Bavarian,2
+Ebersberg,Bavarian,2
+Ottoing,Bavarian,2
+Ottomann,Bavarian,2
+Ottowald,Bavarian,2
+Ottohart,Bavarian,2
+Ottobert,Bavarian,2
+Paboing,Bavarian,2
+Pabomann,Bavarian,2
+Pabowald,Bavarian,2
+Pabohart,Bavarian,1
+Pabobert,Bavarian,1
+Welfing,Bavarian,1
+Welfmann,Bavarian,1
+Welfwald,Bavarian,1
+Welfhart,Bavarian,1
+Welfbert,Bavarian,1
+Ernsting,Bavarian,1
+Ernstmann,Bavarian,1
+Ernstwald,Bavarian,1
+Ernsthart,Bavarian,1
+Ernstbert,Bavarian,1
+Anselming,Bavarian,1
+Anselmann,Bavarian,1
+Anselmwald,Bavarian,1
+Anselmhart,Bavarian,1
+Anselmbert,Bavarian,1
+Arnolding,Bavarian,1
+Arnoldmann,Bavarian,1
+Arnoldwald,Bavarian,1
+Arnoldhart,Bavarian,1
+Arnoldbert,Bavarian,1
+Konrading,Bavarian,1
+Konradmann,Bavarian,1
+Gibichung,Burgundian,3
+Gundaharing,Burgundian,3
+Gondiocing,Burgundian,3
+Gundobading,Burgundian,3
+Sigismunding,Burgundian,3
+Godomaring,Burgundian,3
+Nibelung,Burgundian,3
+Burgunding,Burgundian,3
+Sapaudian,Burgundian,3
+Lugdunian,Burgundian,3
+Viennensis,Burgundian,2
+Rhodaning,Burgundian,2
+Saoning,Burgundian,2
+Durance,Burgundian,2
+Arelate,Burgundian,2
+Valentinois,Burgundian,2
+Agiulfing,Burgundian,2
+Agiulfmann,Burgundian,2
+Agiulfwald,Burgundian,2
+Agiulfhart,Burgundian,2
+Agiulfbert,Burgundian,2
+Gibicing,Burgundian,2
+Gibicmann,Burgundian,2
+Gibicwald,Burgundian,2
+Gibichart,Burgundian,1
+Gibicbert,Burgundian,1
+Albomaring,Burgundian,1
+Albomarmann,Burgundian,1
+Albomarwald,Burgundian,1
+Albomarhart,Burgundian,1
+Albomarbert,Burgundian,1
+Clotharing,Burgundian,1
+Clotharmann,Burgundian,1
+Clotharwald,Burgundian,1
+Clotharhart,Burgundian,1
+Clotharbert,Burgundian,1
+Godomarmann,Burgundian,1
+Godomarwald,Burgundian,1
+Godomarhart,Burgundian,1
+Godomarbert,Burgundian,1
+Gondiocmann,Burgundian,1
+Gondiocwald,Burgundian,1
+Gondiochart,Burgundian,1
+Gondiocbert,Burgundian,1
+Ricimering,Burgundian,1
+Ricimermann,Burgundian,1
+Ricimerwald,Burgundian,1
+Ricimerhart,Burgundian,1
+Beliaskon,Celtiberian,3
+Numantian,Celtiberian,3
+Arevaci,Celtiberian,3
+Lusones,Celtiberian,3
+Titti,Celtiberian,3
+Belli,Celtiberian,3
+Segontian,Celtiberian,3
+Uxamian,Celtiberian,3
+Contrebian,Celtiberian,3
+Termestine,Celtiberian,3
+Nertobrigan,Celtiberian,2
+Bilbilitan,Celtiberian,2
+Clunian,Celtiberian,2
+Oretani,Celtiberian,2
+Pelendones,Celtiberian,2
+Titian,Celtiberian,2
+Carosacos,Celtiberian,2
+Carosrix,Celtiberian,2
+Carosmaros,Celtiberian,2
+Carosgnatos,Celtiberian,2
+Carosdunon,Celtiberian,2
+Uxamacos,Celtiberian,2
+Uxamarix,Celtiberian,2
+Uxamamaros,Celtiberian,2
+Uxamagnatos,Celtiberian,1
+Uxamadunon,Celtiberian,1
+Ambatacos,Celtiberian,1
+Ambatrix,Celtiberian,1
+Ambatmaros,Celtiberian,1
+Ambatgnatos,Celtiberian,1
+Ambatdunon,Celtiberian,1
+Aucalacos,Celtiberian,1
+Aucalrix,Celtiberian,1
+Aucalmaros,Celtiberian,1
+Aucalgnatos,Celtiberian,1
+Aucaldunon,Celtiberian,1
+Belenacos,Celtiberian,1
+Belenrix,Celtiberian,1
+Belenmaros,Celtiberian,1
+Belengnatos,Celtiberian,1
+Belendunon,Celtiberian,1
+Caturixacos,Celtiberian,1
+Caturixrix,Celtiberian,1
+Caturixmaros,Celtiberian,1
+Caturixgnatos,Celtiberian,1
+Caturixdunon,Celtiberian,1
+Virotacos,Celtiberian,1
+Virotrix,Celtiberian,1
+Insuber,Cisalpine Celtic,3
+Boian,Cisalpine Celtic,3
+Cenomani,Cisalpine Celtic,3
+Taurini,Cisalpine Celtic,3
+Lepontic,Cisalpine Celtic,3
+Brixian,Cisalpine Celtic,3
+Mediolanian,Cisalpine Celtic,3
+Padan,Cisalpine Celtic,3
+Cenomar,Cisalpine Celtic,3
+Lingonian,Cisalpine Celtic,3
+Senonian,Cisalpine Celtic,2
+Carni,Cisalpine Celtic,2
+Venostes,Cisalpine Celtic,2
+Salassi,Cisalpine Celtic,2
+Orobii,Cisalpine Celtic,2
+Tauriscan,Cisalpine Celtic,2
+Nantosacos,Cisalpine Celtic,2
+Nantosrix,Cisalpine Celtic,2
+Nantosmaros,Cisalpine Celtic,2
+Nantosgnatos,Cisalpine Celtic,2
+Nantosdunon,Cisalpine Celtic,2
+Belenacos,Cisalpine Celtic,2
+Belenrix,Cisalpine Celtic,2
+Belenmaros,Cisalpine Celtic,2
+Belengnatos,Cisalpine Celtic,1
+Belendunon,Cisalpine Celtic,1
+Brennacos,Cisalpine Celtic,1
+Brennrix,Cisalpine Celtic,1
+Brennmaros,Cisalpine Celtic,1
+Brenngnatos,Cisalpine Celtic,1
+Brenndunon,Cisalpine Celtic,1
+Cavaracos,Cisalpine Celtic,1
+Cavarix,Cisalpine Celtic,1
+Cavarmaros,Cisalpine Celtic,1
+Cavargnatos,Cisalpine Celtic,1
+Cavardunon,Cisalpine Celtic,1
+Comaracos,Cisalpine Celtic,1
+Comarix,Cisalpine Celtic,1
+Comarmaros,Cisalpine Celtic,1
+Comargnatos,Cisalpine Celtic,1
+Comardunon,Cisalpine Celtic,1
+Adbogacos,Cisalpine Celtic,1
+Adbogrix,Cisalpine Celtic,1
+Adbogmaros,Cisalpine Celtic,1
+Adbognatos,Cisalpine Celtic,1
+Adbogdunon,Cisalpine Celtic,1
+Dumnacacos,Cisalpine Celtic,1
+Dumnacrix,Cisalpine Celtic,1
+Trevelyan,Cornish,3
+Penrose,Cornish,3
+Trelawny,Cornish,3
+Pendarves,Cornish,3
+Polwhele,Cornish,3
+Nanscarrow,Cornish,3
+Carminow,Cornish,3
+Tremayne,Cornish,3
+Trevithick,Cornish,3
+Penzance,Cornish,3
+Penhaligon,Cornish,2
+Treliske,Cornish,2
+Roscarrock,Cornish,2
+Godolphin,Cornish,2
+Boscawen,Cornish,2
+Carnsew,Cornish,2
+Tregarth,Cornish,2
+Trevorrow,Cornish,2
+ApIago,Cornish,2
+PenIago,Cornish,2
+TreIago,Cornish,2
+Iagowyn,Cornish,2
+Iagoawc,Cornish,2
+ApJago,Cornish,2
+PenJago,Cornish,1
+TreJago,Cornish,1
+Jagowyn,Cornish,1
+Jagoawc,Cornish,1
+ApRuan,Cornish,1
+PenRuan,Cornish,1
+TreRuan,Cornish,1
+Ruanwyn,Cornish,1
+Ruanawc,Cornish,1
+ApBudoc,Cornish,1
+PenBudoc,Cornish,1
+TreBudoc,Cornish,1
+Budocwyn,Cornish,1
+Budocawc,Cornish,1
+ApCynan,Cornish,1
+PenCynan,Cornish,1
+TreCynan,Cornish,1
+Cynanwyn,Cornish,1
+Cynanawc,Cornish,1
+ApDerwa,Cornish,1
+PenDerwa,Cornish,1
+TreDerwa,Cornish,1
+Derwawyn,Cornish,1
+Derwawc,Cornish,1
+Rheged,Cumbric,3
+Strathclyde,Cumbric,3
+Altclut,Cumbric,3
+Govan,Cumbric,3
+Elmet,Cumbric,3
+Gododdin,Cumbric,3
+Manau,Cumbric,3
+Dineidyn,Cumbric,3
+Lleuddiniawn,Cumbric,3
+Gwenddoleu,Cumbric,3
+Cynfarch,Cumbric,2
+Urienid,Cumbric,2
+Rhydderchid,Cumbric,2
+Dumbarton,Cumbric,2
+Ebrauc,Cumbric,2
+Cumbrian,Cumbric,2
+ApBeli,Cumbric,2
+PenBeli,Cumbric,2
+TreBeli,Cumbric,2
+Beliwyn,Cumbric,2
+Beliawc,Cumbric,2
+ApBran,Cumbric,2
+PenBran,Cumbric,2
+TreBran,Cumbric,2
+Branwyn,Cumbric,1
+Branawc,Cumbric,1
+ApHoel,Cumbric,1
+PenHoel,Cumbric,1
+TreHoel,Cumbric,1
+Hoelwyn,Cumbric,1
+Hoelawc,Cumbric,1
+ApPabo,Cumbric,1
+PenPabo,Cumbric,1
+TrePabo,Cumbric,1
+Pabowyn,Cumbric,1
+Paboawc,Cumbric,1
+ApRhun,Cumbric,1
+PenRhun,Cumbric,1
+TreRhun,Cumbric,1
+Rhunwyn,Cumbric,1
+Rhunawc,Cumbric,1
+ApCeneu,Cumbric,1
+PenCeneu,Cumbric,1
+TreCeneu,Cumbric,1
+Ceneuwyn,Cumbric,1
+Ceneuawc,Cumbric,1
+ApCynon,Cumbric,1
+PenCynon,Cumbric,1
+Kursis,Curonian,3
+Ziemelis,Curonian,3
+Pilsats,Curonian,3
+Megava,Curonian,3
+Bandava,Curonian,3
+Duvzare,Curonian,3
+Ventava,Curonian,3
+Ceklis,Curonian,3
+Lamatta,Curonian,3
+Durbis,Curonian,3
+Embute,Curonian,2
+Grobin,Curonian,2
+Abava,Curonian,2
+Venta,Curonian,2
+Miera,Curonian,2
+Talsi,Curonian,2
+Austasaitis,Curonian,2
+Austasunas,Curonian,2
+Austasenas,Curonian,2
+Austasonis,Curonian,2
+Austasiskis,Curonian,2
+Dargisaitis,Curonian,2
+Dargisunas,Curonian,2
+Dargisenas,Curonian,2
+Dargisonis,Curonian,1
+Dargisiskis,Curonian,1
+Gailisaitis,Curonian,1
+Gailisunas,Curonian,1
+Gailisenas,Curonian,1
+Gailisonis,Curonian,1
+Gailisiskis,Curonian,1
+Jurgisaitis,Curonian,1
+Jurgisunas,Curonian,1
+Jurgisenas,Curonian,1
+Jurgisonis,Curonian,1
+Jurgisiskis,Curonian,1
+Vaiodaitis,Curonian,1
+Vaiodunas,Curonian,1
+Vaiodenas,Curonian,1
+Vaiodonis,Curonian,1
+Vaiodiskis,Curonian,1
+Andagisaitis,Curonian,1
+Andagisunas,Curonian,1
+Andagisenas,Curonian,1
+Andagisonis,Curonian,1
+Andagisiskis,Curonian,1
+Kerniaitis,Curonian,1
+Kerniunas,Curonian,1
+Densusian,Dacian,3
+Sarmizegetusan,Dacian,3
+Carpathian,Dacian,3
+Burebistan,Dacian,3
+Daciscus,Dacian,3
+Geticus,Dacian,3
+Apulian,Dacian,3
+Napocan,Dacian,3
+Porolissan,Dacian,3
+Costobocian,Dacian,3
+Diernan,Dacian,2
+Zalmoxian,Dacian,2
+Tibiscian,Dacian,2
+Moesian,Dacian,2
+Alutan,Dacian,2
+Sargetian,Dacian,2
+Dadasid,Dacian,2
+Dadasicus,Dacian,2
+Dadasian,Dacian,2
+Dadasenus,Dacian,2
+Dadasides,Dacian,2
+Dapyxid,Dacian,2
+Dapyxicus,Dacian,2
+Dapyxian,Dacian,2
+Dapyxenus,Dacian,1
+Dapyxides,Dacian,1
+Durasid,Dacian,1
+Durasicus,Dacian,1
+Durasian,Dacian,1
+Durasenus,Dacian,1
+Durasides,Dacian,1
+Surasid,Dacian,1
+Surasicus,Dacian,1
+Surasian,Dacian,1
+Surasenus,Dacian,1
+Surasides,Dacian,1
+Tarsaid,Dacian,1
+Tarsaicus,Dacian,1
+Tarsaian,Dacian,1
+Tarsaenus,Dacian,1
+Tarsaides,Dacian,1
+Cotisoid,Dacian,1
+Cotisoicus,Dacian,1
+Cotisoian,Dacian,1
+Cotisoenus,Dacian,1
+Cotisoides,Dacian,1
+Orolesid,Dacian,1
+Orolesicus,Dacian,1
+Tamme,Estonian,3
+Saar,Estonian,3
+Kask,Estonian,3
+Lepik,Estonian,3
+Mets,Estonian,3
+Kivi,Estonian,3
+Laas,Estonian,3
+Tammepuu,Estonian,3
+Kuusk,Estonian,3
+Pold,Estonian,3
+Rand,Estonian,2
+Toom,Estonian,2
+Kallas,Estonian,2
+Pihl,Estonian,2
+Vaher,Estonian,2
+Oja,Estonian,2
+Lind,Estonian,2
+Ratas,Estonian,2
+Ivonen,Estonian,2
+Ivola,Estonian,2
+Ivomaki,Estonian,2
+Ivojarvi,Estonian,2
+Ivomo,Estonian,2
+Ukunen,Estonian,2
+Ukula,Estonian,1
+Ukumaki,Estonian,1
+Ukujarvi,Estonian,1
+Ukumo,Estonian,1
+Ahtinen,Estonian,1
+Ahtila,Estonian,1
+Ahtimaki,Estonian,1
+Ahtijarvi,Estonian,1
+Ahtimo,Estonian,1
+Antsnen,Estonian,1
+Antsla,Estonian,1
+Antsmaki,Estonian,1
+Antsjarvi,Estonian,1
+Antsmo,Estonian,1
+Ardonen,Estonian,1
+Ardola,Estonian,1
+Ardomaki,Estonian,1
+Ardojarvi,Estonian,1
+Ardomo,Estonian,1
+Jaanen,Estonian,1
+Jaanla,Estonian,1
+Jaanmaki,Estonian,1
+Jaanjarvi,Estonian,1
+Jaanmo,Estonian,1
+Spurinna,Etruscan,3
+Vibenna,Etruscan,3
+Clevsina,Etruscan,3
+Tarchna,Etruscan,3
+Velcha,Etruscan,3
+Caecina,Etruscan,3
+Perusna,Etruscan,3
+Tarquna,Etruscan,3
+Cilnia,Etruscan,3
+Clavtie,Etruscan,3
+Aulethna,Etruscan,2
+Velthina,Etruscan,2
+Porsenna,Etruscan,2
+Pulena,Etruscan,2
+Rasna,Etruscan,2
+Lecne,Etruscan,2
+Saties,Etruscan,2
+Vipina,Etruscan,2
+Caena,Etruscan,2
+Caenas,Etruscan,2
+Caenei,Etruscan,2
+Caeicus,Etruscan,2
+Caeian,Etruscan,2
+Velna,Etruscan,2
+Velnas,Etruscan,1
+Velnei,Etruscan,1
+Velicus,Etruscan,1
+Velian,Etruscan,1
+Aulena,Etruscan,1
+Aulenas,Etruscan,1
+Aulenei,Etruscan,1
+Auleicus,Etruscan,1
+Auleian,Etruscan,1
+Vipena,Etruscan,1
+Vipenas,Etruscan,1
+Vipenei,Etruscan,1
+Vipeicus,Etruscan,1
+Vipeian,Etruscan,1
+Arnthna,Etruscan,1
+Arnthnas,Etruscan,1
+Arnthnei,Etruscan,1
+Arnthicus,Etruscan,1
+Arnthian,Etruscan,1
+Avilena,Etruscan,1
+Avilenas,Etruscan,1
+Avilenei,Etruscan,1
+Avileicus,Etruscan,1
+Avileian,Etruscan,1
+Aghizar,Exotic,3
+Akreth,Exotic,3
+Alzivar,Exotic,3
+Ashkad,Exotic,3
+Azrakan,Exotic,3
+Belthar,Exotic,3
+Caldrin,Exotic,3
+Drazeth,Exotic,3
+Eldovar,Exotic,3
+Faelkor,Exotic,3
+Ghazrin,Exotic,2
+Irkavan,Exotic,2
+Jorvath,Exotic,2
+Kelmar,Exotic,2
+Khezul,Exotic,2
+Lorvane,Exotic,2
+Morveth,Exotic,2
+Narzhal,Exotic,2
+Orvash,Exotic,2
+Qadriel,Exotic,2
+Ravakar,Exotic,2
+Serevoth,Exotic,2
+Tazren,Exotic,2
+Ulkath,Exotic,2
+Vandor,Exotic,1
+Xaldrin,Exotic,1
+Yavrek,Exotic,1
+Zorvath,Exotic,1
+Arkanesh,Exotic,1
+Beldrath,Exotic,1
+Cazroth,Exotic,1
+Delzarin,Exotic,1
+Eshkar,Exotic,1
+Faldreth,Exotic,1
+Gorvane,Exotic,1
+Heskul,Exotic,1
+Izhmar,Exotic,1
+Jalveth,Exotic,1
+Korvash,Exotic,1
+Lazrith,Exotic,1
+Mordakai,Exotic,1
+Nexovar,Exotic,1
+Orzhan,Exotic,1
+Peldrith,Exotic,1
+Qirvane,Exotic,1
+Rhazakul,Exotic,1
+Sarneth,Exotic,1
+Tolvakar,Exotic,1
+Uzhadin,Exotic,1
+Vashrul,Exotic,1
+Wyrdan,Exotic,1
+Xorath,Exotic,1
+Yezarin,Exotic,1
+Zhalvek,Exotic,1
+Arnulfing,Frankish,3
+Pippinid,Frankish,3
+Chlodoving,Frankish,3
+Meroving,Frankish,3
+Caroling,Frankish,3
+Ripuari,Frankish,3
+Salian,Frankish,3
+Toxandrian,Frankish,3
+Austrasian,Frankish,3
+Neustrian,Frankish,3
+Bructer,Frankish,2
+Chattuari,Frankish,2
+Chamavi,Frankish,2
+Sicambri,Frankish,2
+Bautoing,Frankish,2
+Warining,Frankish,2
+Hugoberting,Frankish,2
+Etichonid,Frankish,2
+Warinmann,Frankish,2
+Warinwald,Frankish,2
+Warinhart,Frankish,2
+Warinbert,Frankish,2
+Aldricing,Frankish,2
+Aldricmann,Frankish,2
+Aldricwald,Frankish,1
+Aldrichart,Frankish,1
+Aldricbert,Frankish,1
+Arnulfmann,Frankish,1
+Arnulfwald,Frankish,1
+Arnulfhart,Frankish,1
+Arnulfbert,Frankish,1
+Audoining,Frankish,1
+Audoinmann,Frankish,1
+Audoinwald,Frankish,1
+Audoinhart,Frankish,1
+Audoinbert,Frankish,1
+Ebroining,Frankish,1
+Ebroinmann,Frankish,1
+Ebroinwald,Frankish,1
+Ebroinhart,Frankish,1
+Ebroinbert,Frankish,1
+Lotharing,Frankish,1
+Lotharmann,Frankish,1
+Lotharwald,Frankish,1
+Lotharhart,Frankish,1
+Lotharbert,Frankish,1
+Pippining,Frankish,1
+Pippinmann,Frankish,1
+Fernandes,Galician-Portuguese,3
+Goncalves,Galician-Portuguese,3
+Eanes,Galician-Portuguese,3
+Pais,Galician-Portuguese,3
+Peres,Galician-Portuguese,3
+Soares,Galician-Portuguese,3
+Mendes,Galician-Portuguese,3
+Nunes,Galician-Portuguese,3
+Coelho,Galician-Portuguese,3
+Pereira,Galician-Portuguese,3
+Afonso,Galician-Portuguese,2
+Rodrigues,Galician-Portuguese,2
+Vasques,Galician-Portuguese,2
+Lourenco,Galician-Portuguese,2
+Froilaz,Galician-Portuguese,2
+Bermudez,Galician-Portuguese,2
+Moniz,Galician-Portuguese,2
+Guedes,Galician-Portuguese,2
+Memez,Galician-Portuguese,2
+Memes,Galician-Portuguese,2
+Memiz,Galician-Portuguese,2
+Memano,Galician-Portuguese,2
+Memeiro,Galician-Portuguese,2
+Anesez,Galician-Portuguese,2
+Aneses,Galician-Portuguese,1
+Anesiz,Galician-Portuguese,1
+Anesano,Galician-Portuguese,1
+Aneseiro,Galician-Portuguese,1
+Egasez,Galician-Portuguese,1
+Egases,Galician-Portuguese,1
+Egasiz,Galician-Portuguese,1
+Egasano,Galician-Portuguese,1
+Egaseiro,Galician-Portuguese,1
+Joaoez,Galician-Portuguese,1
+Joaoes,Galician-Portuguese,1
+Joaoiz,Galician-Portuguese,1
+Joaoano,Galician-Portuguese,1
+Joaoeiro,Galician-Portuguese,1
+Lopoez,Galician-Portuguese,1
+Lopoes,Galician-Portuguese,1
+Lopoiz,Galician-Portuguese,1
+Lopoano,Galician-Portuguese,1
+Lopoeiro,Galician-Portuguese,1
+Nunoez,Galician-Portuguese,1
+Nunoes,Galician-Portuguese,1
+Nunoiz,Galician-Portuguese,1
+Nunoano,Galician-Portuguese,1
+Nunoeiro,Galician-Portuguese,1
+Arvern,Gaulish,3
+Aedui,Gaulish,3
+Sequani,Gaulish,3
+Carnute,Gaulish,3
+Senon,Gaulish,3
+Biturige,Gaulish,3
+Trever,Gaulish,3
+Nervian,Gaulish,3
+Helvetian,Gaulish,3
+Remian,Gaulish,3
+Lemovice,Gaulish,2
+Cadurcan,Gaulish,2
+Picton,Gaulish,2
+Petrocorian,Gaulish,2
+Santone,Gaulish,2
+Allobrog,Gaulish,2
+Bellovac,Gaulish,2
+Meldian,Gaulish,2
+Brennacos,Gaulish,2
+Brennrix,Gaulish,2
+Brennmaros,Gaulish,2
+Brenngnatos,Gaulish,2
+Brenndunon,Gaulish,2
+Caturixacos,Gaulish,2
+Caturixrix,Gaulish,1
+Caturixmaros,Gaulish,1
+Caturixgnatos,Gaulish,1
+Caturixdunon,Gaulish,1
+Commiacos,Gaulish,1
+Commirix,Gaulish,1
+Commimaros,Gaulish,1
+Commignatos,Gaulish,1
+Commidunon,Gaulish,1
+Ambiorixacos,Gaulish,1
+Ambiorixrix,Gaulish,1
+Ambiorixmaros,Gaulish,1
+Ambiorixgnatos,Gaulish,1
+Ambiorixdunon,Gaulish,1
+Casticacos,Gaulish,1
+Casticrix,Gaulish,1
+Casticmaros,Gaulish,1
+Casticgnatos,Gaulish,1
+Casticdunon,Gaulish,1
+Dumnorixacos,Gaulish,1
+Dumnorixrix,Gaulish,1
+Dumnorixmaros,Gaulish,1
+Dumnorixgnatos,Gaulish,1
+Dumnorixdunon,Gaulish,1
+Amal,Gothic,3
+Balth,Gothic,3
+Greuthung,Gothic,3
+Terving,Gothic,3
+Theodoring,Gothic,3
+Alaricing,Gothic,3
+Athanaricing,Gothic,3
+Wulfing,Gothic,3
+Guting,Gothic,3
+Ostrogoth,Gothic,3
+Visigoth,Gothic,2
+Vesi,Gothic,2
+Gruthung,Gothic,2
+Hermannaric,Gothic,2
+Fritigern,Gothic,2
+Leovigilding,Gothic,2
+Agilaing,Gothic,2
+Agilamann,Gothic,2
+Agilawald,Gothic,2
+Agilahart,Gothic,2
+Agilabert,Gothic,2
+Euricing,Gothic,2
+Euricmann,Gothic,2
+Euricwald,Gothic,2
+Eurichart,Gothic,1
+Euricbert,Gothic,1
+Waliaing,Gothic,1
+Waliamann,Gothic,1
+Waliawald,Gothic,1
+Waliahart,Gothic,1
+Waliabert,Gothic,1
+Alaricmann,Gothic,1
+Alaricwald,Gothic,1
+Alarichart,Gothic,1
+Alaricbert,Gothic,1
+Totiling,Gothic,1
+Totilmann,Gothic,1
+Totilwald,Gothic,1
+Totilhart,Gothic,1
+Totilbert,Gothic,1
+Gesalecing,Gothic,1
+Gesalecmann,Gothic,1
+Gesalecwald,Gothic,1
+Gesalechart,Gothic,1
+Gesalecbert,Gothic,1
+Rodering,Gothic,1
+Rodermann,Gothic,1
+Roderwald,Gothic,1
+Dardan,Illyrian,3
+Ardiaei,Illyrian,3
+Taulant,Illyrian,3
+Labeat,Illyrian,3
+Enchelei,Illyrian,3
+Dassaret,Illyrian,3
+Pannon,Illyrian,3
+Autariate,Illyrian,3
+Delmatae,Illyrian,3
+Liburnian,Illyrian,3
+Iapodian,Illyrian,2
+Glaukid,Illyrian,2
+Batonid,Illyrian,2
+Gentiad,Illyrian,2
+Agronid,Illyrian,2
+Skerdilaid,Illyrian,2
+Batoid,Illyrian,2
+Batoicus,Illyrian,2
+Batoian,Illyrian,2
+Batoenus,Illyrian,2
+Batoides,Illyrian,2
+Agronicus,Illyrian,2
+Agronian,Illyrian,2
+Agronenus,Illyrian,2
+Agronides,Illyrian,1
+Andesid,Illyrian,1
+Andesicus,Illyrian,1
+Andesian,Illyrian,1
+Andesenus,Illyrian,1
+Andesides,Illyrian,1
+Verzoid,Illyrian,1
+Verzoicus,Illyrian,1
+Verzoian,Illyrian,1
+Verzoenus,Illyrian,1
+Verzoides,Illyrian,1
+Grabosid,Illyrian,1
+Grabosicus,Illyrian,1
+Grabosian,Illyrian,1
+Grabosenus,Illyrian,1
+Grabosides,Illyrian,1
+Pinnesid,Illyrian,1
+Pinnesicus,Illyrian,1
+Pinnesian,Illyrian,1
+Pinnesenus,Illyrian,1
+Pinnesides,Illyrian,1
+Platorid,Illyrian,1
+Platoricus,Illyrian,1
+Platorian,Illyrian,1
+ONeill,Irish Gaelic,3
+OBrien,Irish Gaelic,3
+MacCarthy,Irish Gaelic,3
+MacMurrough,Irish Gaelic,3
+OConnor,Irish Gaelic,3
+MacDermot,Irish Gaelic,3
+ODonnell,Irish Gaelic,3
+ORourke,Irish Gaelic,3
+MacMahon,Irish Gaelic,3
+MacLochlainn,Irish Gaelic,3
+MacAodha,Irish Gaelic,2
+ODubhda,Irish Gaelic,2
+OFlaithbertach,Irish Gaelic,2
+MacGillapatrick,Irish Gaelic,2
+OMalley,Irish Gaelic,2
+OKelly,Irish Gaelic,2
+OSullivan,Irish Gaelic,2
+MacBrian,Irish Gaelic,2
+MacAed,Irish Gaelic,2
+OAed,Irish Gaelic,2
+UiAed,Irish Gaelic,2
+Aedan,Irish Gaelic,2
+Aedach,Irish Gaelic,2
+MacArt,Irish Gaelic,2
+OArt,Irish Gaelic,1
+UiArt,Irish Gaelic,1
+Artan,Irish Gaelic,1
+Artach,Irish Gaelic,1
+MacFinn,Irish Gaelic,1
+OFinn,Irish Gaelic,1
+UiFinn,Irish Gaelic,1
+Finnan,Irish Gaelic,1
+Finnach,Irish Gaelic,1
+MacTadc,Irish Gaelic,1
+OTadc,Irish Gaelic,1
+UiTadc,Irish Gaelic,1
+Tadcan,Irish Gaelic,1
+Tadcach,Irish Gaelic,1
+OBrian,Irish Gaelic,1
+UiBrian,Irish Gaelic,1
+Brianan,Irish Gaelic,1
+Brianach,Irish Gaelic,1
+MacFlann,Irish Gaelic,1
+OFlann,Irish Gaelic,1
+UiFlann,Irish Gaelic,1
+Flannan,Irish Gaelic,1
+Flannach,Irish Gaelic,1
+MacNiall,Irish Gaelic,1
+ONiall,Irish Gaelic,1
+UiNiall,Irish Gaelic,1
+Niallan,Irish Gaelic,1
+Niallach,Irish Gaelic,1
+MacAengus,Irish Gaelic,1
+OAengus,Irish Gaelic,1
+Karjalainen,Karelian,3
+Korhonen,Karelian,3
+Nieminen,Karelian,3
+Miettinen,Karelian,3
+Hamalainen,Karelian,3
+Koskinen,Karelian,3
+Heikkinen,Karelian,3
+Kettunen,Karelian,3
+Laukkanen,Karelian,3
+Partanen,Karelian,3
+Rautiainen,Karelian,2
+Hakkarainen,Karelian,2
+Kivinen,Karelian,2
+Metsanen,Karelian,2
+Jokinen,Karelian,2
+Saarinen,Karelian,2
+Ironen,Karelian,2
+Irola,Karelian,2
+Iromaki,Karelian,2
+Irojarvi,Karelian,2
+Iromo,Karelian,2
+Ahtinen,Karelian,2
+Ahtila,Karelian,2
+Ahtimaki,Karelian,2
+Ahtijarvi,Karelian,1
+Ahtimo,Karelian,1
+Eeronen,Karelian,1
+Eerola,Karelian,1
+Eeromaki,Karelian,1
+Eerojarvi,Karelian,1
+Eeromo,Karelian,1
+Juhonen,Karelian,1
+Juhola,Karelian,1
+Juhomaki,Karelian,1
+Juhojarvi,Karelian,1
+Juhomo,Karelian,1
+Untonen,Karelian,1
+Untola,Karelian,1
+Untomaki,Karelian,1
+Untojarvi,Karelian,1
+Untomo,Karelian,1
+Anttinen,Karelian,1
+Anttila,Karelian,1
+Anttimaki,Karelian,1
+Anttijarvi,Karelian,1
+Anttimo,Karelian,1
+Kaukonen,Karelian,1
+Kaukola,Karelian,1
+Aelius,Latin/Roman,3
+Aemilius,Latin/Roman,3
+Annius,Latin/Roman,3
+Antonius,Latin/Roman,3
+Appius,Latin/Roman,3
+Aquilius,Latin/Roman,3
+Atilius,Latin/Roman,3
+Aurelius,Latin/Roman,3
+Caecilius,Latin/Roman,3
+Calpurnius,Latin/Roman,3
+Cassius,Latin/Roman,2
+Claudius,Latin/Roman,2
+Cornelius,Latin/Roman,2
+Domitius,Latin/Roman,2
+Fabius,Latin/Roman,2
+Fabricius,Latin/Roman,2
+Flavius,Latin/Roman,2
+Fulvius,Latin/Roman,2
+Furius,Latin/Roman,2
+Horatius,Latin/Roman,2
+Julius,Latin/Roman,2
+Junius,Latin/Roman,2
+Licinius,Latin/Roman,2
+Livius,Latin/Roman,2
+Lucretius,Latin/Roman,1
+Manlius,Latin/Roman,1
+Marcius,Latin/Roman,1
+Marius,Latin/Roman,1
+Minucius,Latin/Roman,1
+Mucius,Latin/Roman,1
+Octavius,Latin/Roman,1
+Papirius,Latin/Roman,1
+Pinarius,Latin/Roman,1
+Plautius,Latin/Roman,1
+Pompeius,Latin/Roman,1
+Pontius,Latin/Roman,1
+Porcius,Latin/Roman,1
+Postumius,Latin/Roman,1
+Quinctius,Latin/Roman,1
+Quinctilius,Latin/Roman,1
+Scribonius,Latin/Roman,1
+Sempronius,Latin/Roman,1
+Sergius,Latin/Roman,1
+Servilius,Latin/Roman,1
+Sulpicius,Latin/Roman,1
+Terentius,Latin/Roman,1
+Tullius,Latin/Roman,1
+Valerius,Latin/Roman,1
+Vergilius,Latin/Roman,1
+Vibius,Latin/Roman,1
+Vitellius,Latin/Roman,1
+Volumnius,Latin/Roman,1
+Clodius,Latin/Roman,1
+Scipio,Latin/Roman,1
+Kalnins,Latvian/Latgalian,3
+Berzins,Latvian/Latgalian,3
+Ozolins,Latvian/Latgalian,3
+Balodis,Latvian/Latgalian,3
+Liepins,Latvian/Latgalian,3
+Eglitis,Latvian/Latgalian,3
+Krumins,Latvian/Latgalian,3
+Zarins,Latvian/Latgalian,3
+Jansons,Latvian/Latgalian,3
+Petersons,Latvian/Latgalian,3
+Abolins,Latvian/Latgalian,2
+Lacis,Latvian/Latgalian,2
+Vilks,Latvian/Latgalian,2
+Priede,Latvian/Latgalian,2
+Graudins,Latvian/Latgalian,2
+Auzins,Latvian/Latgalian,2
+Daugavietis,Latvian/Latgalian,2
+Latgalis,Latvian/Latgalian,2
+Tomsaitis,Latvian/Latgalian,2
+Tomsunas,Latvian/Latgalian,2
+Tomsenas,Latvian/Latgalian,2
+Tomsonis,Latvian/Latgalian,2
+Tomsiskis,Latvian/Latgalian,2
+Ansisaitis,Latvian/Latgalian,2
+Ansisunas,Latvian/Latgalian,1
+Ansisenas,Latvian/Latgalian,1
+Ansisonis,Latvian/Latgalian,1
+Ansisiskis,Latvian/Latgalian,1
+Eriksaitis,Latvian/Latgalian,1
+Eriksunas,Latvian/Latgalian,1
+Eriksenas,Latvian/Latgalian,1
+Eriksonis,Latvian/Latgalian,1
+Eriksiskis,Latvian/Latgalian,1
+Gatisaitis,Latvian/Latgalian,1
+Gatisunas,Latvian/Latgalian,1
+Gatisenas,Latvian/Latgalian,1
+Gatisonis,Latvian/Latgalian,1
+Gatisiskis,Latvian/Latgalian,1
+Janisaitis,Latvian/Latgalian,1
+Janisunas,Latvian/Latgalian,1
+Janisenas,Latvian/Latgalian,1
+Janisonis,Latvian/Latgalian,1
+Janisiskis,Latvian/Latgalian,1
+Jurisaitis,Latvian/Latgalian,1
+Jurisunas,Latvian/Latgalian,1
+Jurisenas,Latvian/Latgalian,1
+Jurisonis,Latvian/Latgalian,1
+Jurisiskis,Latvian/Latgalian,1
+Kaup,Livonian,3
+Livo,Livonian,3
+Salatsi,Livonian,3
+Turaida,Livonian,3
+Metsepole,Livonian,3
+Koiva,Livonian,3
+Irbe,Livonian,3
+Randa,Livonian,3
+Vidzeme,Livonian,3
+Kolka,Livonian,3
+Mazirbe,Livonian,2
+Vainola,Livonian,2
+Kandava,Livonian,2
+Talsi,Livonian,2
+Limba,Livonian,2
+Daugava,Livonian,2
+Ansnen,Livonian,2
+Ansla,Livonian,2
+Ansmaki,Livonian,2
+Ansjarvi,Livonian,2
+Ansmo,Livonian,2
+Yrinen,Livonian,2
+Yrila,Livonian,2
+Yrimaki,Livonian,2
+Yrijarvi,Livonian,1
+Yrimo,Livonian,1
+Karlnen,Livonian,1
+Karla,Livonian,1
+Karlmaki,Livonian,1
+Karljarvi,Livonian,1
+Karlmo,Livonian,1
+Vilinen,Livonian,1
+Vilila,Livonian,1
+Vilimaki,Livonian,1
+Vilijarvi,Livonian,1
+Vilimo,Livonian,1
+Gausian,Lombard,3
+Lething,Lombard,3
+Aroding,Lombard,3
+Wachoning,Lombard,3
+Gisulfing,Lombard,3
+Alboining,Lombard,3
+Rotharing,Lombard,3
+Liutpranding,Lombard,3
+Beneventan,Lombard,3
+Spoleto,Lombard,3
+Friulan,Lombard,2
+Cividale,Lombard,2
+Ticinus,Lombard,2
+Langobard,Lombard,2
+Perctariting,Lombard,2
+Grimoalding,Lombard,2
+Tassoing,Lombard,2
+Tassomann,Lombard,2
+Tassowald,Lombard,2
+Tassohart,Lombard,2
+Tassobert,Lombard,2
+Wachoing,Lombard,2
+Wachomann,Lombard,2
+Wachowald,Lombard,2
+Wachohart,Lombard,1
+Wachobert,Lombard,1
+Alboinmann,Lombard,1
+Alboinwald,Lombard,1
+Alboinhart,Lombard,1
+Alboinbert,Lombard,1
+Gisulfmann,Lombard,1
+Gisulfwald,Lombard,1
+Gisulfhart,Lombard,1
+Gisulfbert,Lombard,1
+Agilulfing,Lombard,1
+Agilulfmann,Lombard,1
+Agilulfwald,Lombard,1
+Agilulfhart,Lombard,1
+Agilulfbert,Lombard,1
+Arichising,Lombard,1
+Arichismann,Lombard,1
+Arichiswald,Lombard,1
+Arichishart,Lombard,1
+Arichisbert,Lombard,1
+Autharing,Lombard,1
+Autharimann,Lombard,1
+Authariwald,Lombard,1
+Autharihart,Lombard,1
+Artas,Messapic,3
+Dazimas,Messapic,3
+Lahona,Messapic,3
+Plator,Messapic,3
+Rudiae,Messapic,3
+Venas,Messapic,3
+Callia,Messapic,3
+Brundisian,Messapic,3
+Calabrus,Messapic,3
+Iapyx,Messapic,3
+Uzentum,Messapic,2
+Mandurian,Messapic,2
+Tarentine,Messapic,2
+Peucetian,Messapic,2
+Daunian,Messapic,2
+Salentin,Messapic,2
+Zisna,Messapic,2
+Zisnas,Messapic,2
+Zisnei,Messapic,2
+Zisicus,Messapic,2
+Zisian,Messapic,2
+Aplisna,Messapic,2
+Aplisnas,Messapic,2
+Aplisnei,Messapic,2
+Aplisicus,Messapic,1
+Aplisian,Messapic,1
+Tatorna,Messapic,1
+Tatornas,Messapic,1
+Tatornei,Messapic,1
+Tatoricus,Messapic,1
+Tatorian,Messapic,1
+Venasna,Messapic,1
+Venasnas,Messapic,1
+Venasnei,Messapic,1
+Venasicus,Messapic,1
+Venasian,Messapic,1
+Abbas,Middle Dutch,1
+Aec,Middle Dutch,1
+Alfsteen,Middle Dutch,1
+Ankere,Middle Dutch,1
+Appelman,Middle Dutch,1
+Armigero,Middle Dutch,1
+Asart,Middle Dutch,1
+Asarts,Middle Dutch,1
+Auonde,Middle Dutch,1
+Aurifaber,Middle Dutch,1
+Backer,Middle Dutch,1
+Backere,Middle Dutch,1
+Backre,Middle Dutch,1
+Bacre,Middle Dutch,1
+Baeliu,Middle Dutch,1
+Baers,Middle Dutch,1
+Baetselere,Middle Dutch,1
+Bake,Middle Dutch,1
+Baligant,Middle Dutch,1
+Baliu,Middle Dutch,1
+Ballinc,Middle Dutch,1
+Balspeler,Middle Dutch,1
+Bange,Middle Dutch,1
+Banghe,Middle Dutch,1
+Bara,Middle Dutch,1
+Bardemaker,Middle Dutch,1
+Bards,Middle Dutch,1
+Barlebaens,Middle Dutch,1
+Bart,Middle Dutch,1
+Bartmacre,Middle Dutch,1
+Barvoet,Middle Dutch,1
+Bascheleer,Middle Dutch,1
+Bastart,Middle Dutch,1
+Batchelere,Middle Dutch,1
+Batselere,Middle Dutch,1
+Batsheleer,Middle Dutch,1
+Battenman,Middle Dutch,1
+Bec,Middle Dutch,1
+Beghina,Middle Dutch,1
+Beghine,Middle Dutch,1
+Begine,Middle Dutch,1
+Bein,Middle Dutch,1
+Bennes,Middle Dutch,1
+Bicken,Middle Dutch,1
+Bie,Middle Dutch,1
+Bier,Middle Dutch,1
+Bigordel,Middle Dutch,1
+Bindere,Middle Dutch,1
+Bindren,Middle Dutch,1
+Blandere,Middle Dutch,1
+Blase,Middle Dutch,1
+Blasere,Middle Dutch,1
+Blaubloeme,Middle Dutch,1
+Blauoets,Middle Dutch,1
+Blawers,Middle Dutch,1
+Bleckere,Middle Dutch,1
+Blessard,Middle Dutch,1
+Blideleuen,Middle Dutch,1
+Bloemart,Middle Dutch,1
+Bloeme,Middle Dutch,1
+Blome,Middle Dutch,1
+Blonde,Middle Dutch,1
+Bobel,Middle Dutch,1
+Bode,Middle Dutch,1
+Bodeken,Middle Dutch,1
+Bodeliere,Middle Dutch,1
+Boec,Middle Dutch,1
+Boel,Middle Dutch,1
+Boene,Middle Dutch,1
+Boeter,Middle Dutch,1
+Boeterman,Middle Dutch,1
+Boghart,Middle Dutch,1
+Bokel,Middle Dutch,1
+Bollart,Middle Dutch,1
+Boman,Middle Dutch,1
+Bone,Middle Dutch,1
+Bonevent,Middle Dutch,1
+Bonevente,Middle Dutch,1
+Bonghe,Middle Dutch,1
+Borluet,Middle Dutch,1
+Borlut,Middle Dutch,1
+Borlutte,Middle Dutch,1
+Borsdraghere,Middle Dutch,1
+Botere,Middle Dutch,1
+Boterman,Middle Dutch,1
+Botlar,Middle Dutch,1
+Boueri,Middle Dutch,1
+Bouier,Middle Dutch,1
+Bove,Middle Dutch,1
+Brassator,Middle Dutch,1
+Brassere,Middle Dutch,1
+Brebart,Middle Dutch,1
+Brede,Middle Dutch,1
+Breede,Middle Dutch,1
+Broedere,Middle Dutch,1
+Broem,Middle Dutch,1
+Brouwere,Middle Dutch,1
+Brune,Middle Dutch,1
+Bruneel,Middle Dutch,1
+Brusch,Middle Dutch,1
+Bruus,Middle Dutch,1
+Buc,Middle Dutch,1
+Buce,Middle Dutch,1
+Buch,Middle Dutch,1
+Buec,Middle Dutch,1
+Buekel,Middle Dutch,1
+Buk,Middle Dutch,1
+Buke,Middle Dutch,1
+Burne,Middle Dutch,1
+Busseel,Middle Dutch,1
+Butel,Middle Dutch,1
+Buthiel,Middle Dutch,1
+Butter,Middle Dutch,1
+Butzeel,Middle Dutch,1
+Butzel,Middle Dutch,1
+Butziel,Middle Dutch,1
+Bux,Middle Dutch,1
+Buyc,Middle Dutch,1
+Bye,Middle Dutch,1
+Cabellau,Middle Dutch,1
+Cabelliau,Middle Dutch,1
+Cabus,Middle Dutch,1
+Cabuys,Middle Dutch,1
+Caen,Middle Dutch,1
+Calf,Middle Dutch,1
+Callart,Middle Dutch,1
+Calle,Middle Dutch,1
+Calsidemakere,Middle Dutch,1
+Calsieder,Middle Dutch,1
+Calvesnack,Middle Dutch,1
+Calvus,Middle Dutch,1
+Cammaker,Middle Dutch,1
+Cammakere,Middle Dutch,1
+Cammere,Middle Dutch,1
+Camscerppere,Middle Dutch,1
+Candelarius,Middle Dutch,1
+Canis,Middle Dutch,1
+Canne,Middle Dutch,1
+Canonicus,Middle Dutch,1
+Cant,Middle Dutch,1
+Capellanus,Middle Dutch,1
+Capoen,Middle Dutch,1
+Cardemacre,Middle Dutch,1
+Cardemakere,Middle Dutch,1
+Carmer,Middle Dutch,1
+Carmere,Middle Dutch,1
+Carpentarius,Middle Dutch,1
+Case,Middle Dutch,1
+Casselaer,Middle Dutch,1
+Castellana,Middle Dutch,1
+Catere,Middle Dutch,1
+Cauersijn,Middle Dutch,1
+Causemakre,Middle Dutch,1
+Cauwen,Middle Dutch,1
+Cellarius,Middle Dutch,1
+Choman,Middle Dutch,1
+Clareitmakere,Middle Dutch,1
+Claustro,Middle Dutch,1
+Cledecoepers,Middle Dutch,1
+Cledercuts,Middle Dutch,1
+Cleenheere,Middle Dutch,1
+Cleensmeets,Middle Dutch,1
+Cleine,Middle Dutch,1
+Clenke,Middle Dutch,1
+Clerc,Middle Dutch,1
+Clerck,Middle Dutch,1
+Clericus,Middle Dutch,1
+Clerke,Middle Dutch,1
+Clinkart,Middle Dutch,1
+Clocghietere,Middle Dutch,1
+Clocghitre,Middle Dutch,1
+Clove,Middle Dutch,1
+Cnif,Middle Dutch,1
+Cnijf,Middle Dutch,1
+Cnode,Middle Dutch,1
+Coc,Middle Dutch,1
+Cock,Middle Dutch,1
+Cockine,Middle Dutch,1
+Cocwachtee,Middle Dutch,1
+Cocwachter,Middle Dutch,1
+Codde,Middle Dutch,1
+Coe,Middle Dutch,1
+Cokemester,Middle Dutch,1
+Cokemestere,Middle Dutch,1
+Coleman,Middle Dutch,1
+Colsebyle,Middle Dutch,1
+Colueken,Middle Dutch,1
+Coluen,Middle Dutch,1
+Coman,Middle Dutch,1
+Comes,Middle Dutch,1
+Comitus,Middle Dutch,1
+Commandator,Middle Dutch,1
+Commer,Middle Dutch,1
+Compere,Middle Dutch,1
+Coninc,Middle Dutch,1
+Conreidere,Middle Dutch,1
+Coquus,Middle Dutch,1
+Coram,Middle Dutch,1
+Corbeel,Middle Dutch,1
+Cordinge,Middle Dutch,1
+Cordinghe,Middle Dutch,1
+Coren,Middle Dutch,1
+Corenman,Middle Dutch,1
+Cornuit,Middle Dutch,1
+Cornute,Middle Dutch,1
+Costre,Middle Dutch,1
+Cotoen,Middle Dutch,1
+Couer,Middle Dutch,1
+Cousemaker,Middle Dutch,1
+Cousemakere,Middle Dutch,1
+Cousemakre,Middle Dutch,1
+Cousen,Middle Dutch,1
+Cousmacre,Middle Dutch,1
+Cousmaker,Middle Dutch,1
+Cousmakre,Middle Dutch,1
+Covelare,Middle Dutch,1
+Craie,Middle Dutch,1
+Craiman,Middle Dutch,1
+Crane,Middle Dutch,1
+Craye,Middle Dutch,1
+Crick,Middle Dutch,1
+Criec,Middle Dutch,1
+Croenekin,Middle Dutch,1
+Croic,Middle Dutch,1
+Croppes,Middle Dutch,1
+Crudepen,Middle Dutch,1
+Crudepenninx,Middle Dutch,1
+Crul,Middle Dutch,1
+Crulleboye,Middle Dutch,1
+Crulleken,Middle Dutch,1
+Cultellifici,Middle Dutch,1
+CumMacula,Middle Dutch,1
+Cuparij,Middle Dutch,1
+Cuper,Middle Dutch,1
+Cupere,Middle Dutch,1
+Cupre,Middle Dutch,1
+Curthals,Middle Dutch,1
+Damman,Middle Dutch,1
+Dapifero,Middle Dutch,1
+Decanus,Middle Dutch,1
+Deckere,Middle Dutch,1
+Deken,Middle Dutch,1
+Demersman,Middle Dutch,1
+Desmet,Middle Dutch,1
+Dhardere,Middle Dutch,1
+Dhelmmakere,Middle Dutch,1
+Dhudeuettere,Middle Dutch,1
+Dicbier,Middle Dutch,1
+Dicbir,Middle Dutch,1
+Dickbier,Middle Dutch,1
+Dienieneverloech,Middle Dutch,1
+Doncker,Middle Dutch,1
+Donevoet,Middle Dutch,1
+Dorewachter,Middle Dutch,1
+Dreet,Middle Dutch,1
+Dresche,Middle Dutch,1
+Droeue,Middle Dutch,1
+Dronkine,Middle Dutch,1
+Drossaet,Middle Dutch,1
+Ducissa,Middle Dutch,1
+Ducisse,Middle Dutch,1
+Duckard,Middle Dutch,1
+Duker,Middle Dutch,1
+Dukinc,Middle Dutch,1
+Dukinghe,Middle Dutch,1
+Durcant,Middle Dutch,1
+Durwardere,Middle Dutch,1
+Duue,Middle Dutch,1
+Duvel,Middle Dutch,1
+Dux,Middle Dutch,1
+Edelinc,Middle Dutch,1
+Euer,Middle Dutch,1
+Faber,Middle Dutch,1
+Fabrica,Middle Dutch,1
+Fermentator,Middle Dutch,1
+Fierenblase,Middle Dutch,1
+Fierenblayse,Middle Dutch,1
+Fierenbras,Middle Dutch,1
+Firenblais,Middle Dutch,1
+Firenbrais,Middle Dutch,1
+Formator,Middle Dutch,1
+Forneysmakere,Middle Dutch,1
+Froes,Middle Dutch,1
+Fysikerevan,Middle Dutch,1
+Gansebrader,Middle Dutch,1
+Gardianus,Middle Dutch,1
+Ghoede,Middle Dutch,1
+Ghorter,Middle Dutch,1
+Gole,Middle Dutch,1
+Gortemakere,Middle Dutch,1
+Goude,Middle Dutch,1
+Goudsmede,Middle Dutch,1
+Gousmet,Middle Dutch,1
+Goutsmet,Middle Dutch,1
+Graeuwerkere,Middle Dutch,1
+Graue,Middle Dutch,1
+Grauinne,Middle Dutch,1
+Grauuerkers,Middle Dutch,1
+Grauwerke,Middle Dutch,1
+Grauwerker,Middle Dutch,1
+Grawerkere,Middle Dutch,1
+Groete,Middle Dutch,1
+Gruter,Middle Dutch,1
+Grutere,Middle Dutch,1
+Gruters,Middle Dutch,1
+Guardianus,Middle Dutch,1
+Gughelare,Middle Dutch,1
+Haec,Middle Dutch,1
+Hanen,Middle Dutch,1
+Heldecop,Middle Dutch,1
+Heurkint,Middle Dutch,1
+Heylighevrouwe,Middle Dutch,1
+Hoedekine,Middle Dutch,1
+Hoefman,Middle Dutch,1
+Hoeft,Middle Dutch,1
+Hoeghen,Middle Dutch,1
+Hoen,Middle Dutch,1
+Hoens,Middle Dutch,1
+Hoesterlinc,Middle Dutch,1
+Hoetman,Middle Dutch,1
+Hoeuedekin,Middle Dutch,1
+Hoghen,Middle Dutch,1
+Hoiman,Middle Dutch,1
+Hons,Middle Dutch,1
+Hont,Middle Dutch,1
+Honte,Middle Dutch,1
+Horenblaser,Middle Dutch,1
+Horenblasere,Middle Dutch,1
+Houdewerkers,Middle Dutch,1
+Houteman,Middle Dutch,1
+Houtman,Middle Dutch,1
+Hoyeman,Middle Dutch,1
+Hudeuettre,Middle Dutch,1
+Hudevettere,Middle Dutch,1
+Huntekin,Middle Dutch,1
+Huuchals,Middle Dutch,1
+Hyseriin,Middle Dutch,1
+Iagher,Middle Dutch,1
+Innighe,Middle Dutch,1
+Investitus,Middle Dutch,1
+Iude,Middle Dutch,1
+Jeude,Middle Dutch,1
+Jode,Middle Dutch,1
+Joede,Middle Dutch,1
+Jserine,Middle Dutch,1
+Jude,Middle Dutch,1
+Junghe,Middle Dutch,1
+Juvene,Middle Dutch,1
+Kant,Middle Dutch,1
+Kardemaker,Middle Dutch,1
+Karmers,Middle Dutch,1
+Kaus,Middle Dutch,1
+Keghelaere,Middle Dutch,1
+Keiser,Middle Dutch,1
+Kembart,Middle Dutch,1
+Kember,Middle Dutch,1
+Kenode,Middle Dutch,1
+Kersemaker,Middle Dutch,1
+Kersmacre,Middle Dutch,1
+Kersmakere,Middle Dutch,1
+Ketelboetre,Middle Dutch,1
+Ketelere,Middle Dutch,1
+Ketelter,Middle Dutch,1
+Keyser,Middle Dutch,1
+Kics,Middle Dutch,1
+Kiekiins,Middle Dutch,1
+Kiekin,Middle Dutch,1
+Kint,Middle Dutch,1
+Knode,Middle Dutch,1
+Knuts,Middle Dutch,1
+Kocghewachter,Middle Dutch,1
+Kort,Middle Dutch,1
+Korte,Middle Dutch,1
+Kriec,Middle Dutch,1
+Lakenboetre,Middle Dutch,1
+Lammerin,Middle Dutch,1
+Lancgeroch,Middle Dutch,1
+Lancroc,Middle Dutch,1
+Langen,Middle Dutch,1
+Langerox,Middle Dutch,1
+Langhe,Middle Dutch,1
+Langheroc,Middle Dutch,1
+Lanthere,Middle Dutch,1
+Lapide,Middle Dutch,1
+Lecker,Middle Dutch,1
+Ledeghe,Middle Dutch,1
+Leemplackere,Middle Dutch,1
+Leencnecht,Middle Dutch,1
+Leimplackere,Middle Dutch,1
+Lepelare,Middle Dutch,1
+Lepele,Middle Dutch,1
+Lettele,Middle Dutch,1
+Linemacre,Middle Dutch,1
+Linemakere,Middle Dutch,1
+Lodderken,Middle Dutch,1
+Loddernie,Middle Dutch,1
+Loeuin,Middle Dutch,1
+Lombard,Middle Dutch,1
+Lombarde,Middle Dutch,1
+Lombarden,Middle Dutch,1
+Lombardn,Middle Dutch,1
+Lonbarden,Middle Dutch,1
+Longus,Middle Dutch,1
+Lopere,Middle Dutch,1
+Lozere,Middle Dutch,1
+Lumbardo,Middle Dutch,1
+Luttelman,Middle Dutch,1
+Maenschin,Middle Dutch,1
+Maerke,Middle Dutch,1
+Maetselar,Middle Dutch,1
+Magister,Middle Dutch,1
+Magnus,Middle Dutch,1
+Maiere,Middle Dutch,1
+Maior,Middle Dutch,1
+Maire,Middle Dutch,1
+Makerreel,Middle Dutch,1
+Mandemaker,Middle Dutch,1
+Manghenus,Middle Dutch,1
+Marcelmans,Middle Dutch,1
+Markolf,Middle Dutch,1
+Marscalc,Middle Dutch,1
+Marteel,Middle Dutch,1
+Martelmans,Middle Dutch,1
+Masc,Middle Dutch,1
+Medeblandre,Middle Dutch,1
+Melstre,Middle Dutch,1
+Melter,Middle Dutch,1
+Meltre,Middle Dutch,1
+Merseman,Middle Dutch,1
+Merserighe,Middle Dutch,1
+Mersman,Middle Dutch,1
+Mesmaker,Middle Dutch,1
+Mesmakere,Middle Dutch,1
+Mestelgier,Middle Dutch,1
+Metre,Middle Dutch,1
+Mey,Middle Dutch,1
+Meyer,Middle Dutch,1
+Midach,Middle Dutch,1
+Mie,Middle Dutch,1
+Miles,Middle Dutch,1
+Milites,Middle Dutch,1
+Minne,Middle Dutch,1
+Minneman,Middle Dutch,1
+Mmostardmakere,Middle Dutch,1
+Moel,Middle Dutch,1
+Moelnare,Middle Dutch,1
+Moenc,Middle Dutch,1
+Moer,Middle Dutch,1
+Moes,Middle Dutch,1
+Mol,Middle Dutch,1
+Molen,Middle Dutch,1
+Molendinarius,Middle Dutch,1
+Molimakere,Middle Dutch,1
+Molnare,Middle Dutch,1
+Molnerre,Middle Dutch,1
+Mombare,Middle Dutch,1
+Monachus,Middle Dutch,1
+Monbare,Middle Dutch,1
+Monter,Middle Dutch,1
+Mostartmaelre,Middle Dutch,1
+Mouter,Middle Dutch,1
+Mues,Middle Dutch,1
+Muil,Middle Dutch,1
+Mulart,Middle Dutch,1
+Mule,Middle Dutch,1
+Naeldemakere,Middle Dutch,1
+Naeldemakers,Middle Dutch,1
+Naghel,Middle Dutch,1
+Napbrekere,Middle Dutch,1
+Neue,Middle Dutch,1
+Neve,Middle Dutch,1
+Niger,Middle Dutch,1
+Notarioducis,Middle Dutch,1
+Oem,Middle Dutch,1
+Oer,Middle Dutch,1
+Oge,Middle Dutch,1
+Olipot,Middle Dutch,1
+Ome,Middle Dutch,1
+Omekine,Middle Dutch,1
+Omn,Middle Dutch,1
+Ongheldere,Middle Dutch,1
+Onlost,Middle Dutch,1
+Pael,Middle Dutch,1
+Paleman,Middle Dutch,1
+Palin,Middle Dutch,1
+Panne,Middle Dutch,1
+Pannekins,Middle Dutch,1
+Pannen,Middle Dutch,1
+Pape,Middle Dutch,1
+Papinge,Middle Dutch,1
+Parchamenarius,Middle Dutch,1
+Paue,Middle Dutch,1
+Paus,Middle Dutch,1
+Pauwe,Middle Dutch,1
+Peister,Middle Dutch,1
+Pellificis,Middle Dutch,1
+Pelsere,Middle Dutch,1
+Pentier,Middle Dutch,1
+Pertshoeft,Middle Dutch,1
+Peteman,Middle Dutch,1
+Phisicus,Middle Dutch,1
+Pinart,Middle Dutch,1
+Pipe,Middle Dutch,1
+Piscatoris,Middle Dutch,1
+Pistor,Middle Dutch,1
+Pistoris,Middle Dutch,1
+Platea,Middle Dutch,1
+Plebanus,Middle Dutch,1
+Pluckerose,Middle Dutch,1
+Plucrose,Middle Dutch,1
+Pluuier,Middle Dutch,1
+Poertre,Middle Dutch,1
+Poiters,Middle Dutch,1
+Portere,Middle Dutch,1
+Portwarder,Middle Dutch,1
+Poste,Middle Dutch,1
+Potmakere,Middle Dutch,1
+Pots,Middle Dutch,1
+Pottere,Middle Dutch,1
+Poytre,Middle Dutch,1
+Pratre,Middle Dutch,1
+Preceptor,Middle Dutch,1
+Prepositus,Middle Dutch,1
+Presbiter,Middle Dutch,1
+Presbitero,Middle Dutch,1
+Procuratori,Middle Dutch,1
+Proefst,Middle Dutch,1
+Proefts,Middle Dutch,1
+Provisori,Middle Dutch,1
+Pryckert,Middle Dutch,1
+Puls,Middle Dutch,1
+Putoc,Middle Dutch,1
+Putoch,Middle Dutch,1
+Putocke,Middle Dutch,1
+Quade,Middle Dutch,1
+Quareels,Middle Dutch,1
+Quic,Middle Dutch,1
+Quistwater,Middle Dutch,1
+Raat,Middle Dutch,1
+Raeds,Middle Dutch,1
+Raet,Middle Dutch,1
+Rape,Middle Dutch,1
+Raven,Middle Dutch,1
+Rechtre,Middle Dutch,1
+Rector,Middle Dutch,1
+Regis,Middle Dutch,1
+Reigher,Middle Dutch,1
+Ridder,Middle Dutch,1
+Riddere,Middle Dutch,1
+Riddre,Middle Dutch,1
+Riemakere,Middle Dutch,1
+Rietmakere,Middle Dutch,1
+Riim,Middle Dutch,1
+Rijnvisch,Middle Dutch,1
+Rike,Middle Dutch,1
+Riken,Middle Dutch,1
+Rin,Middle Dutch,1
+Rinvisch,Middle Dutch,1
+Roden,Middle Dutch,1
+Roede,Middle Dutch,1
+Roeden,Middle Dutch,1
+Rouer,Middle Dutch,1
+Rouvoet,Middle Dutch,1
+Rowerus,Middle Dutch,1
+Ruffo,Middle Dutch,1
+Sacerdos,Middle Dutch,1
+Sacerdotis,Middle Dutch,1
+Sadelaer,Middle Dutch,1
+Sage,Middle Dutch,1
+Sages,Middle Dutch,1
+Salm,Middle Dutch,1
+Scabinus,Middle Dutch,1
+Scachtre,Middle Dutch,1
+Scakart,Middle Dutch,1
+Scamel,Middle Dutch,1
+Scamps,Middle Dutch,1
+Scankart,Middle Dutch,1
+Scarlaken,Middle Dutch,1
+Sceerre,Middle Dutch,1
+Scelwart,Middle Dutch,1
+Scenkel,Middle Dutch,1
+Scenkele,Middle Dutch,1
+Scepene,Middle Dutch,1
+Scepmakere,Middle Dutch,1
+Sceppere,Middle Dutch,1
+Sceppre,Middle Dutch,1
+Scermer,Middle Dutch,1
+Scermre,Middle Dutch,1
+Schelewart,Middle Dutch,1
+Schelkini,Middle Dutch,1
+Schille,Middle Dutch,1
+Schulte,Middle Dutch,1
+Scildere,Middle Dutch,1
+Scinkel,Middle Dutch,1
+Scipmans,Middle Dutch,1
+Sclix,Middle Dutch,1
+Scluter,Middle Dutch,1
+Scoete,Middle Dutch,1
+Scolmester,Middle Dutch,1
+Scomaker,Middle Dutch,1
+Scop,Middle Dutch,1
+Scoreel,Middle Dutch,1
+Scosuttere,Middle Dutch,1
+Scote,Middle Dutch,1
+Scotelare,Middle Dutch,1
+Scotellere,Middle Dutch,1
+Scoten,Middle Dutch,1
+Scotte,Middle Dutch,1
+Scoute,Middle Dutch,1
+Screvel,Middle Dutch,1
+Scrivere,Middle Dutch,1
+Scrodere,Middle Dutch,1
+Scroedere,Middle Dutch,1
+Sculte,Middle Dutch,1
+Scultet,Middle Dutch,1
+Scultetus,Middle Dutch,1
+Sculthetus,Middle Dutch,1
+Scultinc,Middle Dutch,1
+Scute,Middle Dutch,1
+Sdeckers,Middle Dutch,1
+Senum,Middle Dutch,1
+Slabbart,Middle Dutch,1
+Slic,Middle Dutch,1
+Slieve,Middle Dutch,1
+Slikeman,Middle Dutch,1
+Sloet,Middle Dutch,1
+Sloeue,Middle Dutch,1
+Sluke,Middle Dutch,1
+Sluter,Middle Dutch,1
+Smeder,Middle Dutch,1
+Smet,Middle Dutch,1
+Smicke,Middle Dutch,1
+Smiec,Middle Dutch,1
+Smit,Middle Dutch,1
+Smout,Middle Dutch,1
+Snauel,Middle Dutch,1
+Snep,Middle Dutch,1
+Snepart,Middle Dutch,1
+Snepore,Middle Dutch,1
+Snider,Middle Dutch,1
+Snidere,Middle Dutch,1
+Sonderland,Middle Dutch,1
+Spaen,Middle Dutch,1
+Spanekijn,Middle Dutch,1
+Spanekine,Middle Dutch,1
+Spiegel,Middle Dutch,1
+Spiker,Middle Dutch,1
+Spirinc,Middle Dutch,1
+Spirinx,Middle Dutch,1
+Spriet,Middle Dutch,1
+Sprinx,Middle Dutch,1
+Stael,Middle Dutch,1
+Stamelare,Middle Dutch,1
+Stamelarit,Middle Dutch,1
+Stamelart,Middle Dutch,1
+Steenaert,Middle Dutch,1
+Steenard,Middle Dutch,1
+Steenbichlers,Middle Dutch,1
+Steenbiclere,Middle Dutch,1
+Steene,Middle Dutch,1
+Steimpel,Middle Dutch,1
+Steneken,Middle Dutch,1
+Stippekender,Middle Dutch,1
+Stir,Middle Dutch,1
+Stoc,Middle Dutch,1
+Stoep,Middle Dutch,1
+Stoerm,Middle Dutch,1
+Stopelkin,Middle Dutch,1
+Storhem,Middle Dutch,1
+Strael,Middle Dutch,1
+Strich,Middle Dutch,1
+Strument,Middle Dutch,1
+Stuucs,Middle Dutch,1
+Suardt,Middle Dutch,1
+Svaif,Middle Dutch,1
+Svancken,Middle Dutch,1
+Svarten,Middle Dutch,1
+Svende,Middle Dutch,1
+Tant,Middle Dutch,1
+Tapijtmacre,Middle Dutch,1
+Tater,Middle Dutch,1
+Tatere,Middle Dutch,1
+Tauernier,Middle Dutch,1
+Tauwere,Middle Dutch,1
+Tay,Middle Dutch,1
+Temmerman,Middle Dutch,1
+Textoris,Middle Dutch,1
+Thieghelere,Middle Dutch,1
+Thuin,Middle Dutch,1
+Timermans,Middle Dutch,1
+Timmerman,Middle Dutch,1
+Tintemakere,Middle Dutch,1
+Tolnar,Middle Dutch,1
+Tolnare,Middle Dutch,1
+Tolner,Middle Dutch,1
+Tolnere,Middle Dutch,1
+Tolnerre,Middle Dutch,1
+Toreel,Middle Dutch,1
+Touwere,Middle Dutch,1
+Toyart,Middle Dutch,1
+Trusere,Middle Dutch,1
+Tscriuers,Middle Dutch,1
+Tuc,Middle Dutch,1
+Tunne,Middle Dutch,1
+Turc,Middle Dutch,1
+Ulf,Middle Dutch,1
+Vaelspaen,Middle Dutch,1
+Vaken,Middle Dutch,1
+Valant,Middle Dutch,1
+Valecappe,Middle Dutch,1
+Valke,Middle Dutch,1
+Valkenare,Middle Dutch,1
+Vector,Middle Dutch,1
+Vekenstyl,Middle Dutch,1
+Velkenere,Middle Dutch,1
+Verkins,Middle Dutch,1
+Verwere,Middle Dutch,1
+Vetten,Middle Dutch,1
+Viltkin,Middle Dutch,1
+Viltre,Middle Dutch,1
+Vincs,Middle Dutch,1
+Vinke,Middle Dutch,1
+Vinken,Middle Dutch,1
+Vint,Middle Dutch,1
+Virtichponde,Middle Dutch,1
+Visc,Middle Dutch,1
+Viscopere,Middle Dutch,1
+Visevase,Middle Dutch,1
+Visscehre,Middle Dutch,1
+Visscere,Middle Dutch,1
+Vladebackere,Middle Dutch,1
+Vladebacre,Middle Dutch,1
+Vleesaure,Middle Dutch,1
+Vleeschaure,Middle Dutch,1
+Vleischouwer,Middle Dutch,1
+Vleschouwer,Middle Dutch,1
+Vleshouwere,Middle Dutch,1
+Vlieghe,Middle Dutch,1
+Voet,Middle Dutch,1
+Vogel,Middle Dutch,1
+Voghelare,Middle Dutch,1
+Voit,Middle Dutch,1
+Volre,Middle Dutch,1
+Vos,Middle Dutch,1
+Vosse,Middle Dutch,1
+Vosseken,Middle Dutch,1
+Vraet,Middle Dutch,1
+Vrie,Middle Dutch,1
+Vriend,Middle Dutch,1
+Vrint,Middle Dutch,1
+Vrode,Middle Dutch,1
+Vrodn,Middle Dutch,1
+Vroede,Middle Dutch,1
+Vroedn,Middle Dutch,1
+Vromoeds,Middle Dutch,1
+Wacghe,Middle Dutch,1
+Wachtere,Middle Dutch,1
+Waldacker,Middle Dutch,1
+Wanre,Middle Dutch,1
+Warmoes,Middle Dutch,1
+Wart,Middle Dutch,1
+Wauel,Middle Dutch,1
+Wauels,Middle Dutch,1
+Weder,Middle Dutch,1
+Weis,Middle Dutch,1
+Weuere,Middle Dutch,1
+Widoeghe,Middle Dutch,1
+Wilde,Middle Dutch,1
+Witte,Middle Dutch,1
+Wittebart,Middle Dutch,1
+Wittebloem,Middle Dutch,1
+Wittebroet,Middle Dutch,1
+Witten,Middle Dutch,1
+Wlslagre,Middle Dutch,1
+Wort,Middle Dutch,1
+Wortman,Middle Dutch,1
+Zalm,Middle Dutch,1
+Zassen,Middle Dutch,1
+Zieken,Middle Dutch,1
+Ziele,Middle Dutch,1
+Zonne,Middle Dutch,1
+Zuakart,Middle Dutch,1
+Zuarte,Middle Dutch,1
+Zwertvegher,Middle Dutch,1
+Abbot,Middle English,13
+Abbott,Middle English,13
+Ackerman,Middle English,13
+Alder,Middle English,13
+Archer,Middle English,13
+Arkwright,Middle English,13
+Ash,Middle English,13
+Ashe,Middle English,13
+Atwood,Middle English,13
+Baker,Middle English,13
+Bard,Middle English,13
+Barker,Middle English,13
+Barnes,Middle English,13
+Battle,Middle English,13
+Baxter,Middle English,13
+Becker,Middle English,13
+Bell,Middle English,13
+Berry,Middle English,13
+Bishop,Middle English,13
+Body,Middle English,13
+Bolt,Middle English,13
+Boteler,Middle English,13
+Boutcher,Middle English,13
+Bowyer,Middle English,13
+Brewer,Middle English,13
+Brewster,Middle English,13
+Briar,Middle English,13
+Bridger,Middle English,13
+Briggs,Middle English,13
+Brock,Middle English,13
+Brook,Middle English,13
+Brooke,Middle English,13
+Brooks,Middle English,13
+Bundy,Middle English,13
+Burnside,Middle English,13
+Burroughs,Middle English,13
+Burrows,Middle English,13
+Bush,Middle English,13
+Butcher,Middle English,13
+Butler,Middle English,13
+Cade,Middle English,13
+Carpenter,Middle English,13
+Carter,Middle English,13
+Cartwright,Middle English,13
+Cash,Middle English,13
+Chace,Middle English,13
+Chandler,Middle English,13
+Chaplin,Middle English,13
+Chapman,Middle English,13
+Churchward,Middle English,13
+Clark,Middle English,13
+Clarke,Middle English,13
+Clay,Middle English,13
+Coleman,Middle English,13
+Collier,Middle English,13
+Collyer,Middle English,13
+Colt,Middle English,13
+Conner,Middle English,13
+Cook,Middle English,13
+Cooke,Middle English,13
+Cooper,Middle English,13
+Coppersmith,Middle English,13
+Court,Middle English,13
+Cowper,Middle English,13
+Cox,Middle English,13
+Crapper,Middle English,13
+Croft,Middle English,13
+Cropper,Middle English,13
+Cross,Middle English,13
+Crump,Middle English,13
+Cutler,Middle English,13
+Dale,Middle English,13
+Day,Middle English,13
+Deacon,Middle English,13
+Dean,Middle English,13
+Deane,Middle English,13
+Dexter,Middle English,13
+Dike,Middle English,13
+Dodd,Middle English,13
+Draper,Middle English,13
+Dyer,Middle English,13
+Earl,Middle English,13
+Earle,Middle English,13
+Falconer,Middle English,13
+Falkner,Middle English,13
+Farrah,Middle English,13
+Faulkner,Middle English,13
+Fisher,Middle English,13
+Fletcher,Middle English,13
+Ford,Middle English,13
+Forester,Middle English,13
+Forrest,Middle English,13
+Forster,Middle English,13
+Foster,Middle English,13
+Fowler,Middle English,13
+Fox,Middle English,13
+Freeman,Middle English,13
+Fuller,Middle English,13
+Gage,Middle English,13
+Gardener,Middle English,13
+Gardiner,Middle English,13
+Gardner,Middle English,13
+Garland,Middle English,13
+Garside,Middle English,13
+Gary,Middle English,13
+Glover,Middle English,13
+Gold,Middle English,13
+Goldsmith,Middle English,13
+Gorsuch,Middle English,13
+Granger,Middle English,13
+Graves,Middle English,13
+Grayson,Middle English,13
+Green,Middle English,13
+Greene,Middle English,13
+Greeves,Middle English,13
+Greyson,Middle English,13
+Gross,Middle English,13
+Grove,Middle English,13
+Grover,Middle English,13
+Hall,Middle English,13
+Harp,Middle English,13
+Harper,Middle English,13
+Hatmaker,Middle English,13
+Hawthorne,Middle English,13
+Hayward,Middle English,13
+Hazel,Middle English,13
+Head,Middle English,13
+Heather,Middle English,13
+Hill,Middle English,13
+Hillier,Middle English,13
+Hodder,Middle English,13
+Holland,Middle English,13
+Holley,Middle English,13
+Holly,Middle English,13
+Holmes,Middle English,13
+Holt,Middle English,13
+Homer,Middle English,13
+Hooke,Middle English,13
+Hope,Middle English,13
+Horner,Middle English,13
+House,Middle English,13
+Howe,Middle English,13
+Hume,Middle English,13
+Hunt,Middle English,13
+Hunter,Middle English,13
+Huntsman,Middle English,13
+Hyde,Middle English,13
+Jagger,Middle English,13
+Johnston,Middle English,13
+Judge,Middle English,13
+Justice,Middle English,13
+Kay,Middle English,13
+Kaye,Middle English,13
+Keats,Middle English,13
+Kempster,Middle English,13
+Kerry,Middle English,13
+Kirk,Middle English,13
+Kirke,Middle English,13
+Knight,Middle English,13
+Lamb,Middle English,13
+Land,Middle English,13
+Lane,Middle English,13
+Lark,Middle English,13
+Layne,Middle English,13
+Lea,Middle English,13
+Lederer,Middle English,13
+Lee,Middle English,13
+Leigh,Middle English,13
+Lister,Middle English,13
+Lowell,Middle English,13
+Luther,Middle English,13
+Machen,Middle English,13
+Maison,Middle English,13
+Malthus,Middle English,13
+March,Middle English,13
+Marsh,Middle English,13
+Marshal,Middle English,13
+Marshall,Middle English,13
+Martin,Middle English,13
+Mason,Middle English,13
+May,Middle English,13
+Mercer,Middle English,13
+Metcalf,Middle English,13
+Metcalfe,Middle English,13
+Miller,Middle English,13
+Millerchip,Middle English,13
+Mills,Middle English,13
+Milner,Middle English,13
+Moore,Middle English,13
+Napier,Middle English,13
+Newby,Middle English,13
+Nutter,Middle English,13
+Page,Middle English,13
+Paige,Middle English,13
+Pain,Middle English,13
+Paine,Middle English,13
+Painter,Middle English,13
+Parker,Middle English,13
+Parsons,Middle English,13
+Payne,Middle English,13
+Pike,Middle English,13
+Piper,Middle English,13
+Pitt,Middle English,13
+Plowright,Middle English,13
+Porter,Middle English,13
+Portman,Middle English,13
+Potter,Middle English,13
+Preacher,Middle English,13
+Prentice,Middle English,13
+Provost,Middle English,13
+Purple,Middle English,13
+Pyper,Middle English,13
+Rider,Middle English,13
+Ridge,Middle English,13
+Ring,Middle English,13
+Rock,Middle English,13
+Roper,Middle English,13
+Rose,Middle English,13
+Rowen,Middle English,13
+Rush,Middle English,13
+Ryder,Middle English,13
+Sanger,Middle English,13
+Sangster,Middle English,13
+Sawyer,Middle English,13
+Sayer,Middle English,13
+Sayers,Middle English,13
+Saylor,Middle English,13
+Scarlett,Middle English,13
+Seller,Middle English,13
+Sellers,Middle English,13
+Sexton,Middle English,13
+Shaw,Middle English,13
+Shearer,Middle English,13
+Shepherd,Middle English,13
+Sheppard,Middle English,13
+Sherman,Middle English,13
+Shoemaker,Middle English,13
+Shore,Middle English,13
+Silver,Middle English,13
+Sixsmith,Middle English,13
+Skinner,Middle English,13
+Slater,Middle English,13
+Smith,Middle English,13
+Spear,Middle English,13
+Spears,Middle English,13
+Spencer,Middle English,13
+Spenser,Middle English,13
+Steele,Middle English,13
+Steward,Middle English,13
+Stewart,Middle English,13
+Stott,Middle English,13
+Straw,Middle English,13
+Stuart,Middle English,13
+Sumner,Middle English,13
+Tanner,Middle English,13
+Taylor,Middle English,13
+Thacker,Middle English,13
+Thatcher,Middle English,13
+Thorn,Middle English,13
+Thorne,Middle English,13
+Tinker,Middle English,13
+Trapp,Middle English,13
+Travers,Middle English,13
+Travis,Middle English,13
+Trump,Middle English,13
+Tucker,Middle English,13
+Turner,Middle English,13
+Tyler,Middle English,13
+Underwood,Middle English,13
+Waggoner,Middle English,13
+Wagoner,Middle English,13
+Wainwright,Middle English,13
+Walker,Middle English,13
+Ward,Middle English,13
+Warner,Middle English,13
+Wayne,Middle English,13
+Weaver,Middle English,13
+Webb,Middle English,13
+Webber,Middle English,13
+Webster,Middle English,13
+Wells,Middle English,13
+West,Middle English,13
+Wheeler,Middle English,13
+Wheelwright,Middle English,13
+Whitney,Middle English,13
+Wild,Middle English,13
+Wilde,Middle English,13
+Wile,Middle English,13
+Wiles,Middle English,13
+Wood,Middle English,13
+Woodger,Middle English,13
+Woodman,Middle English,13
+Woodrow,Middle English,13
+Woods,Middle English,13
+Woodward,Middle English,13
+Wright,Middle English,13
+Keller,Middle German,9
+Cun,Middle German,7
+Cuon,Middle German,7
+Ganter,Middle German,7
+Blum,Middle German,6
+Bluom,Middle German,6
+Dornhains,Middle German,6
+Scherer,Middle German,6
+Schnider,Middle German,6
+Truchtinger,Middle German,6
+Blumen,Middle German,5
+Bluomen,Middle German,5
+Frantz,Middle German,5
+Hiller,Middle German,5
+Huoter,Middle German,5
+Huter,Middle German,5
+Moeschlin,Middle German,5
+Moschlin,Middle German,5
+Murer,Middle German,5
+Vilinger,Middle German,5
+Vischer,Middle German,5
+Aigels,Middle German,4
+Glueg,Middle German,4
+Hagg,Middle German,4
+Haugg,Middle German,4
+Hower,Middle German,4
+Koch,Middle German,4
+Messerschmid,Middle German,4
+Messing,Middle German,4
+Ortolff,Middle German,4
+Pfankuchen,Middle German,4
+Pfankuochen,Middle German,4
+Roetembach,Middle German,4
+Rot,Middle German,4
+Rotembach,Middle German,4
+Rout,Middle German,4
+Schmid,Middle German,4
+Schriber,Middle German,4
+Swab,Middle German,4
+Swaub,Middle German,4
+Ablin,Middle German,3
+Aeblin,Middle German,3
+Beschaiden,Middle German,3
+Birker,Middle German,3
+Brotbek,Middle German,3
+Buchamer,Middle German,3
+Buochamer,Middle German,3
+Dornhain,Middle German,3
+Draeyer,Middle German,3
+Drayer,Middle German,3
+Eberhart,Middle German,3
+Endinger,Middle German,3
+Floeter,Middle German,3
+Floter,Middle German,3
+Frodenrich,Middle German,3
+Froedenrich,Middle German,3
+Gierings,Middle German,3
+Giesser,Middle German,3
+Gosshain,Middle German,3
+Grait,Middle German,3
+Groman,Middle German,3
+Guot,Middle German,3
+Gut,Middle German,3
+Harscher,Middle German,3
+Harthain,Middle German,3
+Hinderofen,Middle German,3
+Knoll,Middle German,3
+Landolt,Middle German,3
+Lientz,Middle German,3
+Lutz,Middle German,3
+Maeslin,Middle German,3
+Mafftz,Middle German,3
+Martin,Middle German,3
+Maslin,Middle German,3
+Nientz,Middle German,3
+Niess,Middle German,3
+Nufringer,Middle German,3
+Probst,Middle German,3
+Rainhart,Middle German,3
+Richenbach,Middle German,3
+Roetlin,Middle German,3
+Rosenveld,Middle German,3
+Rotlin,Middle German,3
+Ruf,Middle German,3
+Ruof,Middle German,3
+Schaerlin,Middle German,3
+Schappels,Middle German,3
+Scharlin,Middle German,3
+Sichler,Middle German,3
+Singer,Middle German,3
+Stilhart,Middle German,3
+Stoeffler,Middle German,3
+Stoffler,Middle German,3
+Tigensshain,Middle German,3
+Wachssing,Middle German,3
+Waechssing,Middle German,3
+Weber,Middle German,3
+Winman,Middle German,3
+Winterlinger,Middle German,3
+Wirt,Middle German,3
+Wuest,Middle German,3
+Wust,Middle German,3
+Zeller,Middle German,3
+Zyppolt,Middle German,3
+Aertzinger,Middle German,2
+Aigel,Middle German,2
+Algossin,Middle German,2
+Artzat,Middle German,2
+Artzinger,Middle German,2
+Aulber,Middle German,2
+Aulgoessin,Middle German,2
+Bader,Middle German,2
+Bendels,Middle German,2
+Benner,Middle German,2
+Bern,Middle German,2
+Bletzin,Middle German,2
+Bock,Middle German,2
+Boller,Middle German,2
+Broehlin,Middle German,2
+Brohlin,Middle German,2
+Brulingerin,Middle German,2
+Bung,Middle German,2
+Byderman,Middle German,2
+Byter,Middle German,2
+Cantzler,Middle German,2
+Deling,Middle German,2
+Denkinger,Middle German,2
+Diechtler,Middle German,2
+Doener,Middle German,2
+Doner,Middle German,2
+Dormettinger,Middle German,2
+Dornfogel,Middle German,2
+Egnolffs,Middle German,2
+Fraevel,Middle German,2
+Fravel,Middle German,2
+Friburger,Middle German,2
+Frueger,Middle German,2
+Fruger,Middle German,2
+Fuchs,Middle German,2
+Fueg,Middle German,2
+Fug,Middle German,2
+Geseller,Middle German,2
+Goettfrid,Middle German,2
+Gosshains,Middle German,2
+Gottfrid,Middle German,2
+Grauff,Middle German,2
+Grundlers,Middle German,2
+Guldins,Middle German,2
+Gunther,Middle German,2
+Gunthers,Middle German,2
+Gyger,Middle German,2
+Hachel,Middle German,2
+Haechel,Middle German,2
+Haeggin,Middle German,2
+Haegillin,Middle German,2
+Hafner,Middle German,2
+Haggin,Middle German,2
+Hagillin,Middle German,2
+Harder,Middle German,2
+Hartlieb,Middle German,2
+Held,Middle German,2
+Herman,Middle German,2
+Herr,Middle German,2
+Hetzingers,Middle German,2
+Hickeller,Middle German,2
+Hiltprands,Middle German,2
+Holder,Middle German,2
+Hubers,Middle German,2
+Humel,Middle German,2
+Huobers,Middle German,2
+Huser,Middle German,2
+Huslers,Middle German,2
+Irgang,Middle German,2
+Kannstatt,Middle German,2
+Karrer,Middle German,2
+Knoller,Middle German,2
+Knuss,Middle German,2
+Knuvss,Middle German,2
+Krum,Middle German,2
+Krutlin,Middle German,2
+Lamparter,Middle German,2
+Lausser,Middle German,2
+Lidringer,Middle German,2
+Lingg,Middle German,2
+Ludwig,Middle German,2
+Lugglin,Middle German,2
+Maestlin,Middle German,2
+Maeyers,Middle German,2
+Mastlin,Middle German,2
+Mayers,Middle German,2
+Memminger,Middle German,2
+Metter,Middle German,2
+Moll,Middle German,2
+Munch,Middle German,2
+Murere,Middle German,2
+Naeyer,Middle German,2
+Nayer,Middle German,2
+Nyffer,Middle German,2
+Offtertinger,Middle German,2
+Raem,Middle German,2
+Ram,Middle German,2
+Ranfft,Middle German,2
+Rangendinger,Middle German,2
+Raunfft,Middle German,2
+Roefflins,Middle German,2
+Rofflins,Middle German,2
+Rotenkopff,Middle German,2
+Sattler,Middle German,2
+Schaelinger,Middle German,2
+Schalinger,Middle German,2
+Schmaltzkopf,Middle German,2
+Schoen,Middle German,2
+Schon,Middle German,2
+schuchmacher,Middle German,2
+schuochmacher,Middle German,2
+Sichlenschmid,Middle German,2
+Spengler,Middle German,2
+Spiessmacher,Middle German,2
+Sporers,Middle German,2
+Spreng,Middle German,2
+Staymer,Middle German,2
+Strobel,Middle German,2
+Swainbolt,Middle German,2
+Swartzen,Middle German,2
+Swertferger,Middle German,2
+Syfrid,Middle German,2
+Tieringer,Middle German,2
+Tigenshain,Middle German,2
+Tobel,Middle German,2
+Troll,Middle German,2
+Unfrid,Middle German,2
+Vasnaht,Middle German,2
+Villing,Middle German,2
+Vischerin,Middle German,2
+Vogel,Middle German,2
+Voltz,Middle German,2
+Vorster,Middle German,2
+Wackerlin,Middle German,2
+Waeckerlin,Middle German,2
+Waehinger,Middle German,2
+Wagner,Middle German,2
+Wahinger,Middle German,2
+Walker,Middle German,2
+Wanner,Middle German,2
+Warndorf,Middle German,2
+Weakerlin,Middle German,2
+Wekerlin,Middle German,2
+Wilhart,Middle German,2
+Wirtner,Middle German,2
+Wolff,Middle German,2
+Zetters,Middle German,2
+Zymrer,Middle German,2
+Ablins,Middle German,1
+Ackermans,Middle German,1
+Aeblins,Middle German,1
+Aertzinars,Middle German,1
+Aertzingers,Middle German,1
+Aescher,Middle German,1
+Albrecht,Middle German,1
+Algoss,Middle German,1
+Algouss,Middle German,1
+Alspachin,Middle German,1
+Alspaechin,Middle German,1
+Alspan,Middle German,1
+Aman,Middle German,1
+App,Middle German,1
+Appenzeller,Middle German,1
+Armbroster,Middle German,1
+Armbrosterin,Middle German,1
+Armleder,Middle German,1
+Arnold,Middle German,1
+Arnoltz,Middle German,1
+Artzinars,Middle German,1
+Artzingers,Middle German,1
+Ascher,Middle German,1
+Aulbert,Middle German,1
+Baderin,Middle German,1
+Baeglin,Middle German,1
+Baeht,Middle German,1
+Baepplins,Middle German,1
+Baglin,Middle German,1
+Baht,Middle German,1
+Banwartz,Middle German,1
+Bapplins,Middle German,1
+Bartz,Middle German,1
+Bearler,Middle German,1
+Bech,Middle German,1
+Beckin,Middle German,1
+Beham,Middle German,1
+Behams,Middle German,1
+Behem,Middle German,1
+Belar,Middle German,1
+Bentzen,Middle German,1
+Bentzinger,Middle German,1
+Bergler,Middle German,1
+Berler,Middle German,1
+Bernen,Middle German,1
+Berner,Middle German,1
+Berners,Middle German,1
+Bettingerin,Middle German,1
+Betzman,Middle German,1
+Biengglin,Middle German,1
+Bill,Middle German,1
+Billing,Middle German,1
+Billung,Middle German,1
+Binder,Middle German,1
+Bischoffin,Middle German,1
+Bisslerin,Middle German,1
+Biter,Middle German,1
+Blattners,Middle German,1
+Bletzen,Middle German,1
+Blutz,Middle German,1
+Bluvtz,Middle German,1
+Bochingerin,Middle German,1
+Boeppin,Middle German,1
+Bondorff,Middle German,1
+Boppfinger,Middle German,1
+Boppin,Middle German,1
+Boschart,Middle German,1
+Botz,Middle German,1
+Brendlin,Middle German,1
+Brendlins,Middle German,1
+Brisgon,Middle German,1
+Bruders,Middle German,1
+Brugel,Middle German,1
+Brun,Middle German,1
+Brunhopter,Middle German,1
+Bruoders,Middle German,1
+Buchamerin,Middle German,1
+Buggmaeyer,Middle German,1
+Buggmayer,Middle German,1
+Buochamerin,Middle German,1
+Buoschellin,Middle German,1
+Buoschillin,Middle German,1
+Buotz,Middle German,1
+Burmberg,Middle German,1
+Burnberg,Middle German,1
+Burnin,Middle German,1
+Burstlinin,Middle German,1
+Burstlins,Middle German,1
+Buschellin,Middle German,1
+Buschillin,Middle German,1
+Bussin,Middle German,1
+Buttin,Middle German,1
+Buttiss,Middle German,1
+Butz,Middle German,1
+Bydermans,Middle German,1
+Cantzlerin,Middle German,1
+Claewin,Middle German,1
+Claewins,Middle German,1
+Clawin,Middle German,1
+Clawins,Middle German,1
+Coelner,Middle German,1
+Colner,Middle German,1
+Cromer,Middle German,1
+Cuntzer,Middle German,1
+Cunz,Middle German,1
+Cuontzer,Middle German,1
+Cuonz,Middle German,1
+Daevids,Middle German,1
+Davids,Middle German,1
+Delkofers,Middle German,1
+Deners,Middle German,1
+Diem,Middle German,1
+Dieterlins,Middle German,1
+Dietinger,Middle German,1
+Dietsch,Middle German,1
+Dietschen,Middle German,1
+Dietschin,Middle German,1
+Diter,Middle German,1
+Dobuls,Middle German,1
+Doggenburgin,Middle German,1
+Dormettingerin,Middle German,1
+Dornhainin,Middle German,1
+Dornhainnin,Middle German,1
+Dornhan,Middle German,1
+Eberlin,Middle German,1
+Edelman,Middle German,1
+Egen,Middle German,1
+Endingerin,Middle German,1
+Engelfrid,Middle German,1
+Eppfendorfs,Middle German,1
+Ermerlin,Middle German,1
+Eschelberger,Middle German,1
+Esslinger,Middle German,1
+Federlin,Middle German,1
+Fieter,Middle German,1
+Fladenschroetin,Middle German,1
+Fladenschrot,Middle German,1
+Fladenschrotin,Middle German,1
+Fladenschrout,Middle German,1
+Fleck,Middle German,1
+Flecken,Middle German,1
+Flecky,Middle German,1
+Foltzen,Middle German,1
+Friccen,Middle German,1
+Frick,Middle German,1
+Fridrichs,Middle German,1
+Friesin,Middle German,1
+Fritzen,Middle German,1
+Fritzin,Middle German,1
+Froelich,Middle German,1
+Frolich,Middle German,1
+Fry,Middle German,1
+Fryen,Middle German,1
+Frygin,Middle German,1
+Fulhaber,Middle German,1
+Fulhaberin,Middle German,1
+Fulhaeberin,Middle German,1
+Fullings,Middle German,1
+Fullwins,Middle German,1
+Funffpfund,Middle German,1
+Funffpfunds,Middle German,1
+Fuollwins,Middle German,1
+Fuos,Middle German,1
+Fuotrers,Middle German,1
+Furer,Middle German,1
+Fus,Middle German,1
+Fusch,Middle German,1
+Futrers,Middle German,1
+Gaesslers,Middle German,1
+Gaetling,Middle German,1
+Gaettling,Middle German,1
+Gail,Middle German,1
+Gailingerin,Middle German,1
+Gantar,Middle German,1
+Ganters,Middle German,1
+Gasslers,Middle German,1
+Gatling,Middle German,1
+Gattling,Middle German,1
+Gerwig,Middle German,1
+Gesell,Middle German,1
+Giering,Middle German,1
+Giessers,Middle German,1
+Giger,Middle German,1
+Glaeyen,Middle German,1
+Glayen,Middle German,1
+Glisserin,Middle German,1
+Glug,Middle German,1
+Gluog,Middle German,1
+Glysser,Middle German,1
+Gnygellin,Middle German,1
+Goeslinger,Middle German,1
+Goeslingerin,Middle German,1
+Goettrid,Middle German,1
+Golter,Middle German,1
+Goslinger,Middle German,1
+Goslingerin,Middle German,1
+Gottbrat,Middle German,1
+Gottbraut,Middle German,1
+Gottrid,Middle German,1
+Graeslin,Middle German,1
+Graslin,Middle German,1
+Grave,Middle German,1
+Graven,Middle German,1
+Groessin,Middle German,1
+Gros,Middle German,1
+Grossin,Middle German,1
+Grundler,Middle German,1
+Gruorerin,Middle German,1
+Grurerin,Middle German,1
+Gruser,Middle German,1
+Gundlin,Middle German,1
+Gundlins,Middle German,1
+Guotgesell,Middle German,1
+Gusers,Middle German,1
+Gutgesell,Middle German,1
+Gutschen,Middle German,1
+Gysel,Middle German,1
+Haberlingin,Middle German,1
+Habmantel,Middle German,1
+Hachels,Middle German,1
+Haeberlingin,Middle German,1
+Haechels,Middle German,1
+Haegeller,Middle German,1
+Hael,Middle German,1
+Haen,Middle German,1
+Haenlers,Middle German,1
+Haenlin,Middle German,1
+Haerdrer,Middle German,1
+Haering,Middle German,1
+Haertwig,Middle German,1
+Haeschin,Middle German,1
+Haetzer,Middle German,1
+Haeyen,Middle German,1
+Haffners,Middle German,1
+Hageller,Middle German,1
+Hagelstain,Middle German,1
+Hagen,Middle German,1
+Hailer,Middle German,1
+Haini,Middle German,1
+Hainrich,Middle German,1
+Hainrichers,Middle German,1
+Hal,Middle German,1
+Halpherr,Middle German,1
+Hamman,Middle German,1
+Han,Middle German,1
+Hanlers,Middle German,1
+Hanlin,Middle German,1
+Harders,Middle German,1
+Hardrer,Middle German,1
+Haring,Middle German,1
+Harlosen,Middle German,1
+Harnascher,Middle German,1
+Harschers,Middle German,1
+Hartwig,Middle German,1
+Haschin,Middle German,1
+Hase,Middle German,1
+Hasenbain,Middle German,1
+Haspel,Middle German,1
+Hatrlos,Middle German,1
+Hattinger,Middle German,1
+Hattingerin,Middle German,1
+Hatzer,Middle German,1
+Haurlosen,Middle German,1
+Hautrlos,Middle German,1
+Hayen,Middle German,1
+Hearter,Middle German,1
+Helds,Middle German,1
+Heltzer,Middle German,1
+Hengst,Middle German,1
+Hennslin,Middle German,1
+Herder,Middle German,1
+Heren,Middle German,1
+Herremberg,Middle German,1
+Herter,Middle German,1
+Heslenwangs,Middle German,1
+Hetzinger,Middle German,1
+Hildprands,Middle German,1
+Hillerin,Middle German,1
+Hilprand,Middle German,1
+Hiltprand,Middle German,1
+Hinderoefinn,Middle German,1
+Hinderofinn,Middle German,1
+Hirt,Middle German,1
+Hirten,Middle German,1
+Hoellenstain,Middle German,1
+Hoenen,Middle German,1
+Hoesslers,Middle German,1
+Hofhart,Middle German,1
+Hoflichs,Middle German,1
+Hohmessinger,Middle German,1
+Holl,Middle German,1
+Hollen,Middle German,1
+Hollenstain,Middle German,1
+Honen,Middle German,1
+Honow,Middle German,1
+Horger,Middle German,1
+Hossinger,Middle German,1
+Hosslers,Middle German,1
+Hotz,Middle German,1
+Hounow,Middle German,1
+Howers,Middle German,1
+Huber,Middle German,1
+Hulins,Middle German,1
+Humlin,Middle German,1
+Huober,Middle German,1
+Husler,Middle German,1
+Hutsch,Middle German,1
+Hutschen,Middle German,1
+Hutschillins,Middle German,1
+Hutschin,Middle German,1
+Jaeger,Middle German,1
+Jager,Middle German,1
+Jungst,Middle German,1
+Juter,Middle German,1
+Kaeller,Middle German,1
+Kaesman,Middle German,1
+Kaesmennin,Middle German,1
+Kaisers,Middle German,1
+Kaller,Middle German,1
+Kasel,Middle German,1
+Kasman,Middle German,1
+Kasmennin,Middle German,1
+Kasser,Middle German,1
+Kellar,Middle German,1
+Kilchherr,Middle German,1
+Kilchherren,Middle German,1
+Kind,Middle German,1
+Klain,Middle German,1
+Kluck,Middle German,1
+Knell,Middle German,1
+Knoblochs,Middle German,1
+Knus,Middle German,1
+Knussen,Middle German,1
+Knuvs,Middle German,1
+Knuvssen,Middle German,1
+Koetman,Middle German,1
+Kolb,Middle German,1
+Kolbing,Middle German,1
+Kolhopffin,Middle German,1
+Kornhase,Middle German,1
+Kotman,Middle German,1
+Kraepflins,Middle German,1
+Kraeplin,Middle German,1
+Krantz,Middle German,1
+Krapflins,Middle German,1
+Kraplin,Middle German,1
+Krudel,Middle German,1
+Krumin,Middle German,1
+Krumlin,Middle German,1
+Krummen,Middle German,1
+Kummers,Middle German,1
+Kung,Middle German,1
+Kunner,Middle German,1
+Kurneg,Middle German,1
+Laepsch,Middle German,1
+Laew,Middle German,1
+Lainbart,Middle German,1
+Landoltin,Middle German,1
+Landoltz,Middle German,1
+Lang,Middle German,1
+Langen,Middle German,1
+Langenbachin,Middle German,1
+Langenbaechin,Middle German,1
+Lapsch,Middle German,1
+Lassers,Middle German,1
+Laussers,Middle German,1
+Law,Middle German,1
+Lemm,Middle German,1
+Lendlin,Middle German,1
+Lidringers,Middle German,1
+Liecher,Middle German,1
+Lientzen,Middle German,1
+Lippach,Middle German,1
+Loblin,Middle German,1
+Loeblin,Middle German,1
+Loenlin,Middle German,1
+Loew,Middle German,1
+Lonlin,Middle German,1
+Lotter,Middle German,1
+Loucher,Middle German,1
+Louchers,Middle German,1
+Louffer,Middle German,1
+Low,Middle German,1
+Luggart,Middle German,1
+Lugglinin,Middle German,1
+Lugglins,Middle German,1
+Luotters,Middle German,1
+Lupp,Middle German,1
+Luprands,Middle German,1
+Lutolds,Middle German,1
+Lutolt,Middle German,1
+Lutters,Middle German,1
+Lutzin,Middle German,1
+Lux,Middle German,1
+Maders,Middle German,1
+Maeders,Middle German,1
+Maeger,Middle German,1
+Maerklin,Middle German,1
+Maerklins,Middle German,1
+Maeslinin,Middle German,1
+Maeyerin,Middle German,1
+Mager,Middle German,1
+Magne,Middle German,1
+Magnes,Middle German,1
+Maigers,Middle German,1
+Malers,Middle German,1
+Marklin,Middle German,1
+Marklins,Middle German,1
+Marstallerin,Middle German,1
+Martins,Middle German,1
+Marttis,Middle German,1
+Maslinin,Middle German,1
+Maulers,Middle German,1
+Mayer,Middle German,1
+Mayerin,Middle German,1
+Mayger,Middle German,1
+Mearklin,Middle German,1
+Merklin,Middle German,1
+Meyer,Middle German,1
+Meyers,Middle German,1
+Michels,Middle German,1
+Minsaeins,Middle German,1
+Minsains,Middle German,1
+Misains,Middle German,1
+Molitor,Middle German,1
+Muag,Middle German,1
+Muchbach,Middle German,1
+Muegen,Middle German,1
+Muegin,Middle German,1
+Muelichs,Middle German,1
+Mueller,Middle German,1
+Mug,Middle German,1
+Mugen,Middle German,1
+Mugin,Middle German,1
+Mul,Middle German,1
+Mulichs,Middle German,1
+Mull,Middle German,1
+Mullar,Middle German,1
+Muller,Middle German,1
+Mullers,Middle German,1
+Munserin,Middle German,1
+Murers,Middle German,1
+Mutzhas,Middle German,1
+Mutzhasen,Middle German,1
+Muvl,Middle German,1
+Muvll,Middle German,1
+Mysner,Middle German,1
+Narten,Middle German,1
+Nefen,Middle German,1
+Neff,Middle German,1
+Nerers,Middle German,1
+Nufringerin,Middle German,1
+Nusplinger,Middle German,1
+Nusplingerin,Middle German,1
+Oehamin,Middle German,1
+Oehem,Middle German,1
+Oerler,Middle German,1
+Oerlin,Middle German,1
+Offterting,Middle German,1
+Offtertings,Middle German,1
+Ohamin,Middle German,1
+Ohem,Middle German,1
+Orler,Middle German,1
+Orlin,Middle German,1
+Ott,Middle German,1
+Ottinger,Middle German,1
+Ower,Middle German,1
+Pfaffen,Middle German,1
+Pfankuch,Middle German,1
+Pfankuoch,Middle German,1
+Pfefferlin,Middle German,1
+Pfender,Middle German,1
+Pfleghar,Middle German,1
+Pfleghars,Middle German,1
+Pfleghaur,Middle German,1
+Pfleghaurs,Middle German,1
+Pflugerin,Middle German,1
+Pflumer,Middle German,1
+Pfluogerin,Middle German,1
+Pforrer,Middle German,1
+Pfuser,Middle German,1
+Pfyffers,Middle German,1
+Plumping,Middle German,1
+Radegg,Middle German,1
+Ragguser,Middle German,1
+Rainhartin,Middle German,1
+Rall,Middle German,1
+Ranfftz,Middle German,1
+Rangendingers,Middle German,1
+Rapolt,Middle German,1
+Rapp,Middle German,1
+Rappen,Middle German,1
+Raunfftz,Middle German,1
+Raupolt,Middle German,1
+Reger,Middle German,1
+Regers,Middle German,1
+Rem,Middle German,1
+Rentz,Middle German,1
+Riblins,Middle German,1
+Richenbachs,Middle German,1
+Riemer,Middle German,1
+Riemers,Middle German,1
+Ringraeyer,Middle German,1
+Ringrayer,Middle German,1
+Rischer,Middle German,1
+Rischers,Middle German,1
+Riser,Middle German,1
+Riserin,Middle German,1
+Risers,Middle German,1
+Roefflin,Middle German,1
+Roem,Middle German,1
+Roes,Middle German,1
+Roeslin,Middle German,1
+Roetin,Middle German,1
+Rofflin,Middle German,1
+Rom,Middle German,1
+Ros,Middle German,1
+Rosemberg,Middle German,1
+Rosenberg,Middle German,1
+Rosenveldin,Middle German,1
+Roslin,Middle German,1
+Roten,Middle German,1
+Rotenburg,Middle German,1
+Rotenkopf,Middle German,1
+Rotin,Middle German,1
+Rottencopf,Middle German,1
+Routen,Middle German,1
+Ruegger,Middle German,1
+Rueggers,Middle German,1
+Ruehen,Middle German,1
+Rufen,Middle German,1
+Ruff,Middle German,1
+Rugger,Middle German,1
+Ruggers,Middle German,1
+Ruggibroc,Middle German,1
+Rugginbrotzz,Middle German,1
+Ruh,Middle German,1
+Ruhen,Middle German,1
+Rulerin,Middle German,1
+Rumpff,Middle German,1
+Ruofen,Middle German,1
+Ruoff,Middle German,1
+Ruossman,Middle German,1
+Russel,Middle German,1
+Russman,Middle German,1
+Rustrer,Middle German,1
+Rutler,Middle German,1
+Ryscher,Middle German,1
+Ryserin,Middle German,1
+Ryter,Middle German,1
+Sackwebers,Middle German,1
+Sailer,Middle German,1
+Saltzman,Middle German,1
+Schaeffer,Middle German,1
+Schaeffers,Middle German,1
+Schaefflin,Middle German,1
+Schaelingers,Middle German,1
+Schaen,Middle German,1
+Schaetzlinin,Middle German,1
+Schaetzlins,Middle German,1
+Schaffer,Middle German,1
+Schaffers,Middle German,1
+Schafflin,Middle German,1
+Schalingers,Middle German,1
+Schan,Middle German,1
+Schatzlinin,Middle German,1
+Schatzlins,Middle German,1
+Scheltz,Middle German,1
+Scherers,Middle German,1
+Schertzingerin,Middle German,1
+Schidholtz,Middle German,1
+Schifflers,Middle German,1
+Schinwyss,Middle German,1
+Schlaitz,Middle German,1
+Schligel,Middle German,1
+Schlotternaegillins,Middle German,1
+Schlotternagillins,Middle German,1
+Schmalbaggs,Middle German,1
+Schmids,Middle German,1
+Schmit,Middle German,1
+Schnagg,Middle German,1
+Schnaugg,Middle German,1
+Schnitzer,Middle German,1
+Schoblin,Middle German,1
+Schoeblin,Middle German,1
+Schoembergers,Middle German,1
+Schoenstain,Middle German,1
+Schoenstains,Middle German,1
+Schombergers,Middle German,1
+Schonstain,Middle German,1
+Schonstains,Middle German,1
+Schotzerin,Middle German,1
+Schraetz,Middle German,1
+Schratz,Middle German,1
+Schribers,Middle German,1
+Schuler,Middle German,1
+Schulthais,Middle German,1
+Schumarchers,Middle German,1
+Schuoler,Middle German,1
+Schuomarchers,Middle German,1
+Schwartz,Middle German,1
+Schwend,Middle German,1
+Schyt,Middle German,1
+Seewerin,Middle German,1
+Segerin,Middle German,1
+Selfinger,Middle German,1
+Selvingers,Middle German,1
+Seng,Middle German,1
+Sewerin,Middle German,1
+Sifrid,Middle German,1
+Siglin,Middle German,1
+Singers,Middle German,1
+Soeler,Middle German,1
+Soemler,Middle German,1
+Soemlers,Middle German,1
+Soler,Middle German,1
+Somler,Middle German,1
+Somlers,Middle German,1
+Spaerwer,Middle German,1
+Spannagel,Middle German,1
+Sparwer,Middle German,1
+Speck,Middle German,1
+Spenglers,Middle German,1
+Spiessmacherin,Middle German,1
+Spoenin,Middle German,1
+Spon,Middle German,1
+Sponer,Middle German,1
+Sponin,Middle German,1
+Sporer,Middle German,1
+Spraelling,Middle German,1
+Spralling,Middle German,1
+Sprengen,Middle German,1
+Sprengers,Middle German,1
+Staehillins,Middle German,1
+Stahillins,Middle German,1
+Stahlerin,Middle German,1
+Stainachin,Middle German,1
+Stamer,Middle German,1
+Stapferin,Middle German,1
+Stapffer,Middle German,1
+Staymerin,Middle German,1
+Stierlerin,Middle German,1
+Stierlers,Middle German,1
+Stifel,Middle German,1
+Stilhartz,Middle German,1
+Stoefflerin,Middle German,1
+Stoefflers,Middle German,1
+Stofflerin,Middle German,1
+Stofflers,Middle German,1
+Stotzer,Middle German,1
+Straelers,Middle German,1
+Stralers,Middle German,1
+Stricher,Middle German,1
+Strichers,Middle German,1
+Strickerin,Middle German,1
+Strickers,Middle German,1
+Striker,Middle German,1
+Stroemen,Middle German,1
+Strom,Middle German,1
+Stromaeyer,Middle German,1
+Stromayer,Middle German,1
+Stromen,Middle German,1
+Stromeyer,Middle German,1
+Stroumen,Middle German,1
+Strublin,Middle German,1
+Studlin,Middle German,1
+Stuelinger,Middle German,1
+Stuelingerin,Middle German,1
+Stuelingers,Middle German,1
+Stulinger,Middle German,1
+Stulingerin,Middle German,1
+Stulingers,Middle German,1
+Sultzer,Middle German,1
+Sunher,Middle German,1
+Sunherr,Middle German,1
+Surwin,Middle German,1
+Swaigers,Middle German,1
+Swartz,Middle German,1
+Swartzbach,Middle German,1
+Swegler,Middle German,1
+Swenningner,Middle German,1
+Switzer,Middle German,1
+Swygglin,Middle German,1
+Swytzer,Middle German,1
+Syferlins,Middle German,1
+Syfridin,Middle German,1
+Sytz,Middle German,1
+Sytzen,Middle German,1
+Tanhaimerin,Middle German,1
+Tapphartz,Middle German,1
+Temeller,Middle German,1
+Tischmesser,Middle German,1
+Tobels,Middle German,1
+Toberin,Middle German,1
+Tobillin,Middle German,1
+Tochterman,Middle German,1
+Toeberin,Middle German,1
+Trossinger,Middle German,1
+Trossingers,Middle German,1
+Truchtingerscherer,Middle German,1
+Truetinger,Middle German,1
+Trutwin,Middle German,1
+Tufel,Middle German,1
+Tulgast,Middle German,1
+Tullgast,Middle German,1
+Tunninger,Middle German,1
+Tuolgast,Middle German,1
+Tutschmans,Middle German,1
+Ubelher,Middle German,1
+Uelins,Middle German,1
+Ulinger,Middle German,1
+Ulins,Middle German,1
+under Katzenstig,Middle German,1
+Ungillins,Middle German,1
+Unrat,Middle German,1
+Unraut,Middle German,1
+Uolinger,Middle German,1
+Vackler,Middle German,1
+Vaeckler,Middle German,1
+Vaeler,Middle German,1
+Vaelerin,Middle German,1
+Vaesch,Middle German,1
+Vaeschen,Middle German,1
+Vaesser,Middle German,1
+Valer,Middle German,1
+Valerin,Middle German,1
+Vasch,Middle German,1
+Vaschen,Middle German,1
+Vasser,Middle German,1
+Vell,Middle German,1
+Veringer,Middle German,1
+Veringers,Middle German,1
+Vesar,Middle German,1
+Vesars,Middle German,1
+Vetter,Middle German,1
+Vetzer,Middle German,1
+Vichter,Middle German,1
+Vichterin,Middle German,1
+Vichters,Middle German,1
+Videllin,Middle German,1
+Vilingers,Middle German,1
+Villingin,Middle German,1
+Villings,Middle German,1
+Vink,Middle German,1
+Vischers,Middle German,1
+Visel,Middle German,1
+Vochentzer,Middle German,1
+Vogt,Middle German,1
+Volmar,Middle German,1
+Volmer,Middle German,1
+Vorsterin,Middle German,1
+Wachter,Middle German,1
+Waelhin,Middle German,1
+Waeygen,Middle German,1
+Wager,Middle German,1
+Wahingerin,Middle German,1
+Walckar,Middle German,1
+Walhin,Middle German,1
+Walkers,Middle German,1
+Wallen,Middle German,1
+Wallerin,Middle German,1
+Walther,Middle German,1
+Wampp,Middle German,1
+Wanners,Middle German,1
+Warndorff,Middle German,1
+Waybel,Middle German,1
+Waygen,Middle German,1
+Webars,Middle German,1
+Weckerlin,Middle German,1
+Werkmaisterin,Middle German,1
+Wernhers,Middle German,1
+Wesner,Middle German,1
+Widerruss,Middle German,1
+Widlin,Middle German,1
+Widmer,Middle German,1
+Wind,Middle German,1
+Winmaennin,Middle German,1
+Winmann,Middle German,1
+Winmannin,Middle German,1
+Wirtnerin,Middle German,1
+Wirtners,Middle German,1
+Wirtz,Middle German,1
+Wittendorf,Middle German,1
+Witz,Middle German,1
+Witzman,Middle German,1
+Wollands,Middle German,1
+Wylhain,Middle German,1
+Wysshar,Middle German,1
+Wysshaur,Middle German,1
+Wysslin,Middle German,1
+Ysenhuot,Middle German,1
+Ysenhut,Middle German,1
+Zaiser,Middle German,1
+Zaiseriner,Middle German,1
+Zaisers,Middle German,1
+Zellerin,Middle German,1
+Zellers,Middle German,1
+Zieglerin,Middle German,1
+Zorrers,Middle German,1
+Zuttel,Middle German,1
+Zwick,Middle German,1
+Zylerin,Middle German,1
+Zymmermans,Middle German,1
+Andersone,Middle Scots,8
+Hay,Middle Scots,8
+Gray,Middle Scots,7
+Smythe,Middle Scots,7
+Gordoun,Middle Scots,6
+Torrie,Middle Scots,5
+Bauerlay,Middle Scots,4
+Law,Middle Scots,4
+Nicoll,Middle Scots,4
+Simsone,Middle Scots,4
+Stewart,Middle Scots,4
+Volume,Middle Scots,4
+Watsone,Middle Scots,4
+Ailes,Middle Scots,3
+Barnet,Middle Scots,3
+Blake,Middle Scots,3
+Boys,Middle Scots,3
+Chalmer,Middle Scots,3
+Cruikshank,Middle Scots,3
+Dauidsone,Middle Scots,3
+Forbes,Middle Scots,3
+Forsyith,Middle Scots,3
+Garioche,Middle Scots,3
+Gibsone,Middle Scots,3
+Hendersone,Middle Scots,3
+Innes,Middle Scots,3
+Kilgour,Middle Scots,3
+Merser,Middle Scots,3
+Nicol,Middle Scots,3
+Reid,Middle Scots,3
+Ross,Middle Scots,3
+Tailzeour,Middle Scots,3
+Adame,Middle Scots,2
+Anderston,Middle Scots,2
+Blakburne,Middle Scots,2
+Blayk,Middle Scots,2
+Blinschell,Middle Scots,2
+Bothuel,Middle Scots,2
+Clerke,Middle Scots,2
+Couttes,Middle Scots,2
+Cruikshanke,Middle Scots,2
+Cuming,Middle Scots,2
+Davidsone,Middle Scots,2
+Drone,Middle Scots,2
+Duncan,Middle Scots,2
+Duthie,Middle Scots,2
+Fleming,Middle Scots,2
+Flemyn,Middle Scots,2
+Forsyithe,Middle Scots,2
+Forsythe,Middle Scots,2
+Foullartoun,Middle Scots,2
+Fraser,Middle Scots,2
+Gairden,Middle Scots,2
+Guthrie,Middle Scots,2
+Haket,Middle Scots,2
+Halden,Middle Scots,2
+Howat,Middle Scots,2
+Iruing,Middle Scots,2
+Irwing,Middle Scots,2
+Jacson,Middle Scots,2
+Jacsone,Middle Scots,2
+Johnstoune,Middle Scots,2
+King,Middle Scots,2
+Knolles,Middle Scots,2
+Leslie,Middle Scots,2
+Littistar,Middle Scots,2
+Logan,Middle Scots,2
+Lumsden,Middle Scots,2
+Lytstar,Middle Scots,2
+Moir,Middle Scots,2
+Ortoun,Middle Scots,2
+Ortoune,Middle Scots,2
+Robertsone,Middle Scots,2
+Ros,Middle Scots,2
+Sangster,Middle Scots,2
+Steuart,Middle Scots,2
+Still,Middle Scots,2
+Tellie,Middle Scots,2
+Than,Middle Scots,2
+Thomsone,Middle Scots,2
+Troup,Middle Scots,2
+Wat,Middle Scots,2
+Williamsone,Middle Scots,2
+Willox,Middle Scots,2
+Wyllie,Middle Scots,2
+Abell,Middle Scots,1
+Aberdour,Middle Scots,1
+Addie,Middle Scots,1
+Adie,Middle Scots,1
+Alansoun,Middle Scots,1
+Allane,Middle Scots,1
+Anande,Middle Scots,1
+Anderson,Middle Scots,1
+Andro,Middle Scots,1
+Androson,Middle Scots,1
+Annand,Middle Scots,1
+Arthour,Middle Scots,1
+Auld,Middle Scots,1
+Baird,Middle Scots,1
+Bakstar,Middle Scots,1
+Balmanoch,Middle Scots,1
+Bannermane,Middle Scots,1
+Barker,Middle Scots,1
+Bartlet,Middle Scots,1
+Baxtar,Middle Scots,1
+Bischope,Middle Scots,1
+Blaik,Middle Scots,1
+Blythe,Middle Scots,1
+Bothuele,Middle Scots,1
+Bothwell,Middle Scots,1
+Boyes,Middle Scots,1
+Boyne,Middle Scots,1
+Brames,Middle Scots,1
+Brine,Middle Scots,1
+Bron,Middle Scots,1
+Broun,Middle Scots,1
+Broune,Middle Scots,1
+Buchane,Middle Scots,1
+Burnet,Middle Scots,1
+Cady,Middle Scots,1
+Campbell,Middle Scots,1
+Carll,Middle Scots,1
+Carnecorse,Middle Scots,1
+Catto,Middle Scots,1
+Chayn,Middle Scots,1
+Cheilles,Middle Scots,1
+Chepman,Middle Scots,1
+Chrystie,Middle Scots,1
+Citchie,Middle Scots,1
+Collie,Middle Scots,1
+Con,Middle Scots,1
+Coulles,Middle Scots,1
+Couper,Middle Scots,1
+Courage,Middle Scots,1
+Cow,Middle Scots,1
+Craighead,Middle Scots,1
+Crewie,Middle Scots,1
+Cristison,Middle Scots,1
+Cristyson,Middle Scots,1
+Cristysone,Middle Scots,1
+Cristysun,Middle Scots,1
+Crystyson,Middle Scots,1
+Curlande,Middle Scots,1
+Cushnie,Middle Scots,1
+Cuthbert,Middle Scots,1
+Cuy,Middle Scots,1
+Daniell,Middle Scots,1
+Dauie,Middle Scots,1
+Deanes,Middle Scots,1
+Dolas,Middle Scots,1
+Donald,Middle Scots,1
+Dow,Middle Scots,1
+Dreden,Middle Scots,1
+Duiguid,Middle Scots,1
+Duncane,Middle Scots,1
+Edward,Middle Scots,1
+Elmslie,Middle Scots,1
+Farquharsone,Middle Scots,1
+Farquhassone,Middle Scots,1
+Fergusone,Middle Scots,1
+Fiddes,Middle Scots,1
+Foular,Middle Scots,1
+Fowlar,Middle Scots,1
+Fox,Middle Scots,1
+French,Middle Scots,1
+Fullartoun,Middle Scots,1
+Fyiff,Middle Scots,1
+Gartlie,Middle Scots,1
+Gawine,Middle Scots,1
+Gelland,Middle Scots,1
+George,Middle Scots,1
+Gerret,Middle Scots,1
+Gilcryste,Middle Scots,1
+Glenie,Middle Scots,1
+Gordon,Middle Scots,1
+Gordone,Middle Scots,1
+Gordoune,Middle Scots,1
+Gormake,Middle Scots,1
+Goslyn,Middle Scots,1
+Granger,Middle Scots,1
+Grangiar,Middle Scots,1
+Gudsuan,Middle Scots,1
+Hacat,Middle Scots,1
+Hacate,Middle Scots,1
+Hall,Middle Scots,1
+Hantoun,Middle Scots,1
+Hendrie,Middle Scots,1
+Herevie,Middle Scots,1
+Heruie,Middle Scots,1
+Hog,Middle Scots,1
+Hunter,Middle Scots,1
+Hutcheon,Middle Scots,1
+Iraulyn,Middle Scots,1
+Jaffray,Middle Scots,1
+Jaffrey,Middle Scots,1
+Jake,Middle Scots,1
+Jamesone,Middle Scots,1
+Jhonsoun,Middle Scots,1
+Johnestoune,Middle Scots,1
+Johnson,Middle Scots,1
+Johnstoun,Middle Scots,1
+Kedie,Middle Scots,1
+Kellie,Middle Scots,1
+Kelman,Middle Scots,1
+Kemp,Middle Scots,1
+Keythe,Middle Scots,1
+Lamb,Middle Scots,1
+Lech,Middle Scots,1
+Leeche,Middle Scots,1
+Leith,Middle Scots,1
+Lessell,Middle Scots,1
+Lidingham,Middle Scots,1
+Lillie,Middle Scots,1
+Lindsay,Middle Scots,1
+Linsie,Middle Scots,1
+Litstar,Middle Scots,1
+Littilljohne,Middle Scots,1
+Logane,Middle Scots,1
+Low,Middle Scots,1
+Lumisden,Middle Scots,1
+Lundie,Middle Scots,1
+Mackie,Middle Scots,1
+Mackrines,Middle Scots,1
+Mar,Middle Scots,1
+Martynsone,Middle Scots,1
+Martyson,Middle Scots,1
+Masoun,Middle Scots,1
+Maxuell,Middle Scots,1
+Mechalson,Middle Scots,1
+Mechelson,Middle Scots,1
+Mechelsone,Middle Scots,1
+Mechelsoun,Middle Scots,1
+Mechelsun,Middle Scots,1
+Meeke,Middle Scots,1
+Megus,Middle Scots,1
+Menzies,Middle Scots,1
+Middiltoun,Middle Scots,1
+Mill,Middle Scots,1
+Milne,Middle Scots,1
+Moriesone,Middle Scots,1
+Moubray,Middle Scots,1
+Nicolsone,Middle Scots,1
+Nisbit,Middle Scots,1
+Norie,Middle Scots,1
+Omond,Middle Scots,1
+Orem,Middle Scots,1
+Orum,Middle Scots,1
+Paip,Middle Scots,1
+Pantoune,Middle Scots,1
+Paterson,Middle Scots,1
+Patoun,Middle Scots,1
+Patounson,Middle Scots,1
+Pattone,Middle Scots,1
+Peirie,Middle Scots,1
+Petrie,Middle Scots,1
+Philp,Middle Scots,1
+Porter,Middle Scots,1
+Prat,Middle Scots,1
+Rainie,Middle Scots,1
+Rainy,Middle Scots,1
+Reiths,Middle Scots,1
+Ritchie,Middle Scots,1
+Robersone,Middle Scots,1
+Robertson,Middle Scots,1
+Robertsoune,Middle Scots,1
+Rollie,Middle Scots,1
+Rose,Middle Scots,1
+Russell,Middle Scots,1
+Sandie,Middle Scots,1
+Schand,Middle Scots,1
+Scheipheard,Middle Scots,1
+Scherer,Middle Scots,1
+Schives,Middle Scots,1
+Scrogie,Middle Scots,1
+Selbie,Middle Scots,1
+Senzeour,Middle Scots,1
+Settoun,Middle Scots,1
+Sibbald,Middle Scots,1
+Sime,Middle Scots,1
+Simmer,Middle Scots,1
+Sinclair,Middle Scots,1
+Skedway,Middle Scots,1
+Small,Middle Scots,1
+Spens,Middle Scots,1
+Stanneris,Middle Scots,1
+Stewinsoune,Middle Scots,1
+Story,Middle Scots,1
+Stoylle,Middle Scots,1
+Strang,Middle Scots,1
+Sutherland,Middle Scots,1
+Sym,Middle Scots,1
+Tailyeour,Middle Scots,1
+Turnbul,Middle Scots,1
+Turner,Middle Scots,1
+Vobster,Middle Scots,1
+Vricht,Middle Scots,1
+Wadie,Middle Scots,1
+Wagrellis,Middle Scots,1
+Walker,Middle Scots,1
+Wer,Middle Scots,1
+Wicht,Middle Scots,1
+Williamsoun,Middle Scots,1
+Willsoun,Middle Scots,1
+Wilson,Middle Scots,1
+Wilsone,Middle Scots,1
+Wilsun,Middle Scots,1
+Wilyamson,Middle Scots,1
+Wobster,Middle Scots,1
+Wode,Middle Scots,1
+Woode,Middle Scots,1
+Wrich,Middle Scots,1
+Wricht,Middle Scots,1
+Wrquhart,Middle Scots,1
+Wrych,Middle Scots,1
+Wrycht,Middle Scots,1
+Wylsone,Middle Scots,1
+Wylyamson,Middle Scots,1
+Wylyhamsone,Middle Scots,1
+Youngsone,Middle Scots,1
+Yowng,Middle Scots,1
+Yrland,Middle Scots,1
+Yung,Middle Scots,1
+Zoungsone,Middle Scots,1
+Atreid,Mycenaean Greek,3
+Pelopid,Mycenaean Greek,3
+Aiakid,Mycenaean Greek,3
+Kadmeid,Mycenaean Greek,3
+Labdakid,Mycenaean Greek,3
+Perseid,Mycenaean Greek,3
+Tyndarid,Mycenaean Greek,3
+Pylian,Mycenaean Greek,3
+Akhaiwos,Mycenaean Greek,3
+Mykenaian,Mycenaean Greek,3
+Tirynthian,Mycenaean Greek,2
+Orchomenid,Mycenaean Greek,2
+Theban,Mycenaean Greek,2
+Knossian,Mycenaean Greek,2
+Atrytonid,Mycenaean Greek,2
+Wanaktid,Mycenaean Greek,2
+Damosides,Mycenaean Greek,2
+Damosiad,Mycenaean Greek,2
+Damosios,Mycenaean Greek,2
+Damoseus,Mycenaean Greek,2
+Damosid,Mycenaean Greek,2
+Iasonides,Mycenaean Greek,2
+Iasoniad,Mycenaean Greek,2
+Iasonios,Mycenaean Greek,2
+Iasoneus,Mycenaean Greek,1
+Iasonid,Mycenaean Greek,1
+Pylasides,Mycenaean Greek,1
+Pylasiad,Mycenaean Greek,1
+Pylasios,Mycenaean Greek,1
+Pylaseus,Mycenaean Greek,1
+Pylasid,Mycenaean Greek,1
+Akamasides,Mycenaean Greek,1
+Akamasiad,Mycenaean Greek,1
+Akamasios,Mycenaean Greek,1
+Akamaseus,Mycenaean Greek,1
+Akamasid,Mycenaean Greek,1
+Areionides,Mycenaean Greek,1
+Areioniad,Mycenaean Greek,1
+Areionios,Mycenaean Greek,1
+Areioneus,Mycenaean Greek,1
+Areionid,Mycenaean Greek,1
+Atreusides,Mycenaean Greek,1
+Atreusiad,Mycenaean Greek,1
+Atreusios,Mycenaean Greek,1
+Atreuseus,Mycenaean Greek,1
+Atreusid,Mycenaean Greek,1
+Hektorides,Mycenaean Greek,1
+Hektoriad,Mycenaean Greek,1
+DeClare,Norman Norse-French Hybrid,3
+DeVere,Norman Norse-French Hybrid,3
+DeMowbray,Norman Norse-French Hybrid,3
+DeMortemer,Norman Norse-French Hybrid,3
+DeTosny,Norman Norse-French Hybrid,3
+DeBeaumont,Norman Norse-French Hybrid,3
+FitzOsbern,Norman Norse-French Hybrid,3
+FitzRichard,Norman Norse-French Hybrid,3
+FitzRobert,Norman Norse-French Hybrid,3
+FitzRoger,Norman Norse-French Hybrid,3
+FitzHamon,Norman Norse-French Hybrid,2
+FitzTurstin,Norman Norse-French Hybrid,2
+Anquetil,Norman Norse-French Hybrid,2
+Giffard,Norman Norse-French Hybrid,2
+Baskerville,Norman Norse-French Hybrid,2
+Mandeville,Norman Norse-French Hybrid,2
+Montgomery,Norman Norse-French Hybrid,2
+Paynel,Norman Norse-French Hybrid,2
+FitzIvo,Norman Norse-French Hybrid,2
+DeIvo,Norman Norse-French Hybrid,2
+Ivoville,Norman Norse-French Hybrid,2
+Ivomont,Norman Norse-French Hybrid,2
+Ivocourt,Norman Norse-French Hybrid,2
+FitzFulk,Norman Norse-French Hybrid,2
+DeFulk,Norman Norse-French Hybrid,1
+Fulkville,Norman Norse-French Hybrid,1
+Fulkmont,Norman Norse-French Hybrid,1
+Fulkcourt,Norman Norse-French Hybrid,1
+FitzDrogo,Norman Norse-French Hybrid,1
+DeDrogo,Norman Norse-French Hybrid,1
+Drogoville,Norman Norse-French Hybrid,1
+Drogomont,Norman Norse-French Hybrid,1
+Drogocourt,Norman Norse-French Hybrid,1
+DeHamon,Norman Norse-French Hybrid,1
+Hamonville,Norman Norse-French Hybrid,1
+Hamonmont,Norman Norse-French Hybrid,1
+Hamoncourt,Norman Norse-French Hybrid,1
+FitzHrolf,Norman Norse-French Hybrid,1
+DeHrolf,Norman Norse-French Hybrid,1
+Hrolfville,Norman Norse-French Hybrid,1
+Hrolfmont,Norman Norse-French Hybrid,1
+Hrolfcourt,Norman Norse-French Hybrid,1
+FitzNigel,Norman Norse-French Hybrid,1
+DeNigel,Norman Norse-French Hybrid,1
+Nigelville,Norman Norse-French Hybrid,1
+Nigelmont,Norman Norse-French Hybrid,1
+Nigelcourt,Norman Norse-French Hybrid,1
+FitzRaoul,Norman Norse-French Hybrid,1
+Berenguer,Old Catalan,3
+Folch,Old Catalan,3
+Montcada,Old Catalan,3
+Cardona,Old Catalan,3
+Cervera,Old Catalan,3
+Besalu,Old Catalan,3
+Urgell,Old Catalan,3
+Rocaberti,Old Catalan,3
+Empuries,Old Catalan,3
+Pallars,Old Catalan,3
+Roussillon,Old Catalan,2
+Vilamur,Old Catalan,2
+Castellbo,Old Catalan,2
+Cabrera,Old Catalan,2
+Anglesola,Old Catalan,2
+Queralt,Old Catalan,2
+Torroja,Old Catalan,2
+Pinatell,Old Catalan,2
+Hugez,Old Catalan,2
+Huges,Old Catalan,2
+Hugiz,Old Catalan,2
+Hugano,Old Catalan,2
+Hugeiro,Old Catalan,2
+Folcez,Old Catalan,2
+Folces,Old Catalan,1
+Folciz,Old Catalan,1
+Folcano,Old Catalan,1
+Folceiro,Old Catalan,1
+Miroez,Old Catalan,1
+Miroes,Old Catalan,1
+Miroiz,Old Catalan,1
+Miroano,Old Catalan,1
+Miroeiro,Old Catalan,1
+Perez,Old Catalan,1
+Peres,Old Catalan,1
+Pereiz,Old Catalan,1
+Pereano,Old Catalan,1
+Pereiro,Old Catalan,1
+Poncez,Old Catalan,1
+Ponces,Old Catalan,1
+Ponciz,Old Catalan,1
+Poncano,Old Catalan,1
+Ponceiro,Old Catalan,1
+Arnauez,Old Catalan,1
+Arnaues,Old Catalan,1
+Arnauiz,Old Catalan,1
+Arnauano,Old Catalan,1
+Arnaueiro,Old Catalan,1
+Premyslid,Old Czech/Moravian,3
+Slavnik,Old Czech/Moravian,3
+Vitkovic,Old Czech/Moravian,3
+Rozmberk,Old Czech/Moravian,3
+Zajic,Old Czech/Moravian,3
+Plichta,Old Czech/Moravian,3
+Bojanov,Old Czech/Moravian,3
+Moravec,Old Czech/Moravian,3
+Cech,Old Czech/Moravian,3
+Dudleb,Old Czech/Moravian,3
+Zlic,Old Czech/Moravian,2
+Lucan,Old Czech/Moravian,2
+Litomeric,Old Czech/Moravian,2
+Prerovan,Old Czech/Moravian,2
+Olomoucan,Old Czech/Moravian,2
+Vrsovec,Old Czech/Moravian,2
+Hrabisic,Old Czech/Moravian,2
+Drslavic,Old Czech/Moravian,2
+Knezov,Old Czech/Moravian,2
+Knezev,Old Czech/Moravian,2
+Knezic,Old Czech/Moravian,2
+Knezski,Old Czech/Moravian,2
+Knezin,Old Czech/Moravian,2
+Cenekov,Old Czech/Moravian,2
+Cenekev,Old Czech/Moravian,1
+Cenekic,Old Czech/Moravian,1
+Cenekski,Old Czech/Moravian,1
+Cenekin,Old Czech/Moravian,1
+Liborov,Old Czech/Moravian,1
+Liborev,Old Czech/Moravian,1
+Liboric,Old Czech/Moravian,1
+Liborski,Old Czech/Moravian,1
+Liborin,Old Czech/Moravian,1
+Radimov,Old Czech/Moravian,1
+Radimev,Old Czech/Moravian,1
+Radimic,Old Czech/Moravian,1
+Radimski,Old Czech/Moravian,1
+Radimin,Old Czech/Moravian,1
+Ctiborov,Old Czech/Moravian,1
+Ctiborev,Old Czech/Moravian,1
+Ctiboric,Old Czech/Moravian,1
+Ctiborski,Old Czech/Moravian,1
+Ctiborin,Old Czech/Moravian,1
+Ludvikov,Old Czech/Moravian,1
+Ludvikev,Old Czech/Moravian,1
+Ludvikic,Old Czech/Moravian,1
+Ludvikski,Old Czech/Moravian,1
+Ludvikin,Old Czech/Moravian,1
+Jelling,Old Danish,3
+Knudsen,Old Danish,3
+Gormsen,Old Danish,3
+Haraldsen,Old Danish,3
+Ulfeld,Old Danish,3
+Estridsen,Old Danish,3
+Skjoldung,Old Danish,3
+Hvide,Old Danish,3
+Tokesen,Old Danish,3
+Asbjornsen,Old Danish,3
+Thorkilsen,Old Danish,2
+Roskilde,Old Danish,2
+Sjaelland,Old Danish,2
+Jutland,Old Danish,2
+Fynbo,Old Danish,2
+Lundby,Old Danish,2
+Hedeby,Old Danish,2
+Skaane,Old Danish,2
+Ulfsson,Old Danish,2
+Ulfsen,Old Danish,2
+Ulfdottir,Old Danish,2
+Ulfstad,Old Danish,2
+Ulfby,Old Danish,2
+Aagesson,Old Danish,2
+Aagesen,Old Danish,1
+Aagedottir,Old Danish,1
+Aagestad,Old Danish,1
+Aageby,Old Danish,1
+Arnesson,Old Danish,1
+Arnesen,Old Danish,1
+Arnedottir,Old Danish,1
+Arnestad,Old Danish,1
+Arneby,Old Danish,1
+Bentsson,Old Danish,1
+Bentsen,Old Danish,1
+Bentdottir,Old Danish,1
+Bentstad,Old Danish,1
+Bentby,Old Danish,1
+Eriksson,Old Danish,1
+Eriksen,Old Danish,1
+Erikdottir,Old Danish,1
+Erikstad,Old Danish,1
+Erikby,Old Danish,1
+Finnsson,Old Danish,1
+Finnsen,Old Danish,1
+Finndottir,Old Danish,1
+Finnstad,Old Danish,1
+Finnby,Old Danish,1
+Rurikid,Old East Slavic,3
+Monomakh,Old East Slavic,3
+Iziaslavich,Old East Slavic,3
+Sviatoslavich,Old East Slavic,3
+Olgovich,Old East Slavic,3
+Rostislavich,Old East Slavic,3
+Yaroslavich,Old East Slavic,3
+Mstislavich,Old East Slavic,3
+Vseslavich,Old East Slavic,3
+Dregovich,Old East Slavic,3
+Krivich,Old East Slavic,2
+Polianin,Old East Slavic,2
+Drevlyanin,Old East Slavic,2
+Severian,Old East Slavic,2
+Volhynian,Old East Slavic,2
+Novgorodian,Old East Slavic,2
+Kievian,Old East Slavic,2
+Smolenskian,Old East Slavic,2
+Glebov,Old East Slavic,2
+Glebev,Old East Slavic,2
+Glebic,Old East Slavic,2
+Glebski,Old East Slavic,2
+Glebin,Old East Slavic,2
+Igorov,Old East Slavic,2
+Igorev,Old East Slavic,1
+Igoric,Old East Slavic,1
+Igorski,Old East Slavic,1
+Igorin,Old East Slavic,1
+Ilyaov,Old East Slavic,1
+Ilyaev,Old East Slavic,1
+Ilyaic,Old East Slavic,1
+Ilyaski,Old East Slavic,1
+Ilyain,Old East Slavic,1
+Olegov,Old East Slavic,1
+Olegev,Old East Slavic,1
+Olegic,Old East Slavic,1
+Olegski,Old East Slavic,1
+Olegin,Old East Slavic,1
+Yuriov,Old East Slavic,1
+Yuriev,Old East Slavic,1
+Yuric,Old East Slavic,1
+Yuriski,Old East Slavic,1
+Yurin,Old East Slavic,1
+Borisov,Old East Slavic,1
+Borisev,Old East Slavic,1
+Borisic,Old East Slavic,1
+Boriski,Old East Slavic,1
+Borisin,Old East Slavic,1
+Abbot,Old English,3
+Abbott,Old English,3
+Ackerman,Old English,3
+Alder,Old English,3
+Archer,Old English,3
+Arkwright,Old English,3
+Ash,Old English,3
+Ashe,Old English,3
+Atwood,Old English,3
+Baker,Old English,3
+Bard,Old English,3
+Barker,Old English,3
+Barnes,Old English,3
+Battle,Old English,3
+Baxter,Old English,3
+Becker,Old English,3
+Bell,Old English,3
+Berry,Old English,3
+Bishop,Old English,3
+Body,Old English,3
+Bolt,Old English,3
+Boteler,Old English,3
+Boutcher,Old English,3
+Bowyer,Old English,3
+Brewer,Old English,3
+Brewster,Old English,3
+Briar,Old English,3
+Bridger,Old English,3
+Briggs,Old English,3
+Brock,Old English,3
+Brook,Old English,3
+Brooke,Old English,3
+Brooks,Old English,3
+Bundy,Old English,3
+Burnside,Old English,3
+Burroughs,Old English,3
+Burrows,Old English,3
+Bush,Old English,3
+Butcher,Old English,3
+Butler,Old English,3
+Cade,Old English,3
+Carpenter,Old English,3
+Carter,Old English,3
+Cartwright,Old English,3
+Cash,Old English,3
+Chace,Old English,3
+Chandler,Old English,3
+Chaplin,Old English,3
+Chapman,Old English,3
+Churchward,Old English,3
+Clark,Old English,3
+Clarke,Old English,3
+Clay,Old English,3
+Coleman,Old English,3
+Collier,Old English,3
+Collyer,Old English,3
+Colt,Old English,3
+Conner,Old English,3
+Cook,Old English,3
+Cooke,Old English,3
+Cooper,Old English,3
+Coppersmith,Old English,3
+Court,Old English,3
+Cowper,Old English,3
+Cox,Old English,3
+Crapper,Old English,3
+Croft,Old English,3
+Cropper,Old English,3
+Cross,Old English,3
+Crump,Old English,3
+Cutler,Old English,3
+Dale,Old English,3
+Day,Old English,3
+Deacon,Old English,3
+Dean,Old English,3
+Deane,Old English,3
+Dexter,Old English,3
+Dike,Old English,3
+Dodd,Old English,3
+Draper,Old English,3
+Dyer,Old English,3
+Earl,Old English,3
+Earle,Old English,3
+Falconer,Old English,3
+Falkner,Old English,3
+Farrah,Old English,3
+Faulkner,Old English,3
+Fisher,Old English,3
+Fletcher,Old English,3
+Ford,Old English,3
+Forester,Old English,3
+Forrest,Old English,3
+Forster,Old English,3
+Foster,Old English,3
+Fowler,Old English,3
+Fox,Old English,3
+Freeman,Old English,3
+Fuller,Old English,3
+Gage,Old English,3
+Gardener,Old English,3
+Gardiner,Old English,3
+Gardner,Old English,3
+Garland,Old English,3
+Garside,Old English,3
+Gary,Old English,3
+Glover,Old English,3
+Gold,Old English,3
+Goldsmith,Old English,3
+Gorsuch,Old English,3
+Granger,Old English,3
+Graves,Old English,3
+Grayson,Old English,3
+Green,Old English,3
+Greene,Old English,3
+Greeves,Old English,3
+Greyson,Old English,3
+Gross,Old English,3
+Grove,Old English,3
+Grover,Old English,3
+Hall,Old English,3
+Harp,Old English,3
+Harper,Old English,3
+Hatmaker,Old English,3
+Hawthorne,Old English,3
+Hayward,Old English,3
+Hazel,Old English,3
+Head,Old English,3
+Heather,Old English,3
+Hill,Old English,3
+Hillier,Old English,3
+Hodder,Old English,3
+Holland,Old English,3
+Holley,Old English,3
+Holly,Old English,3
+Holmes,Old English,3
+Holt,Old English,3
+Homer,Old English,3
+Hooke,Old English,3
+Hope,Old English,3
+Horner,Old English,3
+House,Old English,3
+Howe,Old English,3
+Hume,Old English,3
+Hunt,Old English,3
+Hunter,Old English,3
+Huntsman,Old English,3
+Hyde,Old English,3
+Jagger,Old English,3
+Johnston,Old English,3
+Judge,Old English,3
+Justice,Old English,3
+Kay,Old English,3
+Kaye,Old English,3
+Keats,Old English,3
+Kempster,Old English,3
+Kerry,Old English,3
+Kirk,Old English,3
+Kirke,Old English,3
+Knight,Old English,3
+Lamb,Old English,3
+Land,Old English,3
+Lane,Old English,3
+Lark,Old English,3
+Layne,Old English,3
+Lea,Old English,3
+Lederer,Old English,3
+Lee,Old English,3
+Leigh,Old English,3
+Lister,Old English,3
+Lowell,Old English,3
+Luther,Old English,3
+Machen,Old English,3
+Maison,Old English,3
+Malthus,Old English,3
+March,Old English,3
+Marsh,Old English,3
+Marshal,Old English,3
+Marshall,Old English,3
+Martin,Old English,3
+Mason,Old English,3
+May,Old English,3
+Mercer,Old English,3
+Metcalf,Old English,3
+Metcalfe,Old English,3
+Miller,Old English,3
+Millerchip,Old English,3
+Mills,Old English,3
+Milner,Old English,3
+Moore,Old English,3
+Napier,Old English,3
+Newby,Old English,3
+Nutter,Old English,3
+Page,Old English,3
+Paige,Old English,3
+Pain,Old English,3
+Paine,Old English,3
+Painter,Old English,3
+Parker,Old English,3
+Parsons,Old English,3
+Payne,Old English,3
+Pike,Old English,3
+Piper,Old English,3
+Pitt,Old English,3
+Plowright,Old English,3
+Porter,Old English,3
+Portman,Old English,3
+Potter,Old English,3
+Preacher,Old English,3
+Prentice,Old English,3
+Provost,Old English,3
+Purple,Old English,3
+Pyper,Old English,3
+Rider,Old English,3
+Ridge,Old English,3
+Ring,Old English,3
+Rock,Old English,3
+Roper,Old English,3
+Rose,Old English,3
+Rowen,Old English,3
+Rush,Old English,3
+Ryder,Old English,3
+Sanger,Old English,3
+Sangster,Old English,3
+Sawyer,Old English,3
+Sayer,Old English,3
+Sayers,Old English,3
+Saylor,Old English,3
+Scarlett,Old English,3
+Seller,Old English,3
+Sellers,Old English,3
+Sexton,Old English,3
+Shaw,Old English,3
+Shearer,Old English,3
+Shepherd,Old English,3
+Sheppard,Old English,3
+Sherman,Old English,3
+Shoemaker,Old English,3
+Shore,Old English,3
+Silver,Old English,3
+Sixsmith,Old English,3
+Skinner,Old English,3
+Slater,Old English,3
+Smith,Old English,3
+Spear,Old English,3
+Spears,Old English,3
+Spencer,Old English,3
+Spenser,Old English,3
+Steele,Old English,3
+Steward,Old English,3
+Stewart,Old English,3
+Stott,Old English,3
+Straw,Old English,3
+Stuart,Old English,3
+Sumner,Old English,3
+Tanner,Old English,3
+Taylor,Old English,3
+Thacker,Old English,3
+Thatcher,Old English,3
+Thorn,Old English,3
+Thorne,Old English,3
+Tinker,Old English,3
+Trapp,Old English,3
+Travers,Old English,3
+Travis,Old English,3
+Trump,Old English,3
+Tucker,Old English,3
+Turner,Old English,3
+Tyler,Old English,3
+Underwood,Old English,3
+Waggoner,Old English,3
+Wagoner,Old English,3
+Wainwright,Old English,3
+Walker,Old English,3
+Ward,Old English,3
+Warner,Old English,3
+Wayne,Old English,3
+Weaver,Old English,3
+Webb,Old English,3
+Webber,Old English,3
+Webster,Old English,3
+Wells,Old English,3
+West,Old English,3
+Wheeler,Old English,3
+Wheelwright,Old English,3
+Whitney,Old English,3
+Wild,Old English,3
+Wilde,Old English,3
+Wile,Old English,3
+Wiles,Old English,3
+Wood,Old English,3
+Woodger,Old English,3
+Woodman,Old English,3
+Woodrow,Old English,3
+Woods,Old English,3
+Woodward,Old English,3
+Wright,Old English,3
+Korhonen,Old Finnish,3
+Virtanen,Old Finnish,3
+Maki,Old Finnish,3
+Koskinen,Old Finnish,3
+Niemi,Old Finnish,3
+Laine,Old Finnish,3
+Hakkinen,Old Finnish,3
+Jokinen,Old Finnish,3
+Kivinen,Old Finnish,3
+Saarinen,Old Finnish,3
+Tapiola,Old Finnish,2
+Vainola,Old Finnish,2
+Kalevainen,Old Finnish,2
+Ilmarinen,Old Finnish,2
+Louhinen,Old Finnish,2
+Kaukolainen,Old Finnish,2
+Pohjola,Old Finnish,2
+Ahtola,Old Finnish,2
+Ahtinen,Old Finnish,2
+Ahtila,Old Finnish,2
+Ahtimaki,Old Finnish,2
+Ahtijarvi,Old Finnish,2
+Ahtimo,Old Finnish,2
+Onninen,Old Finnish,2
+Onnila,Old Finnish,1
+Onnimaki,Old Finnish,1
+Onnijarvi,Old Finnish,1
+Onnimo,Old Finnish,1
+Ukkonen,Old Finnish,1
+Ukkola,Old Finnish,1
+Ukkomaki,Old Finnish,1
+Ukkojarvi,Old Finnish,1
+Ukkomo,Old Finnish,1
+Vesanen,Old Finnish,1
+Vesala,Old Finnish,1
+Vesamaki,Old Finnish,1
+Vesajarvi,Old Finnish,1
+Vesamo,Old Finnish,1
+Armasnen,Old Finnish,1
+Armasla,Old Finnish,1
+Armasmaki,Old Finnish,1
+Armasjarvi,Old Finnish,1
+Armasmo,Old Finnish,1
+Kaukonen,Old Finnish,1
+Kaukola,Old Finnish,1
+Kaukomaki,Old Finnish,1
+Kaukojarvi,Old Finnish,1
+Kaukomo,Old Finnish,1
+Beaumont,Old French,3
+Beaufort,Old French,3
+Montfort,Old French,3
+Villiers,Old French,3
+Chartres,Old French,3
+Orleans,Old French,3
+Dunois,Old French,3
+Blois,Old French,3
+Rochefort,Old French,3
+Vermandois,Old French,3
+Anjou,Old French,2
+Bourbon,Old French,2
+Lusignan,Old French,2
+Poitiers,Old French,2
+Dreux,Old French,2
+Coucy,Old French,2
+Joinville,Old French,2
+Rochechouart,Old French,2
+DeAdam,Old French,2
+Adamard,Old French,2
+Adamier,Old French,2
+Adameau,Old French,2
+Adamel,Old French,2
+DeAlain,Old French,2
+Alainard,Old French,1
+Alainier,Old French,1
+Alaineau,Old French,1
+Alainel,Old French,1
+DeEudes,Old French,1
+Eudesard,Old French,1
+Eudesier,Old French,1
+Eudeseau,Old French,1
+Eudesel,Old French,1
+DeHenri,Old French,1
+Henriard,Old French,1
+Henrier,Old French,1
+Henrieau,Old French,1
+Henriel,Old French,1
+DeJehan,Old French,1
+Jehanard,Old French,1
+Jehanier,Old French,1
+Jehaneau,Old French,1
+Jehanel,Old French,1
+DeLouis,Old French,1
+Louisard,Old French,1
+Louisier,Old French,1
+Louiseau,Old French,1
+Louisel,Old French,1
+Welfing,Old High German,3
+Konradin,Old High German,3
+Liudolfing,Old High German,3
+Babenberg,Old High German,3
+Hohenstauf,Old High German,3
+Salian,Old High German,3
+Ezzonid,Old High German,3
+Agilolfing,Old High German,3
+Etichonid,Old High German,3
+Luitpolding,Old High German,3
+Rheinfrank,Old High German,2
+Thuring,Old High German,2
+Swabing,Old High German,2
+Bavaring,Old High German,2
+Saxonian,Old High German,2
+Wormsgau,Old High German,2
+Speyergau,Old High German,2
+Franconian,Old High German,2
+Ottoing,Old High German,2
+Ottomann,Old High German,2
+Ottowald,Old High German,2
+Ottohart,Old High German,2
+Ottobert,Old High German,2
+Brunoing,Old High German,2
+Brunomann,Old High German,1
+Brunowald,Old High German,1
+Brunohart,Old High German,1
+Brunobert,Old High German,1
+Ernsting,Old High German,1
+Ernstmann,Old High German,1
+Ernstwald,Old High German,1
+Ernsthart,Old High German,1
+Ernstbert,Old High German,1
+Arnulfing,Old High German,1
+Arnulfmann,Old High German,1
+Arnulfwald,Old High German,1
+Arnulfhart,Old High German,1
+Arnulfbert,Old High German,1
+Konrading,Old High German,1
+Konradmann,Old High German,1
+Konradwald,Old High German,1
+Konradhart,Old High German,1
+Konradbert,Old High German,1
+Ludwiging,Old High German,1
+Ludwigmann,Old High German,1
+Ludwigwald,Old High German,1
+Ludwighart,Old High German,1
+Ludwigbert,Old High German,1
+Gediminaitis,Old Lithuanian,3
+Algirdaitis,Old Lithuanian,3
+Kestutaitis,Old Lithuanian,3
+Butvydas,Old Lithuanian,3
+Dausprungas,Old Lithuanian,3
+Mindaugaitis,Old Lithuanian,3
+Narimantaitis,Old Lithuanian,3
+Skirgailaitis,Old Lithuanian,3
+Trakaitis,Old Lithuanian,3
+Vilnietis,Old Lithuanian,3
+Aukstaitis,Old Lithuanian,2
+Zemaitis,Old Lithuanian,2
+Neris,Old Lithuanian,2
+Nemunas,Old Lithuanian,2
+Radvila,Old Lithuanian,2
+Gostautas,Old Lithuanian,2
+Sapiega,Old Lithuanian,2
+Alseniskis,Old Lithuanian,2
+Jogailaitis,Old Lithuanian,2
+Jogailunas,Old Lithuanian,2
+Jogailenas,Old Lithuanian,2
+Jogailonis,Old Lithuanian,2
+Jogailiskis,Old Lithuanian,2
+Algirdasaitis,Old Lithuanian,2
+Algirdasunas,Old Lithuanian,1
+Algirdasenas,Old Lithuanian,1
+Algirdasonis,Old Lithuanian,1
+Algirdasiskis,Old Lithuanian,1
+Butvydasaitis,Old Lithuanian,1
+Butvydasunas,Old Lithuanian,1
+Butvydasenas,Old Lithuanian,1
+Butvydasonis,Old Lithuanian,1
+Butvydasiskis,Old Lithuanian,1
+Kestutisaitis,Old Lithuanian,1
+Kestutisunas,Old Lithuanian,1
+Kestutisenas,Old Lithuanian,1
+Kestutisonis,Old Lithuanian,1
+Kestutisiskis,Old Lithuanian,1
+Manvydasaitis,Old Lithuanian,1
+Manvydasunas,Old Lithuanian,1
+Manvydasenas,Old Lithuanian,1
+Manvydasonis,Old Lithuanian,1
+Manvydasiskis,Old Lithuanian,1
+Rimantasaitis,Old Lithuanian,1
+Rimantasunas,Old Lithuanian,1
+Rimantasenas,Old Lithuanian,1
+Rimantasonis,Old Lithuanian,1
+Rimantasiskis,Old Lithuanian,1
+Yngling,Old Norse,3
+Skjoldung,Old Norse,3
+Sigurdsson,Old Norse,3
+Ivarsson,Old Norse,3
+Ragnarsdottir,Old Norse,3
+Ulfsson,Old Norse,3
+Haraldsson,Old Norse,3
+Eiriksson,Old Norse,3
+Bjornsson,Old Norse,3
+Askeladd,Old Norse,3
+Sturlung,Old Norse,2
+Hrafnkel,Old Norse,2
+Haukadal,Old Norse,2
+Laxdal,Old Norse,2
+Gautrek,Old Norse,2
+Volsung,Old Norse,2
+Gjuking,Old Norse,2
+Lodbrok,Old Norse,2
+Arnsson,Old Norse,2
+Arnsen,Old Norse,2
+Arndottir,Old Norse,2
+Arnstad,Old Norse,2
+Arnby,Old Norse,2
+Jorsson,Old Norse,2
+Jorsen,Old Norse,1
+Jordottir,Old Norse,1
+Jorstad,Old Norse,1
+Jorby,Old Norse,1
+Kolsson,Old Norse,1
+Kolsen,Old Norse,1
+Koldottir,Old Norse,1
+Kolstad,Old Norse,1
+Kolby,Old Norse,1
+Oddsson,Old Norse,1
+Oddsen,Old Norse,1
+Odddottir,Old Norse,1
+Oddstad,Old Norse,1
+Oddby,Old Norse,1
+Ulfsen,Old Norse,1
+Ulfdottir,Old Norse,1
+Ulfstad,Old Norse,1
+Ulfby,Old Norse,1
+Ulvsson,Old Norse,1
+Ulvsen,Old Norse,1
+Ulvdottir,Old Norse,1
+Ulvstad,Old Norse,1
+Ulvby,Old Norse,1
+Aakesson,Old Norse,1
+Aakesen,Old Norse,1
+Aakedottir,Old Norse,1
+Aakestad,Old Norse,1
+Aakeby,Old Norse,1
+Arnisson,Old Norse,1
+Arnisen,Old Norse,1
+Foix,Old Occitan,3
+Toulouse,Old Occitan,3
+Trencavel,Old Occitan,3
+Carcassonne,Old Occitan,3
+Narbonne,Old Occitan,3
+Comminges,Old Occitan,3
+Mirepoix,Old Occitan,3
+Raimondenc,Old Occitan,3
+Montpelier,Old Occitan,3
+Ventadorn,Old Occitan,3
+Limousin,Old Occitan,2
+Auvergne,Old Occitan,2
+Proensa,Old Occitan,2
+Bearn,Old Occitan,2
+Rouergue,Old Occitan,2
+Quercy,Old Occitan,2
+Albigeois,Old Occitan,2
+Baux,Old Occitan,2
+DeUgo,Old Occitan,2
+Ugoard,Old Occitan,2
+Ugoier,Old Occitan,2
+Ugoeau,Old Occitan,2
+Ugoel,Old Occitan,2
+DePons,Old Occitan,2
+Ponsard,Old Occitan,1
+Ponsier,Old Occitan,1
+Ponseau,Old Occitan,1
+Ponsel,Old Occitan,1
+DePeire,Old Occitan,1
+Peireard,Old Occitan,1
+Peireier,Old Occitan,1
+Peireau,Old Occitan,1
+Peirel,Old Occitan,1
+DeRamon,Old Occitan,1
+Ramonard,Old Occitan,1
+Ramonier,Old Occitan,1
+Ramoneau,Old Occitan,1
+Ramonel,Old Occitan,1
+DeRudel,Old Occitan,1
+Rudelard,Old Occitan,1
+Rudelier,Old Occitan,1
+Rudeleau,Old Occitan,1
+Rudelel,Old Occitan,1
+DeArnaut,Old Occitan,1
+Arnautard,Old Occitan,1
+Arnautier,Old Occitan,1
+Arnauteau,Old Occitan,1
+Arnautel,Old Occitan,1
+Piast,Old Polish/West Slavic,3
+Popielid,Old Polish/West Slavic,3
+Gryfit,Old Polish/West Slavic,3
+Odrowaz,Old Polish/West Slavic,3
+Topor,Old Polish/West Slavic,3
+Nalecz,Old Polish/West Slavic,3
+Leliva,Old Polish/West Slavic,3
+Rawicz,Old Polish/West Slavic,3
+Slepowron,Old Polish/West Slavic,3
+Pobog,Old Polish/West Slavic,3
+Kujawian,Old Polish/West Slavic,2
+Mazovian,Old Polish/West Slavic,2
+Polanian,Old Polish/West Slavic,2
+Vistulan,Old Polish/West Slavic,2
+Silesian,Old Polish/West Slavic,2
+Lubusz,Old Polish/West Slavic,2
+Gniezno,Old Polish/West Slavic,2
+Krakowian,Old Polish/West Slavic,2
+Leszekov,Old Polish/West Slavic,2
+Leszekev,Old Polish/West Slavic,2
+Leszekic,Old Polish/West Slavic,2
+Leszekski,Old Polish/West Slavic,2
+Leszekin,Old Polish/West Slavic,2
+Bogumilov,Old Polish/West Slavic,2
+Bogumilev,Old Polish/West Slavic,1
+Bogumilic,Old Polish/West Slavic,1
+Bogumilski,Old Polish/West Slavic,1
+Bogumilin,Old Polish/West Slavic,1
+Casimirov,Old Polish/West Slavic,1
+Casimirev,Old Polish/West Slavic,1
+Casimiric,Old Polish/West Slavic,1
+Casimirski,Old Polish/West Slavic,1
+Casimirin,Old Polish/West Slavic,1
+Czciborov,Old Polish/West Slavic,1
+Czciborev,Old Polish/West Slavic,1
+Czciboric,Old Polish/West Slavic,1
+Czciborski,Old Polish/West Slavic,1
+Czciborin,Old Polish/West Slavic,1
+Jaromirov,Old Polish/West Slavic,1
+Jaromirev,Old Polish/West Slavic,1
+Jaromiric,Old Polish/West Slavic,1
+Jaromirski,Old Polish/West Slavic,1
+Jaromirin,Old Polish/West Slavic,1
+Mieszkov,Old Polish/West Slavic,1
+Mieszkoev,Old Polish/West Slavic,1
+Mieszkoic,Old Polish/West Slavic,1
+Mieszkoski,Old Polish/West Slavic,1
+Mieszkoin,Old Polish/West Slavic,1
+Sembian,Old Prussian,3
+Natangian,Old Prussian,3
+Warmian,Old Prussian,3
+Pomesanian,Old Prussian,3
+Pogesanian,Old Prussian,3
+Bartian,Old Prussian,3
+Nadruvian,Old Prussian,3
+Scalovian,Old Prussian,3
+Sudovian,Old Prussian,3
+Galindian,Old Prussian,3
+Prusas,Old Prussian,2
+Aestian,Old Prussian,2
+Truso,Old Prussian,2
+Varmis,Old Prussian,2
+Nadrawa,Old Prussian,2
+Sambia,Old Prussian,2
+Gedetaitis,Old Prussian,2
+Gedetunas,Old Prussian,2
+Gedetenas,Old Prussian,2
+Gedetonis,Old Prussian,2
+Gedetiskis,Old Prussian,2
+Glandaitis,Old Prussian,2
+Glandunas,Old Prussian,2
+Glandenas,Old Prussian,2
+Glandonis,Old Prussian,1
+Glandiskis,Old Prussian,1
+Herkusaitis,Old Prussian,1
+Herkusunas,Old Prussian,1
+Herkusenas,Old Prussian,1
+Herkusonis,Old Prussian,1
+Herkusiskis,Old Prussian,1
+Mantasaitis,Old Prussian,1
+Mantasunas,Old Prussian,1
+Mantasenas,Old Prussian,1
+Mantasonis,Old Prussian,1
+Mantasiskis,Old Prussian,1
+Auctumaitis,Old Prussian,1
+Auctumunas,Old Prussian,1
+Auctumenas,Old Prussian,1
+Auctumonis,Old Prussian,1
+Auctumiskis,Old Prussian,1
+Diwanaitis,Old Prussian,1
+Diwanunas,Old Prussian,1
+Diwanenas,Old Prussian,1
+Diwanonis,Old Prussian,1
+Diwaniskis,Old Prussian,1
+Globbioaitis,Old Prussian,1
+Globbiounas,Old Prussian,1
+Dragovic,Old Slavic,3
+Milovic,Old Slavic,3
+Bogdanov,Old Slavic,3
+Radomiric,Old Slavic,3
+Vlastimirovic,Old Slavic,3
+Ljubovic,Old Slavic,3
+Dobrovic,Old Slavic,3
+Miroslavic,Old Slavic,3
+Svetoslavic,Old Slavic,3
+Boric,Old Slavic,3
+Dusanovic,Old Slavic,2
+Zupanovic,Old Slavic,2
+Branovic,Old Slavic,2
+Radoslavic,Old Slavic,2
+Vukovic,Old Slavic,2
+Sokolovic,Old Slavic,2
+Bogdanev,Old Slavic,2
+Bogdanic,Old Slavic,2
+Bogdanski,Old Slavic,2
+Bogdanin,Old Slavic,2
+Bohdanov,Old Slavic,2
+Bohdanev,Old Slavic,2
+Bohdanic,Old Slavic,2
+Bohdanski,Old Slavic,2
+Bohdanin,Old Slavic,1
+Jaromirov,Old Slavic,1
+Jaromirev,Old Slavic,1
+Jaromiric,Old Slavic,1
+Jaromirski,Old Slavic,1
+Jaromirin,Old Slavic,1
+Radomirov,Old Slavic,1
+Radomirev,Old Slavic,1
+Radomirski,Old Slavic,1
+Radomirin,Old Slavic,1
+Ratimirov,Old Slavic,1
+Ratimirev,Old Slavic,1
+Ratimiric,Old Slavic,1
+Ratimirski,Old Slavic,1
+Ratimirin,Old Slavic,1
+Zdeslavov,Old Slavic,1
+Zdeslavev,Old Slavic,1
+Zdeslavic,Old Slavic,1
+Zdeslavski,Old Slavic,1
+Zdeslavin,Old Slavic,1
+Borislavov,Old Slavic,1
+Borislavev,Old Slavic,1
+Borislavic,Old Slavic,1
+Borislavski,Old Slavic,1
+Alvarez,Old Spanish/Castilian,3
+Fernandez,Old Spanish/Castilian,3
+Gonzalez,Old Spanish/Castilian,3
+Rodriguez,Old Spanish/Castilian,3
+Pelaez,Old Spanish/Castilian,3
+Diaz,Old Spanish/Castilian,3
+Lopez,Old Spanish/Castilian,3
+Munoz,Old Spanish/Castilian,3
+Nunez,Old Spanish/Castilian,3
+Sanchez,Old Spanish/Castilian,3
+Velazquez,Old Spanish/Castilian,2
+Ordonez,Old Spanish/Castilian,2
+Froilaz,Old Spanish/Castilian,2
+Ansurez,Old Spanish/Castilian,2
+Gomez,Old Spanish/Castilian,2
+Yanez,Old Spanish/Castilian,2
+Vermudez,Old Spanish/Castilian,2
+Manrique,Old Spanish/Castilian,2
+Lara,Old Spanish/Castilian,2
+Lopes,Old Spanish/Castilian,2
+Lopeiz,Old Spanish/Castilian,2
+Lopeano,Old Spanish/Castilian,2
+Lopeiro,Old Spanish/Castilian,2
+Nunoez,Old Spanish/Castilian,2
+Nunoes,Old Spanish/Castilian,1
+Nunoiz,Old Spanish/Castilian,1
+Nunoano,Old Spanish/Castilian,1
+Nunoeiro,Old Spanish/Castilian,1
+Velaez,Old Spanish/Castilian,1
+Velaes,Old Spanish/Castilian,1
+Velaiz,Old Spanish/Castilian,1
+Velano,Old Spanish/Castilian,1
+Velaeiro,Old Spanish/Castilian,1
+Alvares,Old Spanish/Castilian,1
+Alvariz,Old Spanish/Castilian,1
+Alvarano,Old Spanish/Castilian,1
+Alvareiro,Old Spanish/Castilian,1
+Ariasez,Old Spanish/Castilian,1
+Ariases,Old Spanish/Castilian,1
+Ariasiz,Old Spanish/Castilian,1
+Ariasano,Old Spanish/Castilian,1
+Ariaseiro,Old Spanish/Castilian,1
+Diegoez,Old Spanish/Castilian,1
+Diegoes,Old Spanish/Castilian,1
+Diegoiz,Old Spanish/Castilian,1
+Diegoano,Old Spanish/Castilian,1
+Diegoeiro,Old Spanish/Castilian,1
+Gomezez,Old Spanish/Castilian,1
+Bjornsson,Old Swedish,3
+Eriksson,Old Swedish,3
+Nilsson,Old Swedish,3
+Sture,Old Swedish,3
+Vasa,Old Swedish,3
+Folkunga,Old Swedish,3
+Sverker,Old Swedish,3
+Bonde,Old Swedish,3
+Stenkil,Old Swedish,3
+Sparre,Old Swedish,3
+Oxenstierna,Old Swedish,2
+Bjelke,Old Swedish,2
+Grip,Old Swedish,2
+Trolle,Old Swedish,2
+Ulv,Old Swedish,2
+NattOchDag,Old Swedish,2
+Lodde,Old Swedish,2
+Sigtuna,Old Swedish,2
+Ulfsson,Old Swedish,2
+Ulfsen,Old Swedish,2
+Ulfdottir,Old Swedish,2
+Ulfstad,Old Swedish,2
+Ulfby,Old Swedish,2
+Eriksen,Old Swedish,2
+Erikdottir,Old Swedish,1
+Erikstad,Old Swedish,1
+Erikby,Old Swedish,1
+Ingesson,Old Swedish,1
+Ingesen,Old Swedish,1
+Ingedottir,Old Swedish,1
+Ingestad,Old Swedish,1
+Ingeby,Old Swedish,1
+Jarlsson,Old Swedish,1
+Jarlsen,Old Swedish,1
+Jarldottir,Old Swedish,1
+Jarlstad,Old Swedish,1
+Jarlby,Old Swedish,1
+Karlsson,Old Swedish,1
+Karlsen,Old Swedish,1
+Karldottir,Old Swedish,1
+Karlstad,Old Swedish,1
+Karlby,Old Swedish,1
+Knutsson,Old Swedish,1
+Knutsen,Old Swedish,1
+Knutdottir,Old Swedish,1
+Knutstad,Old Swedish,1
+Knutby,Old Swedish,1
+Olafsson,Old Swedish,1
+Egilsson,Old West Norse,3
+Skallagrimsson,Old West Norse,3
+Gislason,Old West Norse,3
+Snorrason,Old West Norse,3
+Sturlung,Old West Norse,3
+Haukadal,Old West Norse,3
+Laxdael,Old West Norse,3
+Vatnsdael,Old West Norse,3
+Hrafnkel,Old West Norse,3
+Oddaverja,Old West Norse,3
+Mosfelling,Old West Norse,2
+Eyrbyggja,Old West Norse,2
+Volsung,Old West Norse,2
+Gjuking,Old West Norse,2
+Grettir,Old West Norse,2
+Kveldulf,Old West Norse,2
+Thorsnes,Old West Norse,2
+Borgarfjord,Old West Norse,2
+Arisson,Old West Norse,2
+Arisen,Old West Norse,2
+Aridottir,Old West Norse,2
+Aristad,Old West Norse,2
+Ariby,Old West Norse,2
+Ulfsson,Old West Norse,2
+Ulfsen,Old West Norse,1
+Ulfdottir,Old West Norse,1
+Ulfstad,Old West Norse,1
+Ulfby,Old West Norse,1
+Egilsen,Old West Norse,1
+Egildottir,Old West Norse,1
+Egilstad,Old West Norse,1
+Egilby,Old West Norse,1
+Ormrsson,Old West Norse,1
+Ormrsen,Old West Norse,1
+Ormrdottir,Old West Norse,1
+Ormrstad,Old West Norse,1
+Ormrby,Old West Norse,1
+Bardisson,Old West Norse,1
+Bardisen,Old West Norse,1
+Bardidottir,Old West Norse,1
+Bardistad,Old West Norse,1
+Bardiby,Old West Norse,1
+Bjornsson,Old West Norse,1
+Bjornsen,Old West Norse,1
+Bjorndottir,Old West Norse,1
+Bjornstad,Old West Norse,1
+Bjornby,Old West Norse,1
+Einarsson,Old West Norse,1
+Fortriu,Pictish/Brittonic Substrate,3
+Fidach,Pictish/Brittonic Substrate,3
+Circinn,Pictish/Brittonic Substrate,3
+Ce,Pictish/Brittonic Substrate,3
+Fib,Pictish/Brittonic Substrate,3
+Atholl,Pictish/Brittonic Substrate,3
+Verturian,Pictish/Brittonic Substrate,3
+Caledon,Pictish/Brittonic Substrate,3
+Vacomagi,Pictish/Brittonic Substrate,3
+Taexali,Pictish/Brittonic Substrate,3
+Venicones,Pictish/Brittonic Substrate,2
+Lugii,Pictish/Brittonic Substrate,2
+Decantae,Pictish/Brittonic Substrate,2
+Cat,Pictish/Brittonic Substrate,2
+Orcadian,Pictish/Brittonic Substrate,2
+Abernethy,Pictish/Brittonic Substrate,2
+ApUuen,Pictish/Brittonic Substrate,2
+PenUuen,Pictish/Brittonic Substrate,2
+TreUuen,Pictish/Brittonic Substrate,2
+Uuenwyn,Pictish/Brittonic Substrate,2
+Uuenawc,Pictish/Brittonic Substrate,2
+ApBrude,Pictish/Brittonic Substrate,2
+PenBrude,Pictish/Brittonic Substrate,2
+TreBrude,Pictish/Brittonic Substrate,2
+Brudewyn,Pictish/Brittonic Substrate,1
+Brudeawc,Pictish/Brittonic Substrate,1
+ApCaitt,Pictish/Brittonic Substrate,1
+PenCaitt,Pictish/Brittonic Substrate,1
+TreCaitt,Pictish/Brittonic Substrate,1
+Caittwyn,Pictish/Brittonic Substrate,1
+Caittawc,Pictish/Brittonic Substrate,1
+ApDrest,Pictish/Brittonic Substrate,1
+PenDrest,Pictish/Brittonic Substrate,1
+TreDrest,Pictish/Brittonic Substrate,1
+Drestwyn,Pictish/Brittonic Substrate,1
+Drestawc,Pictish/Brittonic Substrate,1
+Basarab,Romanian/Aromanian,3
+Dragos,Romanian/Aromanian,3
+Craioveanu,Romanian/Aromanian,3
+Popescu,Romanian/Aromanian,3
+Ionescu,Romanian/Aromanian,3
+Rosetti,Romanian/Aromanian,3
+Aromanu,Romanian/Aromanian,3
+Cantacuzino,Romanian/Aromanian,3
+Musat,Romanian/Aromanian,3
+Buzescu,Romanian/Aromanian,3
+Danescu,Romanian/Aromanian,2
+Danoiu,Romanian/Aromanian,2
+Vlach,Romanian/Aromanian,2
+Moldoveanu,Romanian/Aromanian,2
+Muntenu,Romanian/Aromanian,2
+Olteanu,Romanian/Aromanian,2
+Carpatescu,Romanian/Aromanian,2
+Comanescu,Romanian/Aromanian,2
+Daneanu,Romanian/Aromanian,2
+Dananu,Romanian/Aromanian,2
+Danaru,Romanian/Aromanian,2
+Ioneanu,Romanian/Aromanian,2
+Ionanu,Romanian/Aromanian,2
+Ionaru,Romanian/Aromanian,2
+Ionoiu,Romanian/Aromanian,1
+Lucaescu,Romanian/Aromanian,1
+Lucaeanu,Romanian/Aromanian,1
+Lucanu,Romanian/Aromanian,1
+Lucaru,Romanian/Aromanian,1
+Lucaoiu,Romanian/Aromanian,1
+Raduescu,Romanian/Aromanian,1
+Radueanu,Romanian/Aromanian,1
+Raduanu,Romanian/Aromanian,1
+Raduaru,Romanian/Aromanian,1
+Raduoiu,Romanian/Aromanian,1
+Vladescu,Romanian/Aromanian,1
+Vladeanu,Romanian/Aromanian,1
+Vladanu,Romanian/Aromanian,1
+Vladaru,Romanian/Aromanian,1
+Vladoiu,Romanian/Aromanian,1
+Iovanescu,Romanian/Aromanian,1
+Iovaneanu,Romanian/Aromanian,1
+Iovananu,Romanian/Aromanian,1
+Iovanaru,Romanian/Aromanian,1
+Iovanoiu,Romanian/Aromanian,1
+Mateiescu,Romanian/Aromanian,1
+Mateieanu,Romanian/Aromanian,1
+Mateianu,Romanian/Aromanian,1
+Piras,Sardinian,3
+Carta,Sardinian,3
+Sanna,Sardinian,3
+Melis,Sardinian,3
+Serra,Sardinian,3
+Cossu,Sardinian,3
+Manca,Sardinian,3
+DeSerra,Sardinian,3
+Lacon,Sardinian,3
+Arborea,Sardinian,3
+Gallura,Sardinian,2
+Logudoro,Sardinian,2
+Cagliari,Sardinian,2
+Torres,Sardinian,2
+Judike,Sardinian,2
+Barbaricino,Sardinian,2
+Sulcis,Sardinian,2
+Ogliastra,Sardinian,2
+Ugoneis,Sardinian,2
+Ugoneu,Sardinian,2
+Ugoneddu,Sardinian,2
+Ugoneai,Sardinian,2
+DeUgone,Sardinian,2
+Antonis,Sardinian,2
+Antoniu,Sardinian,1
+Antonieddu,Sardinian,1
+Antoniai,Sardinian,1
+DeAntoni,Sardinian,1
+Arzocuis,Sardinian,1
+Arzocu,Sardinian,1
+Arzocueddu,Sardinian,1
+Arzocuai,Sardinian,1
+DeArzocu,Sardinian,1
+Comitis,Sardinian,1
+Comitu,Sardinian,1
+Comiteddu,Sardinian,1
+Comitai,Sardinian,1
+DeComita,Sardinian,1
+Pietrois,Sardinian,1
+Pietrou,Sardinian,1
+Pietroeddu,Sardinian,1
+Pietroai,Sardinian,1
+DePietro,Sardinian,1
+Salusis,Sardinian,1
+Salusiu,Sardinian,1
+Salusieddu,Sardinian,1
+Salusiai,Sardinian,1
+DeSalusi,Sardinian,1
+MacDonald,Scottish Gaelic,3
+MacLeod,Scottish Gaelic,3
+MacGregor,Scottish Gaelic,3
+MacKenzie,Scottish Gaelic,3
+MacDuff,Scottish Gaelic,3
+MacNeil,Scottish Gaelic,3
+MacKay,Scottish Gaelic,3
+Campbell,Scottish Gaelic,3
+MacAulay,Scottish Gaelic,3
+MacDougall,Scottish Gaelic,3
+MacRae,Scottish Gaelic,2
+MacInnes,Scottish Gaelic,2
+MacLachlan,Scottish Gaelic,2
+MacQuarrie,Scottish Gaelic,2
+MacAlpin,Scottish Gaelic,2
+MacPherson,Scottish Gaelic,2
+MacGillivray,Scottish Gaelic,2
+MacNab,Scottish Gaelic,2
+MacEoin,Scottish Gaelic,2
+OEoin,Scottish Gaelic,2
+UiEoin,Scottish Gaelic,2
+Eoinan,Scottish Gaelic,2
+Eoinach,Scottish Gaelic,2
+MacIain,Scottish Gaelic,2
+OIain,Scottish Gaelic,1
+UiIain,Scottish Gaelic,1
+Iainan,Scottish Gaelic,1
+Iainach,Scottish Gaelic,1
+MacAedan,Scottish Gaelic,1
+OAedan,Scottish Gaelic,1
+UiAedan,Scottish Gaelic,1
+Aedanan,Scottish Gaelic,1
+Aedanach,Scottish Gaelic,1
+MacNiall,Scottish Gaelic,1
+ONiall,Scottish Gaelic,1
+UiNiall,Scottish Gaelic,1
+Niallan,Scottish Gaelic,1
+Niallach,Scottish Gaelic,1
+MacAengus,Scottish Gaelic,1
+OAengus,Scottish Gaelic,1
+UiAengus,Scottish Gaelic,1
+Aengusan,Scottish Gaelic,1
+Aengusach,Scottish Gaelic,1
+MacArtair,Scottish Gaelic,1
+OArtair,Scottish Gaelic,1
+UiArtair,Scottish Gaelic,1
+Artairan,Scottish Gaelic,1
+Artairach,Scottish Gaelic,1
+Lusitz,Sorbian/Wendish,3
+Milceni,Sorbian/Wendish,3
+Glomacze,Sorbian/Wendish,3
+Lusatian,Sorbian/Wendish,3
+Zupan,Sorbian/Wendish,3
+Budissin,Sorbian/Wendish,3
+Zitawa,Sorbian/Wendish,3
+Sprewan,Sorbian/Wendish,3
+Daleminz,Sorbian/Wendish,3
+Nisan,Sorbian/Wendish,3
+Serbja,Sorbian/Wendish,2
+Rani,Sorbian/Wendish,2
+Veleti,Sorbian/Wendish,2
+Obotrite,Sorbian/Wendish,2
+Lusici,Sorbian/Wendish,2
+Chutici,Sorbian/Wendish,2
+Janov,Sorbian/Wendish,2
+Janev,Sorbian/Wendish,2
+Janic,Sorbian/Wendish,2
+Janski,Sorbian/Wendish,2
+Janin,Sorbian/Wendish,2
+Benov,Sorbian/Wendish,2
+Benoev,Sorbian/Wendish,2
+Benoic,Sorbian/Wendish,2
+Benoski,Sorbian/Wendish,1
+Benoin,Sorbian/Wendish,1
+Jurov,Sorbian/Wendish,1
+Juroev,Sorbian/Wendish,1
+Juroic,Sorbian/Wendish,1
+Juroski,Sorbian/Wendish,1
+Juroin,Sorbian/Wendish,1
+Kitov,Sorbian/Wendish,1
+Kitoev,Sorbian/Wendish,1
+Kitoic,Sorbian/Wendish,1
+Kitoski,Sorbian/Wendish,1
+Kitoin,Sorbian/Wendish,1
+Matov,Sorbian/Wendish,1
+Matoev,Sorbian/Wendish,1
+Matoic,Sorbian/Wendish,1
+Matoski,Sorbian/Wendish,1
+Matoin,Sorbian/Wendish,1
+Jakubov,Sorbian/Wendish,1
+Jakubev,Sorbian/Wendish,1
+Jakubic,Sorbian/Wendish,1
+Jakubski,Sorbian/Wendish,1
+Jakubin,Sorbian/Wendish,1
+Pawolov,Sorbian/Wendish,1
+Pawolev,Sorbian/Wendish,1
+Vlastimirovic,South Slavic,3
+Trpimirovic,South Slavic,3
+Kotromanic,South Slavic,3
+Mrnjavcevic,South Slavic,3
+Balsic,South Slavic,3
+Lazarevic,South Slavic,3
+Nemanjic,South Slavic,3
+Kacic,South Slavic,3
+Dukljanin,South Slavic,3
+Travunjanin,South Slavic,3
+Zahumljanin,South Slavic,2
+Branivojevic,South Slavic,2
+Vojislavljevic,South Slavic,2
+Svacic,South Slavic,2
+Kresimirovic,South Slavic,2
+Zupanovic,South Slavic,2
+Borisov,South Slavic,2
+Borisev,South Slavic,2
+Borisic,South Slavic,2
+Boriski,South Slavic,2
+Borisin,South Slavic,2
+Dusanov,South Slavic,2
+Dusanev,South Slavic,2
+Dusanic,South Slavic,2
+Dusanski,South Slavic,1
+Dusanin,South Slavic,1
+Lazarov,South Slavic,1
+Lazarev,South Slavic,1
+Lazaric,South Slavic,1
+Lazarski,South Slavic,1
+Lazarin,South Slavic,1
+Petarov,South Slavic,1
+Petarev,South Slavic,1
+Petaric,South Slavic,1
+Petarski,South Slavic,1
+Petarin,South Slavic,1
+Caslavov,South Slavic,1
+Caslavev,South Slavic,1
+Caslavic,South Slavic,1
+Caslavski,South Slavic,1
+Caslavin,South Slavic,1
+Goislavov,South Slavic,1
+Goislavev,South Slavic,1
+Goislavic,South Slavic,1
+Goislavski,South Slavic,1
+Goislavin,South Slavic,1
+Mihailov,South Slavic,1
+Mihailoev,South Slavic,1
+Bessos,Thracian,3
+Odrysian,Thracian,3
+Getic,Thracian,3
+Sapaean,Thracian,3
+Teresid,Thracian,3
+Seuthid,Thracian,3
+Dii,Thracian,3
+Biston,Thracian,3
+Triballian,Thracian,3
+Moesian,Thracian,3
+Denthelet,Thracian,2
+Maedi,Thracian,2
+Krobyzian,Thracian,2
+Asti,Thracian,2
+Kabile,Thracian,2
+Hebrian,Thracian,2
+Medaid,Thracian,2
+Medaicus,Thracian,2
+Medaian,Thracian,2
+Medaenus,Thracian,2
+Medaides,Thracian,2
+Cotysid,Thracian,2
+Cotysicus,Thracian,2
+Cotysian,Thracian,2
+Cotysenus,Thracian,1
+Cotysides,Thracian,1
+Teresicus,Thracian,1
+Teresian,Thracian,1
+Teresenus,Thracian,1
+Teresides,Thracian,1
+Mostisid,Thracian,1
+Mostisicus,Thracian,1
+Mostisian,Thracian,1
+Mostisenus,Thracian,1
+Mostisides,Thracian,1
+Olorusid,Thracian,1
+Hasding,Vandal,3
+Siling,Vandal,3
+Gaisericing,Vandal,3
+Gelimering,Vandal,3
+Hunericing,Vandal,3
+Thrasamunding,Vandal,3
+Gundericing,Vandal,3
+Vandalic,Vandal,3
+Asding,Vandal,3
+Geilamiring,Vandal,3
+Godagisling,Vandal,2
+Raginaring,Vandal,2
+Hildericing,Vandal,2
+Carthaginian,Vandal,2
+Baetican,Vandal,2
+Rugian,Vandal,2
+Tzazoing,Vandal,2
+Tzazomann,Vandal,2
+Tzazowald,Vandal,2
+Tzazohart,Vandal,2
+Tzazobert,Vandal,2
+Hoamering,Vandal,2
+Hoamermann,Vandal,2
+Hoamerwald,Vandal,2
+Hoamerhart,Vandal,1
+Hoamerbert,Vandal,1
+Gelimermann,Vandal,1
+Gelimerwald,Vandal,1
+Gelimerhart,Vandal,1
+Gelimerbert,Vandal,1
+Godagising,Vandal,1
+Godagismann,Vandal,1
+Godagiswald,Vandal,1
+Godagishart,Vandal,1
+Godagisbert,Vandal,1
+Visimaring,Vandal,1
+Ateste,Venetic,3
+Patavium,Venetic,3
+Venet,Venetic,3
+Enetoi,Venetic,3
+Opitergium,Venetic,3
+Altinum,Venetic,3
+Acelum,Venetic,3
+Tarvisium,Venetic,3
+Concordia,Venetic,3
+Hatria,Venetic,3
+Este,Venetic,2
+Padavin,Venetic,2
+Venetian,Venetic,2
+Caprulan,Venetic,2
+Lagunar,Venetic,2
+Adrian,Venetic,2
+Alerona,Venetic,2
+Aleronas,Venetic,2
+Aleronei,Venetic,2
+Aleroicus,Venetic,2
+Aleroian,Venetic,2
+Boiosna,Venetic,2
+Boiosnas,Venetic,2
+Boiosnei,Venetic,2
+Boiosicus,Venetic,1
+Boiosian,Venetic,1
+Aketosna,Venetic,1
+Aketosnas,Venetic,1
+Aketosnei,Venetic,1
+Aketosicus,Venetic,1
+Aketosian,Venetic,1
+Ostiosna,Venetic,1
+Ostiosnas,Venetic,1
+Ostiosnei,Venetic,1
+Ostiosicus,Venetic,1
+Ostiosian,Venetic,1
+Balthing,Visigothic,3
+Amal,Visigothic,3
+Reccareding,Visigothic,3
+Leovigilding,Visigothic,3
+Alaricing,Visigothic,3
+Euricing,Visigothic,3
+Wambing,Visigothic,3
+Rodericing,Visigothic,3
+Toledan,Visigothic,3
+Narbonensis,Visigothic,3
+Septimanian,Visigothic,2
+Iberogoth,Visigothic,2
+Athanagilding,Visigothic,2
+Hermenegilding,Visigothic,2
+Sigericing,Visigothic,2
+Vesi,Visigothic,2
+Agilaing,Visigothic,2
+Agilamann,Visigothic,2
+Agilawald,Visigothic,2
+Agilahart,Visigothic,2
+Agilabert,Visigothic,2
+Euricmann,Visigothic,2
+Euricwald,Visigothic,2
+Eurichart,Visigothic,2
+Euricbert,Visigothic,1
+Wambaing,Visigothic,1
+Wambamann,Visigothic,1
+Wambawald,Visigothic,1
+Wambahart,Visigothic,1
+Wambabert,Visigothic,1
+Alaricmann,Visigothic,1
+Alaricwald,Visigothic,1
+Alarichart,Visigothic,1
+Alaricbert,Visigothic,1
+Witizing,Visigothic,1
+Witizmann,Visigothic,1
+Witizwald,Visigothic,1
+Witizhart,Visigothic,1
+Witizbert,Visigothic,1
+Rodering,Visigothic,1
+Rodermann,Visigothic,1
+Roderwald,Visigothic,1
+Roderhart,Visigothic,1
+Roderbert,Visigothic,1
+Sisebuting,Visigothic,1
+Sisebutmann,Visigothic,1
+Sisebutwald,Visigothic,1
+Sisebuthart,Visigothic,1
+Bowen,Welsh,3
+Powell,Welsh,3
+Pryce,Welsh,3
+Pritchard,Welsh,3
+Gough,Welsh,3
+Vaughan,Welsh,3
+Gwynedd,Welsh,3
+Deheubarth,Welsh,3
+Glyndwr,Welsh,3
+Penrhyn,Welsh,3
+Mostyn,Welsh,2
+Trevor,Welsh,2
+Bleddyn,Welsh,2
+Powys,Welsh,2
+Ceredigion,Welsh,2
+Dyfed,Welsh,2
+Cadwallon,Welsh,2
+Llywelyn,Welsh,2
+ApRhys,Welsh,2
+PenRhys,Welsh,2
+TreRhys,Welsh,2
+Rhyswyn,Welsh,2
+Rhysawc,Welsh,2
+ApHywel,Welsh,2
+PenHywel,Welsh,1
+TreHywel,Welsh,1
+Hywelwyn,Welsh,1
+Hywelawc,Welsh,1
+ApMadog,Welsh,1
+PenMadog,Welsh,1
+TreMadog,Welsh,1
+Madogwyn,Welsh,1
+Madogawc,Welsh,1
+ApOwain,Welsh,1
+PenOwain,Welsh,1
+TreOwain,Welsh,1
+Owainwyn,Welsh,1
+Owainawc,Welsh,1
+ApTudur,Welsh,1
+PenTudur,Welsh,1
+TreTudur,Welsh,1
+Tudurwyn,Welsh,1
+Tudurawc,Welsh,1
+ApUrien,Welsh,1
+PenUrien,Welsh,1
+TreUrien,Welsh,1
+Urienwyn,Welsh,1
+Urienawc,Welsh,1
+ApCadell,Welsh,1
+PenCadell,Welsh,1
+TreCadell,Welsh,1
+Cadellwyn,Welsh,1
+Cadellawc,Welsh,1
+ApDafydd,Welsh,1

@@ -1,0 +1,2 @@
+world,start_year,history_equivalent_start_year,checkpoint_full_snapshot_every_n_years,start_infant_mortality,start_child_mortality,start_adult_decay,population_scale
+default,1000,1000,10,0.25,0.20,0.02,0.05

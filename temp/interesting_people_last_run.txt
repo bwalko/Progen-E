@@ -1,0 +1,353 @@
+Interesting people (120y, seed=42, couples=10, n=737)
+Genome: deviations from 0 = ideal; |value|~50 ordinary; |value|≥92 extreme; |value|≤5 unusually near ideal.
+
+Longest-lived
+-------------
+id=69  'Allin von Dobromirbergu'  ethnic='Middle German'  lifespan=107y  kids=6  events=29  max|g|=97.5  L2=315.3  alive_end=True
+id=79  'Oroles Costobocian'  ethnic='Pannonian'  lifespan=104y  kids=4  events=12  max|g|=94.4  L2=300.1  alive_end=True
+id=85  'Annlin von Dobromirbergu'  ethnic='Middle German'  lifespan=102y  kids=0  events=7  max|g|=96.4  L2=297.1  alive_end=True
+id=84  'Glausote'  ethnic='Old Prussian'  lifespan=101y  kids=0  events=7  max|g|=94.7  L2=270.6  alive_end=False
+id=73  'Sarmiza Auluporiseasca'  ethnic='Pannonian'  lifespan=99y  kids=0  events=13  max|g|=95.5  L2=301.5  alive_end=False
+id=102  'Golda of Dobromirbergu'  ethnic='Middle English'  lifespan=95y  kids=5  events=27  max|g|=97.2  L2=318.2  alive_end=False
+id=110  'Elpin Nutter'  ethnic='Pictish/Brittonic Substrate'  lifespan=95y  kids=1  events=11  max|g|=95.5  L2=318.5  alive_end=True
+id=127  'Fintan of Dobromirbergu'  ethnic='Irish Gaelic'  lifespan=91y  kids=9  events=15  max|g|=99.4  L2=340.3  alive_end=True
+
+Most children (as parent on any child record)
+---------------------------------------------
+id=361  'Glausote Gedeteaitis'  ethnic='Old Prussian'  lifespan=53y  kids=21  events=34  max|g|=99.4  L2=305.6  alive_end=False
+id=499  'Dubthach Ó Aengus'  ethnic='Irish Gaelic'  lifespan=41y  kids=18  events=24  max|g|=99.8  L2=309.7  alive_end=True
+id=558  'Auluporis Cotisoid'  ethnic='Pannonian'  lifespan=36y  kids=18  events=24  max|g|=99.0  L2=351.9  alive_end=True
+id=448  'Zalmodegikos Durasescu'  ethnic='Pannonian'  lifespan=46y  kids=17  events=25  max|g|=90.8  L2=294.1  alive_end=True
+id=565  'Rubobostes of Dobromirbergu'  ethnic='Pannonian'  lifespan=36y  kids=17  events=21  max|g|=96.8  L2=314.9  alive_end=True
+id=198  'Diurpaneus Ziaelasescu'  ethnic='Pannonian'  lifespan=73y  kids=16  events=34  max|g|=99.8  L2=325.1  alive_end=False
+id=130  'Peter Engeramson'  ethnic='Middle English'  lifespan=90y  kids=15  events=43  max|g|=95.4  L2=312.0  alive_end=True
+id=458  'Mucapora of Dobromirbergu'  ethnic='Pannonian'  lifespan=45y  kids=15  events=20  max|g|=97.6  L2=332.1  alive_end=True
+
+Most event rows (any id column in events.csv)
+---------------------------------------------
+id=130  'Peter Engeramson'  ethnic='Middle English'  lifespan=90y  kids=15  events=43  max|g|=95.4  L2=312.0  alive_end=True
+id=198  'Diurpaneus Ziaelasescu'  ethnic='Pannonian'  lifespan=73y  kids=16  events=34  max|g|=99.8  L2=325.1  alive_end=False
+id=361  'Glausote Gedeteaitis'  ethnic='Old Prussian'  lifespan=53y  kids=21  events=34  max|g|=99.4  L2=305.6  alive_end=False
+id=275  'Hanns von Dobromirbergu'  ethnic='Middle German'  lifespan=52y  kids=12  events=32  max|g|=88.5  L2=308.7  alive_end=False
+id=232  'Duras of Dobromirbergu'  ethnic='Pannonian'  lifespan=72y  kids=14  events=31  max|g|=98.8  L2=307.7  alive_end=True
+id=69  'Allin von Dobromirbergu'  ethnic='Middle German'  lifespan=107y  kids=6  events=29  max|g|=97.5  L2=315.3  alive_end=True
+id=408  'Auluporis von Dobromirbergu'  ethnic='Pannonian'  lifespan=42y  kids=11  events=29  max|g|=93.7  L2=296.7  alive_end=False
+id=131  'Auluporis of Dobromirbergu'  ethnic='Pannonian'  lifespan=89y  kids=10  events=28  max|g|=96.8  L2=308.2  alive_end=False
+
+Largest single-trait magnitude
+------------------------------
+id=623  'Sarmiza of Dobromirbergu'  ethnic='Pannonian'  lifespan=28y  kids=0  events=6  max|g|=100.0  L2=342.7  alive_end=False
+id=651  'Dapyx Dromichaitesescu'  ethnic='Pannonian'  lifespan=30y  kids=0  events=5  max|g|=100.0  L2=339.2  alive_end=True
+id=1115  'Skumantas Robertaitis'  ethnic='Old Prussian'  lifespan=8y  kids=0  events=2  max|g|=100.0  L2=300.8  alive_end=True
+id=841  'Henry Diurpaneusson'  ethnic='Middle English'  lifespan=1y  kids=0  events=3  max|g|=100.0  L2=329.4  alive_end=False
+id=686  'Suras of Dobromirbergu'  ethnic='Pannonian'  lifespan=28y  kids=5  events=9  max|g|=100.0  L2=325.5  alive_end=True
+id=794  'Robert of Dobromirbergu'  ethnic='Middle English'  lifespan=16y  kids=1  events=6  max|g|=100.0  L2=308.0  alive_end=False
+id=688  'Pieporus of Dobromirbergu'  ethnic='Pannonian'  lifespan=27y  kids=6  events=10  max|g|=100.0  L2=304.3  alive_end=True
+id=973  'Robert Thomasson'  ethnic='Middle English'  lifespan=5y  kids=0  events=3  max|g|=100.0  L2=283.5  alive_end=False
+
+Most traits near numeric ideal (|trait|≤5)
+------------------------------------------
+id=374  'Clar von Dobromirbergu'  ethnic='Middle German'  lifespan=55y  kids=5  events=16  max|g|=91.7  L2=304.9  alive_end=True
+id=1109  'Aife of Dobromirbergu'  ethnic='Irish Gaelic'  lifespan=1y  kids=0  events=3  max|g|=80.2  L2=263.2  alive_end=False
+id=874  'Martin'  ethnic='Middle German'  lifespan=4y  kids=0  events=4  max|g|=96.9  L2=281.7  alive_end=False
+id=534  'Survile of Dobromirbergu'  ethnic='Old Prussian'  lifespan=38y  kids=10  events=17  max|g|=99.3  L2=282.0  alive_end=True
+id=1224  'Diurpaneus of Dobromirbergu'  ethnic='Pannonian'  lifespan=3y  kids=0  events=2  max|g|=96.7  L2=282.7  alive_end=True
+id=543  'Alured'  ethnic='Middle English'  lifespan=37y  kids=8  events=12  max|g|=88.4  L2=283.4  alive_end=True
+id=575  'William Waleranson'  ethnic='Middle English'  lifespan=35y  kids=6  events=11  max|g|=98.7  L2=285.7  alive_end=True
+id=627  'William of Dobromirbergu'  ethnic='Middle English'  lifespan=11y  kids=0  events=4  max|g|=96.5  L2=289.7  alive_end=False
+
+Genome: people with any |trait| >= 92 (what they were 'like')
+------------------------------------------------------------------------
+
+* id=623  'Sarmiza of Dobromirbergu'  (Female)  max|g|=99.99
+  persuasion -99.99: far from ideal 'persuasive' -- reads as strongly 'unconvincing'.
+  assertiveness -99.54: far from ideal 'assertive' -- reads as strongly 'submissive'.
+  curiosity +98.05: far from ideal 'curious' -- reads as strongly 'distracted'.
+  courage -95.66: far from ideal 'courageous' -- reads as strongly 'coward'.
+  temperance -93.99: far from ideal 'wisdom' -- reads as strongly 'indulgent'.
+  Interpreter highlights:
+    - adaptability (+85.41): very indecisive
+    - assertiveness (-99.54): pathologically submissive
+    - civics (-7.79): remarkably civil
+    - courage (-95.66): pathologically coward
+    - curiosity (+98.05): pathologically distracted
+    - discipline (+65.55): compulsive
+    - generosity (+66.62): extravagant
+    - honesty (+4.54): incredibly truthful
+    - justice (-70.14): criminal
+    - mating drive (+4.64): incredibly reproductive mating drive
+    - nurturance (-28.77): nurturing
+    - patience (+65.54): passive
+    - persuasion (-99.99): pathologically unconvincing
+    - physical (-73.24): frailty
+
+* id=651  'Dapyx Dromichaitesescu'  (Male)  max|g|=99.99
+  civics +99.99: far from ideal 'civil' -- reads as strongly 'subversive'.
+  courage -99.65: far from ideal 'courageous' -- reads as strongly 'coward'.
+  temperance +99.53: far from ideal 'wisdom' -- reads as strongly 'inhibited'.
+  nurturance -97.22: far from ideal 'nurturing' -- reads as strongly 'neglectful'.
+  Interpreter highlights:
+    - ambition (+76.33): ruthless
+    - assertiveness (-85.39): very submissive
+    - civics (+99.99): pathologically subversive
+    - courage (-99.65): pathologically coward
+    - creativity (-20.02): creative
+    - curiosity (+65.44): distracted
+    - discipline (-67.95): negligent
+    - empathy (+33.53): empathic
+    - honesty (+4.55): incredibly truthful
+    - loyalty (-34.33): commitment
+    - mating drive (-88.02): extremely absent mating drive
+    - modesty (+22.77): modest
+    - neurochemical (+33.15): emotionally stabile
+    - nurturance (-97.22): pathologically neglectful
+
+* id=1115  'Skumantas Robertaitis'  (Male)  max|g|=99.99
+  assertiveness +99.99: far from ideal 'assertive' -- reads as strongly 'brutal'.
+  Interpreter highlights:
+    - adaptability (+15.56): very adaptive
+    - assertiveness (+99.99): pathologically brutal
+    - civics (-11.01): remarkably civil
+    - courage (-33.56): courageous
+    - curiosity (-0.99): incredibly curious
+    - discipline (+77.51): compulsive
+    - friendliness (-15.13): very friendly
+    - frugality (-66.58): wasteful
+    - generosity (+24.44): generous
+    - humility (+83.25): very recluse
+    - intellect (-71.17): cognitive deficiency
+    - patience (-83.46): very impulsive
+    - perception (-16.66): very perceptive
+    - persuasion (-79.74): unconvincing
+
+* id=686  'Suras of Dobromirbergu'  (Male)  max|g|=99.97
+  persuasion -99.97: far from ideal 'persuasive' -- reads as strongly 'unconvincing'.
+  curiosity +95.01: far from ideal 'curious' -- reads as strongly 'distracted'.
+  Interpreter highlights:
+    - adaptability (-85.33): very rigid
+    - civics (+79.87): subversive
+    - creativity (+6.21): remarkably creative
+    - curiosity (+95.01): pathologically distracted
+    - discipline (-65.57): negligent
+    - focus (+76.57): fixated
+    - friendliness (-26.53): friendly
+    - generosity (-66.26): envious
+    - honesty (-80.44): very deceitful
+    - intellect (-5.79): remarkably peak intellect
+    - justice (+70.14): zealot
+    - loyalty (+4.41): incredibly commitment
+    - mating drive (+4.66): incredibly reproductive mating drive
+    - modesty (+27.77): modest
+
+* id=688  'Pieporus of Dobromirbergu'  (Male)  max|g|=99.97
+  modesty -99.97: far from ideal 'modest' -- reads as strongly 'shameless'.
+  Interpreter highlights:
+    - ambition (-65.55): sloth
+    - civics (+69.76): subversive
+    - creativity (+22.55): creative
+    - empathy (+20.35): empathic
+    - frugality (-33.33): frugal
+    - generosity (-75.44): envious
+    - intellect (-10.26): remarkably peak intellect
+    - justice (-74.77): criminal
+    - loyalty (-30.40): commitment
+    - modesty (-99.97): pathologically shameless
+    - neurochemical (+17.55): very emotionally stabile
+    - nurturance (-27.77): nurturing
+    - patience (+69.65): passive
+    - perception (-70.33): oblivious
+
+* id=794  'Robert of Dobromirbergu'  (Male)  max|g|=99.97
+  assertiveness -99.97: far from ideal 'assertive' -- reads as strongly 'submissive'.
+  Interpreter highlights:
+    - assertiveness (-99.97): pathologically submissive
+    - civics (+10.53): remarkably civil
+    - curiosity (-9.09): remarkably curious
+    - empathy (-25.55): empathic
+    - frugality (+65.58): miserly
+    - intellect (+71.61): cognitive instability
+    - loyalty (+76.24): sycophant
+    - mating drive (+85.83): very compulsive mating drive
+    - patience (-84.00): very impulsive
+    - perception (+16.21): very perceptive
+    - persuasion (+74.75): manipulative
+    - physical (+78.28): hypermetabolic
+    - symmetry (-14.25): very peak symmetry
+
+* id=841  'Henry Diurpaneusson'  (Male)  max|g|=99.97
+  persuasion +99.97: far from ideal 'persuasive' -- reads as strongly 'manipulative'.
+  civics +98.70: far from ideal 'civil' -- reads as strongly 'subversive'.
+  temperance +97.93: far from ideal 'wisdom' -- reads as strongly 'inhibited'.
+  discipline +97.65: far from ideal 'disciplined' -- reads as strongly 'compulsive'.
+  courage -95.46: far from ideal 'courageous' -- reads as strongly 'coward'.
+  Interpreter highlights:
+    - adaptability (+14.53): very adaptive
+    - ambition (-33.52): ambitious
+    - civics (+98.70): pathologically subversive
+    - courage (-95.46): pathologically coward
+    - creativity (+6.20): remarkably creative
+    - curiosity (-5.94): remarkably curious
+    - discipline (+97.65): pathologically compulsive
+    - empathy (-33.32): empathic
+    - focus (-73.57): scatterbrained
+    - friendliness (-65.33): cantankerous
+    - frugality (+84.53): very miserly
+    - generosity (+66.65): extravagant
+    - honesty (-4.58): incredibly truthful
+    - intellect (+15.59): very peak intellect
+
+* id=973  'Robert Thomasson'  (Male)  max|g|=99.97
+  assertiveness +99.97: far from ideal 'assertive' -- reads as strongly 'brutal'.
+  Interpreter highlights:
+    - adaptability (-15.53): very adaptive
+    - assertiveness (+99.97): pathologically brutal
+    - creativity (+31.65): creative
+    - curiosity (-9.09): remarkably curious
+    - discipline (+4.57): incredibly disciplined
+    - frugality (-83.58): very wasteful
+    - honesty (-26.86): truthful
+    - humility (+21.85): humble
+    - intellect (+76.71): cognitive instability
+    - loyalty (-26.14): commitment
+    - modesty (+20.77): modest
+    - neurochemical (+26.27): emotionally stabile
+    - nurturance (-73.49): neglectful
+    - persuasion (-74.46): unconvincing
+
+* id=949  'Gede Glausoteaite'  (Female)  max|g|=99.96
+  curiosity -99.96: far from ideal 'curious' -- reads as strongly 'dogmatic'.
+  assertiveness +99.93: far from ideal 'assertive' -- reads as strongly 'brutal'.
+  Interpreter highlights:
+    - adaptability (-16.55): very adaptive
+    - ambition (-82.32): very sloth
+    - assertiveness (+99.93): pathologically brutal
+    - civics (+15.15): very civil
+    - creativity (+33.33): creative
+    - curiosity (-99.96): pathologically dogmatic
+    - discipline (+14.48): very disciplined
+    - friendliness (-11.33): remarkably friendly
+    - generosity (+22.44): generous
+    - honesty (+65.82): tactless
+    - humility (+28.22): humble
+    - intellect (-17.11): very peak intellect
+    - patience (+8.33): remarkably patient
+    - perception (-66.66): oblivious
+
+* id=463  'Gerlin von Dobromirbergu'  (Female)  max|g|=99.95
+  temperance +99.95: far from ideal 'wisdom' -- reads as strongly 'inhibited'.
+  courage -99.46: far from ideal 'courageous' -- reads as strongly 'coward'.
+  persuasion -99.23: far from ideal 'persuasive' -- reads as strongly 'unconvincing'.
+  assertiveness -95.83: far from ideal 'assertive' -- reads as strongly 'submissive'.
+  Interpreter highlights:
+    - assertiveness (-95.83): pathologically submissive
+    - civics (-79.97): authoritarian
+    - courage (-99.46): pathologically coward
+    - creativity (-28.52): creative
+    - discipline (-65.76): negligent
+    - empathy (-23.33): empathic
+    - focus (-16.47): very focused
+    - honesty (+5.45): remarkably truthful
+    - intellect (-19.25): very peak intellect
+    - mating drive (+86.20): very compulsive mating drive
+    - modesty (+77.23): shy
+    - nurturance (-72.78): neglectful
+    - perception (-73.25): oblivious
+    - persuasion (-99.23): pathologically unconvincing
+
+* id=273  'Dapyxa Bastizaeasca'  (Female)  max|g|=99.94
+  assertiveness +99.94: far from ideal 'assertive' -- reads as strongly 'brutal'.
+  courage -94.45: far from ideal 'courageous' -- reads as strongly 'coward'.
+  Interpreter highlights:
+    - ambition (-25.55): ambitious
+    - assertiveness (+99.94): pathologically brutal
+    - civics (-76.90): authoritarian
+    - courage (-94.45): extremely coward
+    - creativity (+25.82): creative
+    - curiosity (+65.69): distracted
+    - empathy (+5.33): remarkably empathic
+    - friendliness (-25.57): friendly
+    - frugality (-33.45): frugal
+    - generosity (+74.68): extravagant
+    - intellect (+6.21): remarkably peak intellect
+    - justice (-74.47): criminal
+    - loyalty (+0.54): incredibly commitment
+    - modesty (+77.19): shy
+
+* id=962  'Burebista Napocan'  (Male)  max|g|=99.94
+  assertiveness -99.94: far from ideal 'assertive' -- reads as strongly 'submissive'.
+  Interpreter highlights:
+    - assertiveness (-99.94): pathologically submissive
+    - creativity (-26.56): creative
+    - empathy (+3.35): incredibly empathic
+    - friendliness (-22.44): friendly
+    - generosity (+77.65): extravagant
+    - humility (+21.46): humble
+    - intellect (-22.76): peak intellect
+    - mating drive (+16.44): very reproductive mating drive
+    - nurturance (-77.28): neglectful
+    - perception (-33.70): perceptive
+    - symmetry (+85.56): very right asymmetry
+
+Genome: people with several traits |trait| ≤ 5 (what they excelled in)
+------------------------------------------------------------------------
+
+* id=374  'Clar von Dobromirbergu'  (Female)  traits_near_ideal=4  L2=304.9
+  persuasion +0.04: unusually close to ideal -- excels in 'persuasive'.
+  modesty -1.33: unusually close to ideal -- excels in 'modest'.
+  intellect -2.63: unusually close to ideal -- excels in 'peak intellect'.
+  focus +4.49: unusually close to ideal -- excels in 'focused'.
+
+* id=1109  'Aife of Dobromirbergu'  (Female)  traits_near_ideal=3  L2=263.2
+  persuasion +0.04: unusually close to ideal -- excels in 'persuasive'.
+  perception -3.03: unusually close to ideal -- excels in 'perceptive'.
+  mating drive -4.38: unusually close to ideal -- excels in 'reproductive mating drive'.
+
+* id=874  'Martin'  (Male)  traits_near_ideal=3  L2=281.7
+  persuasion -0.59: unusually close to ideal -- excels in 'persuasive'.
+  resilience -1.58: unusually close to ideal -- excels in 'resilient'.
+  perception -3.77: unusually close to ideal -- excels in 'perceptive'.
+
+* id=534  'Survile of Dobromirbergu'  (Female)  traits_near_ideal=3  L2=282.0
+  neurochemical +0.16: unusually close to ideal -- excels in 'emotionally stabile'.
+  honesty +0.83: unusually close to ideal -- excels in 'truthful'.
+  temperance -1.72: unusually close to ideal -- excels in 'wisdom'.
+
+* id=1224  'Diurpaneus of Dobromirbergu'  (Male)  traits_near_ideal=3  L2=282.7
+  ambition +2.12: unusually close to ideal -- excels in 'ambitious'.
+  friendliness -3.36: unusually close to ideal -- excels in 'friendly'.
+  generosity -4.55: unusually close to ideal -- excels in 'generous'.
+
+* id=543  'Alured'  (Male)  traits_near_ideal=3  L2=283.4
+  persuasion +3.35: unusually close to ideal -- excels in 'persuasive'.
+  humility +4.32: unusually close to ideal -- excels in 'humble'.
+  patience -5.00: unusually close to ideal -- excels in 'patient'.
+
+* id=575  'William Waleranson'  (Male)  traits_near_ideal=3  L2=285.7
+  resilience +0.95: unusually close to ideal -- excels in 'resilient'.
+  intellect -1.37: unusually close to ideal -- excels in 'peak intellect'.
+  justice +4.09: unusually close to ideal -- excels in 'just'.
+
+* id=627  'William of Dobromirbergu'  (Male)  traits_near_ideal=3  L2=289.7
+  justice +0.04: unusually close to ideal -- excels in 'just'.
+  humility -3.32: unusually close to ideal -- excels in 'humble'.
+  patience +4.09: unusually close to ideal -- excels in 'patient'.
+
+* id=631  'Peter Waleranson'  (Male)  traits_near_ideal=3  L2=290.1
+  persuasion -3.05: unusually close to ideal -- excels in 'persuasive'.
+  justice -4.01: unusually close to ideal -- excels in 'just'.
+  ambition +4.53: unusually close to ideal -- excels in 'ambitious'.
+
+* id=249  'Dromichaites of Dobromirbergu'  (Male)  traits_near_ideal=3  L2=290.4
+  empathy -2.38: unusually close to ideal -- excels in 'empathic'.
+  perception -3.22: unusually close to ideal -- excels in 'perceptive'.
+  humility -3.30: unusually close to ideal -- excels in 'humble'.
+
+* id=451  'Aengus von Dobromirbergu'  (Male)  traits_near_ideal=3  L2=296.0
+  mating drive +2.23: unusually close to ideal -- excels in 'reproductive mating drive'.
+  honesty +2.99: unusually close to ideal -- excels in 'truthful'.
+  persuasion +4.05: unusually close to ideal -- excels in 'persuasive'.
+
+* id=765  'Zalmodegikos'  (Male)  traits_near_ideal=3  L2=302.5
+  modesty -0.27: unusually close to ideal -- excels in 'modest'.
+  friendliness +0.55: unusually close to ideal -- excels in 'friendly'.
+  loyalty +4.00: unusually close to ideal -- excels in 'commitment'.

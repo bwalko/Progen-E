@@ -1,0 +1,120 @@
+# Module Map
+
+Quick orientation for `library`, `utils`, and `unit_test`.
+
+## Library
+
+- `library/generator.py`
+  - Main entrypoints for person generation.
+  - Handles overrides, birthyear resolution, and parent-based child generation.
+- `library/random_traits.py`
+  - Species pick, life-stage/age selection, body trait draws, genome rolling, and derived identity traits.
+- `library/random_names.py`
+  - First/last-name generation and birth surname inheritance behavior.
+- `library/offspring_genome.py`
+  - Digit-based heredity mixing from parent genome magnitudes.
+- `library/reproduction.py`
+  - Fertility checks, litter size, `having_sex_birth_event`, and tunable `annual_conception_probability` / `conception_rng` for population and zero-point birth pacing. `pair_prosperity_01` blends per-person `job_prosperity_01` (from `library/simulation_economy`) with mean normalized resource pressure for two people (also used by same-sex acceptance).
+- `library/job_economics.py`
+  - Normalized `job_key` strings and `JobEconomicsCatalog` loading: per-era **base** rows (`job_key=*`, absolute weights) plus optional **deviation** rows (multipliers; blank = 1.0). Legacy tables without `row_kind` still load as all-absolute rows.
+- `library/job_market.py`
+  - Human-editable job market semantics layered over normalized job titles: job family, essential/luxury/urban demand, saturation curve, scarcity resilience, and settlement effect deltas. Missing rows fall back to keyword inference so flavor titles and older fixtures still work.
+- `library/job_economics_tiers.py`
+  - Keyword + premium heuristics for deviation multipliers when regenerating `job_economics.csv`.
+  - Normalized `job_key` strings and `JobEconomicsCatalog` loading: per-era **base** rows (`job_key=*`, absolute weights) plus optional **deviation** rows (multipliers; blank = 1.0). Legacy tables without `row_kind` still load as all-absolute rows.
+- `library/world_paths.py`
+  - Paths for `worlds/<world_id>/config.sqlite` and `save.sqlite`.
+- `library/config_import.py`
+  - Rebuild per-world `config.sqlite` from `config/*.csv`.
+- `library/world_bootstrap.py`
+  - Ensures world/temp dirs, optional save wipe helpers, CSV refresh auto-policy inputs.
+- `library/zero_point_colonies.py`
+  - Coast/river colony spacing, founder seeding, ordered per-settlement pairing/birth then global mortality orchestration.
+- `library/world_save.py`
+  - Tables in `save.sqlite` for people/settlements/couples checkpoints, append-only `simulation_events`, and `world_state` from `world_time`; government snapshot tables (`simulation_polities`, territory, seats, holdings, dynasties, alliances, campaigns) via `library/government_checkpoint.py`. Full checkpoints **upsert** people/settlements (archival sqlite); **`try_load_simulation_checkpoint`** restores a **RAM working set** (alive + recent dead); **`prune_ancient_dead_from_ram`** trims long-dead from memory after snapshots. **`checkpoint_simulation_to_save(..., full_snapshot=False)`** still updates **`simulation_meta`** (`next_person_id`, cap multipliers, **region display label overrides**, **region naming aux**) via **`flush_simulation_meta_checkpoint`** between full snapshots.
+- `library/simulation_context.py`
+  - In-memory simulation state; optional CSV run store; `finalize_run()`; refresh config + checkpoint save DB (see [`simulation_engine.md`](simulation_engine.md) for reset-world, CSV auto-refresh, zero-point mode). `record_year_summary` runs **`library/simulation_careers`**, **`library/simulation_migration`**, **`library/simulation_social`** (paramours + same-sex couples), **`library/simulation_household_care`**, **`library/simulation_government`** (between household care and economy), then **`library/simulation_economy`**. `effective_regional_population_cap` feeds settlement evolve and spin-off logic.
+- `library/world_time.py`
+  - World clock: reads `world_start` from config DB; persists `world_state` in the save DB.
+- `library/body_interpreter.py`
+  - Converts mature metrics into interpreted child/immature physique values.
+- `library/personality_interpreter.py`
+  - Narrative trait callouts based on distance from ordinary genome magnitude.
+- `library/person.py`
+  - Immutable `Person` dataclass used across generation and tests.
+- `library/geography.py`
+  - Region/continent graph, travel-era friction, migration sampling; route lists include engine-augmented edges (see `route_inference`).
+- `library/geography_inference.py`
+  - Deterministic continent/region “physics” from CSV `keywords` + biome/terrain; optional plug-in backend.
+- `library/route_inference.py`
+  - Completes bidirectional land/sea pairs and adds sparse continental `land` bridges when the authored graph would otherwise split a continent.
+- `library/simulation_careers.py`
+  - Annual employment: assign jobs from `genome_jobs` by era, using skill match, `job_economics` wage potential, `job_market` job family / urban fit / saturation, settlement-scale market demand (`society_need`), and desperation/selfish fallback (`selfish_desperate`); fitness-weighted loss/rehire, job-seeker household migration, `resource_pressure_for_person`, and related `simulation_events`.
+- `library/simulation_economy.py`
+  - After household care: pooled settlement/regional prosperity, per-job draws from `job_economics` plus `job_market` family effects, `job_prosperity_01`, household savings/prosperity with assertiveness-based purseholder ids, wage taxes into regional treasury, optional `treasury_leader_spend` for stability/pool bumps.
+- `library/simulation_social.py`
+  - Annual social tick: settlement separation on the region graph (via `library/geography`), paramour dissolve when too distant, weighted formation trials. After paramours, optional **same-sex official couples**: romantic-genome-weighted trials (capped per settlement), acceptance scaled by `pair_prosperity_01` × per-person resource pressure, multiplied by `SAME_SEX_SOCIAL_FRICTION`; blocks full siblings and parent–child pairs; records `same_sex_couple_formed` on success.
+- `library/simulation_household_care.py`
+  - Annual tick after social: partner residence mismatch (lower `person_id` joins partner's settlement), fast-path orphan gates (co-resident parent, then bounded extended-family in same settlement), routing uncovered minors to the largest active settlement, implicit-household childcare supply vs dependent count with crisis events (`household_childcare_shortfall`, `orphan_routed_to_largest_settlement`, `partner_residence_reconciled`). **Grandparents** alive in the same settlement as the implicit household contribute a fraction (`CARE_GRANDPARENT_SUPPLY_SHARE`) of their effective caregiver supply toward shortfall math even when not in the job-move household set. **`caregiver_capacity`** adds a small post-fertility bump (`ELDER_POST_FERTILITY_CAPACITY_BONUS` / `ELDER_AGE_FALLBACK_NO_MAX_FERTILITY`) so elders skew more capable on paper. Exposes **`childcare_duty_factor(ctx, rec, year)`** in `[0, CHILD_DUTY_FACTOR_CAP]` (smooth `1 - exp(-CHILD_DUTY_GROWTH * n)` over dependent minors in the implicit job-move household, minus `CHILD_DUTY_GRANDPARENT_RELIEF` per co-resident grandparent extra). Consumed by `library/simulation_careers.py` (multiplies `rehire_probability`; mildly boosts `job_loss_probability`), `library/simulation_government.py` (down-weights `_fill_merit_or_election` and `_pick_head_candidate_in_region` scores so heavy caregivers are less likely to win merit offices or be picked as the regional head), and `library/simulation_economy.py` (excludes high-duty informal "leaders" from `_leader_candidate`; treasury-seat holders bypass the gate).
+- `library/simulation_migration.py`
+  - Resource-pressure out-migration to route neighbors weighted by headroom vs :meth:`library.simulation_context.SimulationContext.effective_regional_population_cap`; per-region cap multiplier random-walk after moves. Tuning workflow: [`migration_tuning.md`](migration_tuning.md).
+- `library/leadership.py` / `library/government_catalog.py` / `library/polity.py` / `library/place_namer.py` / `library/government_checkpoint.py` / `library/simulation_government.py` / `library/simulation_warfare.py`
+  - Polities, titles, succession, vassals, campaigns, alliances; config in `config/government_*.csv`; runtime state on `SimulationContext` (`gov_*` fields) and `save.sqlite`. **`place_namer`** builds lazy geographic labels for regions/polities. Overview: [`government.md`](government.md).
+
+## Utils
+
+- `utils/util_load_config.py`
+  - CLI: imports all `config/*.csv` into `worlds/<world_id>/config.sqlite`.
+- `utils/util_extract_job_economics_skeleton.py`
+  - CLI: writes `config/job_economics.csv` with one **base** row per era (`*`) plus **deviation** multiplier rows for jobs that tier heuristics (`library/job_economics_tiers.py`) mark as non-default; preserves existing base numbers when re-run.
+- `utils/util_check_config_sqlite_vs_csv.py`
+  - CLI: exit `1` if `worlds/<world_id>/config.sqlite` is missing or older than the newest `config/*.csv` mtime (optional preflight after CSV edits).
+- `library/population_growth_runner.py`
+  - Shared founder/birth/pairing/mortality loop and report builders for population-growth runs; `build_population_growth_report(..., ctx=…)` appends an optional government appendix. `births_by_settlement` uses annual fertility eligibility (no biennial parity) plus `library.reproduction.annual_conception_probability` (mating drive + jobs + `resource_pressure_for_person`) and a deterministic `conception_rng` roll before each birth attempt.
+- `utils/run_population_simulation.py`
+  - CLI: run population growth for `--years N` against `worlds/<world_id>/config.sqlite` + `save.sqlite` (full checkpoint); also writes canonical `population_growth_simulation_*` files under `unit_test/`. Appends a timing row to `unit_test/population_sim_timing.tsv` each run unless `POPULATION_SIM_SKIP_TIMING_LOG=1`.
+- `utils/util_print_alive_by_year.py`
+  - CLI: print `yearly_summary.csv` alive counts (`--yearly-summary` or `--world … --latest-run`).
+- `utils/util_print_polity_map.py`
+  - CLI: print open region-to-polity rows from `save.sqlite` (`simulation_polity_territory` + `simulation_polities`).
+- `utils/util_trace_lineage_csv.py`
+  - CLI: print ancestor generations from a run-store `people.csv` (`--people-csv`, `--person-id`).
+- `utils/bench_simulation_flush_batch_years.py`
+  - CLI: benchmark `run_population_simulation.py` for two `SIM_STORE_FLUSH_BATCH_YEARS` values (`--years`, `--runner`).
+- `utils/util_import_run_store_csv.py`
+  - CLI: append rows from a run-store `events.csv` into `save.sqlite` table `simulation_events`.
+- `utils/util_age_distribution.py`
+  - Computes stage distributions by species using mortality parameters.
+- `utils/demo_offspring_five_sets.py`
+  - Demonstration/tracing script validating offspring genome mixing mechanics.
+
+## Unit tests and scripts
+
+End-to-end and regression coverage should **call production code** in `library/` (and real checkpoint paths in `save.sqlite` where relevant). Tests may patch external symbols to isolate filesystem noise or to assert wiring (for example that `record_year_summary` still invokes migration), but **simulator rules, persistence, and event shapes belong in `library/`**, not only in test modules. Ad-hoc tooling belongs under `utils/` (see `util_trace_lineage_csv.py`); generated run-store output under `temp/simulation_run_store/` is gitignored, not a substitute for tests.
+
+- `unit_test/test_world_time.py`
+  - Ensures world clock initialization, persistence, and birthyear determinism.
+- `unit_test/test_birth_surname_rule.py`
+  - Verifies paternal surname inheritance and kin-template exception behavior.
+- `unit_test/test_population_growth_100_years.py`
+  - End-to-end multi-year population simulation; writes `population_growth_simulation_report.txt`, `population_growth_simulation_people.json`, and `_places_geo.json` (split founding vs current state; see `library/simulation_export.py`).
+- `unit_test/test_simulation_engine_zero_point.py`
+  - Reset-world + three-colony zero-point founders; ordered settlement years; birthplace isolation smoke check.
+- `unit_test/test_population_birth_variance.py`
+  - Conception probability vs prosperity / mating drive; annual birth eligibility (no biennial parity).
+- `unit_test/test_simulation_household_care.py`
+  - Yearly household care: orphan gates, largest-settlement routing, childcare shortfall, partner residence reconcile; `record_year_summary` wiring.
+- `unit_test/test_simulation_economy.py`
+  - `job_economics` base rows in CSV, prehistoric gatherer vs defender spread, economy tick smoke, `pair_prosperity_01` vs `job_prosperity_01`.
+- `unit_test/test_save_checkpoint.py`
+  - Persistence of simulation rows to `save.sqlite` and resume/clear behavior; government table round-trip.
+- `unit_test/test_simulation_government.py`
+  - Government annual tick bootstrap smoke.
+- `unit_test/test_simulation_warfare.py`
+  - Warfare tick smoke (empty campaigns).
+- `unit_test/test_working_set_checkpoint.py`
+  - Upsert archival: ancient dead stays in SQLite but drops from RAM post-checkpoint; resume loads filtered working set.
+- `unit_test/test_route_inference.py`
+  - Bidirectional route closure and continental land-bridge inference.
+- `unit_test/regenerate_generated_people.py`
+  - Utility script to regenerate sample person output file for manual inspection.

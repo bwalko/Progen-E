@@ -1,0 +1,810 @@
+Interesting people (200y, seed=42, couples=10, n=4393)
+Genome: deviations from 0 = ideal; |value|~50 ordinary; |value|≥92 extreme; |value|≤5 unusually near ideal.
+
+Longest-lived
+-------------
+id=352  'Gede Alanaite'  ethnic='Old Prussian'  lifespan=138y  kids=1  events=23  max|g|=87.0  L2=284.7  alive_end=True
+id=410  'Kaetherlin Hossinger'  ethnic='Middle German'  lifespan=131y  kids=1  events=24  max|g|=88.1  L2=295.0  alive_end=True
+id=414  'Roger of Dobromirbergu'  ethnic='Middle English'  lifespan=125y  kids=4  events=30  max|g|=99.9  L2=317.1  alive_end=False
+id=427  'Juliana of Dobromirbergu'  ethnic='Middle English'  lifespan=118y  kids=1  events=27  max|g|=98.5  L2=336.7  alive_end=False
+id=383  'Tarsa'  ethnic='Pannonian'  lifespan=117y  kids=0  events=21  max|g|=96.8  L2=290.8  alive_end=False
+id=415  'Thomas of Dobromirbergu'  ethnic='Middle English'  lifespan=114y  kids=1  events=20  max|g|=94.5  L2=298.7  alive_end=False
+id=484  'Katherin von Dobromirbergu'  ethnic='Middle German'  lifespan=114y  kids=0  events=31  max|g|=99.5  L2=303.9  alive_end=False
+id=608  'Geoffrey Dyer'  ethnic='Middle English'  lifespan=113y  kids=5  events=16  max|g|=85.5  L2=283.1  alive_end=True
+
+Most children (as parent on any child record)
+---------------------------------------------
+id=2037  'Colman Ó Aengus'  ethnic='Irish Gaelic'  lifespan=56y  kids=24  events=36  max|g|=92.5  L2=276.4  alive_end=True
+id=2904  'Gervase of Dobromirbergu'  ethnic='Middle English'  lifespan=39y  kids=23  events=30  max|g|=98.5  L2=340.8  alive_end=True
+id=2495  'Oroles Conallescu'  ethnic='Pannonian'  lifespan=46y  kids=22  events=32  max|g|=98.5  L2=312.3  alive_end=True
+id=2835  'Conrat von Dobromirbergu'  ethnic='Middle German'  lifespan=39y  kids=22  events=31  max|g|=93.5  L2=344.1  alive_end=False
+id=2970  'Peter Pomandeson'  ethnic='Middle English'  lifespan=39y  kids=22  events=32  max|g|=96.5  L2=320.1  alive_end=True
+id=2062  'Zalmodegikos Conallescu'  ethnic='Pannonian'  lifespan=56y  kids=21  events=35  max|g|=99.6  L2=336.4  alive_end=True
+id=2172  'Aengus Ó Ruaidri'  ethnic='Irish Gaelic'  lifespan=53y  kids=21  events=32  max|g|=94.7  L2=297.0  alive_end=True
+id=2345  'Talorc of Dobromirbergu'  ethnic='Pictish/Brittonic Substrate'  lifespan=49y  kids=21  events=31  max|g|=84.6  L2=277.3  alive_end=True
+
+Most event rows (any id column in events.csv)
+---------------------------------------------
+id=955  'Hanns'  ethnic='Middle German'  lifespan=95y  kids=13  events=42  max|g|=85.6  L2=282.5  alive_end=True
+id=1231  'Mael Sechnaill'  ethnic='Irish Gaelic'  lifespan=83y  kids=17  events=41  max|g|=92.5  L2=327.9  alive_end=True
+id=980  'Diernais of Dobromirbergu'  ethnic='Pannonian'  lifespan=83y  kids=13  events=40  max|g|=97.6  L2=333.5  alive_end=False
+id=1983  'Cotiso of Dobromirbergu'  ethnic='Pannonian'  lifespan=58y  kids=19  events=40  max|g|=94.5  L2=276.9  alive_end=True
+id=632  'Art Ó Aengus'  ethnic='Irish Gaelic'  lifespan=111y  kids=18  events=39  max|g|=96.7  L2=312.3  alive_end=True
+id=1778  'Haintzlin of Dobromirbergu'  ethnic='Middle German'  lifespan=52y  kids=15  events=39  max|g|=97.5  L2=356.5  alive_end=False
+id=1755  'Thomas'  ethnic='Middle English'  lifespan=49y  kids=14  events=39  max|g|=95.3  L2=311.8  alive_end=False
+id=1638  'Bastiza of Dobromirbergu'  ethnic='Pannonian'  lifespan=67y  kids=16  events=36  max|g|=94.6  L2=302.7  alive_end=True
+
+Largest single-trait magnitude
+------------------------------
+id=5683  'Zalmodegia Cothelaseasca'  ethnic='Pannonian'  lifespan=1y  kids=0  events=3  max|g|=100.0  L2=343.7  alive_end=False
+id=4975  'Dadas Cotisoescu'  ethnic='Pannonian'  lifespan=17y  kids=0  events=4  max|g|=100.0  L2=340.8  alive_end=True
+id=4482  'Alexander Day'  ethnic='Middle English'  lifespan=19y  kids=0  events=5  max|g|=100.0  L2=337.6  alive_end=False
+id=7040  'Uuenna verch Bridei'  ethnic='Pictish/Brittonic Substrate'  lifespan=3y  kids=0  events=2  max|g|=100.0  L2=334.1  alive_end=True
+id=5650  'Nes von Dobromirbergu'  ethnic='Middle German'  lifespan=1y  kids=0  events=3  max|g|=100.0  L2=329.3  alive_end=False
+id=6117  'Daciana Dromichaiteseasca'  ethnic='Pannonian'  lifespan=1y  kids=0  events=3  max|g|=100.0  L2=328.1  alive_end=False
+id=7369  'Philip of Dobromirbergu'  ethnic='Middle English'  lifespan=1y  kids=0  events=2  max|g|=100.0  L2=327.3  alive_end=True
+id=6935  'Aulia Cotisoeasca'  ethnic='Pannonian'  lifespan=1y  kids=0  events=3  max|g|=100.0  L2=323.6  alive_end=False
+
+Most traits near numeric ideal (|trait|≤5)
+------------------------------------------
+id=5362  'Conall Ó Arnald'  ethnic='Irish Gaelic'  lifespan=5y  kids=0  events=4  max|g|=98.5  L2=276.0  alive_end=False
+id=1086  'Clarice daughter of Peter'  ethnic='Middle English'  lifespan=89y  kids=5  events=27  max|g|=95.5  L2=277.9  alive_end=True
+id=7413  'Umfrey Amauryson'  ethnic='Middle English'  lifespan=1y  kids=0  events=2  max|g|=94.4  L2=288.8  alive_end=True
+id=6983  'Robert of Dobromirbergu'  ethnic='Middle English'  lifespan=1y  kids=0  events=3  max|g|=88.1  L2=293.2  alive_end=False
+id=6187  'Dierna'  ethnic='Pannonian'  lifespan=8y  kids=0  events=3  max|g|=76.4  L2=249.7  alive_end=True
+id=2598  'Richard'  ethnic='Middle English'  lifespan=44y  kids=12  events=18  max|g|=91.5  L2=256.9  alive_end=True
+id=6498  'Eochaid Ó Cathal'  ethnic='Irish Gaelic'  lifespan=6y  kids=0  events=2  max|g|=93.5  L2=263.2  alive_end=True
+id=4853  'Aife Ní Aed'  ethnic='Irish Gaelic'  lifespan=1y  kids=0  events=3  max|g|=96.4  L2=267.8  alive_end=False
+
+Genome: people with any |trait| >= 92 (what they were 'like')
+------------------------------------------------------------------------
+
+* id=3392  'Tarsa'  (Female)  max|g|=99.99
+  loyalty -99.99: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  creativity +95.75: far from ideal 'creative' -- reads as strongly 'delusion'.
+  Interpreter highlights:
+    - ambition (+14.49): very ambitious
+    - civics (-5.64): remarkably civil
+    - creativity (+95.75): pathologically delusion
+    - focus (+5.58): remarkably focused
+    - friendliness (+65.46): obsequious
+    - frugality (-75.50): wasteful
+    - honesty (+73.24): tactless
+    - loyalty (-99.99): pathologically disloyal
+    - mating drive (-11.55): remarkably reproductive mating drive
+    - modesty (-8.73): remarkably modest
+    - nurturance (-75.73): neglectful
+    - persuasion (-25.85): persuasive
+    - temperance (+89.80): extremely inhibited
+
+* id=4012  'Els'  (Female)  max|g|=99.99
+  resilience -99.99: far from ideal 'resilient' -- reads as strongly 'fragile'.
+  curiosity -94.88: far from ideal 'curious' -- reads as strongly 'dogmatic'.
+  Interpreter highlights:
+    - adaptability (-71.69): rigid
+    - assertiveness (-77.48): submissive
+    - curiosity (-94.88): extremely dogmatic
+    - empathy (+0.72): incredibly empathic
+    - honesty (+27.38): truthful
+    - intellect (-13.69): very peak intellect
+    - mating drive (+65.44): compulsive mating drive
+    - modesty (-30.08): modest
+    - patience (+66.88): passive
+    - resilience (-99.99): pathologically fragile
+    - symmetry (+67.63): right asymmetry
+
+* id=4482  'Alexander Day'  (Male)  max|g|=99.99
+  loyalty +99.99: far from ideal 'commitment' -- reads as strongly 'sycophant'.
+  adaptability -95.47: far from ideal 'adaptive' -- reads as strongly 'rigid'.
+  Interpreter highlights:
+    - adaptability (-95.47): pathologically rigid
+    - assertiveness (+73.13): brutal
+    - creativity (-75.95): unimaginative
+    - curiosity (-66.65): dogmatic
+    - empathy (+65.34): overidentification
+    - focus (+80.55): very fixated
+    - generosity (-65.33): envious
+    - honesty (-33.73): truthful
+    - humility (-33.62): humble
+    - intellect (-14.33): very peak intellect
+    - loyalty (+99.99): pathologically sycophant
+    - mating drive (-15.61): very reproductive mating drive
+    - modesty (+78.13): shy
+    - neurochemical (-68.56): emotionally suppressed
+
+* id=4975  'Dadas Cotisoescu'  (Male)  max|g|=99.99
+  resilience -99.99: far from ideal 'resilient' -- reads as strongly 'fragile'.
+  loyalty -97.50: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  perception +95.54: far from ideal 'perceptive' -- reads as strongly 'hypervigilant'.
+  Interpreter highlights:
+    - assertiveness (-33.65): assertive
+    - civics (-16.46): very civil
+    - courage (+26.94): courageous
+    - curiosity (-82.48): very dogmatic
+    - discipline (-66.56): negligent
+    - focus (-66.15): scatterbrained
+    - honesty (+21.42): truthful
+    - humility (+84.44): very recluse
+    - loyalty (-97.50): pathologically disloyal
+    - mating drive (+66.56): compulsive mating drive
+    - modesty (-68.83): shameless
+    - neurochemical (+89.32): extremely emotionally volatile
+    - patience (-73.66): impulsive
+    - perception (+95.54): pathologically hypervigilant
+
+* id=5394  'Allin'  (Female)  max|g|=99.99
+  neurochemical -99.99: far from ideal 'emotionally stabile' -- reads as strongly 'emotionally suppressed'.
+  Interpreter highlights:
+    - ambition (+69.46): ruthless
+    - assertiveness (-79.67): submissive
+    - creativity (-8.70): remarkably creative
+    - discipline (-67.67): negligent
+    - generosity (+24.32): generous
+    - modesty (+6.58): remarkably modest
+    - neurochemical (-99.99): pathologically emotionally suppressed
+    - patience (+78.56): passive
+    - perception (+34.91): perceptive
+    - symmetry (-66.66): left asymmetry
+    - temperance (-76.04): indulgent
+    - wit (-65.41): boorish
+
+* id=5650  'Nes von Dobromirbergu'  (Female)  max|g|=99.99
+  neurochemical +99.99: far from ideal 'emotionally stabile' -- reads as strongly 'emotionally volatile'.
+  civics +99.41: far from ideal 'civil' -- reads as strongly 'subversive'.
+  Interpreter highlights:
+    - ambition (+66.94): ruthless
+    - assertiveness (+79.67): brutal
+    - civics (+99.41): pathologically subversive
+    - courage (+15.17): very courageous
+    - creativity (+0.48): incredibly creative
+    - friendliness (+16.46): very friendly
+    - generosity (-24.32): generous
+    - justice (+75.64): zealot
+    - mating drive (-72.66): absent mating drive
+    - modesty (-65.60): shameless
+    - neurochemical (+99.99): pathologically emotionally volatile
+    - nurturance (-33.75): nurturing
+    - patience (+87.65): extremely passive
+    - perception (-15.13): very perceptive
+
+* id=5683  'Zalmodegia Cothelaseasca'  (Female)  max|g|=99.99
+  neurochemical +99.99: far from ideal 'emotionally stabile' -- reads as strongly 'emotionally volatile'.
+  humility +94.24: far from ideal 'humble' -- reads as strongly 'recluse'.
+  Interpreter highlights:
+    - ambition (-17.41): very ambitious
+    - assertiveness (+31.47): assertive
+    - civics (+76.24): subversive
+    - courage (-66.55): coward
+    - curiosity (+28.74): curious
+    - discipline (+26.55): disciplined
+    - generosity (-23.26): generous
+    - humility (+94.24): extremely recluse
+    - intellect (-91.40): extremely cognitive deficiency
+    - justice (+86.79): very zealot
+    - loyalty (-77.55): disloyal
+    - modesty (+81.50): very shy
+    - neurochemical (+99.99): pathologically emotionally volatile
+    - nurturance (-34.66): nurturing
+
+* id=5956  'Zalmodegia Cothelaseasca'  (Female)  max|g|=99.99
+  neurochemical -99.99: far from ideal 'emotionally stabile' -- reads as strongly 'emotionally suppressed'.
+  persuasion +92.75: far from ideal 'persuasive' -- reads as strongly 'manipulative'.
+  Interpreter highlights:
+    - adaptability (+65.96): indecisive
+    - ambition (-74.11): sloth
+    - assertiveness (+31.47): assertive
+    - civics (-74.26): authoritarian
+    - courage (-65.16): coward
+    - curiosity (-24.58): curious
+    - friendliness (-77.16): cantankerous
+    - generosity (-32.64): generous
+    - intellect (+1.19): incredibly peak intellect
+    - loyalty (-77.55): disloyal
+    - modesty (+18.08): very modest
+    - neurochemical (-99.99): pathologically emotionally suppressed
+    - persuasion (+92.75): extremely manipulative
+    - physical (+0.38): incredibly peak fitness
+
+* id=6117  'Daciana Dromichaiteseasca'  (Female)  max|g|=99.99
+  creativity -99.99: far from ideal 'creative' -- reads as strongly 'unimaginative'.
+  curiosity +98.65: far from ideal 'curious' -- reads as strongly 'distracted'.
+  frugality -96.55: far from ideal 'frugal' -- reads as strongly 'wasteful'.
+  Interpreter highlights:
+    - courage (+23.67): courageous
+    - creativity (-99.99): pathologically unimaginative
+    - curiosity (+98.65): pathologically distracted
+    - discipline (+65.54): compulsive
+    - frugality (-96.55): pathologically wasteful
+    - honesty (-33.33): truthful
+    - humility (+10.99): remarkably humble
+    - intellect (+74.13): cognitive instability
+    - loyalty (+69.77): sycophant
+    - neurochemical (+91.06): extremely emotionally volatile
+    - persuasion (+4.76): incredibly persuasive
+    - physical (+26.64): peak fitness
+    - symmetry (-31.46): peak symmetry
+    - temperance (-77.40): indulgent
+
+* id=6415  'Cicely'  (Female)  max|g|=99.99
+  loyalty -99.99: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  ambition -94.74: far from ideal 'ambitious' -- reads as strongly 'sloth'.
+  Interpreter highlights:
+    - ambition (-94.74): extremely sloth
+    - curiosity (+69.56): distracted
+    - discipline (-25.46): disciplined
+    - empathy (+66.20): overidentification
+    - friendliness (-66.65): cantankerous
+    - frugality (+0.00): incredibly frugal
+    - honesty (+31.32): truthful
+    - intellect (+13.43): very peak intellect
+    - justice (+14.49): very just
+    - loyalty (-99.99): pathologically disloyal
+    - mating drive (-14.56): very reproductive mating drive
+    - modesty (-85.91): very shameless
+    - neurochemical (+89.68): extremely emotionally volatile
+    - patience (+77.55): passive
+
+* id=6813  'Ann von Dobromirbergu'  (Female)  max|g|=99.99
+  neurochemical +99.99: far from ideal 'emotionally stabile' -- reads as strongly 'emotionally volatile'.
+  assertiveness -97.78: far from ideal 'assertive' -- reads as strongly 'submissive'.
+  frugality +93.55: far from ideal 'frugal' -- reads as strongly 'miserly'.
+  Interpreter highlights:
+    - adaptability (+14.46): very adaptive
+    - assertiveness (-97.78): pathologically submissive
+    - courage (-71.55): coward
+    - creativity (-0.77): incredibly creative
+    - empathy (+4.32): incredibly empathic
+    - frugality (+93.55): extremely miserly
+    - generosity (+24.52): generous
+    - humility (+65.44): recluse
+    - justice (-65.36): criminal
+    - mating drive (+67.20): compulsive mating drive
+    - modesty (+65.80): shy
+    - neurochemical (+99.99): pathologically emotionally volatile
+    - patience (-87.55): extremely impulsive
+    - perception (+13.19): very perceptive
+
+* id=6886  'Allin of Dobromirbergu'  (Female)  max|g|=99.99
+  curiosity -99.99: far from ideal 'curious' -- reads as strongly 'dogmatic'.
+  intellect -96.34: far from ideal 'peak intellect' -- reads as strongly 'cognitive deficiency'.
+  civics -94.44: far from ideal 'civil' -- reads as strongly 'authoritarian'.
+  Interpreter highlights:
+    - adaptability (+65.68): indecisive
+    - ambition (+34.84): ambitious
+    - civics (-94.44): extremely authoritarian
+    - curiosity (-99.99): pathologically dogmatic
+    - friendliness (-11.64): remarkably friendly
+    - humility (-17.04): very humble
+    - intellect (-96.34): pathologically cognitive deficiency
+    - mating drive (-12.46): remarkably reproductive mating drive
+    - patience (-68.45): impulsive
+    - physical (+82.77): very hypermetabolic
+    - symmetry (+74.37): right asymmetry
+    - temperance (-10.88): remarkably wisdom
+
+* id=6935  'Aulia Cotisoeasca'  (Female)  max|g|=99.99
+  resilience -99.99: far from ideal 'resilient' -- reads as strongly 'fragile'.
+  loyalty -97.55: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  perception +95.55: far from ideal 'perceptive' -- reads as strongly 'hypervigilant'.
+  Interpreter highlights:
+    - adaptability (+19.46): very adaptive
+    - assertiveness (+66.93): brutal
+    - civics (+66.60): subversive
+    - curiosity (-88.48): extremely dogmatic
+    - discipline (+66.55): compulsive
+    - empathy (+0.76): incredibly empathic
+    - focus (+16.65): very focused
+    - friendliness (+11.46): remarkably friendly
+    - honesty (-33.14): truthful
+    - loyalty (-97.55): pathologically disloyal
+    - mating drive (-66.54): absent mating drive
+    - modesty (+78.53): shy
+    - neurochemical (-21.93): emotionally stabile
+    - perception (+95.55): pathologically hypervigilant
+
+* id=7040  'Uuenna verch Bridei'  (Female)  max|g|=99.99
+  loyalty +99.99: far from ideal 'commitment' -- reads as strongly 'sycophant'.
+  frugality +95.00: far from ideal 'frugal' -- reads as strongly 'miserly'.
+  Interpreter highlights:
+    - adaptability (+15.54): very adaptive
+    - ambition (+75.50): ruthless
+    - civics (+74.46): subversive
+    - curiosity (-28.82): curious
+    - empathy (-66.64): callous
+    - friendliness (-65.68): cantankerous
+    - frugality (+95.00): extremely miserly
+    - honesty (+88.39): extremely tactless
+    - intellect (-12.33): remarkably peak intellect
+    - loyalty (+99.99): pathologically sycophant
+    - mating drive (+74.16): compulsive mating drive
+    - modesty (-88.57): extremely shameless
+    - neurochemical (+6.55): remarkably emotionally stabile
+    - patience (+75.45): passive
+
+* id=7369  'Philip of Dobromirbergu'  (Male)  max|g|=99.99
+  loyalty -99.99: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  Interpreter highlights:
+    - civics (-70.44): authoritarian
+    - courage (-34.65): courageous
+    - creativity (-85.54): very unimaginative
+    - curiosity (-69.56): dogmatic
+    - empathy (-26.60): empathic
+    - frugality (-7.00): remarkably frugal
+    - honesty (+33.42): truthful
+    - loyalty (-99.99): pathologically disloyal
+    - neurochemical (+68.89): emotionally volatile
+    - patience (-75.57): impulsive
+    - perception (-91.19): extremely oblivious
+    - persuasion (+82.85): very manipulative
+    - symmetry (-66.65): left asymmetry
+
+* id=1593  'Rubobostes of Dobromirbergu'  (Male)  max|g|=99.98
+  neurochemical +99.98: far from ideal 'emotionally stabile' -- reads as strongly 'emotionally volatile'.
+  loyalty -99.96: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  Interpreter highlights:
+    - civics (+88.28): extremely subversive
+    - courage (-33.36): courageous
+    - focus (-5.58): remarkably focused
+    - honesty (-12.21): remarkably truthful
+    - humility (-66.33): vain
+    - intellect (+16.62): very peak intellect
+    - justice (+71.44): zealot
+    - loyalty (-99.96): pathologically disloyal
+    - mating drive (-66.11): absent mating drive
+    - modesty (-17.31): very modest
+    - neurochemical (+99.98): pathologically emotionally volatile
+    - nurturance (+33.55): nurturing
+    - temperance (+68.50): inhibited
+
+* id=4862  'Hanns of Dobromirbergu'  (Male)  max|g|=99.98
+  curiosity +99.98: far from ideal 'curious' -- reads as strongly 'distracted'.
+  Interpreter highlights:
+    - civics (-87.89): extremely authoritarian
+    - creativity (+77.55): delusion
+    - curiosity (+99.98): pathologically distracted
+    - honesty (+12.22): remarkably truthful
+    - humility (+73.67): recluse
+    - intellect (-22.23): peak intellect
+    - loyalty (+75.97): sycophant
+    - neurochemical (+69.59): emotionally volatile
+    - patience (-71.55): impulsive
+    - persuasion (-70.54): unconvincing
+    - wit (+66.46): buffoon
+
+* id=5244  'Niall Ó Diarmait'  (Male)  max|g|=99.97
+  loyalty -99.97: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  perception +94.53: far from ideal 'perceptive' -- reads as strongly 'hypervigilant'.
+  Interpreter highlights:
+    - adaptability (-67.66): rigid
+    - assertiveness (+15.36): very assertive
+    - civics (+84.96): very subversive
+    - creativity (-82.41): very unimaginative
+    - discipline (-65.65): negligent
+    - friendliness (+17.45): very friendly
+    - justice (+34.45): just
+    - loyalty (-99.97): pathologically disloyal
+    - mating drive (-13.66): very reproductive mating drive
+    - neurochemical (-1.33): incredibly emotionally stabile
+    - nurturance (+74.35): smothering
+    - perception (+94.53): extremely hypervigilant
+    - physical (-7.43): remarkably peak fitness
+    - resilience (-14.59): very resilient
+
+* id=5678  'Aife of Dobromirbergu'  (Female)  max|g|=99.97
+  loyalty -99.97: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  creativity +95.85: far from ideal 'creative' -- reads as strongly 'delusion'.
+  Interpreter highlights:
+    - assertiveness (+65.37): brutal
+    - civics (+87.87): extremely subversive
+    - creativity (+95.85): pathologically delusion
+    - curiosity (+79.89): distracted
+    - empathy (+33.46): empathic
+    - focus (+5.55): remarkably focused
+    - friendliness (-66.56): cantankerous
+    - honesty (-82.32): very deceitful
+    - humility (+33.60): humble
+    - intellect (-21.11): peak intellect
+    - justice (+76.16): zealot
+    - loyalty (-99.97): pathologically disloyal
+    - modesty (+17.31): very modest
+    - neurochemical (-91.99): extremely emotionally suppressed
+
+* id=6102  'Lasairfhiona Ní Donnchad'  (Female)  max|g|=99.97
+  loyalty -99.97: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  curiosity -96.83: far from ideal 'curious' -- reads as strongly 'dogmatic'.
+  Interpreter highlights:
+    - adaptability (-76.25): rigid
+    - ambition (-87.70): extremely sloth
+    - assertiveness (+77.34): brutal
+    - civics (+86.37): very subversive
+    - courage (-32.16): courageous
+    - curiosity (-96.83): pathologically dogmatic
+    - discipline (-67.75): negligent
+    - empathy (-23.74): empathic
+    - focus (+6.55): remarkably focused
+    - friendliness (-75.16): cantankerous
+    - frugality (+5.59): remarkably frugal
+    - justice (+17.89): very just
+    - loyalty (-99.97): pathologically disloyal
+    - modesty (-88.81): extremely shameless
+
+* id=6357  'Brid'  (Female)  max|g|=99.97
+  loyalty +99.97: far from ideal 'commitment' -- reads as strongly 'sycophant'.
+  creativity -99.77: far from ideal 'creative' -- reads as strongly 'unimaginative'.
+  curiosity -99.52: far from ideal 'curious' -- reads as strongly 'dogmatic'.
+  Interpreter highlights:
+    - assertiveness (+33.36): assertive
+    - civics (+80.65): very subversive
+    - creativity (-99.77): pathologically unimaginative
+    - curiosity (-99.52): pathologically dogmatic
+    - discipline (-66.65): negligent
+    - empathy (-65.70): callous
+    - friendliness (+65.64): obsequious
+    - honesty (-32.73): truthful
+    - humility (-76.26): vain
+    - intellect (-23.34): peak intellect
+    - loyalty (+99.97): pathologically sycophant
+    - modesty (+5.77): remarkably modest
+    - nurturance (+67.37): smothering
+    - perception (-65.35): oblivious
+
+* id=7106  'Margery of Dobromirbergu'  (Female)  max|g|=99.97
+  loyalty -99.97: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  creativity +95.56: far from ideal 'creative' -- reads as strongly 'delusion'.
+  humility +93.36: far from ideal 'humble' -- reads as strongly 'recluse'.
+  Interpreter highlights:
+    - assertiveness (+67.49): brutal
+    - courage (-31.23): courageous
+    - creativity (+95.56): pathologically delusion
+    - discipline (+76.65): compulsive
+    - focus (+65.56): fixated
+    - friendliness (-66.65): cantankerous
+    - humility (+93.36): extremely recluse
+    - justice (+7.57): remarkably just
+    - loyalty (-99.97): pathologically disloyal
+    - neurochemical (-0.33): incredibly emotionally stabile
+    - nurturance (-77.35): neglectful
+    - perception (-14.81): very perceptive
+    - persuasion (-28.83): persuasive
+    - resilience (-72.45): fragile
+
+* id=1288  'Joanna of Dobromirbergu'  (Female)  max|g|=99.96
+  symmetry -99.96: far from ideal 'peak symmetry' -- reads as strongly 'left asymmetry'.
+  honesty +93.97: far from ideal 'truthful' -- reads as strongly 'tactless'.
+  loyalty +92.07: far from ideal 'commitment' -- reads as strongly 'sycophant'.
+  Interpreter highlights:
+    - assertiveness (-31.95): assertive
+    - discipline (+77.36): compulsive
+    - generosity (+66.66): extravagant
+    - honesty (+93.97): extremely tactless
+    - humility (+34.66): humble
+    - intellect (+33.18): peak intellect
+    - justice (+19.95): very just
+    - loyalty (+92.07): extremely sycophant
+    - patience (-34.86): patient
+    - physical (-85.51): very frailty
+    - symmetry (-99.96): pathologically left asymmetry
+    - temperance (-6.40): remarkably wisdom
+    - wit (-11.14): remarkably witty
+
+* id=1483  'Bistia of Dobromirbergu'  (Female)  max|g|=99.96
+  neurochemical -99.96: far from ideal 'emotionally stabile' -- reads as strongly 'emotionally suppressed'.
+  adaptability +99.55: far from ideal 'adaptive' -- reads as strongly 'indecisive'.
+  ambition -95.47: far from ideal 'ambitious' -- reads as strongly 'sloth'.
+  intellect -94.42: far from ideal 'peak intellect' -- reads as strongly 'cognitive deficiency'.
+  Interpreter highlights:
+    - adaptability (+99.55): pathologically indecisive
+    - ambition (-95.47): pathologically sloth
+    - civics (+77.14): subversive
+    - courage (-66.66): coward
+    - creativity (+67.84): delusion
+    - curiosity (+82.68): very distracted
+    - empathy (-6.74): remarkably empathic
+    - focus (+65.16): fixated
+    - frugality (-34.09): frugal
+    - generosity (+32.35): generous
+    - honesty (+21.42): truthful
+    - humility (+74.66): recluse
+    - intellect (-94.42): extremely cognitive deficiency
+    - neurochemical (-99.96): pathologically emotionally suppressed
+
+* id=2215  'Amabilia of Dobromirbergu'  (Female)  max|g|=99.96
+  symmetry -99.96: far from ideal 'peak symmetry' -- reads as strongly 'left asymmetry'.
+  modesty +98.71: far from ideal 'modest' -- reads as strongly 'shy'.
+  resilience +94.45: far from ideal 'resilient' -- reads as strongly 'desensitized'.
+  humility +94.33: far from ideal 'humble' -- reads as strongly 'recluse'.
+  Interpreter highlights:
+    - ambition (-79.87): sloth
+    - assertiveness (+24.63): assertive
+    - civics (-84.48): very authoritarian
+    - discipline (-26.57): disciplined
+    - empathy (+66.03): overidentification
+    - focus (+66.50): fixated
+    - friendliness (-65.56): cantankerous
+    - honesty (+33.47): truthful
+    - humility (+94.33): extremely recluse
+    - intellect (+73.61): cognitive instability
+    - justice (+71.59): zealot
+    - mating drive (+14.42): very reproductive mating drive
+    - modesty (+98.71): pathologically shy
+    - neurochemical (+19.55): very emotionally stabile
+
+* id=3248  'Niall Ó Dadas'  (Male)  max|g|=99.96
+  neurochemical +99.96: far from ideal 'emotionally stabile' -- reads as strongly 'emotionally volatile'.
+  resilience +99.55: far from ideal 'resilient' -- reads as strongly 'desensitized'.
+  Interpreter highlights:
+    - assertiveness (+34.75): assertive
+    - courage (-15.52): very courageous
+    - curiosity (+66.85): distracted
+    - discipline (+76.56): compulsive
+    - generosity (-23.22): generous
+    - honesty (+73.82): tactless
+    - intellect (-30.22): peak intellect
+    - justice (-89.78): extremely criminal
+    - loyalty (-72.61): disloyal
+    - modesty (+68.18): shy
+    - neurochemical (+99.96): pathologically emotionally volatile
+    - physical (-30.88): peak fitness
+    - resilience (+99.55): pathologically desensitized
+    - symmetry (-76.76): left asymmetry
+
+* id=3399  'Frank von Dobromirbergu'  (Male)  max|g|=99.96
+  curiosity +99.96: far from ideal 'curious' -- reads as strongly 'distracted'.
+  loyalty -97.96: far from ideal 'commitment' -- reads as strongly 'disloyal'.
+  honesty -92.93: far from ideal 'truthful' -- reads as strongly 'deceitful'.
+  Interpreter highlights:
+    - adaptability (+21.56): adaptive
+    - ambition (-17.17): very ambitious
+    - assertiveness (-10.94): remarkably assertive
+    - civics (+24.44): civil
+    - courage (+66.55): reckless
+    - curiosity (+99.96): pathologically distracted
+    - empathy (-24.35): empathic
+    - focus (+18.42): very focused
+    - honesty (-92.93): extremely deceitful
+    - humility (-74.65): vain
+    - intellect (-12.47): remarkably peak intellect
+    - loyalty (-97.96): pathologically disloyal
+    - neurochemical (-33.13): emotionally stabile
+    - patience (+76.49): passive
+
+* id=3764  'Mucapora of Dobromirbergu'  (Female)  max|g|=99.96
+  perception +99.96: far from ideal 'perceptive' -- reads as strongly 'hypervigilant'.
+  justice +98.69: far from ideal 'just' -- reads as strongly 'zealot'.
+  Interpreter highlights:
+    - assertiveness (+33.53): assertive
+    - civics (+67.44): subversive
+    - courage (-66.33): coward
+    - creativity (+85.06): very delusion
+    - curiosity (-65.26): dogmatic
+    - empathy (-23.63): empathic
+    - focus (+66.13): fixated
+    - humility (-6.64): remarkably humble
+    - intellect (-27.14): peak intellect
+    - justice (+98.69): pathologically zealot
+    - loyalty (+77.50): sycophant
+    - mating drive (-66.54): absent mating drive
+    - perception (+99.96): pathologically hypervigilant
+    - persuasion (-14.48): very persuasive
+
+Pathological interpreter standouts (any note contains 'pathologically')
+------------------------------------------------------------------------
+
+* id=3392  'Tarsa'  (Female)  max|g|=99.99
+    - creativity (+95.75): pathologically delusion
+    - loyalty (-99.99): pathologically disloyal
+
+* id=4012  'Els'  (Female)  max|g|=99.99
+    - resilience (-99.99): pathologically fragile
+
+* id=4482  'Alexander Day'  (Male)  max|g|=99.99
+    - adaptability (-95.47): pathologically rigid
+    - loyalty (+99.99): pathologically sycophant
+
+* id=4975  'Dadas Cotisoescu'  (Male)  max|g|=99.99
+    - loyalty (-97.50): pathologically disloyal
+    - perception (+95.54): pathologically hypervigilant
+    - resilience (-99.99): pathologically fragile
+
+* id=5394  'Allin'  (Female)  max|g|=99.99
+    - neurochemical (-99.99): pathologically emotionally suppressed
+
+* id=5650  'Nes von Dobromirbergu'  (Female)  max|g|=99.99
+    - civics (+99.41): pathologically subversive
+    - neurochemical (+99.99): pathologically emotionally volatile
+
+* id=5683  'Zalmodegia Cothelaseasca'  (Female)  max|g|=99.99
+    - neurochemical (+99.99): pathologically emotionally volatile
+
+* id=5956  'Zalmodegia Cothelaseasca'  (Female)  max|g|=99.99
+    - neurochemical (-99.99): pathologically emotionally suppressed
+
+* id=6117  'Daciana Dromichaiteseasca'  (Female)  max|g|=99.99
+    - creativity (-99.99): pathologically unimaginative
+    - curiosity (+98.65): pathologically distracted
+    - frugality (-96.55): pathologically wasteful
+
+* id=6415  'Cicely'  (Female)  max|g|=99.99
+    - loyalty (-99.99): pathologically disloyal
+
+* id=6813  'Ann von Dobromirbergu'  (Female)  max|g|=99.99
+    - assertiveness (-97.78): pathologically submissive
+    - neurochemical (+99.99): pathologically emotionally volatile
+
+* id=6886  'Allin of Dobromirbergu'  (Female)  max|g|=99.99
+    - curiosity (-99.99): pathologically dogmatic
+    - intellect (-96.34): pathologically cognitive deficiency
+
+* id=6935  'Aulia Cotisoeasca'  (Female)  max|g|=99.99
+    - loyalty (-97.55): pathologically disloyal
+    - perception (+95.55): pathologically hypervigilant
+    - resilience (-99.99): pathologically fragile
+
+* id=7040  'Uuenna verch Bridei'  (Female)  max|g|=99.99
+    - loyalty (+99.99): pathologically sycophant
+
+* id=7369  'Philip of Dobromirbergu'  (Male)  max|g|=99.99
+    - loyalty (-99.99): pathologically disloyal
+
+* id=1593  'Rubobostes of Dobromirbergu'  (Male)  max|g|=99.98
+    - loyalty (-99.96): pathologically disloyal
+    - neurochemical (+99.98): pathologically emotionally volatile
+
+* id=4862  'Hanns of Dobromirbergu'  (Male)  max|g|=99.98
+    - curiosity (+99.98): pathologically distracted
+
+* id=5244  'Niall Ó Diarmait'  (Male)  max|g|=99.97
+    - loyalty (-99.97): pathologically disloyal
+
+* id=5678  'Aife of Dobromirbergu'  (Female)  max|g|=99.97
+    - creativity (+95.85): pathologically delusion
+    - loyalty (-99.97): pathologically disloyal
+
+* id=6102  'Lasairfhiona Ní Donnchad'  (Female)  max|g|=99.97
+    - curiosity (-96.83): pathologically dogmatic
+    - loyalty (-99.97): pathologically disloyal
+
+* id=6357  'Brid'  (Female)  max|g|=99.97
+    - creativity (-99.77): pathologically unimaginative
+    - curiosity (-99.52): pathologically dogmatic
+    - loyalty (+99.97): pathologically sycophant
+
+* id=7106  'Margery of Dobromirbergu'  (Female)  max|g|=99.97
+    - creativity (+95.56): pathologically delusion
+    - loyalty (-99.97): pathologically disloyal
+
+* id=1288  'Joanna of Dobromirbergu'  (Female)  max|g|=99.96
+    - symmetry (-99.96): pathologically left asymmetry
+
+* id=1483  'Bistia of Dobromirbergu'  (Female)  max|g|=99.96
+    - adaptability (+99.55): pathologically indecisive
+    - ambition (-95.47): pathologically sloth
+    - neurochemical (-99.96): pathologically emotionally suppressed
+
+* id=2215  'Amabilia of Dobromirbergu'  (Female)  max|g|=99.96
+    - modesty (+98.71): pathologically shy
+    - symmetry (-99.96): pathologically left asymmetry
+
+Genome: highly ideal in MANY axes (≥5 traits with |trait| ≤ 5)
+------------------------------------------------------------------------
+
+* id=5362  'Conall Ó Arnald'  (Male)  traits_near_ideal=5  L2=276.0
+  intellect +3.26: unusually close to ideal -- excels in 'peak intellect'.
+  neurochemical +3.93: unusually close to ideal -- excels in 'emotionally stabile'.
+  mating drive +4.35: unusually close to ideal -- excels in 'reproductive mating drive'.
+  generosity -4.45: unusually close to ideal -- excels in 'generous'.
+  civics -4.69: unusually close to ideal -- excels in 'civil'.
+
+* id=1086  'Clarice daughter of Peter'  (Female)  traits_near_ideal=5  L2=277.9
+  focus -0.35: unusually close to ideal -- excels in 'focused'.
+  justice -0.94: unusually close to ideal -- excels in 'just'.
+  temperance +1.40: unusually close to ideal -- excels in 'wisdom'.
+  empathy -3.65: unusually close to ideal -- excels in 'empathic'.
+  honesty +3.83: unusually close to ideal -- excels in 'truthful'.
+
+* id=7413  'Umfrey Amauryson'  (Male)  traits_near_ideal=5  L2=288.8
+  loyalty +0.05: unusually close to ideal -- excels in 'commitment'.
+  honesty +3.33: unusually close to ideal -- excels in 'truthful'.
+  assertiveness +3.45: unusually close to ideal -- excels in 'assertive'.
+  focus +4.60: unusually close to ideal -- excels in 'focused'.
+  justice +4.71: unusually close to ideal -- excels in 'just'.
+
+* id=6983  'Robert of Dobromirbergu'  (Male)  traits_near_ideal=5  L2=293.2
+  creativity +0.79: unusually close to ideal -- excels in 'creative'.
+  intellect +1.33: unusually close to ideal -- excels in 'peak intellect'.
+  temperance +4.08: unusually close to ideal -- excels in 'wisdom'.
+  empathy -4.60: unusually close to ideal -- excels in 'empathic'.
+  humility +4.68: unusually close to ideal -- excels in 'humble'.
+
+Genome: several near-ideal traits (≥3 and <5 traits |trait| ≤ 5)
+------------------------------------------------------------------------
+
+* id=6187  'Dierna'  (Female)  traits_near_ideal=4  L2=249.7
+  loyalty -0.79: unusually close to ideal -- excels in 'commitment'.
+  focus -2.50: unusually close to ideal -- excels in 'focused'.
+  frugality +4.06: unusually close to ideal -- excels in 'frugal'.
+  physical -4.50: unusually close to ideal -- excels in 'peak fitness'.
+
+* id=2598  'Richard'  (Male)  traits_near_ideal=4  L2=256.9
+  courage +3.33: unusually close to ideal -- excels in 'courageous'.
+  honesty -3.38: unusually close to ideal -- excels in 'truthful'.
+  empathy +4.65: unusually close to ideal -- excels in 'empathic'.
+  temperance +4.80: unusually close to ideal -- excels in 'wisdom'.
+
+* id=6498  'Eochaid Ó Cathal'  (Male)  traits_near_ideal=4  L2=263.2
+  creativity -0.50: unusually close to ideal -- excels in 'creative'.
+  modesty +0.85: unusually close to ideal -- excels in 'modest'.
+  empathy -4.65: unusually close to ideal -- excels in 'empathic'.
+  civics +4.76: unusually close to ideal -- excels in 'civil'.
+
+* id=4853  'Aife Ní Aed'  (Female)  traits_near_ideal=4  L2=267.8
+  modesty +0.68: unusually close to ideal -- excels in 'modest'.
+  temperance -4.00: unusually close to ideal -- excels in 'wisdom'.
+  ambition +4.54: unusually close to ideal -- excels in 'ambitious'.
+  creativity -4.87: unusually close to ideal -- excels in 'creative'.
+
+* id=6175  'Juliana of Dobromirbergu'  (Female)  traits_near_ideal=4  L2=268.5
+  physical -0.32: unusually close to ideal -- excels in 'peak fitness'.
+  temperance -1.03: unusually close to ideal -- excels in 'wisdom'.
+  focus -2.66: unusually close to ideal -- excels in 'focused'.
+  empathy -3.00: unusually close to ideal -- excels in 'empathic'.
+
+* id=5812  'Annlin'  (Female)  traits_near_ideal=4  L2=271.0
+  loyalty -1.76: unusually close to ideal -- excels in 'commitment'.
+  humility +2.34: unusually close to ideal -- excels in 'humble'.
+  creativity +2.55: unusually close to ideal -- excels in 'creative'.
+  temperance +4.03: unusually close to ideal -- excels in 'wisdom'.
+
+* id=6317  'Eberhart'  (Male)  traits_near_ideal=4  L2=271.7
+  civics -1.77: unusually close to ideal -- excels in 'civil'.
+  physical -2.24: unusually close to ideal -- excels in 'peak fitness'.
+  generosity -4.44: unusually close to ideal -- excels in 'generous'.
+  persuasion +4.52: unusually close to ideal -- excels in 'persuasive'.
+
+* id=5227  'Malota of Dobromirbergu'  (Female)  traits_near_ideal=4  L2=272.0
+  frugality -0.55: unusually close to ideal -- excels in 'frugal'.
+  assertiveness -0.71: unusually close to ideal -- excels in 'assertive'.
+  civics +2.20: unusually close to ideal -- excels in 'civil'.
+  honesty +3.42: unusually close to ideal -- excels in 'truthful'.
+
+* id=6817  'Bebinn'  (Female)  traits_near_ideal=4  L2=276.7
+  modesty +0.80: unusually close to ideal -- excels in 'modest'.
+  intellect -1.93: unusually close to ideal -- excels in 'peak intellect'.
+  creativity -4.09: unusually close to ideal -- excels in 'creative'.
+  empathy -4.65: unusually close to ideal -- excels in 'empathic'.
+
+* id=5385  'Annlin daughter of Burebista'  (Female)  traits_near_ideal=4  L2=280.3
+  humility +2.86: unusually close to ideal -- excels in 'humble'.
+  physical -3.41: unusually close to ideal -- excels in 'peak fitness'.
+  generosity +3.42: unusually close to ideal -- excels in 'generous'.
+  empathy +4.54: unusually close to ideal -- excels in 'empathic'.
+
+* id=5311  'Hanns Zalmodegikossen'  (Male)  traits_near_ideal=4  L2=283.5
+  intellect -0.11: unusually close to ideal -- excels in 'peak intellect'.
+  neurochemical -0.56: unusually close to ideal -- excels in 'emotionally stabile'.
+  persuasion +2.50: unusually close to ideal -- excels in 'persuasive'.
+  generosity -4.42: unusually close to ideal -- excels in 'generous'.
+
+* id=3078  'Heinrich'  (Male)  traits_near_ideal=4  L2=290.2
+  frugality -0.54: unusually close to ideal -- excels in 'frugal'.
+  assertiveness +3.31: unusually close to ideal -- excels in 'assertive'.
+  intellect +4.12: unusually close to ideal -- excels in 'peak intellect'.
+  temperance +4.40: unusually close to ideal -- excels in 'wisdom'.
+
+* id=4550  'Liecia daughter of Thomas'  (Female)  traits_near_ideal=4  L2=291.1
+  temperance -0.48: unusually close to ideal -- excels in 'wisdom'.
+  focus -2.56: unusually close to ideal -- excels in 'focused'.
+  civics -2.62: unusually close to ideal -- excels in 'civil'.
+  neurochemical +3.24: unusually close to ideal -- excels in 'emotionally stabile'.
+
+* id=2453  'Constantin ap Constantin'  (Male)  traits_near_ideal=4  L2=292.5
+  temperance +0.04: unusually close to ideal -- excels in 'wisdom'.
+  mating drive +0.70: unusually close to ideal -- excels in 'reproductive mating drive'.
+  justice +3.95: unusually close to ideal -- excels in 'just'.
+  empathy +4.26: unusually close to ideal -- excels in 'empathic'.
+
+* id=6273  'Bistia'  (Female)  traits_near_ideal=4  L2=306.7
+  frugality +0.45: unusually close to ideal -- excels in 'frugal'.
+  empathy -0.52: unusually close to ideal -- excels in 'empathic'.
+  humility +4.33: unusually close to ideal -- excels in 'humble'.
+  ambition +4.64: unusually close to ideal -- excels in 'ambitious'.
