@@ -1258,11 +1258,20 @@ class TestSimulationCareers(unittest.TestCase):
                     for pid in (mr.person_id, fr.person_id, cr.person_id)
                 }
                 self.assertEqual(len(moved_sids), 1)
+                self.assertEqual(next(iter(moved_sids)), st_n.settlement_id)
+                self.assertGreaterEqual(len(ctx.pending_settlement_moves), 3)
+                ctx.apply_pending_settlement_moves(1001)
+                moved_sids = {
+                    ctx.id_to_record[pid].person.current_settlement_id
+                    for pid in (mr.person_id, fr.person_id, cr.person_id)
+                }
+                self.assertEqual(len(moved_sids), 1)
                 self.assertNotEqual(next(iter(moved_sids)), st_n.settlement_id)
                 event_types = [
                     event_type for _year, event_type, _payload in ctx._pending_simulation_events
                 ]
                 self.assertIn("job_seeker_migration", event_types)
+                self.assertIn("settlement_move_planned", event_types)
                 move_events = [
                     payload
                     for _year, event_type, payload in ctx._pending_simulation_events

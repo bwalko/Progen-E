@@ -12,6 +12,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Iterable
@@ -25,6 +26,34 @@ WORLDS_DIR = PROJECT_ROOT / "worlds"
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 1000
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SIM_PROGRESS_RE = re.compile(
+    r"SIM_PROGRESS\s+year=(?P<year>-?\d+)\s+end_year=(?P<end_year>-?\d+)\s+elapsed=(?P<elapsed>\d{2}:\d{2}:\d{2})"
+)
+LEGACY_SCORE_COLUMNS = [
+    "Beauty",
+    "Scholar",
+    "Creative",
+    "Athlete",
+    "Conqueror",
+    "Ruler",
+    "Mystic",
+    "Infamous",
+    "Scandal",
+    "Martyr",
+]
+LEGACY_SCORE_KEY_TO_LABEL = {
+    "beauty_legend": "Beauty",
+    "scholar_sage": "Scholar",
+    "creative_genius": "Creative",
+    "athletic_hero": "Athlete",
+    "conqueror": "Conqueror",
+    "founder_ruler": "Ruler",
+    "prophet_mystic": "Mystic",
+    "infamous_predator": "Infamous",
+    "scandal_icon": "Scandal",
+    "martyr_reformer": "Martyr",
+}
+LEGACY_SCORE_LABEL_TO_KEY = {v: k for k, v in LEGACY_SCORE_KEY_TO_LABEL.items()}
 
 APP_CSS = """
 .world-browser {
@@ -264,7 +293,7 @@ def _csv_names() -> list[str]:
 
 def _db_path(world: str, db_kind: str) -> Path:
     filename = "config.sqlite" if db_kind == "Config DB" else "save.sqlite"
-    return WORLDS_DIR / world / filename
+    return WORLDS_DIR / (world or "").strip() / filename
 
 
 @contextmanager
@@ -310,6 +339,40 @@ def _table_names(world: str, db_kind: str) -> list[str]:
 def _table_columns(con: sqlite3.Connection, table: str) -> list[str]:
     table_sql = _quote_identifier(table)
     return [row["name"] for row in con.execute(f"pragma table_info({table_sql})")]
+
+
+def _has_table(con: sqlite3.Connection, table: str) -> bool:
+    row = con.execute(
+        "select 1 from sqlite_master where type = 'table' and name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _saved_world_names(con: sqlite3.Connection) -> list[str]:
+    worlds: list[str] = []
+    seen: set[str] = set()
+    for table in ("world_state", "simulation_people"):
+        if not _has_table(con, table):
+            continue
+        for row in con.execute(f"select distinct world from {_quote_identifier(table)} order by world"):
+            world = str(row["world"] or "").strip()
+            if world and world not in seen:
+                worlds.append(world)
+                seen.add(world)
+    return worlds
+
+
+def _resolve_saved_world(con: sqlite3.Connection, selected_world: str) -> str:
+    selected = (selected_world or "").strip()
+    saved_worlds = _saved_world_names(con)
+    if selected in saved_worlds:
+        return selected
+    if len(saved_worlds) == 1:
+        return saved_worlds[0]
+    if "default" in saved_worlds:
+        return "default"
+    return selected
 
 
 def _dataframe(rows: Iterable[sqlite3.Row | dict[str, object]], headers: list[str]) -> gr.Dataframe:
@@ -406,6 +469,17 @@ def _person_name(person: dict[str, object]) -> str:
     return " ".join(part for part in (first, last) if part) or "Unnamed"
 
 
+def _person_first_name(person: dict[str, object]) -> str:
+    return str(person.get("first_name") or "").strip() or _person_name(person)
+
+
+def _same_person_id(a: object, b: object) -> bool:
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return False
+
+
 def _person_summary_row(row: sqlite3.Row, current_year: int | None) -> dict[str, object]:
     person = _load_json_object(row["person_json"])
     birthyear = person.get("birthyear")
@@ -432,19 +506,7 @@ def _person_summary_row(row: sqlite3.Row, current_year: int | None) -> dict[str,
 
 
 def _legacy_score_columns(traits: object) -> dict[str, str]:
-    headers = {
-        "beauty_legend": "Beauty",
-        "scholar_sage": "Scholar",
-        "creative_genius": "Creative",
-        "athletic_hero": "Athlete",
-        "conqueror": "Conqueror",
-        "founder_ruler": "Ruler",
-        "prophet_mystic": "Mystic",
-        "infamous_predator": "Infamous",
-        "scandal_icon": "Scandal",
-        "martyr_reformer": "Martyr",
-    }
-    out = {label: "" for label in headers.values()}
+    out = {label: "" for label in LEGACY_SCORE_COLUMNS}
     if not isinstance(traits, dict) or not traits:
         return out
     try:
@@ -452,10 +514,41 @@ def _legacy_score_columns(traits: object) -> dict[str, str]:
     except Exception:
         return out
     for row in rows:
-        label = headers.get(str(row.key))
+        label = LEGACY_SCORE_KEY_TO_LABEL.get(str(row.key))
         if label:
             out[label] = f"{float(row.score):.2f}"
     return out
+
+
+def _legacy_score_value(person: dict[str, object], label: str) -> float:
+    key = LEGACY_SCORE_LABEL_TO_KEY.get(label)
+    traits = person.get("mind_body") or person.get("genome") or {}
+    if key is None or not isinstance(traits, dict) or not traits:
+        return float("-inf")
+    try:
+        for row in _legacy_indices_module().legacy_index_scores(traits):
+            if str(row.key) == key:
+                return float(row.score)
+    except Exception:
+        return float("-inf")
+    return float("-inf")
+
+
+def _sort_rows_by_legacy_score(
+    rows: Iterable[sqlite3.Row],
+    *,
+    sort_by: str,
+    sort_dir: str,
+) -> list[sqlite3.Row]:
+    reverse = sort_dir != "Ascending"
+    return sorted(
+        rows,
+        key=lambda row: (
+            _legacy_score_value(_load_json_object(row["person_json"]), str(sort_by)),
+            int(row["person_id"]),
+        ),
+        reverse=reverse,
+    )
 
 
 def _current_year(con: sqlite3.Connection, world: str) -> int | None:
@@ -481,11 +574,12 @@ def load_people_browser(
         return gr.Dataframe(value=[], headers=[]), f"{path} is missing. Run a simulation first.", []
 
     with _connect_readonly(path) as con:
-        current_year = _current_year(con, world)
+        saved_world = _resolve_saved_world(con, world)
+        current_year = _current_year(con, saved_world)
 
     age_sql = "coalesce(json_extract(person_json, '$.deathyear'), ?) - json_extract(person_json, '$.birthyear')"
     clauses = ["world = ?"]
-    params: list[object] = [world]
+    params: list[object] = [saved_world]
     if life_filter == "Alive":
         clauses.append("is_alive = 1")
     elif life_filter == "Dead":
@@ -501,6 +595,7 @@ def load_people_browser(
         params.extend([current_year, _safe_int(max_age, 10_000, 0, 10_000)])
 
     where_sql = " and ".join(clauses)
+    legacy_sort = sort_by in LEGACY_SCORE_COLUMNS
     sort_map = {
         "ID": "person_id",
         "Name": "json_extract(person_json, '$.last_name') collate nocase, json_extract(person_json, '$.first_name') collate nocase",
@@ -512,29 +607,37 @@ def load_people_browser(
         "Ethnic": "json_extract(person_json, '$.ethnic') collate nocase",
         "Home": "coalesce(json_extract(person_json, '$.current_settlement_id'), json_extract(person_json, '$.birthplace')) collate nocase",
     }
-    order_sql = sort_map.get(sort_by or "", "is_alive desc, person_id desc")
-    order_sql_default = sort_map.get("Age" or "", "is_alive desc, person_id desc")
     direction = "asc" if sort_dir == "Ascending" else "desc"
-    if sort_by in (None, "", "Default"):
+    order_sql_default = sort_map.get("Age" or "", "is_alive desc, person_id desc")
+    if legacy_sort:
+        order_clause = "person_id asc"
+        order_params = []
+    elif sort_by in (None, "", "Default"):
         order_clause = f"{order_sql_default} desc, person_id desc"
         order_params = [current_year]
     elif sort_by == "Age":
+        order_sql = sort_map.get(sort_by or "", "is_alive desc, person_id desc")
         order_clause = f"{order_sql} {direction}, person_id desc"
         order_params = [current_year]
     else:
+        order_sql = sort_map.get(sort_by or "", "is_alive desc, person_id desc")
         order_clause = f"{order_sql} {direction}, person_id desc"
         order_params = []
 
     with _connect_readonly(path) as con:
+        limit_sql = "" if legacy_sort else "limit ?"
+        query_params = [*params, *order_params]
+        if not legacy_sort:
+            query_params.append(row_limit)
         rows = con.execute(
             f"""
             select person_id, is_alive, person_json
             from simulation_people
             where {where_sql}
             order by {order_clause}
-            limit ?
+            {limit_sql}
             """,
-            [*params, *order_params, row_limit],
+            query_params,
         ).fetchall()
         total = con.execute(f"select count(*) as n from simulation_people where {where_sql}", params).fetchone()["n"]
 
@@ -549,17 +652,10 @@ def load_people_browser(
         "Ethnic",
         "Home",
         "Traits",
-        "Beauty",
-        "Scholar",
-        "Creative",
-        "Athlete",
-        "Conqueror",
-        "Ruler",
-        "Mystic",
-        "Infamous",
-        "Scandal",
-        "Martyr",
+        *LEGACY_SCORE_COLUMNS,
     ]
+    if legacy_sort:
+        rows = _sort_rows_by_legacy_score(rows, sort_by=str(sort_by), sort_dir=sort_dir)[:row_limit]
     values = [_person_summary_row(row, current_year) for row in rows]
     person_ids = [int(row["person_id"]) for row in rows]
     filter_bits = []
@@ -568,7 +664,12 @@ def load_people_browser(
     if max_age not in (None, ""):
         filter_bits.append(f"age <= {_safe_int(max_age, 10_000, 0, 10_000)}")
     filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
-    status = f"{path.name}: showing {len(values)} of {total} people{filter_text}. Click any person row to open their sheet."
+    sort_text = f" | sorted by: {sort_by} {sort_dir.lower()}" if legacy_sort else ""
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} of {total} people{filter_text}{sort_text}{saved_world_note}. "
+        "Click any person row to open their sheet."
+    )
     return _dataframe(values, headers), status, person_ids
 
 
@@ -702,6 +803,20 @@ def _short_person(con: sqlite3.Connection, world: str, person_id: object) -> str
     return _person_name(person)
 
 
+def _short_person_for_event(
+    con: sqlite3.Connection,
+    world: str,
+    person_id: object,
+    focus_person_id: object,
+) -> str:
+    if person_id in (None, ""):
+        return "unknown person"
+    row, person = _lookup_person(con, world, person_id)
+    if not row:
+        return "unknown person"
+    return _person_first_name(person) if _same_person_id(person_id, focus_person_id) else _person_name(person)
+
+
 def _short_person_html(con: sqlite3.Connection, world: str, person_id: object) -> str:
     if person_id in (None, ""):
         return "unknown person"
@@ -712,6 +827,29 @@ def _short_person_html(con: sqlite3.Connection, world: str, person_id: object) -
     return (
         f'<a href="#" class="person-link" '
         f'aria-label="Open person record for {name}" '
+        f'onclick="{_person_link_onclick(int(row["person_id"]))}">{name}</a>'
+    )
+
+
+def _short_person_html_for_event(
+    con: sqlite3.Connection,
+    world: str,
+    person_id: object,
+    focus_person_id: object,
+) -> str:
+    if person_id in (None, ""):
+        return "unknown person"
+    row, person = _lookup_person(con, world, person_id)
+    if not row:
+        return "unknown person"
+    label = _person_first_name(person) if _same_person_id(person_id, focus_person_id) else _person_name(person)
+    if _same_person_id(person_id, focus_person_id):
+        return f"<strong>{html.escape(label)}</strong>"
+    name = html.escape(label)
+    full_name = html.escape(_person_name(person))
+    return (
+        f'<a href="#" class="person-link" '
+        f'aria-label="Open person record for {full_name}" '
         f'onclick="{_person_link_onclick(int(row["person_id"]))}">{name}</a>'
     )
 
@@ -788,22 +926,38 @@ def _event_float(payload: dict[str, object], key: str) -> float | None:
 
 
 def _person_list_text(
-    con: sqlite3.Connection, world: str, person_ids: object, *, limit: int = 5
+    con: sqlite3.Connection,
+    world: str,
+    person_ids: object,
+    *,
+    limit: int = 5,
+    focus_person_id: object = None,
 ) -> str:
     if not isinstance(person_ids, list) or not person_ids:
         return "none"
-    shown = ", ".join(_short_person(con, world, pid) for pid in person_ids[:limit])
+    shown = ", ".join(
+        _short_person_for_event(con, world, pid, focus_person_id)
+        for pid in person_ids[:limit]
+    )
     if len(person_ids) > limit:
         shown += f", and {len(person_ids) - limit} more"
     return shown
 
 
 def _person_list_html(
-    con: sqlite3.Connection, world: str, person_ids: object, *, limit: int = 5
+    con: sqlite3.Connection,
+    world: str,
+    person_ids: object,
+    *,
+    limit: int = 5,
+    focus_person_id: object = None,
 ) -> str:
     if not isinstance(person_ids, list) or not person_ids:
         return "none"
-    shown = ", ".join(_short_person_html(con, world, pid) for pid in person_ids[:limit])
+    shown = ", ".join(
+        _short_person_html_for_event(con, world, pid, focus_person_id)
+        for pid in person_ids[:limit]
+    )
     if len(person_ids) > limit:
         shown += f", and {len(person_ids) - limit} more"
     return shown
@@ -812,21 +966,21 @@ def _person_list_html(
 def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, focus_person_id: object) -> str:
     payload = _load_json_object(event["payload_json"])
     event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
-    person = _short_person(con, world, payload.get("person_id") or focus_person_id)
+    person = _short_person_for_event(con, world, payload.get("person_id") or focus_person_id, focus_person_id)
     event_label = event_type.replace("_", " ")
 
     if event_type in {"birth", "founder_created"}:
         child_id = payload.get("child_id") or payload.get("person_id")
-        child = _short_person(con, world, child_id)
+        child = _short_person_for_event(con, world, child_id, focus_person_id)
         if event_type == "founder_created":
             return f"{child} entered the world as a founder."
-        parent_a = _short_person(con, world, payload.get("person_a_id"))
-        parent_b = _short_person(con, world, payload.get("person_b_id"))
+        parent_a = _short_person_for_event(con, world, payload.get("person_a_id"), focus_person_id)
+        parent_b = _short_person_for_event(con, world, payload.get("person_b_id"), focus_person_id)
         return f"{child} was born to {parent_a} and {parent_b}."
 
     if event_type in {"couple_formed", "couple_dissolved", "paramour_formed", "paramour_ended", "same_sex_couple_formed"}:
-        a = _short_person(con, world, payload.get("person_a_id"))
-        b = _short_person(con, world, payload.get("person_b_id"))
+        a = _short_person_for_event(con, world, payload.get("person_a_id"), focus_person_id)
+        b = _short_person_for_event(con, world, payload.get("person_b_id"), focus_person_id)
         verb = {
             "couple_formed": "formed a household partnership with",
             "couple_dissolved": "ended a household partnership with",
@@ -889,19 +1043,22 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         reason = str(payload.get("move_reason") or event_type).replace("_", " ")
         moved_ids = payload.get("moved_person_ids")
         if isinstance(moved_ids, list) and len(moved_ids) > 1:
-            moved = ", ".join(_short_person(con, world, pid) for pid in moved_ids[:6])
+            moved = ", ".join(
+                _short_person_for_event(con, world, pid, focus_person_id)
+                for pid in moved_ids[:6]
+            )
             if len(moved_ids) > 6:
                 moved += f", and {len(moved_ids) - 6} more"
             return f"{moved} moved from {from_place} to {to_place}; reason: {reason}."
         return f"{person} moved from {from_place} to {to_place}; reason: {reason}."
 
     if event_type == "partner_residence_reconciled":
-        moved = _short_person(con, world, payload.get("moved_person_id") or focus_person_id)
+        moved = _short_person_for_event(con, world, payload.get("moved_person_id") or focus_person_id, focus_person_id)
         to_place = _settlement_name(con, world, payload.get("target_settlement_id")) or str(payload.get("target_settlement_id") or "unknown")
         return f"{moved} moved to {to_place} to reconcile partner residence."
 
     if event_type == "orphan_routed_to_largest_settlement":
-        child = _short_person(con, world, payload.get("person_id") or focus_person_id)
+        child = _short_person_for_event(con, world, payload.get("person_id") or focus_person_id, focus_person_id)
         from_place = _settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or "unknown")
         to_place = _settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or "unknown")
         return f"{child} was routed from {from_place} to {to_place} for local care."
@@ -912,7 +1069,7 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         supply = _event_float(payload, "supply")
         shortfall = _event_float(payload, "shortfall")
         outcome = str(payload.get("outcome") or "unknown").replace("_", " ")
-        victim = _short_person(con, world, payload.get("victim_person_id") or focus_person_id)
+        victim = _short_person_for_event(con, world, payload.get("victim_person_id") or focus_person_id, focus_person_id)
         bits = [f"Household childcare shortfall affected {minor_count} dependent minor{'s' if minor_count != 1 else ''}"]
         if supply is not None:
             bits.append(f"care supply {supply:.2f}")
@@ -923,10 +1080,15 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         return "; ".join(bits) + "."
 
     if event_type == "household_prosperity_crisis":
-        members = _person_list_text(con, world, payload.get("household_member_ids"))
+        members = _person_list_text(
+            con,
+            world,
+            payload.get("household_member_ids"),
+            focus_person_id=focus_person_id,
+        )
         before = _event_float(payload, "prosperity_before")
         after = _event_float(payload, "prosperity_after")
-        purseholder = _short_person(con, world, payload.get("purseholder_person_id") or focus_person_id)
+        purseholder = _short_person_for_event(con, world, payload.get("purseholder_person_id") or focus_person_id, focus_person_id)
         bits = [f"{purseholder}'s household entered prosperity crisis"]
         if before is not None and after is not None:
             bits.append(f"savings {before:.2f} -> {after:.2f}")
@@ -934,8 +1096,8 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         return "; ".join(bits) + "."
 
     if event_type == "office_succession":
-        holder = _short_person(con, world, payload.get("holder_person_id") or focus_person_id)
-        previous = _short_person(con, world, payload.get("previous_holder_id"))
+        holder = _short_person_for_event(con, world, payload.get("holder_person_id") or focus_person_id, focus_person_id)
+        previous = _short_person_for_event(con, world, payload.get("previous_holder_id"), focus_person_id)
         title = payload.get("title_id") or "office"
         via = str(payload.get("via") or "succession").replace("_", " ")
         return f"{holder} succeeded {previous} to {title} by {via}."
@@ -961,28 +1123,28 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         return str(details)
     other_id = _other_person_id(payload, focus_person_id)
     if other_id is not None:
-        return f"{event_label}: {person} and {_short_person(con, world, other_id)}."
+        return f"{event_label}: {person} and {_short_person_for_event(con, world, other_id, focus_person_id)}."
     return f"{event_label}: {person}."
 
 
 def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row, focus_person_id: object) -> str:
     payload = _load_json_object(event["payload_json"])
     event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
-    person = _short_person_html(con, world, payload.get("person_id") or focus_person_id)
+    person = _short_person_html_for_event(con, world, payload.get("person_id") or focus_person_id, focus_person_id)
     event_label = html.escape(event_type.replace("_", " "))
 
     if event_type in {"birth", "founder_created"}:
         child_id = payload.get("child_id") or payload.get("person_id")
-        child = _short_person_html(con, world, child_id)
+        child = _short_person_html_for_event(con, world, child_id, focus_person_id)
         if event_type == "founder_created":
             return f"{child} entered the world as a founder."
-        parent_a = _short_person_html(con, world, payload.get("person_a_id"))
-        parent_b = _short_person_html(con, world, payload.get("person_b_id"))
+        parent_a = _short_person_html_for_event(con, world, payload.get("person_a_id"), focus_person_id)
+        parent_b = _short_person_html_for_event(con, world, payload.get("person_b_id"), focus_person_id)
         return f"{child} was born to {parent_a} and {parent_b}."
 
     if event_type in {"couple_formed", "couple_dissolved", "paramour_formed", "paramour_ended", "same_sex_couple_formed"}:
-        a = _short_person_html(con, world, payload.get("person_a_id"))
-        b = _short_person_html(con, world, payload.get("person_b_id"))
+        a = _short_person_html_for_event(con, world, payload.get("person_a_id"), focus_person_id)
+        b = _short_person_html_for_event(con, world, payload.get("person_b_id"), focus_person_id)
         verb = {
             "couple_formed": "formed a household partnership with",
             "couple_dissolved": "ended a household partnership with",
@@ -1047,19 +1209,22 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         reason = html.escape(str(payload.get("move_reason") or event_type).replace("_", " "))
         moved_ids = payload.get("moved_person_ids")
         if isinstance(moved_ids, list) and len(moved_ids) > 1:
-            moved = ", ".join(_short_person_html(con, world, pid) for pid in moved_ids[:6])
+            moved = ", ".join(
+                _short_person_html_for_event(con, world, pid, focus_person_id)
+                for pid in moved_ids[:6]
+            )
             if len(moved_ids) > 6:
                 moved += f", and {len(moved_ids) - 6} more"
             return f"{moved} moved from {from_place} to {to_place}; reason: {reason}."
         return f"{person} moved from {from_place} to {to_place}; reason: {reason}."
 
     if event_type == "partner_residence_reconciled":
-        moved = _short_person_html(con, world, payload.get("moved_person_id") or focus_person_id)
+        moved = _short_person_html_for_event(con, world, payload.get("moved_person_id") or focus_person_id, focus_person_id)
         to_place = html.escape(_settlement_name(con, world, payload.get("target_settlement_id")) or str(payload.get("target_settlement_id") or "unknown"))
         return f"{moved} moved to {to_place} to reconcile partner residence."
 
     if event_type == "orphan_routed_to_largest_settlement":
-        child = _short_person_html(con, world, payload.get("person_id") or focus_person_id)
+        child = _short_person_html_for_event(con, world, payload.get("person_id") or focus_person_id, focus_person_id)
         from_place = html.escape(_settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or "unknown"))
         to_place = html.escape(_settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or "unknown"))
         return f"{child} was routed from {from_place} to {to_place} for local care."
@@ -1070,7 +1235,7 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         supply = _event_float(payload, "supply")
         shortfall = _event_float(payload, "shortfall")
         outcome = html.escape(str(payload.get("outcome") or "unknown").replace("_", " "))
-        victim = _short_person_html(con, world, payload.get("victim_person_id") or focus_person_id)
+        victim = _short_person_html_for_event(con, world, payload.get("victim_person_id") or focus_person_id, focus_person_id)
         bits = [f"Household childcare shortfall affected {minor_count} dependent minor{'s' if minor_count != 1 else ''}"]
         if supply is not None:
             bits.append(f"care supply {supply:.2f}")
@@ -1081,10 +1246,15 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         return "; ".join(bits) + "."
 
     if event_type == "household_prosperity_crisis":
-        members = _person_list_html(con, world, payload.get("household_member_ids"))
+        members = _person_list_html(
+            con,
+            world,
+            payload.get("household_member_ids"),
+            focus_person_id=focus_person_id,
+        )
         before = _event_float(payload, "prosperity_before")
         after = _event_float(payload, "prosperity_after")
-        purseholder = _short_person_html(con, world, payload.get("purseholder_person_id") or focus_person_id)
+        purseholder = _short_person_html_for_event(con, world, payload.get("purseholder_person_id") or focus_person_id, focus_person_id)
         bits = [f"{purseholder}'s household entered prosperity crisis"]
         if before is not None and after is not None:
             bits.append(f"savings {before:.2f} -&gt; {after:.2f}")
@@ -1092,8 +1262,8 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         return "; ".join(bits) + "."
 
     if event_type == "office_succession":
-        holder = _short_person_html(con, world, payload.get("holder_person_id") or focus_person_id)
-        previous = _short_person_html(con, world, payload.get("previous_holder_id"))
+        holder = _short_person_html_for_event(con, world, payload.get("holder_person_id") or focus_person_id, focus_person_id)
+        previous = _short_person_html_for_event(con, world, payload.get("previous_holder_id"), focus_person_id)
         title = html.escape(str(payload.get("title_id") or "office"))
         via = html.escape(str(payload.get("via") or "succession").replace("_", " "))
         return f"{holder} succeeded {previous} to {title} by {via}."
@@ -1119,7 +1289,7 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         return html.escape(str(details))
     other_id = _other_person_id(payload, focus_person_id)
     if other_id is not None:
-        return f"{event_label}: {person} and {_short_person_html(con, world, other_id)}."
+        return f"{event_label}: {person} and {_short_person_html_for_event(con, world, other_id, focus_person_id)}."
     return f"{event_label}: {person}."
 
 
@@ -1484,10 +1654,11 @@ def render_person_from_id(world: str, person_id: object) -> str:
     with _connect_readonly(path) as save_con:
         save_con.row_factory = sqlite3.Row
         save_con.execute("attach database ? as cfg", (str(_db_path(world, "Config DB")),))
-        row, person = _lookup_person(save_con, world, pid)
+        saved_world = _resolve_saved_world(save_con, world)
+        row, person = _lookup_person(save_con, saved_world, pid)
         if not row:
             return f'<div class="person-sheet muted" role="status">No person #{html.escape(str(pid))} in {html.escape(world)}.</div>'
-        return _render_person_sheet(save_con, world, row, person)
+        return _render_person_sheet(save_con, saved_world, row, person)
 
 
 def render_person_share_text(world: str, person_id: object) -> str:
@@ -1503,10 +1674,11 @@ def render_person_share_text(world: str, person_id: object) -> str:
     with _connect_readonly(path) as save_con:
         save_con.row_factory = sqlite3.Row
         save_con.execute("attach database ? as cfg", (str(_db_path(world, "Config DB")),))
-        row, person = _lookup_person(save_con, world, pid)
+        saved_world = _resolve_saved_world(save_con, world)
+        row, person = _lookup_person(save_con, saved_world, pid)
         if not row:
             return f"No person #{pid} in {world}."
-        return _render_person_share_text(save_con, world, row, person)
+        return _render_person_share_text(save_con, saved_world, row, person)
 
 
 def render_person_outputs(world: str, person_id: object) -> tuple[str, str]:
@@ -1570,6 +1742,7 @@ def build_sim_command(
     reset_world: bool,
     skip_timing_log: bool,
     extra_args: str,
+    progress: bool = False,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -1592,6 +1765,8 @@ def build_sim_command(
         command.append("--reset-world")
     if skip_timing_log:
         command.append("--skip-timing-log")
+    if progress:
+        command.append("--progress")
     if extra_args:
         command.extend(shlex.split(extra_args, posix=False))
     return command
@@ -1635,32 +1810,85 @@ def run_simulation_from_ui(
     reset_world: bool,
     skip_timing_log: bool,
     extra_args: str,
-) -> tuple[str, str, str, str]:
+) -> Iterator[tuple[str, str, str, str, str]]:
+    def _elapsed_hhmmss(seconds: float) -> str:
+        total = max(0, int(seconds))
+        hours, rem = divmod(total, 3600)
+        minutes, secs = divmod(rem, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
     try:
+        start_int = int(start_year)
+        years_int = _positive_int(years, "years")
+        end_year = start_int + years_int - 1
         command = build_sim_command(
             world_id,
-            years,
+            years_int,
             starting_couples,
-            start_year,
+            start_int,
             seed,
             flush_batch_years,
             reset_world,
             skip_timing_log,
             extra_args,
+            progress=True,
         )
     except Exception as exc:
-        return "Invalid inputs", str(exc), "", ""
+        yield "Invalid inputs", str(exc), "", "", ""
+        return
 
-    completed = subprocess.run(
+    command_text = subprocess.list2cmdline(command)
+    stdout_lines: list[str] = []
+    stderr_text = ""
+    start_t = time.perf_counter()
+    yield (
+        f"Simulation starting. Elapsed 00:00:00. Year {start_int} / {end_year}.",
+        command_text,
+        "",
+        "",
+        f"{start_int} / {end_year}",
+    )
+
+    proc = subprocess.Popen(
         command,
         cwd=PROJECT_ROOT,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
+        bufsize=1,
     )
-    status = "Simulation finished." if completed.returncode == 0 else f"Simulation failed with exit code {completed.returncode}."
-    command_text = subprocess.list2cmdline(command)
-    return status, command_text, completed.stdout, completed.stderr
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        stdout_lines.append(line)
+        match = SIM_PROGRESS_RE.search(line)
+        if match:
+            current_year = int(match.group("year"))
+            expected_end = int(match.group("end_year"))
+            elapsed = match.group("elapsed")
+            yield (
+                f"Running. Elapsed {elapsed}. Year {current_year} / {expected_end}.",
+                command_text,
+                "".join(reversed(stdout_lines)),
+                stderr_text,
+                f"{current_year} / {expected_end}",
+            )
+
+    if proc.stderr is not None:
+        stderr_text = proc.stderr.read()
+    return_code = proc.wait()
+    elapsed = _elapsed_hhmmss(time.perf_counter() - start_t)
+    final_status = (
+        f"Simulation finished. Elapsed {elapsed}. Year {end_year} / {end_year}."
+        if return_code == 0
+        else f"Simulation failed with exit code {return_code}. Elapsed {elapsed}."
+    )
+    yield (
+        final_status,
+        command_text,
+        "".join(reversed(stdout_lines)),
+        stderr_text,
+        f"{end_year if return_code == 0 else start_int} / {end_year}",
+    )
 
 
 def build_app(default_world: str = "default") -> gr.Blocks:
@@ -1684,7 +1912,19 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         person_min_age = gr.Textbox(value="", label="Min Age", placeholder="Any")
                         person_max_age = gr.Textbox(value="", label="Max Age", placeholder="Any")
                         person_sort_by = gr.Dropdown(
-                            ["Default", "ID", "Name", "Age", "Born", "Died", "Gender", "Species", "Ethnic", "Home"],
+                            [
+                                "Default",
+                                "ID",
+                                "Name",
+                                "Age",
+                                "Born",
+                                "Died",
+                                "Gender",
+                                "Species",
+                                "Ethnic",
+                                "Home",
+                                *LEGACY_SCORE_COLUMNS,
+                            ],
                             value="Default",
                             label="Sort By",
                         )
@@ -1764,26 +2004,32 @@ def build_app(default_world: str = "default") -> gr.Blocks:
         with gr.Tab("Run Simulation"):
             gr.Markdown("Run the maintained population simulation CLI and capture its output.")
             with gr.Row():
-                sim_world = gr.Textbox(value=initial_world or "default", label="World ID")
-                sim_years = gr.Number(value=100, label="Years", precision=0)
-                sim_starting_couples = gr.Number(value=10, label="Starting Couples", precision=0)
-                sim_start_year = gr.Number(value=1000, label="Start Year", precision=0)
+                sim_world = gr.Textbox(value=initial_world or "default", label="World ID", scale=1, min_width=110)
+                sim_years = gr.Number(value=100, label="Years", precision=0, scale=1, min_width=90)
+                sim_starting_couples = gr.Number(value=10, label="Couples", precision=0, scale=1, min_width=90)
+                sim_start_year = gr.Number(value=1000, label="Start", precision=0, scale=1, min_width=90)
+                sim_seed = gr.Textbox(value="", label="Seed", placeholder="Blank", scale=1, min_width=100)
+                sim_flush = gr.Number(value=10, label="Flush", precision=0, scale=1, min_width=90)
+                sim_reset = gr.Checkbox(value=False, label="Reset", scale=0, min_width=75)
+                sim_skip_timing = gr.Checkbox(value=False, label="No Timing", scale=0, min_width=95)
+                sim_run_button = gr.Button("Run", variant="primary", scale=0, min_width=70)
+            with gr.Accordion("Advanced command options", open=False):
+                sim_extra_args = gr.Textbox(
+                    value="",
+                    label="Extra CLI Args",
+                    placeholder="Optional, for newly added flags",
+                )
+                sim_preview = gr.Textbox(label="Command Preview", lines=2, interactive=False)
             with gr.Row():
-                sim_seed = gr.Textbox(value="", label="Seed", placeholder="Blank = random")
-                sim_flush = gr.Number(value=50, label="Flush Batch Years", precision=0)
-                sim_reset = gr.Checkbox(value=False, label="Reset world before run")
-                sim_skip_timing = gr.Checkbox(value=False, label="Skip timing log")
-            sim_extra_args = gr.Textbox(
-                value="",
-                label="Extra CLI Args",
-                placeholder="Optional, for newly added flags",
-            )
-            sim_preview = gr.Textbox(label="Command Preview", lines=3, interactive=False)
-            with gr.Row():
-                sim_preview_button = gr.Button("Preview Command")
-                sim_run_button = gr.Button("Run Simulation", variant="primary")
-            sim_status = gr.Textbox(label="Status", interactive=False)
-            sim_stdout = gr.Textbox(label="Output", lines=14, interactive=False)
+                sim_progress = gr.Textbox(
+                    label="Progress",
+                    value="",
+                    interactive=False,
+                    scale=1,
+                    min_width=140,
+                )
+                sim_status = gr.Textbox(label="Status", interactive=False, scale=5)
+            sim_stdout = gr.Textbox(label="Output (newest first)", lines=8, max_lines=10, interactive=False)
             sim_stderr = gr.Textbox(label="Errors", lines=8, interactive=False)
 
         person_load.click(
@@ -1851,13 +2097,12 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             sim_skip_timing,
             sim_extra_args,
         ]
-        sim_preview_button.click(preview_sim_command, sim_inputs, sim_preview)
         for sim_input in sim_inputs:
             sim_input.change(preview_sim_command, sim_inputs, sim_preview)
         sim_run_button.click(
             run_simulation_from_ui,
             sim_inputs,
-            [sim_status, sim_preview, sim_stdout, sim_stderr],
+            [sim_status, sim_preview, sim_stdout, sim_stderr, sim_progress],
         )
 
     return app

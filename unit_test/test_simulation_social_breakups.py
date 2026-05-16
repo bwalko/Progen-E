@@ -25,6 +25,9 @@ if "numpy" not in sys.modules and importlib.util.find_spec("numpy") is None:
 
 from library.person import Person
 from library.simulation_social import (
+    PARAMOUR_CONTACT_TRIAL_CAP,
+    PARAMOUR_EXHAUSTIVE_PAIR_LIMIT,
+    _paramour_contact_trial_budget,
     _paramour_end_probability,
     _paramour_orientation_multiplier,
     _paramour_pair_probability,
@@ -173,6 +176,17 @@ class _FakeCtx:
 
 
 class TestSimulationSocialBreakups(unittest.TestCase):
+    def test_paramour_contact_budget_is_exhaustive_only_for_small_pair_sets(self) -> None:
+        self.assertEqual(_paramour_contact_trial_budget(2), 1)
+        # 90 residents -> 4,005 possible pairs, just over the exhaustive threshold.
+        self.assertLess(_paramour_contact_trial_budget(90), 90 * 89 // 2)
+        self.assertGreaterEqual(PARAMOUR_EXHAUSTIVE_PAIR_LIMIT, 1)
+
+    def test_paramour_contact_budget_caps_large_settlements(self) -> None:
+        budget = _paramour_contact_trial_budget(100_000)
+        self.assertLessEqual(budget, PARAMOUR_CONTACT_TRIAL_CAP)
+        self.assertLess(budget, 100_000 * 99_999 // 2)
+
     def test_paramour_probability_uses_mating_drive_and_loyalty(self) -> None:
         restrained = _person(1, {"mating drive": -90.0, "loyalty": 0.0})
         tempted = _person(2, {"mating drive": 90.0, "loyalty": -90.0})

@@ -44,7 +44,7 @@ from library.population_growth_runner import (  # noqa: E402
     write_population_growth_report_files,
 )
 
-_FLUSH_DEFAULT = 50
+_FLUSH_DEFAULT = 10
 
 # Match ``unit_test/test_population_growth_100_years.py`` scenario parameters.
 _START_YEAR = 1000
@@ -82,6 +82,13 @@ def _append_population_sim_timing_row(
     )
     with path.open("a", encoding="utf-8") as f:
         f.write(line)
+
+
+def _elapsed_hhmmss(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -138,6 +145,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not append to unit_test/population_sim_timing.tsv.",
     )
+    p.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print SIM_PROGRESS lines after each yearly save for streaming UIs.",
+    )
     args = p.parse_args()
     if args.years < 1:
         p.error("--years must be >= 1")
@@ -177,6 +189,17 @@ def main() -> None:
     )
 
     t0 = time.perf_counter()
+    end_year = int(args.start_year) + int(args.years) - 1
+
+    def _print_progress(year: int) -> None:
+        if not args.progress:
+            return
+        elapsed_text = _elapsed_hhmmss(time.perf_counter() - t0)
+        print(
+            f"SIM_PROGRESS year={int(year)} end_year={end_year} elapsed={elapsed_text}",
+            flush=True,
+        )
+
     with sc.SimulationContext.create(
         world_id=args.world_id.strip(),
         world="default",
@@ -189,6 +212,7 @@ def main() -> None:
             start_year=int(args.start_year),
             duration_years=int(args.years),
             starting_couples=int(args.starting_couples),
+            progress_callback=_print_progress,
         )
 
     write_population_growth_report_files(

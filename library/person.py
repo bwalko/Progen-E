@@ -72,6 +72,8 @@ class Person:
     genome_trait_phrases: tuple[str, ...] = ()
     sexual_nature: str | None = None
     gender_mind: str | None = None
+    father_name: str | None = None
+    mother_name: str | None = None
 
     @property
     def full_name(self) -> str:

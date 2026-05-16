@@ -100,14 +100,22 @@ def _move_migrant_and_coresident_partner(
     person_id: int,
     origin_rid: str,
     dest_settlement_id: str,
+    year: int,
 ) -> None:
-    """Move ``person_id`` then cohabiting partner if still in ``origin_rid``."""
+    """Queue ``person_id`` then cohabiting partner if still in ``origin_rid``."""
     rec = ctx.id_to_record.get(person_id)
     if rec is None:
         return
     partner_id = rec.person.partner_person_id
-    ctx.move_person_to_settlement(
-        person_id, dest_settlement_id, move_reason="resource_pressure_migration"
+    group_id = f"resource_pressure:{origin_rid}:{person_id}:{int(year)}"
+    ctx.queue_person_move_to_settlement(
+        person_id,
+        dest_settlement_id,
+        move_reason="resource_pressure_migration",
+        requested_year=int(year),
+        apply_year=int(year) + 1,
+        source_event="resource_pressure_migration",
+        group_id=group_id,
     )
     if partner_id is None or partner_id not in ctx.current_people_ids:
         return
@@ -117,8 +125,14 @@ def _move_migrant_and_coresident_partner(
     if (ctx._residence_region_id(p2) or "") != origin_rid:
         return
     try:
-        ctx.move_person_to_settlement(
-            partner_id, dest_settlement_id, move_reason="resource_pressure_migration"
+        ctx.queue_person_move_to_settlement(
+            partner_id,
+            dest_settlement_id,
+            move_reason="resource_pressure_migration",
+            requested_year=int(year),
+            apply_year=int(year) + 1,
+            source_event="resource_pressure_migration",
+            group_id=group_id,
         )
     except (ValueError, LookupError):
         pass
@@ -159,7 +173,7 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 continue
             try:
                 st = _pick_least_loaded_settlement(ctx, dst_rid)
-                _move_migrant_and_coresident_partner(ctx, pid, rid, st.settlement_id)
+                _move_migrant_and_coresident_partner(ctx, pid, rid, st.settlement_id, year)
             except (ValueError, LookupError):
                 continue
 

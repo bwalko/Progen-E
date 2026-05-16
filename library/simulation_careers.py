@@ -130,6 +130,154 @@ class CareerFitness:
     weighted_high_deviation_count: float
 
 
+@dataclass
+class SettlementJobMarketSnapshot:
+    settlement_pop: int | None
+    market_pull: float
+    stability: float
+    job_counts: dict[str, int]
+    family_counts: dict[str, int]
+
+
+@dataclass
+class YearJobMarketSnapshots:
+    """Reusable job-market census for one career-assignment pass."""
+
+    catalog: JobMarketCatalog
+    by_settlement: dict[str, SettlementJobMarketSnapshot]
+
+    @classmethod
+    def build(cls, ctx: "SimulationContext") -> "YearJobMarketSnapshots":
+        catalog = JobMarketCatalog.load(ctx.db_path)
+        by_settlement: dict[str, SettlementJobMarketSnapshot] = {}
+        for sid, records in ctx.current_people_by_settlement().items():
+            st = ctx.settlements_by_id.get(sid)
+            snapshot = SettlementJobMarketSnapshot(
+                settlement_pop=(
+                    int(getattr(st, "resident_count", 0) or 0)
+                    if st is not None
+                    else len(records)
+                ),
+                market_pull=(
+                    float(getattr(st, "market_pull", 0.0) or 0.0)
+                    if st is not None
+                    else 0.0
+                ),
+                stability=(
+                    float(getattr(st, "stability", 0.5) or 0.5)
+                    if st is not None
+                    else 0.5
+                ),
+                job_counts={},
+                family_counts={},
+            )
+            for other in records:
+                if (other.person.employment_status or "").strip().lower() != "employed":
+                    continue
+                job = (other.person.job or "").strip()
+                if not job:
+                    continue
+                jk = normalize_job_catalog_key(job)
+                if not jk:
+                    continue
+                snapshot.job_counts[jk] = snapshot.job_counts.get(jk, 0) + 1
+                fam = catalog.lookup(job).job_family
+                snapshot.family_counts[fam] = snapshot.family_counts.get(fam, 0) + 1
+            by_settlement[sid] = snapshot
+        return cls(catalog=catalog, by_settlement=by_settlement)
+
+    def snapshot_for(
+        self, ctx: "SimulationContext", settlement_id: str
+    ) -> SettlementJobMarketSnapshot:
+        sid = (settlement_id or "").strip()
+        if sid not in self.by_settlement:
+            st = ctx.settlements_by_id.get(sid)
+            self.by_settlement[sid] = SettlementJobMarketSnapshot(
+                settlement_pop=(
+                    int(getattr(st, "resident_count", 0) or 0)
+                    if st is not None
+                    else None
+                ),
+                market_pull=(
+                    float(getattr(st, "market_pull", 0.0) or 0.0)
+                    if st is not None
+                    else 0.0
+                ),
+                stability=(
+                    float(getattr(st, "stability", 0.5) or 0.5)
+                    if st is not None
+                    else 0.5
+                ),
+                job_counts={},
+                family_counts={},
+            )
+        return self.by_settlement[sid]
+
+    def add_assigned_worker(self, rec: "SimulationPersonRecord") -> None:
+        sid = _residence_settlement_id(rec)
+        if not sid:
+            return
+        job = (rec.person.job or "").strip()
+        if not job or (rec.person.employment_status or "").strip().lower() != "employed":
+            return
+        snap = self.by_settlement.get(sid)
+        if snap is None:
+            return
+        jk = normalize_job_catalog_key(job)
+        if jk:
+            snap.job_counts[jk] = snap.job_counts.get(jk, 0) + 1
+        fam = self.catalog.lookup(job).job_family
+        snap.family_counts[fam] = snap.family_counts.get(fam, 0) + 1
+
+
+@dataclass
+class YearCareerFacts:
+    """Reusable per-person facts for one career tick."""
+
+    pressure_by_person_id: dict[int, float]
+    duty_by_person_id: dict[int, float]
+
+    @classmethod
+    def build(
+        cls,
+        ctx: "SimulationContext",
+        year: int,
+        records: list["SimulationPersonRecord"],
+    ) -> "YearCareerFacts":
+        pressure_by_person_id = {
+            int(rec.person_id): resource_pressure_for_person(ctx, rec)
+            for rec in records
+        }
+        from library.simulation_household_care import childcare_duty_factor
+
+        duty_by_person_id = {
+            int(rec.person_id): float(childcare_duty_factor(ctx, rec, year))
+            for rec in records
+        }
+        return cls(
+            pressure_by_person_id=pressure_by_person_id,
+            duty_by_person_id=duty_by_person_id,
+        )
+
+    def pressure_for(
+        self, ctx: "SimulationContext", rec: "SimulationPersonRecord"
+    ) -> float:
+        pid = int(rec.person_id)
+        if pid not in self.pressure_by_person_id:
+            self.pressure_by_person_id[pid] = resource_pressure_for_person(ctx, rec)
+        return self.pressure_by_person_id[pid]
+
+    def duty_for(
+        self, ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+    ) -> float:
+        pid = int(rec.person_id)
+        if pid not in self.duty_by_person_id:
+            from library.simulation_household_care import childcare_duty_factor
+
+            self.duty_by_person_id[pid] = float(childcare_duty_factor(ctx, rec, year))
+        return self.duty_by_person_id[pid]
+
+
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, float(value)))
 
@@ -549,11 +697,22 @@ def resource_pressure_for_person(
 
 
 def _settlement_job_market_snapshot(
-    ctx: "SimulationContext", settlement_id: str
+    ctx: "SimulationContext",
+    settlement_id: str,
+    market_snapshots: YearJobMarketSnapshots | None = None,
 ) -> tuple[int | None, float, float, dict[str, int], dict[str, int]]:
     sid = (settlement_id or "").strip()
     if not sid:
         return None, 0.0, 0.5, {}, {}
+    if market_snapshots is not None:
+        snap = market_snapshots.snapshot_for(ctx, sid)
+        return (
+            snap.settlement_pop,
+            snap.market_pull,
+            snap.stability,
+            dict(snap.job_counts),
+            dict(snap.family_counts),
+        )
     st = ctx.settlements_by_id.get(sid)
     settlement_pop = int(getattr(st, "resident_count", 0) or 0) if st is not None else None
     market_pull = float(getattr(st, "market_pull", 0.0) or 0.0) if st is not None else 0.0
@@ -998,7 +1157,13 @@ def choose_career_assignment(
 
 
 def assign_career_if_eligible(
-    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+    *,
+    market_snapshots: YearJobMarketSnapshots | None = None,
+    pressure: float | None = None,
+    fitness: CareerFitness | None = None,
 ) -> CareerAssignment | None:
     """Assign or rehire an eligible person, returning details if changed."""
     if rec.person.job:
@@ -1007,8 +1172,14 @@ def assign_career_if_eligible(
     era = resolve_job_era(historical_year)
     if not _eligible_for_job(rec.person, ctx.db_path, year, era):
         return None
-    pressure = resource_pressure_for_person(ctx, rec)
-    fitness = refresh_career_fitness(ctx, rec, year, pressure=pressure)
+    pressure = (
+        resource_pressure_for_person(ctx, rec) if pressure is None else float(pressure)
+    )
+    fitness = (
+        refresh_career_fitness(ctx, rec, year, pressure=pressure)
+        if fitness is None
+        else fitness
+    )
     sid = _residence_settlement_id(rec)
     (
         settlement_pop,
@@ -1016,7 +1187,7 @@ def assign_career_if_eligible(
         settlement_stability,
         current_job_counts,
         current_family_counts,
-    ) = _settlement_job_market_snapshot(ctx, sid)
+    ) = _settlement_job_market_snapshot(ctx, sid, market_snapshots)
     assignment = choose_career_assignment(
         rec.person,
         person_id=rec.person_id,
@@ -1117,8 +1288,10 @@ def assign_career_if_eligible(
                 "trait": assignment.trait,
                 "deviation_band": assignment.deviation_band,
                 "resource_pressure": pressure,
-            },
-        )
+        },
+    )
+    if market_snapshots is not None:
+        market_snapshots.add_assigned_worker(rec)
     return assignment
 
 
@@ -1251,11 +1424,16 @@ def maybe_lose_job(
     *,
     fitness: CareerFitness,
     pressure: float,
+    career_facts: YearCareerFacts | None = None,
 ) -> bool:
     if not rec.person.job:
         return False
     p = job_loss_probability(fitness.score, pressure)
-    duty = _childcare_duty_factor_safe(ctx, rec, year)
+    duty = (
+        career_facts.duty_for(ctx, rec, year)
+        if career_facts is not None
+        else _childcare_duty_factor_safe(ctx, rec, year)
+    )
     if duty > 0.0:
         p = _clamp(
             p * (1.0 + JOB_CHILD_DUTY_LOSS_WEIGHT * duty),
@@ -1301,6 +1479,8 @@ def maybe_assign_or_rehire(
     *,
     fitness: CareerFitness,
     pressure: float,
+    market_snapshots: YearJobMarketSnapshots | None = None,
+    career_facts: YearCareerFacts | None = None,
 ) -> bool:
     if rec.person.job:
         return False
@@ -1310,7 +1490,11 @@ def maybe_assign_or_rehire(
         return False
     unemployment_years = _unemployment_years(rec.person, year)
     p = rehire_probability(fitness.score, pressure, unemployment_years)
-    duty = _childcare_duty_factor_safe(ctx, rec, year)
+    duty = (
+        career_facts.duty_for(ctx, rec, year)
+        if career_facts is not None
+        else _childcare_duty_factor_safe(ctx, rec, year)
+    )
     if duty > 0.0:
         p = _clamp(
             p * (1.0 - JOB_CHILD_DUTY_REHIRE_WEIGHT * duty),
@@ -1326,7 +1510,17 @@ def maybe_assign_or_rehire(
         )
     )
     if rng.random() < p:
-        return assign_career_if_eligible(ctx, rec, year) is not None
+        return (
+            assign_career_if_eligible(
+                ctx,
+                rec,
+                year,
+                market_snapshots=market_snapshots,
+                pressure=pressure,
+                fitness=fitness,
+            )
+            is not None
+        )
     mark_unemployed(
         ctx,
         rec,
@@ -1469,12 +1663,19 @@ def maybe_migrate_job_seeker_household(
     origin_sid = _residence_settlement_id(rec)
     origin_rid = _person_residence_region(ctx, rec)
     moved_ids: list[int] = []
+    group_id = f"job_seeker:{rec.person_id}:{int(year)}"
     for pid in _household_ids_for_job_move(ctx, rec, year):
         try:
-            ctx.move_person_to_settlement(
-                pid, dest_sid, move_reason="job_seeker_migration"
-            )
-            moved_ids.append(pid)
+            if ctx.queue_person_move_to_settlement(
+                pid,
+                dest_sid,
+                move_reason="job_seeker_migration",
+                requested_year=int(year),
+                apply_year=int(year) + 1,
+                source_event="job_seeker_migration",
+                group_id=group_id,
+            ):
+                moved_ids.append(pid)
         except (LookupError, ValueError):
             continue
     if not moved_ids:
@@ -1503,22 +1704,59 @@ def maybe_migrate_job_seeker_household(
 def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
     """Update annual employment state for living people at job-eligible ages."""
     eligible: list[tuple[SimulationPersonRecord, CareerFitness, float]] = []
+    historical_year = ctx.get_historical_year(year)
+    era = resolve_job_era(historical_year)
+    job_age_cache: dict[tuple[str, str, int | None], int] = {}
+    potentially_eligible: list[SimulationPersonRecord] = []
     for rec in ctx.iter_current_people(sorted_by_id=True):
-        historical_year = ctx.get_historical_year(year)
-        era = resolve_job_era(historical_year)
-        if not _eligible_for_job(rec.person, ctx.db_path, year, era):
+        key = (
+            (rec.person.species or "").strip(),
+            (rec.person.ethnic or "").strip(),
+            (
+                int(rec.person.min_fertility_age)
+                if rec.person.min_fertility_age is not None
+                else None
+            ),
+        )
+        min_age = job_age_cache.get(key)
+        if min_age is None:
+            min_age = job_eligibility_age(
+                _person_maturity_age(rec.person, ctx.db_path), era
+            )
+            job_age_cache[key] = min_age
+        if int(year) - int(rec.person.birthyear) < min_age:
             continue
-        pressure = resource_pressure_for_person(ctx, rec)
+        potentially_eligible.append(rec)
+
+    career_facts = YearCareerFacts.build(ctx, year, potentially_eligible)
+    for rec in potentially_eligible:
+        pressure = career_facts.pressure_for(ctx, rec)
         fitness = refresh_career_fitness(ctx, rec, year, pressure=pressure)
         eligible.append((rec, fitness, pressure))
 
     for rec, fitness, pressure in eligible:
-        maybe_lose_job(ctx, rec, year, fitness=fitness, pressure=pressure)
+        maybe_lose_job(
+            ctx,
+            rec,
+            year,
+            fitness=fitness,
+            pressure=pressure,
+            career_facts=career_facts,
+        )
 
+    market_snapshots = YearJobMarketSnapshots.build(ctx)
     for rec, fitness, pressure in eligible:
         if rec.person.job_lost_year == int(year):
             continue
-        maybe_assign_or_rehire(ctx, rec, year, fitness=fitness, pressure=pressure)
+        maybe_assign_or_rehire(
+            ctx,
+            rec,
+            year,
+            fitness=fitness,
+            pressure=pressure,
+            market_snapshots=market_snapshots,
+            career_facts=career_facts,
+        )
 
     for rec, fitness, pressure in eligible:
         maybe_migrate_job_seeker_household(

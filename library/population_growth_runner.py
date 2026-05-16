@@ -9,10 +9,12 @@ import secrets
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
 from library.generator import generate_person_random
+from library.random_names import choose_random_first_last
 from library.settlements import SettlementState
 from library.reproduction import (
     annual_conception_probability,
@@ -30,6 +32,8 @@ KIN_PAIR_GRANDPARENT_GRANDCHILD_PROB = 0.000002
 KIN_PAIR_FULL_SIBLING_PROB = 0.000005
 KIN_PAIR_HALF_SIBLING_PROB = 0.00002
 KIN_PAIR_RNG_STREAM = 612_047
+PAIRING_EXHAUSTIVE_PAIR_LIMIT = 25_000
+PAIRING_CANDIDATE_ATTEMPTS_PER_PERSON = 8
 
 
 def resolve_population_sim_seed() -> int:
@@ -195,6 +199,99 @@ def _format_government_report_appendix(ctx: SimulationContext) -> list[str]:
     return lines
 
 
+def _fertile_founder_age_bounds(person, fallback_age: int = 18) -> tuple[int, int]:
+    p = person
+    lo = int(p.min_fertility_age) if p.min_fertility_age is not None else fallback_age
+    hi = int(p.max_fertility_age) if p.max_fertility_age is not None else max(lo, fallback_age)
+    if hi < lo:
+        hi = lo
+    return lo, hi
+
+
+def _founder_parent_name(
+    ctx: SimulationContext,
+    *,
+    ethnic: str,
+    gender: str,
+    birthplace: str,
+    birthplace_region_id: str | None,
+) -> str:
+    first, last = choose_random_first_last(
+        ethnic=ethnic,
+        gender=gender,
+        birthplace=birthplace,
+        db_path=ctx.db_path,
+        birthplace_region_id=birthplace_region_id,
+        world=ctx.world,
+        simulation_context=ctx,
+    )
+    return f"{first} {last}".strip()
+
+
+def _with_founder_parent_names(
+    ctx: SimulationContext,
+    person,
+) -> object:
+    return replace(
+        person,
+        father_name=_founder_parent_name(
+            ctx,
+            ethnic=person.ethnic,
+            gender="Male",
+            birthplace=person.birthplace,
+            birthplace_region_id=person.birthplace_region_id,
+        ),
+        mother_name=_founder_parent_name(
+            ctx,
+            ethnic=person.ethnic,
+            gender="Female",
+            birthplace=person.birthplace,
+            birthplace_region_id=person.birthplace_region_id,
+        ),
+    )
+
+
+def generate_population_founder(
+    ctx: SimulationContext,
+    *,
+    gender: str,
+    simulation_year: int,
+    rng: random.Random,
+):
+    """Generate a founder with age inside that person's fertility window."""
+    probe = generate_person_random(
+        gender=gender,
+        age=18,
+        simulation_year=simulation_year,
+        simulation_context=ctx,
+    )
+    lo, hi = _fertile_founder_age_bounds(probe)
+    for _ in range(64):
+        age = rng.randint(lo, hi)
+        founder = generate_person_random(
+            species=probe.species,
+            ethnic=probe.ethnic,
+            gender=gender,
+            age=age,
+            simulation_year=simulation_year,
+            simulation_context=ctx,
+        )
+        f_lo, f_hi = _fertile_founder_age_bounds(founder)
+        actual_age = int(simulation_year) - int(founder.birthyear)
+        if f_lo <= actual_age <= f_hi:
+            return _with_founder_parent_names(ctx, founder)
+    fallback_age = max(lo, min(hi, int(probe.min_fertility_age or lo)))
+    founder = generate_person_random(
+        species=probe.species,
+        ethnic=probe.ethnic,
+        gender=gender,
+        age=fallback_age,
+        simulation_year=simulation_year,
+        simulation_context=ctx,
+    )
+    return _with_founder_parent_names(ctx, founder)
+
+
 def _geo_summary(local_geography_json: str | None) -> str:
     if not local_geography_json:
         return ""
@@ -300,6 +397,8 @@ def build_population_growth_report(
                     f"founder={rec.is_founder}",
                     f"father_id={rec.father_id}",
                     f"mother_id={rec.mother_id}",
+                    f"father_name={p.father_name}",
+                    f"mother_name={p.mother_name}",
                     f"partner_id={partner_id}",
                 )
             )
@@ -360,9 +459,22 @@ def _pair_from_records(
         and _is_mature(r, year)
     ]
     remaining_females = list(eligible_females)
+    pair_count = len(eligible_males) * len(remaining_females)
+    bounded = pair_count > PAIRING_EXHAUSTIVE_PAIR_LIMIT
+    rng = random.Random(
+        int(year) * 1_300_003
+        + int(getattr(ctx, "placename_rng_salt", 0)) * 43
+        + len(eligible_males) * 101
+        + len(remaining_females)
+    )
     for male in eligible_males:
         chosen: tuple[SimulationPersonRecord, str | None, float | None] | None = None
-        for female in remaining_females:
+        if bounded:
+            attempts = min(PAIRING_CANDIDATE_ATTEMPTS_PER_PERSON, len(remaining_females))
+            candidates = rng.sample(remaining_females, attempts) if attempts else []
+        else:
+            candidates = remaining_females
+        for female in candidates:
             allowed, relation, probability = _pairing_allowed_by_kinship(
                 ctx, year, male, female
             )
@@ -469,6 +581,9 @@ def births_by_settlement(
             crng = conception_rng(year, sim_seed, rec.person_id, father_id)
             if crng.random() >= p_try:
                 continue
+            surname_convention = ctx.surname_convention_for_parents(
+                father.person_id, rec.person_id
+            )
             children = having_sex_birth_event(
                 father.person,
                 rec.person,
@@ -480,6 +595,7 @@ def births_by_settlement(
                 birthplace=rec.person.birthplace or "Placeholder",
                 simulation_context=ctx,
                 mother_person_id=rec.person_id,
+                surname_convention=surname_convention,
             )
             if not children:
                 continue
@@ -502,6 +618,7 @@ def run_population_growth_simulation(
     start_year: int,
     duration_years: int,
     starting_couples: int,
+    progress_callback: Callable[[int], None] | None = None,
 ) -> None:
     """Drive the canonical population-growth yearly loop until ``finalize_run`` (context exit)."""
     random.seed(sim_seed)
@@ -510,18 +627,19 @@ def run_population_growth_simulation(
         start_year=start_year, duration_years=duration_years
     )
 
+    founder_rng = random.Random(int(sim_seed) * 1_000_003 + int(start_year) + 71_009)
     for _ in range(starting_couples):
-        male = generate_person_random(
+        male = generate_population_founder(
+            ctx,
             gender="Male",
-            age=18,
             simulation_year=start_year,
-            simulation_context=ctx,
+            rng=founder_rng,
         )
-        female = generate_person_random(
+        female = generate_population_founder(
+            ctx,
             gender="Female",
-            age=18,
             simulation_year=start_year,
-            simulation_context=ctx,
+            rng=founder_rng,
         )
         male_rec = ctx.add_person(person=male, is_founder=True)
         female_rec = ctx.add_person(person=female, is_founder=True)
@@ -530,6 +648,7 @@ def run_population_growth_simulation(
     end_exclusive = start_year + duration_years
     for year in range(start_year, end_exclusive):
         ctx.current_year = year
+        ctx.apply_pending_settlement_moves(year)
         births_count = 0
         prof = simulation_timing.active_for_year(year)
         tpc = time.perf_counter
@@ -555,12 +674,18 @@ def run_population_growth_simulation(
         if prof:
             simulation_timing.accumulate("runner.mortality", tpc() - t0)
 
+        persist_to_save = ctx._should_checkpoint_snapshot(year)
         ctx.record_year_summary(
             year=year,
             births_count=births_count,
             deaths_count=int(mortality_rates["deaths_count"]),
             mortality_rates=mortality_rates,
+            persist_to_save=persist_to_save,
         )
+        if progress_callback is not None and (
+            persist_to_save or year == end_exclusive - 1
+        ):
+            progress_callback(year)
 
     simulation_timing.print_report_if_configured()
 

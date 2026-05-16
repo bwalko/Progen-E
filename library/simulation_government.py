@@ -196,12 +196,7 @@ def _pick_head_candidate_in_region(
     rid = (region_id or "").strip()
     if not rid:
         return None
-    residents = [
-        rec
-        for rec in ctx.iter_current_people(sorted_by_id=True)
-        if (ctx._residence_region_id(rec) or "") == rid
-        and rec.person.deathyear is None
-    ]
+    residents = list(ctx.current_people_by_region().get(rid, ()))
     if not residents:
         return None
     pref = float(head_title.male_weight) if head_title is not None else 0.5
@@ -232,19 +227,7 @@ def _pick_head_candidate_in_settlement(
     sid = (settlement_id or "").strip()
     if not sid:
         return None
-    residents = [
-        rec
-        for rec in ctx.iter_current_people(sorted_by_id=True)
-        if rec.person.deathyear is None
-        and (
-            (
-                rec.person.current_settlement_id
-                or rec.person.birthplace_settlement_id
-                or ""
-            ).strip()
-            == sid
-        )
-    ]
+    residents = list(ctx.current_people_by_settlement().get(sid, ()))
     if not residents:
         return None
     pref = float(head_title.male_weight) if head_title is not None else 0.5
@@ -1542,11 +1525,12 @@ def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> No
     rng = random.Random(y * 1_000_003 + hash(ctx.world) % 999_983 + int(ctx.placename_rng_salt))
     pop_scale = population_scale_for_world(ctx.world, db_path=ctx.db_path)
 
-    regions_with_people: set[str] = set()
-    for rec in ctx.iter_current_people(sorted_by_id=True):
-        rid = ctx._residence_region_id(rec)
-        if rid:
-            regions_with_people.add(rid)
+    cols = ctx.alive_person_columns(y)
+    regions_with_people = {
+        cols.region_id_by_code[int(code)]
+        for code in set(cols.region_codes)
+        if int(code) != 0 and int(code) in cols.region_id_by_code
+    }
 
     for rid in sorted(regions_with_people):
         n_alive = ctx.count_alive_in_region(rid)

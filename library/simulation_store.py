@@ -51,6 +51,8 @@ class SimulationFileStore:
                 "is_founder",
                 "father_id",
                 "mother_id",
+                "father_name",
+                "mother_name",
             ],
         )
         self._ensure_table(

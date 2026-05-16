@@ -10,6 +10,7 @@ from pathlib import Path
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
 from library.simulation_context import SimulationContext
+from library.world_save import checkpoint_simulation_to_save
 
 
 class TestRelationshipsResidence(unittest.TestCase):
@@ -40,6 +41,56 @@ class TestRelationshipsResidence(unittest.TestCase):
                 self.assertEqual(rec.person.current_settlement_id, other.settlement_id)
                 types = [t for _, t, _ in ctx._pending_simulation_events]
                 self.assertIn("settlement_moved", types)
+
+    def test_pending_settlement_move_survives_checkpoint_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="iso-pending",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                p = generate_person_random(simulation_context=ctx, simulation_year=1000)
+                sid0 = (p.current_settlement_id or p.birthplace_settlement_id or "").strip()
+                rec0 = ctx.add_person(person=p, is_founder=True)
+                other = ctx.create_additional_active_settlement(
+                    (p.birthplace_region_id or "").strip()
+                )
+                ctx.queue_person_move_to_settlement(
+                    rec0.person_id,
+                    other.settlement_id,
+                    move_reason="test_deferred_move",
+                    requested_year=1000,
+                    apply_year=1001,
+                )
+                checkpoint_simulation_to_save(ctx, full_snapshot=True)
+
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="iso-pending",
+                world="default",
+                start_year=None,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as loaded:
+                self.assertEqual(len(loaded.pending_settlement_moves), 1)
+                self.assertEqual(
+                    loaded.id_to_record[rec0.person_id].person.current_settlement_id,
+                    sid0,
+                )
+                loaded.apply_pending_settlement_moves(1001)
+                self.assertEqual(
+                    loaded.id_to_record[rec0.person_id].person.current_settlement_id,
+                    other.settlement_id,
+                )
 
     def test_dissolve_couple_clears_partner_fields(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

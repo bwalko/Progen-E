@@ -276,6 +276,11 @@ class TestSimulationHouseholdCare(unittest.TestCase):
                 )
                 ctx.current_year = 2000
                 simulation_household_care_annual_tick(ctx, 2000)
+                self.assertNotEqual(
+                    (ctx.id_to_record[cr.person_id].person.current_settlement_id or ""),
+                    sid_large,
+                )
+                ctx.apply_pending_settlement_moves(2001)
                 self.assertEqual(
                     (ctx.id_to_record[cr.person_id].person.current_settlement_id or ""),
                     sid_large,
@@ -527,6 +532,11 @@ class TestSimulationHouseholdCare(unittest.TestCase):
                 )
                 ctx.current_year = 2000
                 simulation_household_care_annual_tick(ctx, 2000)
+                self.assertNotEqual(
+                    (ctx.id_to_record[lo].person.current_settlement_id or ""),
+                    (ctx.id_to_record[hi].person.current_settlement_id or ""),
+                )
+                ctx.apply_pending_settlement_moves(2001)
                 self.assertEqual(
                     (ctx.id_to_record[lo].person.current_settlement_id or ""),
                     (ctx.id_to_record[hi].person.current_settlement_id or ""),

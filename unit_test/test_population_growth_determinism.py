@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import random
 import sys
 import tempfile
 import types
@@ -33,6 +34,7 @@ from library.config_import import load_all_csvs_into_sqlite
 from library.person import Person
 from library.population_growth_runner import (
     KIN_PAIR_PARENT_CHILD_PROB,
+    generate_population_founder,
     pair_people_by_settlement_then_region,
     run_population_growth_simulation,
 )
@@ -71,6 +73,36 @@ def _run_once(*, cfg: Path, sav: Path) -> tuple[tuple[int, ...], tuple[tuple[int
 
 
 class TestPopulationGrowthDeterminism(unittest.TestCase):
+    def test_population_founder_age_is_fertile_and_has_parent_names(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=START_YEAR,
+                placename_rng_salt=SIM_SEED,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                founder = generate_population_founder(
+                    ctx,
+                    gender="Female",
+                    simulation_year=START_YEAR,
+                    rng=random.Random(1234),
+                )
+                age = START_YEAR - int(founder.birthyear)
+                self.assertIsNotNone(founder.min_fertility_age)
+                self.assertIsNotNone(founder.max_fertility_age)
+                self.assertGreaterEqual(age, int(founder.min_fertility_age or 0))
+                self.assertLessEqual(age, int(founder.max_fertility_age or age))
+                self.assertTrue((founder.father_name or "").strip())
+                self.assertTrue((founder.mother_name or "").strip())
+
     def test_two_runs_same_fingerprint(self) -> None:
         fingerprints: list[tuple[tuple[int, ...], tuple[tuple[int, int], ...], int, int]] = []
         for _ in range(2):

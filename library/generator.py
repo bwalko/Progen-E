@@ -556,6 +556,7 @@ def generate_person_from_birth(
     birth_litter_size: int = 1,
     allow_secondary_settlement_spinoff: bool = True,
     mother_person_id: int | None = None,
+    surname_convention: str | None = None,
 ) -> Person:
     """Build a person from two parents.
 
@@ -673,6 +674,7 @@ def generate_person_from_birth(
             father_last_name=father.last_name,
             father_ethnic=father.ethnic,
             father_first_name=father.first_name,
+            surname_convention=surname_convention,
             db_path=path,
             birthplace_region_id=resolved_region_id,
             world=world,

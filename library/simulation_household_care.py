@@ -78,7 +78,6 @@ def _residence_sid(rec: SimulationPersonRecord) -> str:
 
 def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
     alive_ids: set[int] = set(ctx.current_people_ids)
-    by_settlement: dict[str, list[SimulationPersonRecord]] = defaultdict(list)
     minor_ids: list[int] = []
     children_by_parent: dict[int, set[int]] = defaultdict(set)
 
@@ -87,10 +86,8 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
             if p is not None:
                 children_by_parent[p].add(rec.person_id)
 
+    by_settlement = ctx.current_people_by_settlement()
     for rec in ctx.iter_current_people(sorted_by_id=True):
-        sid = _residence_sid(rec)
-        if sid:
-            by_settlement[sid].append(rec)
         if rec.person_id in alive_ids and ctx._person_is_dependent_minor(rec, year):
             minor_ids.append(rec.person_id)
 
@@ -379,28 +376,31 @@ def _grandparent_supply_extras(
 
 
 def _collect_household_keys_with_minors(
-    ctx: SimulationContext, year: int
+    ctx: SimulationContext, year: int, indexes: YearCareIndexes | None = None
 ) -> dict[frozenset[int], frozenset[int]]:
     """Map implicit household member set -> dependent minor ids in that set."""
     out: dict[frozenset[int], set[int]] = {}
-    for crec in ctx.iter_current_people(sorted_by_id=True):
-        if not ctx._person_is_dependent_minor(crec, year):
+    minor_ids = indexes.minor_ids if indexes is not None else tuple(
+        int(rec.person_id)
+        for rec in ctx.iter_current_people(sorted_by_id=True)
+        if ctx._person_is_dependent_minor(rec, year)
+    )
+    for mid in minor_ids:
+        crec = ctx.id_to_record.get(int(mid))
+        if crec is None or int(mid) not in ctx.current_people_ids:
             continue
-        mid = int(crec.person_id)
         key = _household_key_for_minor(ctx, crec, year)
-        out.setdefault(key, set()).add(mid)
+        out.setdefault(key, set()).add(int(mid))
     return {k: frozenset(v) for k, v in out.items()}
 
 
 def _reconcile_partner_residence_mismatch(ctx: SimulationContext, year: int) -> None:
     """Partners with different settlements: lower ``person_id`` moves to the partner's site."""
     seen_pairs: set[tuple[int, int]] = set()
-    for rec in ctx.iter_current_people(sorted_by_id=True):
-        a = int(rec.person_id)
-        b = rec.person.partner_person_id
-        if b is None or b not in ctx.current_people_ids:
+    for a0, b0 in list(ctx.couples):
+        if a0 not in ctx.current_people_ids or b0 not in ctx.current_people_ids:
             continue
-        lo, hi = (a, b) if a < b else (b, a)
+        lo, hi = (int(a0), int(b0)) if int(a0) < int(b0) else (int(b0), int(a0))
         if (lo, hi) in seen_pairs:
             continue
         seen_pairs.add((lo, hi))
@@ -411,8 +411,14 @@ def _reconcile_partner_residence_mismatch(ctx: SimulationContext, year: int) -> 
         if not sa or not sb or sa == sb:
             continue
         try:
-            ctx.move_person_to_settlement(
-                lo, sb, move_reason="partner_residence_reconciled"
+            ctx.queue_person_move_to_settlement(
+                lo,
+                sb,
+                move_reason="partner_residence_reconciled",
+                requested_year=year,
+                apply_year=year + 1,
+                source_event="partner_residence_reconciled",
+                group_id=f"partner_residence:{lo}:{hi}:{year}",
             )
         except (ValueError, LookupError):
             continue
@@ -443,8 +449,14 @@ def _route_local_orphans(
         if sid == largest_sid:
             continue
         try:
-            ctx.move_person_to_settlement(
-                mid, largest_sid, move_reason="orphan_seeking_care_congregation"
+            ctx.queue_person_move_to_settlement(
+                mid,
+                largest_sid,
+                move_reason="orphan_seeking_care_congregation",
+                requested_year=year,
+                apply_year=year + 1,
+                source_event="orphan_routed_to_largest_settlement",
+                group_id=f"orphan_route:{mid}:{year}",
             )
         except (ValueError, LookupError):
             continue
@@ -522,8 +534,14 @@ def _process_childcare_shortfalls(
             vsid = _residence_sid(vrec) if vrec else ""
             if vsid and vsid != largest:
                 try:
-                    ctx.move_person_to_settlement(
-                        victim, largest, move_reason="childcare_shortfall_run_away"
+                    ctx.queue_person_move_to_settlement(
+                        victim,
+                        largest,
+                        move_reason="childcare_shortfall_run_away",
+                        requested_year=year,
+                        apply_year=year + 1,
+                        source_event="household_childcare_shortfall",
+                        group_id=f"childcare_shortfall:{victim}:{year}",
                     )
                 except (ValueError, LookupError):
                     ctx.mark_dead({victim}, deathyear=year)
@@ -554,5 +572,5 @@ def simulation_household_care_annual_tick(ctx: SimulationContext, year: int) -> 
 
     _route_local_orphans(ctx, y, uncovered, largest)
 
-    hh_minors = _collect_household_keys_with_minors(ctx, y)
+    hh_minors = _collect_household_keys_with_minors(ctx, y, indexes)
     _process_childcare_shortfalls(ctx, y, hh_minors)

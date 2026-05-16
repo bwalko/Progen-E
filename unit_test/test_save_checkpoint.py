@@ -167,6 +167,57 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             self.assertFalse(try_load_simulation_checkpoint(shell))
 
+    def test_couple_surname_convention_roundtrip_on_resume(self) -> None:
+        random.seed(5)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="surname",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            male = ctx.add_person(
+                person=generate_person_random(
+                    gender="Male",
+                    age=22,
+                    simulation_context=ctx,
+                    simulation_year=1000,
+                ),
+                is_founder=True,
+            )
+            female = ctx.add_person(
+                person=generate_person_random(
+                    gender="Female",
+                    age=22,
+                    simulation_context=ctx,
+                    simulation_year=1000,
+                ),
+                is_founder=True,
+            )
+            ctx.add_couple(male.person_id, female.person_id)
+            key = ctx._relationship_pair_key(male.person_id, female.person_id)
+            ctx.surname_conventions_by_pair[key] = "kin"
+            checkpoint_simulation_to_save(ctx)
+
+            shell = SimulationContext(
+                db_path=cfg,
+                save_db_path=sav,
+                world="default",
+                simulation_start_year=1000,
+                history_equivalent_start_year=1000,
+                current_year=1000,
+            )
+
+            self.assertTrue(try_load_simulation_checkpoint(shell))
+            self.assertEqual(shell.surname_conventions_by_pair.get(key), "kin")
+
     def test_events_flush_without_full_snapshot(self) -> None:
         # Partial checkpoint on purpose; do not use ``with SimulationContext.create`` because
         # __exit__ would call finalize_run() and write simulation_people, breaking assertions.

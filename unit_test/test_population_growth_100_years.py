@@ -72,7 +72,8 @@ class TestPopulationGrowth100Years(unittest.TestCase):
 
             self.assertTrue(OUTPUT_PATH.exists())
             self.assertTrue(PEOPLE_JSON_PATH.exists())
-            self.assertGreater(len(ctx.people), STARTING_COUPLES * 2)
+            total_people_created = int(ctx.next_person_id) - 1
+            self.assertGreater(total_people_created, STARTING_COUPLES * 2)
 
 
 if __name__ == "__main__":

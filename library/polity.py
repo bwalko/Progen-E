@@ -265,21 +265,14 @@ def realm_resident_ids(ctx: SimulationContext, polity_id: int) -> set[int]:
     regions = polity_regions(ctx, polity_id)
     settlements = polity_settlement_territory_ids(ctx, polity_id)
     out: set[int] = set()
+    by_region = ctx.current_people_by_region()
+    by_settlement = ctx.current_people_by_settlement()
     for rid in regions:
-        for rec in ctx.iter_current_people(sorted_by_id=True):
-            if (ctx._residence_region_id(rec) or "") == rid:
-                out.add(rec.person_id)
+        for rec in by_region.get(rid, ()):
+            out.add(rec.person_id)
     for sid in settlements:
-        for rec in ctx.iter_current_people(sorted_by_id=True):
-            if rec.person.deathyear is not None:
-                continue
-            cur = (
-                rec.person.current_settlement_id
-                or rec.person.birthplace_settlement_id
-                or ""
-            ).strip()
-            if cur == sid:
-                out.add(rec.person_id)
+        for rec in by_settlement.get(sid, ()):
+            out.add(rec.person_id)
     return out
 
 

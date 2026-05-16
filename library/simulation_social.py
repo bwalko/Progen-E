@@ -25,6 +25,10 @@ PARAMOUR_END_MAX_PROB = 0.55
 PARAMOUR_END_RNG_STREAM = 709_367
 PARAMOUR_PROMOTION_MAX_PROB = 0.42
 PARAMOUR_PROMOTION_RNG_STREAM = 811_531
+PARAMOUR_EXHAUSTIVE_PAIR_LIMIT = 4_000
+PARAMOUR_CONTACT_TRIAL_BASE = 64
+PARAMOUR_CONTACT_TRIALS_PER_SQRT_POP = 24
+PARAMOUR_CONTACT_TRIAL_CAP = 5_000
 # With ``min_fertility_age`` set, paramour age floor is ``min(PARAMOUR_MIN_SIM_AGE, mf)``; if unset,
 # only ``PARAMOUR_MIN_SIM_AGE`` applies.
 PARAMOUR_MIN_SIM_AGE = 18
@@ -505,47 +509,103 @@ def maybe_promote_paramours_to_partners(ctx: SimulationContext, year: int) -> No
 def _maybe_form_paramours_one_settlement(
     ctx: SimulationContext, year: int, rng: random.Random, residents: list[int]
 ) -> None:
-    """Low-rate formation among non-spouse pairs in one settlement."""
+    """Low-rate formation from a bounded yearly contact budget in one settlement."""
     n = len(residents)
-    for i in range(n):
-        for j in range(i + 1, n):
-            ia, ib = residents[i], residents[j]
-            ra = ctx.id_to_record.get(ia)
-            rb = ctx.id_to_record.get(ib)
-            if ra is None or rb is None:
-                continue
-            if ia not in ctx.current_people_ids or ib not in ctx.current_people_ids:
-                continue
-            pa, pb = ra.person, rb.person
-            if pa.paramour_person_id is not None or pb.paramour_person_id is not None:
-                continue
-            if pa.partner_person_id == ib or pb.partner_person_id == ia:
-                continue
-            if not paramour_pair_eligible(ra, rb, int(year)):
-                continue
-            if rng.random() > _paramour_pair_probability(pa, pb, ctx):
-                continue
-            try:
-                ctx.add_paramour_relationship(ia, ib)
-                ctx._pending_simulation_events[-1][2].update(
-                    {
-                        "formation_probability": round(
-                            _paramour_pair_probability(pa, pb, ctx), 5
-                        ),
-                        "same_gender": _same_gender(pa, pb),
-                        "orientation_multiplier": round(
-                            _paramour_orientation_multiplier(ctx, pa, pb), 4
-                        ),
-                    }
-                )
-            except (LookupError, ValueError):
-                pass
+    if n < 2:
+        return
+    pair_count = n * (n - 1) // 2
+    if pair_count <= PARAMOUR_EXHAUSTIVE_PAIR_LIMIT:
+        pairs = (
+            (residents[i], residents[j])
+            for i in range(n)
+            for j in range(i + 1, n)
+        )
+    else:
+        trials = _paramour_contact_trial_budget(n, pair_count)
+        pairs = _sample_paramour_contact_pairs(residents, trials, rng)
+    for ia, ib in pairs:
+        _maybe_form_paramour_pair(ctx, year, rng, ia, ib)
+
+
+def _paramour_contact_trial_budget(resident_count: int, pair_count: int | None = None) -> int:
+    """Bound yearly meaningful contacts so large settlements do not do all-pairs work."""
+    n = max(0, int(resident_count))
+    if n < 2:
+        return 0
+    pairs = pair_count if pair_count is not None else n * (n - 1) // 2
+    if pairs <= PARAMOUR_EXHAUSTIVE_PAIR_LIMIT:
+        return int(pairs)
+    budget = PARAMOUR_CONTACT_TRIAL_BASE + int(
+        PARAMOUR_CONTACT_TRIALS_PER_SQRT_POP * (n ** 0.5)
+    )
+    return max(1, min(PARAMOUR_CONTACT_TRIAL_CAP, budget, int(pairs)))
+
+
+def _sample_paramour_contact_pairs(
+    residents: list[int], trials: int, rng: random.Random
+):
+    """Yield up to ``trials`` unique sampled resident pairs."""
+    n = len(residents)
+    seen: set[tuple[int, int]] = set()
+    # Duplicates are rare for large pools, but give modest slack for medium towns.
+    max_draws = max(int(trials), int(trials) * 3)
+    draws = 0
+    while len(seen) < int(trials) and draws < max_draws:
+        draws += 1
+        ia, ib = rng.sample(residents, 2)
+        if ia == ib:
+            continue
+        pair = (ia, ib) if ia < ib else (ib, ia)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        yield pair
+
+
+def _maybe_form_paramour_pair(
+    ctx: SimulationContext,
+    year: int,
+    rng: random.Random,
+    ia: int,
+    ib: int,
+) -> None:
+    ra = ctx.id_to_record.get(ia)
+    rb = ctx.id_to_record.get(ib)
+    if ra is None or rb is None:
+        return
+    if ia not in ctx.current_people_ids or ib not in ctx.current_people_ids:
+        return
+    pa, pb = ra.person, rb.person
+    if pa.paramour_person_id is not None or pb.paramour_person_id is not None:
+        return
+    if pa.partner_person_id == ib or pb.partner_person_id == ia:
+        return
+    if not paramour_pair_eligible(ra, rb, int(year)):
+        return
+    formation_probability = _paramour_pair_probability(pa, pb, ctx)
+    if rng.random() > formation_probability:
+        return
+    try:
+        ctx.add_paramour_relationship(ia, ib)
+        ctx._pending_simulation_events[-1][2].update(
+            {
+                "formation_probability": round(formation_probability, 5),
+                "same_gender": _same_gender(pa, pb),
+                "orientation_multiplier": round(
+                    _paramour_orientation_multiplier(ctx, pa, pb), 4
+                ),
+            }
+        )
+    except (LookupError, ValueError):
+        pass
 
 
 def maybe_form_paramours(ctx: SimulationContext, year: int, rng: random.Random) -> None:
-    by_sid = ctx.current_people_by_settlement()
-    for sid in sorted(by_sid.keys()):
-        ids = [rec.person_id for rec in by_sid[sid]]
+    cols = ctx.alive_person_columns(year)
+    candidate_mask = (cols.ages >= PARAMOUR_MIN_SIM_AGE) & (~cols.has_paramour)
+    for code in sorted(int(c) for c in set(cols.settlement_codes[candidate_mask]) if int(c) != 0):
+        sid_mask = candidate_mask & (cols.settlement_codes == code)
+        ids = cols.person_ids_for_mask(sid_mask)
         _maybe_form_paramours_one_settlement(ctx, year, rng, ids)
 
 
@@ -683,17 +743,33 @@ def _maybe_form_same_sex_couples_one_gender(
 def maybe_form_same_sex_couples(ctx: SimulationContext, year: int) -> None:
     """Form female-female and male-male couples from romantic compatibility and prosperity."""
     paired_ids = _paired_person_ids(ctx)
-    by_sid = ctx.current_people_by_settlement()
+    cols = ctx.alive_person_columns(year)
+    candidate_mask = (
+        (~cols.is_founder)
+        & (~cols.has_partner)
+        & (~cols.has_paramour)
+        & (cols.ages >= 0)
+    )
     y = int(year)
-    for sid in sorted(by_sid.keys()):
-        females: list[int] = []
-        males: list[int] = []
-        for rec in by_sid[sid]:
-            g = (rec.person.gender or "").strip().lower()
-            if g == "female" and _eligible_same_sex_couple_candidate(ctx, rec, y, paired_ids):
-                females.append(int(rec.person_id))
-            elif g == "male" and _eligible_same_sex_couple_candidate(ctx, rec, y, paired_ids):
-                males.append(int(rec.person_id))
+    for code in sorted(int(c) for c in set(cols.settlement_codes[candidate_mask]) if int(c) != 0):
+        sid = cols.settlement_id_by_code.get(code, "")
+        if not sid:
+            continue
+        sid_mask = candidate_mask & (cols.settlement_codes == code)
+        female_ids = cols.person_ids_for_mask(sid_mask & (cols.gender_codes == 2))
+        male_ids = cols.person_ids_for_mask(sid_mask & (cols.gender_codes == 1))
+        females = [
+            pid
+            for pid in female_ids
+            if (rec := ctx.id_to_record.get(pid)) is not None
+            and _eligible_same_sex_couple_candidate(ctx, rec, y, paired_ids)
+        ]
+        males = [
+            pid
+            for pid in male_ids
+            if (rec := ctx.id_to_record.get(pid)) is not None
+            and _eligible_same_sex_couple_candidate(ctx, rec, y, paired_ids)
+        ]
         _maybe_form_same_sex_couples_one_gender(ctx, y, sid, females, paired_ids)
         _maybe_form_same_sex_couples_one_gender(ctx, y, sid, males, paired_ids)
 

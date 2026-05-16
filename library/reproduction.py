@@ -67,6 +67,7 @@ def having_sex(
     birthplace_settlement_id: str | None = None,
     elder_skew: float = 0.35,
     simulation_context: "SimulationContext | None" = None,
+    surname_convention: str | None = None,
 ) -> Person | None:
     """Return offspring when fertility checks pass; otherwise return ``None``."""
     if _below_min_fertility(participant_a, simulation_year):
@@ -119,6 +120,7 @@ def having_sex(
         elder_skew=elder_skew,
         simulation_context=simulation_context,
         birth_litter_size=1,
+        surname_convention=surname_convention,
     )
 
 
@@ -140,6 +142,7 @@ def having_sex_birth_event(
     elder_skew: float = 0.35,
     simulation_context: "SimulationContext | None" = None,
     mother_person_id: int | None = None,
+    surname_convention: str | None = None,
 ) -> list[Person] | None:
     """Possibly multiple newborns (twins/triplets) for one birth event, same parents.
 
@@ -192,6 +195,7 @@ def having_sex_birth_event(
                 birth_litter_size=litter,
                 allow_secondary_settlement_spinoff=(i == 0),
                 mother_person_id=mother_person_id,
+                surname_convention=surname_convention,
             )
         )
     return children

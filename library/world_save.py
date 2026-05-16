@@ -66,12 +66,20 @@ def prune_ancient_dead_from_ram(ctx: "SimulationContext") -> None:
     new_people = [rec for rec in ctx.people if rec.person_id in keep_ids]
     ctx.people = new_people
     ctx.id_to_record = {r.person_id: r for r in new_people}
+    if hasattr(ctx, "invalidate_alive_census_cache"):
+        ctx.invalidate_alive_census_cache()
     ctx.couples = [
         (a, b) for (a, b) in ctx.couples if a in keep_ids and b in keep_ids
     ]
     ctx.paramours = [
         (a, b) for (a, b) in ctx.paramours if a in keep_ids and b in keep_ids
     ]
+    if hasattr(ctx, "surname_conventions_by_pair"):
+        ctx.surname_conventions_by_pair = {
+            pair: convention
+            for pair, convention in ctx.surname_conventions_by_pair.items()
+            if pair[0] in keep_ids and pair[1] in keep_ids
+        }
     for rec in new_people:
         if rec.person_id not in ctx.current_people_ids:
             continue
@@ -164,6 +172,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
             sort_order INTEGER NOT NULL,
             person_a_id INTEGER NOT NULL,
             person_b_id INTEGER NOT NULL,
+            surname_convention TEXT,
             PRIMARY KEY (world, sort_order)
         );
         CREATE TABLE IF NOT EXISTS simulation_paramours (
@@ -171,6 +180,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
             sort_order INTEGER NOT NULL,
             person_a_id INTEGER NOT NULL,
             person_b_id INTEGER NOT NULL,
+            surname_convention TEXT,
             PRIMARY KEY (world, sort_order)
         );
         CREATE TABLE IF NOT EXISTS simulation_events (
@@ -193,6 +203,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _migrate_simulation_settlements_empty_site_columns(conn)
     _migrate_simulation_settlements_prosperity_pool(conn)
     _migrate_simulation_regions_economy_columns(conn)
+    _migrate_relationship_surname_convention_columns(conn)
     from library import government_checkpoint as _gov_ckpt
 
     _gov_ckpt.ensure_government_schema(conn)
@@ -368,6 +379,16 @@ def _migrate_simulation_regions_economy_columns(conn: sqlite3.Connection) -> Non
             ADD COLUMN treasury_balance REAL NOT NULL DEFAULT 0.0
             """
         )
+
+
+def _migrate_relationship_surname_convention_columns(conn: sqlite3.Connection) -> None:
+    for table in ("simulation_couples", "simulation_paramours"):
+        cols = {
+            str(r[1])
+            for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if "surname_convention" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN surname_convention TEXT")
 
 
 _PLACENAME_META_COLS = (
@@ -632,6 +653,9 @@ REGION_NAMING_AUX_META_KEY = "region_naming_aux_json"
 # JSON ``{"pending": {region_id: int}, "last": {region_id: int}}`` for settlement spinoff.
 SETTLEMENT_SPINOFF_STATE_META_KEY = "settlement_spinoff_state_json"
 
+# JSON list of deferred year-boundary residence moves.
+PENDING_SETTLEMENT_MOVES_META_KEY = "pending_settlement_moves_json"
+
 
 def serialize_region_display_label_overrides(ctx: "SimulationContext") -> str:
     d = {
@@ -784,6 +808,75 @@ def parse_settlement_spinoff_state(
     return out_p, out_l
 
 
+def serialize_pending_settlement_moves(ctx: "SimulationContext") -> str:
+    moves = []
+    for m in getattr(ctx, "pending_settlement_moves", None) or []:
+        moves.append(
+            {
+                "person_id": int(m.person_id),
+                "to_settlement_id": str(m.to_settlement_id or "").strip(),
+                "move_reason": str(m.move_reason or "").strip(),
+                "requested_year": int(m.requested_year),
+                "apply_year": int(m.apply_year),
+                "from_settlement_id": (
+                    str(m.from_settlement_id).strip()
+                    if m.from_settlement_id is not None
+                    else None
+                ),
+                "source_event": (
+                    str(m.source_event).strip() if m.source_event is not None else None
+                ),
+                "group_id": str(m.group_id).strip() if m.group_id is not None else None,
+            }
+        )
+    return json.dumps(moves, sort_keys=True)
+
+
+def parse_pending_settlement_moves(meta_value: str | None) -> list["PendingSettlementMove"]:
+    if meta_value is None or not str(meta_value).strip():
+        return []
+    try:
+        raw = json.loads(meta_value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(raw, list):
+        return []
+    from library.simulation_context import PendingSettlementMove
+
+    out: list[PendingSettlementMove] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            person_id = int(item.get("person_id"))
+            to_sid = str(item.get("to_settlement_id") or "").strip()
+            req_y = int(item.get("requested_year"))
+            app_y = int(item.get("apply_year"))
+        except (TypeError, ValueError):
+            continue
+        if person_id <= 0 or not to_sid:
+            continue
+        reason = str(item.get("move_reason") or "").strip() or "deferred_settlement_move"
+        from_sid_raw = item.get("from_settlement_id")
+        src_raw = item.get("source_event")
+        group_raw = item.get("group_id")
+        out.append(
+            PendingSettlementMove(
+                person_id=person_id,
+                to_settlement_id=to_sid,
+                move_reason=reason,
+                requested_year=req_y,
+                apply_year=app_y,
+                from_settlement_id=(
+                    str(from_sid_raw).strip() if from_sid_raw is not None else None
+                ),
+                source_event=str(src_raw).strip() if src_raw is not None else None,
+                group_id=str(group_raw).strip() if group_raw is not None else None,
+            )
+        )
+    return out
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -874,6 +967,17 @@ def flush_simulation_meta_checkpoint(ctx: "SimulationContext") -> None:
             VALUES (?, ?, ?)
             """,
             (w, SETTLEMENT_SPINOFF_STATE_META_KEY, serialize_settlement_spinoff_state(ctx)),
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
+            VALUES (?, ?, ?)
+            """,
+            (
+                w,
+                PENDING_SETTLEMENT_MOVES_META_KEY,
+                serialize_pending_settlement_moves(ctx),
+            ),
         )
         conn.commit()
 
@@ -1016,6 +1120,12 @@ def _person_from_dict(d: dict) -> Person:
             str(d["gender_mind"]).lower()
             if d.get("gender_mind") is not None
             else None
+        ),
+        father_name=(
+            str(d["father_name"]) if d.get("father_name") is not None else None
+        ),
+        mother_name=(
+            str(d["mother_name"]) if d.get("mother_name") is not None else None
         ),
         current_settlement_id=(
             str(d["current_settlement_id"])
@@ -1223,21 +1333,31 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             )
 
         for i, (a_id, b_id) in enumerate(ctx.couples):
+            convention = getattr(ctx, "surname_conventions_by_pair", {}).get(
+                tuple(sorted((int(a_id), int(b_id))))
+            )
             cur.execute(
                 """
-                INSERT INTO simulation_couples (world, sort_order, person_a_id, person_b_id)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO simulation_couples (
+                    world, sort_order, person_a_id, person_b_id, surname_convention
+                )
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (w, i, a_id, b_id),
+                (w, i, a_id, b_id, convention),
             )
 
         for i, (a_id, b_id) in enumerate(ctx.paramours):
+            convention = getattr(ctx, "surname_conventions_by_pair", {}).get(
+                tuple(sorted((int(a_id), int(b_id))))
+            )
             cur.execute(
                 """
-                INSERT INTO simulation_paramours (world, sort_order, person_a_id, person_b_id)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO simulation_paramours (
+                    world, sort_order, person_a_id, person_b_id, surname_convention
+                )
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (w, i, a_id, b_id),
+                (w, i, a_id, b_id, convention),
             )
 
         from library.government_checkpoint import checkpoint_government as _checkpoint_gov
@@ -1286,6 +1406,17 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             VALUES (?, ?, ?)
             """,
             (w, SETTLEMENT_SPINOFF_STATE_META_KEY, serialize_settlement_spinoff_state(ctx)),
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
+            VALUES (?, ?, ?)
+            """,
+            (
+                w,
+                PENDING_SETTLEMENT_MOVES_META_KEY,
+                serialize_pending_settlement_moves(ctx),
+            ),
         )
         conn.commit()
     prune_ancient_dead_from_ram(ctx)
@@ -1414,18 +1545,31 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                     pass
 
         couple_rows = conn.execute(
-            "SELECT person_a_id, person_b_id FROM simulation_couples WHERE world = ? ORDER BY sort_order",
+            """
+            SELECT person_a_id, person_b_id, surname_convention
+            FROM simulation_couples
+            WHERE world = ?
+            ORDER BY sort_order
+            """,
             (w,),
         ).fetchall()
         couple_ids: list[tuple[int, int]] = [
             (int(r["person_a_id"]), int(r["person_b_id"])) for r in couple_rows
         ]
         couples = [(a, b) for (a, b) in couple_ids if a in id_to and b in id_to]
+        surname_conventions_by_pair: dict[tuple[int, int], str] = {}
+        for r in couple_rows:
+            a = int(r["person_a_id"])
+            b = int(r["person_b_id"])
+            convention = str(r["surname_convention"] or "").strip()
+            if convention and a in id_to and b in id_to:
+                surname_conventions_by_pair[tuple(sorted((a, b)))] = convention
 
         try:
             paramour_rows = conn.execute(
                 """
-                SELECT person_a_id, person_b_id FROM simulation_paramours
+                SELECT person_a_id, person_b_id, surname_convention
+                FROM simulation_paramours
                 WHERE world = ? ORDER BY sort_order
                 """,
                 (w,),
@@ -1436,6 +1580,12 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             (int(r["person_a_id"]), int(r["person_b_id"])) for r in paramour_rows
         ]
         paramours = [(a, b) for (a, b) in paramour_ids if a in id_to and b in id_to]
+        for r in paramour_rows:
+            a = int(r["person_a_id"])
+            b = int(r["person_b_id"])
+            convention = str(r["surname_convention"] or "").strip()
+            if convention and a in id_to and b in id_to:
+                surname_conventions_by_pair[tuple(sorted((a, b)))] = convention
 
         meta_row = conn.execute(
             "SELECT meta_value FROM simulation_meta WHERE world = ? AND meta_key = ?",
@@ -1501,6 +1651,18 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             str(spin_raw) if spin_raw is not None else None
         )
 
+        moves_m_row = conn.execute(
+            """
+            SELECT meta_value FROM simulation_meta
+            WHERE world = ? AND meta_key = ?
+            """,
+            (w, PENDING_SETTLEMENT_MOVES_META_KEY),
+        ).fetchone()
+        moves_raw = moves_m_row["meta_value"] if moves_m_row is not None else None
+        pending_moves = parse_pending_settlement_moves(
+            str(moves_raw) if moves_raw is not None else None
+        )
+
         merged_region_labels = {**region_labels}
         for rk, rv in display_overrides.items():
             merged_region_labels[rk] = rv
@@ -1518,8 +1680,11 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
     ctx.people = loaded
     ctx.id_to_record = id_to
     ctx.current_people_ids = alive
+    if hasattr(ctx, "invalidate_alive_census_cache"):
+        ctx.invalidate_alive_census_cache()
     ctx.couples = couples
     ctx.paramours = paramours
+    ctx.surname_conventions_by_pair = surname_conventions_by_pair
     for a_id, b_id in couples:
         ra = id_to.get(a_id)
         rb = id_to.get(b_id)
@@ -1550,6 +1715,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
     ctx.region_treasury_balance = region_treasury_loaded
     ctx.spinoff_pending_families_by_region = spin_pending
     ctx.last_spinoff_sim_year_by_region = spin_last
+    ctx.pending_settlement_moves = pending_moves
     try:
         from library.government_checkpoint import load_government as _load_gov
         from library.world_save import _open_save as _open_save_gov

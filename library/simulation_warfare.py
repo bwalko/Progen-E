@@ -279,11 +279,6 @@ def roll_new_campaigns(
                     continue
                 if def_p.parent_polity_id is not None:
                     continue
-                pop_d = sum(
-                    1
-                    for rec in ctx.iter_current_people(sorted_by_id=True)
-                    if (ctx._residence_region_id(rec) or "") == nrid
-                )
                 candidates.append((def_p.polity_id, nrid))
         if not candidates:
             continue

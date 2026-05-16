@@ -6,11 +6,14 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from library.person import Person
 from library.random_names import (
     _name_tables_cached,
     choose_random_first_last_from_birth,
 )
+from library.simulation_context import SimulationContext
 
 
 def _seed_minimal_name_tables(db_path: Path) -> None:
@@ -64,7 +67,7 @@ def _seed_minimal_name_tables(db_path: Path) -> None:
                 kin_m, kin_f, hails_from
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            ("TestEthnic", "1;1", "1;1", "", "", "0", "0", "1", "0", "$son", "$dottir", ""),
+            ("TestEthnic", "1;1", "1;1", "", "", "0", "0", "1", "0", "$son", "$dottir", "of"),
         )
         # Father ethnic row used for kin-form detection.
         conn.execute(
@@ -141,6 +144,63 @@ class TestBirthSurnameRule(unittest.TestCase):
         self.assertNotEqual(last, "Oakson")
         # Should use child ethnic kin template with actual father's first name.
         self.assertEqual(last, "Robertson")
+
+    def test_explicit_partnership_convention_overrides_child_roll(self) -> None:
+        _, last = choose_random_first_last_from_birth(
+            ethnic="TestEthnic",
+            gender="Female",
+            birthplace="Stonebridge",
+            father_last_name="Sayers",
+            father_ethnic="FatherEthnic",
+            father_first_name="Robert",
+            surname_convention="kin",
+            db_path=self.db_path,
+        )
+
+        self.assertEqual(last, "Robertdottir")
+
+    def test_context_reuses_one_surname_convention_for_partnership(self) -> None:
+        ctx = SimulationContext(
+            db_path=self.db_path,
+            save_db_path=Path(self._tmpdir.name) / "save.sqlite",
+            world="test",
+            simulation_start_year=1000,
+            current_year=1000,
+        )
+        father = ctx.add_person(
+            person=Person(
+                first_name="Robert",
+                last_name="Sayers",
+                gender="Male",
+                ethnic="FatherEthnic",
+                species="Human",
+                birthplace="Stonebridge",
+                birthyear=980,
+            ),
+            is_founder=True,
+        )
+        mother = ctx.add_person(
+            person=Person(
+                first_name="Ada",
+                last_name="LookupLast",
+                gender="Female",
+                ethnic="TestEthnic",
+                species="Human",
+                birthplace="Stonebridge",
+                birthyear=982,
+            ),
+            is_founder=True,
+        )
+
+        with patch("library.random_names.choose_birth_surname_convention") as chooser:
+            chooser.return_value = "kin"
+            ctx.add_couple(father.person_id, mother.person_id)
+            first = ctx.surname_convention_for_parents(father.person_id, mother.person_id)
+            second = ctx.surname_convention_for_parents(mother.person_id, father.person_id)
+
+        self.assertEqual(first, "kin")
+        self.assertEqual(second, "kin")
+        chooser.assert_called_once()
 
 
 if __name__ == "__main__":

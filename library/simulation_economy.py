@@ -400,15 +400,15 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
     _update_household_prosperity(ctx, y)
 
     # --- Leader spending from treasury ---
+    by_region_alive = ctx.current_people_by_region()
     for rid in rid_all:
         treasury = float(ctx.region_treasury_balance.get(rid, 0.0))
         if treasury < 0.35:
             continue
         leaders = [
             rec
-            for rec in ctx.iter_current_people(sorted_by_id=True)
+            for rec in by_region_alive.get(rid, ())
             if _leader_candidate(ctx, rec)
-            and ctx._residence_region_id(rec) == rid
         ]
         if not leaders:
             continue

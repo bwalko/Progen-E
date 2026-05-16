@@ -14,6 +14,7 @@ from library.generator import generate_person_random
 from library.geography import list_regions
 from library.geography import _get_route_edges_by_origin
 from library.person import Person
+from library.population_growth_runner import _with_founder_parent_names
 from library.reproduction import (
     annual_conception_probability,
     conception_rng,
@@ -216,7 +217,7 @@ def generate_founder_person(
         xf = p.max_fertility_age
         if xf is not None and yrs > int(xf) - 10:
             continue
-        return p
+        return _with_founder_parent_names(ctx, p)
     return None
 
 
@@ -331,6 +332,9 @@ def births_and_couples_for_region(
         crng = conception_rng(year, rid_seed, rec.person_id, father_id)
         if crng.random() >= p_try:
             continue
+        surname_convention = ctx.surname_convention_for_parents(
+            father.person_id, rec.person_id
+        )
         children = having_sex_birth_event(
             father.person,
             rec.person,
@@ -346,6 +350,7 @@ def births_and_couples_for_region(
             ),
             simulation_context=ctx,
             mother_person_id=rec.person_id,
+            surname_convention=surname_convention,
         )
         if not children:
             continue

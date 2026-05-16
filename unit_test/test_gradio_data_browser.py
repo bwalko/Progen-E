@@ -12,6 +12,7 @@ from utils.gradio_data_browser import (
     _event_sentence,
     _event_sentence_html,
     _person_event_rows,
+    _sort_rows_by_legacy_score,
     _trait_phrase,
 )
 
@@ -115,6 +116,22 @@ def _genome_row(con: sqlite3.Connection) -> sqlite3.Row:
     ).fetchone()
 
 
+def _person_sort_row(con: sqlite3.Connection, person_id: int, traits: dict[str, float]) -> sqlite3.Row:
+    return con.execute(
+        "select ? as person_id, ? as person_json",
+        (
+            person_id,
+            json.dumps(
+                {
+                    "first_name": f"P{person_id}",
+                    "last_name": "Sort",
+                    "mind_body": traits,
+                }
+            ),
+        ),
+    ).fetchone()
+
+
 class GradioDataBrowserEventTests(unittest.TestCase):
     def test_job_event_fitness_uses_event_payload_not_current_person_score(self) -> None:
         con = _memory_save()
@@ -131,6 +148,38 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("fitness 0.12", html)
         self.assertNotIn("0.99", text)
         self.assertNotIn("0.99", html)
+
+    def test_person_sheet_event_uses_owner_first_name_only(self) -> None:
+        con = _memory_save()
+        event = _event_row(
+            con,
+            "job_assigned",
+            {"person_id": 1, "job": "smith", "fitness_score": 0.1234},
+        )
+
+        text = _event_sentence(con, "test", event, 1)
+        html = _event_sentence_html(con, "test", event, 1)
+
+        self.assertIn("Ada became smith", text)
+        self.assertNotIn("Ada Forge became smith", text)
+        self.assertIn("<strong>Ada</strong> became smith", html)
+        self.assertNotIn(">Ada</a> became smith", html)
+        self.assertNotIn(">Ada Forge</a> became smith", html)
+
+    def test_person_sheet_event_keeps_other_people_full_names(self) -> None:
+        con = _memory_save()
+        event = _event_row(
+            con,
+            "couple_formed",
+            {"person_a_id": 1, "person_b_id": 2},
+        )
+
+        text = _event_sentence(con, "test", event, 1)
+        html = _event_sentence_html(con, "test", event, 1)
+
+        self.assertIn("Ada formed a household partnership with Bea Forge", text)
+        self.assertIn("<strong>Ada</strong> formed a household partnership with", html)
+        self.assertIn(">Bea Forge</a>", html)
 
     def test_career_fitness_update_uses_event_payload(self) -> None:
         con = _memory_save()
@@ -167,6 +216,28 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("poor fit despite decent general ability", text)
         self.assertIn("job keyed to focus / optimal", text)
         self.assertIn("job fit 0.42", html)
+
+    def test_people_browser_can_sort_by_legacy_score_columns(self) -> None:
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        low_beauty = _person_sort_row(
+            con,
+            1,
+            {"symmetry": 100, "wit": 100, "persuasion": 100, "mating drive": -100},
+        )
+        high_beauty = _person_sort_row(
+            con,
+            2,
+            {"symmetry": 0, "wit": 0, "persuasion": 0, "mating drive": 100},
+        )
+
+        rows = _sort_rows_by_legacy_score(
+            [low_beauty, high_beauty],
+            sort_by="Beauty",
+            sort_dir="Descending",
+        )
+
+        self.assertEqual([int(row["person_id"]) for row in rows], [2, 1])
 
     def test_couple_formed_shows_rare_kinship_exception(self) -> None:
         con = _memory_save()

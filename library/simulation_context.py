@@ -12,6 +12,8 @@ from types import TracebackType
 from typing import Any, Sequence
 from uuid import uuid4
 
+import numpy as np
+
 from library import simulation_timing
 from library.config_import import refresh_world_config_from_csv
 from library.person import Person
@@ -63,6 +65,55 @@ class SimulationPersonRecord:
 
 
 @dataclass
+class AliveCensusCache:
+    """Per-context index of alive residents by current settlement and region."""
+
+    by_settlement: dict[str, list[SimulationPersonRecord]]
+    by_region: dict[str, list[SimulationPersonRecord]]
+    count_by_settlement: dict[str, int]
+    count_by_region: dict[str, int]
+
+
+@dataclass
+class AlivePersonColumns:
+    """Columnar alive-person snapshot for fast annual candidate masks."""
+
+    year: int
+    person_ids: np.ndarray
+    ages: np.ndarray
+    birthyears: np.ndarray
+    gender_codes: np.ndarray
+    settlement_codes: np.ndarray
+    region_codes: np.ndarray
+    is_founder: np.ndarray
+    has_partner: np.ndarray
+    has_paramour: np.ndarray
+    attractiveness_01: np.ndarray
+    job_prosperity_01: np.ndarray
+    settlement_code_by_id: dict[str, int]
+    region_code_by_id: dict[str, int]
+    settlement_id_by_code: dict[int, str]
+    region_id_by_code: dict[int, str]
+
+    def person_ids_for_mask(self, mask: np.ndarray) -> list[int]:
+        return [int(pid) for pid in self.person_ids[mask]]
+
+
+@dataclass(frozen=True)
+class PendingSettlementMove:
+    """Deferred residence change applied at a year boundary."""
+
+    person_id: int
+    to_settlement_id: str
+    move_reason: str
+    requested_year: int
+    apply_year: int
+    from_settlement_id: str | None = None
+    source_event: str | None = None
+    group_id: str | None = None
+
+
+@dataclass
 class SimulationContext:
     """Reusable simulation context with preloaded config and runtime state.
 
@@ -82,8 +133,10 @@ class SimulationContext:
     current_people_ids: set[int] = field(default_factory=set)
     couples: list[tuple[int, int]] = field(default_factory=list)
     paramours: list[tuple[int, int]] = field(default_factory=list)
+    surname_conventions_by_pair: dict[tuple[int, int], str] = field(default_factory=dict)
     id_to_record: dict[int, SimulationPersonRecord] = field(default_factory=dict)
     event_queue: list[dict[str, Any]] = field(default_factory=list)
+    pending_settlement_moves: list[PendingSettlementMove] = field(default_factory=list)
     mortality_milestones: list[dict[str, Any]] = field(default_factory=list)
     _mortality_index: int = 0
     file_store: SimulationFileStore | None = None
@@ -129,6 +182,8 @@ class SimulationContext:
     next_gov_dynasty_id: int = 1
     next_gov_campaign_id: int = 1
     next_gov_alliance_id: int = 1
+    _alive_census_cache: AliveCensusCache | None = field(default=None, repr=False)
+    _alive_columns_cache: tuple[int, AlivePersonColumns] | None = field(default=None, repr=False)
 
     def __enter__(self) -> SimulationContext:
         return self
@@ -347,6 +402,131 @@ class SimulationContext:
     ) -> None:
         self._pending_simulation_events.append((sim_year, event_type, payload))
 
+    def invalidate_alive_census_cache(self) -> None:
+        """Drop cached alive residence indexes after population/residence changes."""
+        self._alive_census_cache = None
+        self._alive_columns_cache = None
+
+    def invalidate_alive_columns_cache(self) -> None:
+        """Drop cached columnar fields after relationship/job/person-field changes."""
+        self._alive_columns_cache = None
+
+    def alive_census_cache(self) -> AliveCensusCache:
+        """Build or return the cached alive residence index for the current context state."""
+        cached = self._alive_census_cache
+        if cached is not None:
+            return cached
+        by_settlement: dict[str, list[SimulationPersonRecord]] = {}
+        by_region: dict[str, list[SimulationPersonRecord]] = {}
+        for rec in self.iter_current_people(sorted_by_id=True):
+            sid = self._residence_settlement_id(rec)
+            if sid:
+                by_settlement.setdefault(sid, []).append(rec)
+            rid = self._residence_region_id(rec)
+            if rid:
+                by_region.setdefault(rid, []).append(rec)
+        cached = AliveCensusCache(
+            by_settlement=by_settlement,
+            by_region=by_region,
+            count_by_settlement={sid: len(records) for sid, records in by_settlement.items()},
+            count_by_region={rid: len(records) for rid, records in by_region.items()},
+        )
+        self._alive_census_cache = cached
+        return cached
+
+    def alive_person_columns(self, year: int) -> AlivePersonColumns:
+        """Return a NumPy-backed alive-person snapshot for one simulation year."""
+        y = int(year)
+        cached = self._alive_columns_cache
+        if cached is not None and cached[0] == y:
+            return cached[1]
+        records = list(self.iter_current_people(sorted_by_id=True))
+        settlement_code_by_id: dict[str, int] = {}
+        region_code_by_id: dict[str, int] = {}
+        settlement_id_by_code: dict[int, str] = {}
+        region_id_by_code: dict[int, str] = {}
+
+        def code_for(
+            value: str | None,
+            forward: dict[str, int],
+            reverse: dict[int, str],
+        ) -> int:
+            key = (value or "").strip()
+            if not key:
+                return 0
+            code = forward.get(key)
+            if code is None:
+                code = len(forward) + 1
+                forward[key] = code
+                reverse[code] = key
+            return code
+
+        def gender_code(rec: SimulationPersonRecord) -> int:
+            g = (rec.person.gender or "").strip().lower()
+            if g == "male":
+                return 1
+            if g == "female":
+                return 2
+            return 0
+
+        person_ids: list[int] = []
+        ages: list[int] = []
+        birthyears: list[int] = []
+        gender_codes: list[int] = []
+        settlement_codes: list[int] = []
+        region_codes: list[int] = []
+        is_founder: list[bool] = []
+        has_partner: list[bool] = []
+        has_paramour: list[bool] = []
+        attractiveness: list[float] = []
+        job_prosperity: list[float] = []
+        for rec in records:
+            by = int(rec.person.birthyear)
+            person_ids.append(int(rec.person_id))
+            birthyears.append(by)
+            ages.append(y - by)
+            gender_codes.append(gender_code(rec))
+            settlement_codes.append(
+                code_for(
+                    self._residence_settlement_id(rec),
+                    settlement_code_by_id,
+                    settlement_id_by_code,
+                )
+            )
+            region_codes.append(
+                code_for(
+                    self._residence_region_id(rec),
+                    region_code_by_id,
+                    region_id_by_code,
+                )
+            )
+            is_founder.append(bool(rec.is_founder))
+            has_partner.append(rec.person.partner_person_id is not None)
+            has_paramour.append(rec.person.paramour_person_id is not None)
+            attractiveness.append(float(rec.person.attractiveness_01 or 0.0))
+            job_prosperity.append(float(rec.person.job_prosperity_01 or 0.0))
+
+        cols = AlivePersonColumns(
+            year=y,
+            person_ids=np.asarray(person_ids, dtype=np.int64),
+            ages=np.asarray(ages, dtype=np.int64),
+            birthyears=np.asarray(birthyears, dtype=np.int64),
+            gender_codes=np.asarray(gender_codes, dtype=np.int8),
+            settlement_codes=np.asarray(settlement_codes, dtype=np.int32),
+            region_codes=np.asarray(region_codes, dtype=np.int32),
+            is_founder=np.asarray(is_founder, dtype=bool),
+            has_partner=np.asarray(has_partner, dtype=bool),
+            has_paramour=np.asarray(has_paramour, dtype=bool),
+            attractiveness_01=np.asarray(attractiveness, dtype=float),
+            job_prosperity_01=np.asarray(job_prosperity, dtype=float),
+            settlement_code_by_id=settlement_code_by_id,
+            region_code_by_id=region_code_by_id,
+            settlement_id_by_code=settlement_id_by_code,
+            region_id_by_code=region_id_by_code,
+        )
+        self._alive_columns_cache = (y, cols)
+        return cols
+
     def _should_checkpoint_snapshot(self, record_year: int) -> bool:
         """Whether to rewrite snapshot tables for this completed simulation year."""
         n = self.checkpoint_full_snapshot_every_n_years
@@ -379,6 +559,7 @@ class SimulationContext:
         self.people.append(rec)
         self.id_to_record[rec.person_id] = rec
         self.current_people_ids.add(rec.person_id)
+        self.invalidate_alive_census_cache()
         event_type = "founder_created" if is_founder else "birth"
         if self.file_store is not None:
             self.file_store.append_person(
@@ -397,6 +578,8 @@ class SimulationContext:
                     "is_founder": rec.is_founder,
                     "father_id": rec.father_id,
                     "mother_id": rec.mother_id,
+                    "father_name": rec.person.father_name,
+                    "mother_name": rec.person.mother_name,
                 }
             )
             self.file_store.append_event(
@@ -425,6 +608,45 @@ class SimulationContext:
         )
         return rec
 
+    @staticmethod
+    def _relationship_pair_key(person_a_id: int, person_b_id: int) -> tuple[int, int]:
+        a = int(person_a_id)
+        b = int(person_b_id)
+        return (a, b) if a <= b else (b, a)
+
+    def surname_convention_for_parents(self, person_a_id: int, person_b_id: int) -> str:
+        """Return the stable surname convention for this parent partnership."""
+        key = self._relationship_pair_key(person_a_id, person_b_id)
+        existing = self.surname_conventions_by_pair.get(key)
+        if existing:
+            return existing
+
+        ra = self.id_to_record.get(person_a_id)
+        rb = self.id_to_record.get(person_b_id)
+        if ra is None or rb is None:
+            raise LookupError("surname_convention_for_parents: unknown person id")
+        father = (
+            ra.person
+            if (ra.person.gender or "").strip().lower() == "male"
+            else rb.person
+        )
+        convention_ethnic = (father.ethnic or "").strip()
+        if not convention_ethnic:
+            convention_ethnic = (ra.person.ethnic or rb.person.ethnic or "").strip()
+        from library.random_names import choose_birth_surname_convention
+
+        try:
+            convention = choose_birth_surname_convention(
+                ethnic=convention_ethnic,
+                father_last_name=father.last_name,
+                father_ethnic=father.ethnic,
+                db_path=self.db_path,
+            )
+        except (FileNotFoundError, LookupError):
+            convention = "lookup"
+        self.surname_conventions_by_pair[key] = convention
+        return convention
+
     def add_couple(self, person_a_id: int, person_b_id: int) -> None:
         ra = self.id_to_record.get(person_a_id)
         rb = self.id_to_record.get(person_b_id)
@@ -443,6 +665,8 @@ class SimulationContext:
         else:
             pair = (person_a_id, person_b_id)
         self.couples.append(pair)
+        surname_convention = self.surname_convention_for_parents(*pair)
+        self.invalidate_alive_columns_cache()
         if self.file_store is not None:
             self.file_store.append_event(
                 {
@@ -453,6 +677,7 @@ class SimulationContext:
                     "person_b_id": person_b_id,
                     "child_id": "",
                     "details": "",
+                    "surname_convention": surname_convention,
                 }
             )
         self._record_simulation_event(
@@ -466,6 +691,7 @@ class SimulationContext:
                 "person_b_id": person_b_id,
                 "child_id": None,
                 "details": "",
+                "surname_convention": surname_convention,
             },
         )
 
@@ -476,10 +702,14 @@ class SimulationContext:
             for (a, b) in self.couples
             if {a, b} != pair_set
         ]
+        self.surname_conventions_by_pair.pop(
+            self._relationship_pair_key(person_a_id, person_b_id), None
+        )
         for pid in (person_a_id, person_b_id):
             rec = self.id_to_record.get(pid)
             if rec is not None and rec.person.partner_person_id in pair_set:
                 rec.person = replace(rec.person, partner_person_id=None)
+        self.invalidate_alive_columns_cache()
         if self.file_store is not None:
             self.file_store.append_event(
                 {
@@ -528,6 +758,8 @@ class SimulationContext:
         else:
             pair = (person_a_id, person_b_id)
         self.paramours.append(pair)
+        surname_convention = self.surname_convention_for_parents(*pair)
+        self.invalidate_alive_columns_cache()
         if self.file_store is not None:
             self.file_store.append_event(
                 {
@@ -538,6 +770,7 @@ class SimulationContext:
                     "person_b_id": person_b_id,
                     "child_id": "",
                     "details": "",
+                    "surname_convention": surname_convention,
                 }
             )
         self._record_simulation_event(
@@ -547,6 +780,7 @@ class SimulationContext:
                 "year": self.current_year,
                 "person_a_id": person_a_id,
                 "person_b_id": person_b_id,
+                "surname_convention": surname_convention,
             },
         )
 
@@ -557,10 +791,14 @@ class SimulationContext:
             for (a, b) in self.paramours
             if {a, b} != pair_set
         ]
+        self.surname_conventions_by_pair.pop(
+            self._relationship_pair_key(person_a_id, person_b_id), None
+        )
         for pid in (person_a_id, person_b_id):
             rec = self.id_to_record.get(pid)
             if rec is not None and rec.person.paramour_person_id in pair_set:
                 rec.person = replace(rec.person, paramour_person_id=None)
+        self.invalidate_alive_columns_cache()
         if self.file_store is not None:
             self.file_store.append_event(
                 {
@@ -593,7 +831,7 @@ class SimulationContext:
     def relocate_birthing_household_to_settlement(
         self, mother_person_id: int, new_settlement_id: str
     ) -> None:
-        """Move mother, cohabiting spouse, and immature shared children to ``new_settlement_id``."""
+        """Queue mother, cohabiting spouse, and immature shared children for next-year relocation."""
         ns = (new_settlement_id or "").strip()
         if not ns:
             return
@@ -633,9 +871,148 @@ class SimulationContext:
                 to_move.append(pid)
         for pid in to_move:
             try:
-                self.move_person_to_settlement(pid, ns)
+                self.queue_person_move_to_settlement(
+                    pid,
+                    ns,
+                    move_reason="birthing_household_spinoff",
+                    requested_year=ref_year,
+                    apply_year=ref_year + 1,
+                    source_event="birthing_household_spinoff",
+                    group_id=f"birth_spinoff:{mother_person_id}:{ref_year}",
+                )
             except (ValueError, LookupError):
                 continue
+
+    def queue_person_move_to_settlement(
+        self,
+        person_id: int,
+        settlement_id: str,
+        *,
+        move_reason: str | None = None,
+        requested_year: int | None = None,
+        apply_year: int | None = None,
+        source_event: str | None = None,
+        group_id: str | None = None,
+    ) -> bool:
+        """Record a year-boundary residence move without mutating current residence."""
+        sid = (settlement_id or "").strip()
+        st = self.settlements_by_id.get(sid)
+        if st is None or (st.status or "").strip().lower() != "active":
+            raise ValueError(f"queue_person_move_to_settlement: invalid settlement {sid!r}")
+        rec = self.id_to_record.get(person_id)
+        if rec is None or person_id not in self.current_people_ids:
+            raise LookupError(
+                f"queue_person_move_to_settlement: person {person_id} not alive"
+            )
+        old_sid = (rec.person.current_settlement_id or "").strip() or None
+        if old_sid == sid:
+            return False
+        req_y = int(
+            requested_year
+            if requested_year is not None
+            else self.current_year
+            if self.current_year is not None
+            else self.simulation_start_year
+        )
+        app_y = int(apply_year if apply_year is not None else req_y + 1)
+        reason = (move_reason or "").strip() or "deferred_settlement_move"
+        intent = PendingSettlementMove(
+            person_id=int(person_id),
+            to_settlement_id=sid,
+            move_reason=reason,
+            requested_year=req_y,
+            apply_year=app_y,
+            from_settlement_id=old_sid,
+            source_event=(source_event or "").strip() or None,
+            group_id=(group_id or "").strip() or None,
+        )
+        self.pending_settlement_moves = [
+            m
+            for m in self.pending_settlement_moves
+            if not (int(m.person_id) == int(person_id) and int(m.apply_year) == app_y)
+        ]
+        self.pending_settlement_moves.append(intent)
+        payload: dict[str, Any] = {
+            "year": req_y,
+            "person_id": int(person_id),
+            "from_settlement_id": old_sid,
+            "to_settlement_id": sid,
+            "requested_year": req_y,
+            "apply_year": app_y,
+            "move_reason": reason,
+        }
+        if intent.source_event:
+            payload["source_event"] = intent.source_event
+        if intent.group_id:
+            payload["group_id"] = intent.group_id
+        self._record_simulation_event(req_y, "settlement_move_planned", payload)
+        if self.file_store is not None:
+            self.file_store.append_event(
+                {
+                    "year": req_y,
+                    "event_type": "settlement_move_planned",
+                    "person_id": int(person_id),
+                    "person_a_id": "",
+                    "person_b_id": "",
+                    "child_id": "",
+                    "from_settlement_id": old_sid or "",
+                    "to_settlement_id": sid,
+                    "requested_year": req_y,
+                    "apply_year": app_y,
+                    "move_reason": reason,
+                    "details": f"{old_sid} -> {sid}",
+                }
+            )
+        return True
+
+    def apply_pending_settlement_moves(self, year: int) -> int:
+        """Apply deferred residence moves due at or before ``year``."""
+        y = int(year)
+        self.current_year = y
+        if not self.pending_settlement_moves:
+            return 0
+        due: list[PendingSettlementMove] = []
+        future: list[PendingSettlementMove] = []
+        for intent in self.pending_settlement_moves:
+            if int(intent.apply_year) <= y:
+                due.append(intent)
+            else:
+                future.append(intent)
+        if not due:
+            return 0
+        latest_by_person: dict[int, PendingSettlementMove] = {}
+        for intent in due:
+            latest_by_person[int(intent.person_id)] = intent
+        applied = 0
+        for intent in sorted(
+            latest_by_person.values(), key=lambda m: (int(m.apply_year), int(m.person_id))
+        ):
+            try:
+                self.move_person_to_settlement(
+                    int(intent.person_id),
+                    intent.to_settlement_id,
+                    move_reason=intent.move_reason,
+                    requested_year=intent.requested_year,
+                    planned_apply_year=intent.apply_year,
+                    source_event=intent.source_event,
+                    group_id=intent.group_id,
+                )
+                applied += 1
+            except (ValueError, LookupError):
+                self._record_simulation_event(
+                    y,
+                    "settlement_move_dropped",
+                    {
+                        "year": y,
+                        "person_id": int(intent.person_id),
+                        "to_settlement_id": intent.to_settlement_id,
+                        "requested_year": int(intent.requested_year),
+                        "apply_year": int(intent.apply_year),
+                        "move_reason": intent.move_reason,
+                    },
+                )
+        self.pending_settlement_moves = future
+        return applied
 
     def move_person_to_settlement(
         self,
@@ -643,6 +1020,10 @@ class SimulationContext:
         settlement_id: str,
         *,
         move_reason: str | None = None,
+        requested_year: int | None = None,
+        planned_apply_year: int | None = None,
+        source_event: str | None = None,
+        group_id: str | None = None,
     ) -> None:
         sid = (settlement_id or "").strip()
         st = self.settlements_by_id.get(sid)
@@ -692,11 +1073,20 @@ class SimulationContext:
         }
         if move_reason:
             payload["move_reason"] = move_reason
+        if requested_year is not None:
+            payload["requested_year"] = int(requested_year)
+        if planned_apply_year is not None:
+            payload["planned_apply_year"] = int(planned_apply_year)
+        if source_event:
+            payload["source_event"] = source_event
+        if group_id:
+            payload["group_id"] = group_id
         self._record_simulation_event(
             self.current_year,
             "settlement_moved",
             payload,
         )
+        self.invalidate_alive_census_cache()
 
     def _clear_relationship_refs_to(self, dead_ids: set[int]) -> None:
         for rec in self.people:
@@ -846,6 +1236,7 @@ class SimulationContext:
                     },
                 )
             self.current_people_ids.discard(pid)
+        self.invalidate_alive_census_cache()
         self._clear_relationship_refs_to(dead_ids)
         self.couples = [
             (a_id, b_id)
@@ -874,32 +1265,17 @@ class SimulationContext:
 
     def count_alive_in_region(self, region_id: str) -> int:
         rid = (region_id or "").strip()
-        n = 0
-        for pid in self.current_people_ids:
-            rec = self.id_to_record.get(pid)
-            if rec is None:
-                continue
-            if (self._residence_region_id(rec) or "") == rid:
-                n += 1
-        return n
+        if not rid:
+            return 0
+        return int(self.alive_census_cache().count_by_region.get(rid, 0))
 
     def current_people_by_settlement(self) -> dict[str, list[SimulationPersonRecord]]:
         """Alive people grouped by residence settlement, ordered by person id."""
-        out: dict[str, list[SimulationPersonRecord]] = {}
-        for rec in self.iter_current_people(sorted_by_id=True):
-            sid = self._residence_settlement_id(rec)
-            if sid:
-                out.setdefault(sid, []).append(rec)
-        return out
+        return self.alive_census_cache().by_settlement
 
     def current_people_by_region(self) -> dict[str, list[SimulationPersonRecord]]:
         """Alive people grouped by residence region, ordered by person id."""
-        out: dict[str, list[SimulationPersonRecord]] = {}
-        for rec in self.iter_current_people(sorted_by_id=True):
-            rid = self._residence_region_id(rec)
-            if rid:
-                out.setdefault(rid, []).append(rec)
-        return out
+        return self.alive_census_cache().by_region
 
     def effective_regional_population_cap(self, region_id: str) -> int:
         """Time-varying soft cap: config ``carrying_capacity`` × per-region multiplier (≥ 1)."""
@@ -913,14 +1289,9 @@ class SimulationContext:
 
     def count_alive_in_settlement(self, settlement_id: str) -> int:
         sid = (settlement_id or "").strip()
-        n = 0
-        for pid in self.current_people_ids:
-            rec = self.id_to_record.get(pid)
-            if rec is None:
-                continue
-            if self._residence_settlement_id(rec) == sid:
-                n += 1
-        return n
+        if not sid:
+            return 0
+        return int(self.alive_census_cache().count_by_settlement.get(sid, 0))
 
     def sync_settlement_resident_counts(self) -> None:
         by_sid = self.current_people_by_settlement()
@@ -1162,9 +1533,17 @@ class SimulationContext:
         deaths_count: int,
         mortality_rates: dict[str, float],
         evolve_settlements_this_tick: bool = True,
+        persist_to_save: bool = True,
     ) -> None:
         prof = simulation_timing.active_for_year(year)
         tpc = time.perf_counter
+        self.current_year = year
+
+        if prof:
+            t0 = tpc()
+        self.apply_pending_settlement_moves(year)
+        if prof:
+            simulation_timing.accumulate("summary.apply_pending_moves", tpc() - t0)
 
         if evolve_settlements_this_tick:
             if prof:
@@ -1172,17 +1551,17 @@ class SimulationContext:
             self.evolve_settlements_one_year()
             if prof:
                 simulation_timing.accumulate("summary.evolve_settlements", tpc() - t0)
-        if prof:
-            t0 = tpc()
-        set_world_current_year(
-            current_year=year,
-            config_db_path=self.db_path,
-            save_db_path=self.save_db_path,
-            world=self.world,
-        )
-        self.current_year = year
-        if prof:
-            simulation_timing.accumulate("summary.set_world_year", tpc() - t0)
+        if persist_to_save:
+            if prof:
+                t0 = tpc()
+            set_world_current_year(
+                current_year=year,
+                config_db_path=self.db_path,
+                save_db_path=self.save_db_path,
+                world=self.world,
+            )
+            if prof:
+                simulation_timing.accumulate("summary.set_world_year", tpc() - t0)
         if prof:
             t0 = tpc()
         self.refresh_current_people_life_stages(year)
@@ -1262,13 +1641,14 @@ class SimulationContext:
             self.file_store.maybe_flush_after_year(year, self.simulation_start_year)
             if prof:
                 simulation_timing.accumulate("summary.file_store", tpc() - t0)
-        if prof:
-            t0 = tpc()
-        checkpoint_simulation_to_save(
-            self, full_snapshot=self._should_checkpoint_snapshot(year)
-        )
-        if prof:
-            simulation_timing.accumulate("summary.checkpoint_save", tpc() - t0)
+        if persist_to_save:
+            if prof:
+                t0 = tpc()
+            checkpoint_simulation_to_save(
+                self, full_snapshot=self._should_checkpoint_snapshot(year)
+            )
+            if prof:
+                simulation_timing.accumulate("summary.checkpoint_save", tpc() - t0)
 
     def finalize_run(self) -> None:
         """Persist simulation state to ``save.sqlite`` and flush optional file store.

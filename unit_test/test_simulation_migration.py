@@ -84,6 +84,15 @@ class TestSimulationMigration(unittest.TestCase):
                 granite_before = ctx.count_alive_in_region("aeria_granite_range")
                 ww_before = ctx.count_alive_in_region("aeria_westwater_river")
                 simulation_migration_annual_tick(ctx, 1000)
+                self.assertEqual(ctx.count_alive_in_region("aeria_north"), north_before)
+                planned = [
+                    pl
+                    for _y, et, pl in ctx._pending_simulation_events
+                    if et == "settlement_move_planned"
+                ]
+                self.assertTrue(planned)
+                self.assertTrue(ctx.pending_settlement_moves)
+                ctx.apply_pending_settlement_moves(1001)
                 north_after = ctx.count_alive_in_region("aeria_north")
                 granite_after = ctx.count_alive_in_region("aeria_granite_range")
                 ww_after = ctx.count_alive_in_region("aeria_westwater_river")
@@ -235,6 +244,9 @@ class TestSimulationMigration(unittest.TestCase):
                 pid_a, pid_b = mr.person_id, fr.person_id
                 north_before = ctx.count_alive_in_region("aeria_north")
                 simulation_migration_annual_tick(ctx, 1000)
+                self.assertEqual(ctx.count_alive_in_region("aeria_north"), north_before)
+                self.assertTrue(ctx.pending_settlement_moves)
+                ctx.apply_pending_settlement_moves(1001)
                 self.assertLess(ctx.count_alive_in_region("aeria_north"), north_before)
                 pa = ctx.id_to_record[pid_a].person
                 pb = ctx.id_to_record[pid_b].person

@@ -18,6 +18,7 @@ _SURNAME_MODES: tuple[tuple[str, str], ...] = (
     ("lookup", "sur_lookup_rate"),
     ("none", "sur_none_rate"),
 )
+SURNAME_MODE_VALUES: frozenset[str] = frozenset(mode for mode, _ in _SURNAME_MODES)
 
 # ``species.ethnic`` values that have no ``ethnic`` / name-table rows yet → nearest pool.
 _NAME_ETHNIC_ALIASES: dict[str, str] = {
@@ -192,6 +193,77 @@ def _choose_weighted_mode(ethnic_row: sqlite3.Row) -> str:
         )
     modes, weights = zip(*weighted)
     return random.choices(modes, weights=weights, k=1)[0]
+
+
+def _father_last_name_is_kin(
+    *,
+    ethnic_map: dict[str, dict[str, object]],
+    father_last_name: str | None,
+    father_ethnic: str | None,
+) -> bool:
+    father_last = str(father_last_name or "").strip()
+    if not father_last:
+        return False
+    father_er = ethnic_map.get(_name_ethnic_for_tables(str(father_ethnic or "")))
+    if father_er is None:
+        return False
+    for key in ("kin_m", "kin_f"):
+        tpl = str(father_er.get(key) or "").strip()
+        if _matches_kin_template(father_last, tpl):
+            return True
+    return False
+
+
+def _normalize_birth_surname_mode(
+    *,
+    mode: str | None,
+    ethnic_row: dict[str, object],
+    ethnic_map: dict[str, dict[str, object]],
+    father_last_name: str | None,
+    father_ethnic: str | None,
+) -> str:
+    chosen = str(mode or "").strip().lower()
+    if not chosen:
+        chosen = _choose_weighted_mode(ethnic_row)
+    if chosen not in SURNAME_MODE_VALUES:
+        expected = sorted(SURNAME_MODE_VALUES)
+        raise ValueError(f"Unknown surname convention {mode!r}; expected one of {expected!r}")
+    if chosen == "lookup" and _father_last_name_is_kin(
+        ethnic_map=ethnic_map,
+        father_last_name=father_last_name,
+        father_ethnic=father_ethnic,
+    ):
+        return "kin"
+    return chosen
+
+
+def choose_birth_surname_convention(
+    *,
+    ethnic: str,
+    father_last_name: str | None,
+    father_ethnic: str | None,
+    db_path: Path | str | None = None,
+) -> str:
+    """Pick one surname convention for a parent partnership.
+
+    The returned convention is intended to be stored with the relationship and
+    reused for every child of the same parents. ``lookup`` is normalized to
+    ``kin`` when the father's current surname is itself a kin-form name, avoiding
+    literal inheritance of names like ``Oakson`` as a fixed family surname.
+    """
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    ethnic_map, _, _ = _name_tables_cached(str(path.resolve()))
+    eth_key = _name_ethnic_for_tables(ethnic)
+    er = ethnic_map.get(eth_key)
+    if er is None:
+        raise LookupError(f"No ethnic row for ethnic={ethnic!r}")
+    return _normalize_birth_surname_mode(
+        mode=None,
+        ethnic_row=er,
+        ethnic_map=ethnic_map,
+        father_last_name=father_last_name,
+        father_ethnic=father_ethnic,
+    )
 
 
 def _first_name_pool(
@@ -624,6 +696,7 @@ def choose_random_first_last_from_birth(
     father_last_name: str | None,
     father_ethnic: str | None,
     father_first_name: str | None,
+    surname_convention: str | None = None,
     db_path: Path | str | None = None,
     birthplace_region_id: str | None = None,
     world: str = "default",
@@ -661,45 +734,40 @@ def choose_random_first_last_from_birth(
     n_first = roll_name_component_count(lo_f, hi_f)
     first = _compound_weighted(pool_given, n_first, sep_f)
 
-    mode = _choose_weighted_mode(er)
+    mode = _normalize_birth_surname_mode(
+        mode=surname_convention,
+        ethnic_row=er,
+        ethnic_map=ethnic_map,
+        father_last_name=father_last_name,
+        father_ethnic=father_ethnic,
+    )
     bp = (birthplace or "").strip()
     father_last = str(father_last_name or "").strip()
     if mode == "lookup" and father_last:
-        father_er = ethnic_map.get(_name_ethnic_for_tables(str(father_ethnic or "")))
-        father_is_kin = False
-        if father_er is not None:
-            for key in ("kin_m", "kin_f"):
-                tpl = str(father_er.get(key) or "").strip()
-                if _matches_kin_template(father_last, tpl):
-                    father_is_kin = True
-                    break
-        if father_is_kin:
-            mode = "kin"
+        markers = _toponym_marker_tokens(str(path.resolve()))
+        allowed = _allowed_place_strings_for_person(
+            birthplace=bp,
+            birthplace_region_id=birthplace_region_id,
+            simulation_context=simulation_context,
+            world=world,
+            db_path=path,
+        )
+        parts = re.split(r"[\s\-]+", father_last.strip()) if father_last else []
+        dropped = False
+        rebuilt: list[str] = []
+        for part in parts:
+            pk = part.casefold().strip()
+            if pk and pk in markers and not _toponym_matches_allowed_place(pk, allowed):
+                dropped = True
+                continue
+            if part.strip():
+                rebuilt.append(part.strip())
+        if dropped and rebuilt:
+            return first, " ".join(rebuilt)
+        if dropped and not rebuilt:
+            mode = "lookup"
         else:
-            markers = _toponym_marker_tokens(str(path.resolve()))
-            allowed = _allowed_place_strings_for_person(
-                birthplace=bp,
-                birthplace_region_id=birthplace_region_id,
-                simulation_context=simulation_context,
-                world=world,
-                db_path=path,
-            )
-            parts = re.split(r"[\s\-]+", father_last.strip()) if father_last else []
-            dropped = False
-            rebuilt: list[str] = []
-            for part in parts:
-                pk = part.casefold().strip()
-                if pk and pk in markers and not _toponym_matches_allowed_place(pk, allowed):
-                    dropped = True
-                    continue
-                if part.strip():
-                    rebuilt.append(part.strip())
-            if dropped and rebuilt:
-                return first, " ".join(rebuilt)
-            if dropped and not rebuilt:
-                mode = "lookup"
-            else:
-                return first, father_last
+            return first, father_last
 
     if mode == "none":
         last = ""
