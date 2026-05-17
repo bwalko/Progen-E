@@ -2,47 +2,50 @@
 
 ## Scale Population Simulation Toward Millions
 
-### Current Baseline
+### Current Baseline And Targets
 
-- A 250-year run with 250 starting couples ended with 115,976 total people and 17,926 alive.
-- Wall time was about 2 hours 26 minutes, which is a major improvement over the prior 250/250 run.
+- A post-indexing 250-year run with 250 starting couples took about 24 minutes 30 seconds and ended with 14,513 alive people (`unit_test/population_sim_timing.tsv`).
+- An older pre-indexing 250-year / 250-couple run took about 2 hours 26 minutes and ended with 115,976 total people / 17,926 alive.
 - Late-run cost is still too high: roughly 15K active people can make the final 10-year slices take tens of minutes.
 - Near-term target: make 15K active people run the late 10 years in under 5 minutes.
 - Long-term target: support populations in the millions and histories in the tens of millions.
 
 ### Save DB Storage Efficiency
 
-Current finding from `worlds/default/save.sqlite`:
+Pre-alpha save-file policy:
+
+- Do **not** spend engineering effort preserving backward compatibility for old `save.sqlite` files yet.
+- Until beta, save schemas may break freely when that keeps the simulator simpler, faster, or cleaner.
+- Prefer clear failure messages, delete/rebuild instructions, and fresh generated saves over migration code for old pre-alpha save files.
+- Start caring about durable save migrations only once the project enters beta.
+
+Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 
 - File size: about 2.25GB.
 - `simulation_events`: 3,262,904 rows; `payload_json` is about 1.05GB of text.
 - `simulation_people`: 319,939 rows; `person_json` is about 640MB of text.
-- The `world = default` column is obvious dead weight in save tables because the world folder already names the save. It is not the largest byte source, but removing it should simplify keys/indexes and stop repeating a value that cannot vary inside one save.
-- The biggest wins are likely:
-  - flatten common `Person` fields into real columns;
+- Save schema v2/v3 already removed save-side `world` columns, flattened common `Person` fields into typed columns, and compacted genome/mind-body payloads. See `TODONE.md`.
+- Remaining bigger wins are likely:
   - normalize repeated settlement/region text IDs into integer keys;
-  - redesign high-volume event payloads so common ids/roles are columns or relation rows;
+  - continue moving high-volume event detail out of JSON when a specific event family proves hot;
   - keep JSON only for sparse detail or extension fields.
-- Compacting current `person_json` with JSON separators would save roughly 53MB before any schema change. Short-key JSON can save more, but raw short keys make database peeking worse.
 - Keep human-readable inspection as a first-class need. Prefer readable views, browser helpers, or a future derived `world.sqlite` over making the canonical save easy to inspect only by storing long JSON keys everywhere.
 - Treat a generated `world.sqlite` / UI projection as a later project stage, not the primary fix. The canonical `save.sqlite` still needs to become compact because it controls write cost, resume cost, and disk growth during long runs.
 
 Implementation direction:
 
 1. Normalize settlement/region IDs to integer surrogate keys while retaining readable slugs in lookup tables.
-2. Redesign `simulation_events` around common columns plus `simulation_event_people(event_id, person_id, role)` for timeline queries; reserve JSON for rare detail.
-3. Consider optional verbose event logging for debugging-heavy runs.
+2. Consider optional verbose event logging for debugging-heavy runs.
 
 ### Immediate Performance Work
 
-- Run late-year profiling on serious population runs:
+- Run late-year profiling on the next serious population run; profile rows are now recorded in `unit_test/population_sim_profile.tsv`:
 
   ```powershell
-  $env:HISTORY_SIM_PROFILE_LAST_N_YEARS='10'
-  python utils/run_population_simulation.py --years 250 --starting-couples 250 --progress
+  python utils/run_population_simulation.py --years 250 --starting-couples 250 --progress --profile-last-years 10
   ```
 
-- Run a full 250-year / 250-couple production-scale timing comparison after the local performance work.
+- Run a fresh full 250-year / 250-couple production-scale timing comparison only after meaningful new performance changes. A post-indexing comparison already exists in `unit_test/population_sim_timing.tsv`.
 
 ### Hybrid Population Architecture
 
@@ -151,7 +154,7 @@ Important invariant:
 
 ### Proposed Milestones
 
-1. Run a full 250-year / 250-couple production-scale timing comparison.
+1. Use late-year profiling to confirm the next hot path for ~15K active people.
 2. Get 15K active people / 10 late years under 5 minutes.
 3. Add a minimal passive-person schema and import/export path.
 4. Prototype passive births/deaths/partnerships at settlement or cohort level.

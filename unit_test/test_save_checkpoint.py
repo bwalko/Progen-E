@@ -19,6 +19,7 @@ from library.world_save import (
     REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY,
     checkpoint_simulation_to_save,
     clear_world_checkpoint,
+    ensure_checkpoint_schema,
     ensure_checkpoint_schema_for_file,
     parse_region_effective_cap_multipliers,
     rebuild_save_sqlite_for_schema_upgrade,
@@ -130,11 +131,110 @@ class TestSaveCheckpoint(unittest.TestCase):
                     conn.execute("SELECT COUNT(*) FROM simulation_events").fetchone()[0],
                     1,
                 )
+                self.assertEqual(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) FROM simulation_event_people
+                        WHERE person_id = 1 AND role = 'subject'
+                        """
+                    ).fetchone()[0],
+                    1,
+                )
+                event_row = conn.execute(
+                    """
+                    SELECT primary_person_id
+                    FROM simulation_events
+                    WHERE event_type = 'founder_created'
+                    """
+                ).fetchone()
+                self.assertEqual(int(event_row[0]), 1)
                 row = conn.execute(
                     "SELECT first_name, person_json FROM simulation_people WHERE person_id = 1"
                 ).fetchone()
                 self.assertEqual(row[0], "Test")
                 self.assertEqual(json.loads(row[1])["first_name"], "Test")
+
+    def test_v3_events_backfill_to_normalized_event_people(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with sqlite3.connect(sav) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '3')
+                    """
+                )
+                conn.execute("PRAGMA user_version = 3")
+                conn.execute(
+                    """
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        sim_year, event_type, payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        1001,
+                        "household_childcare_shortfall",
+                        json.dumps(
+                            {
+                                "household_member_ids": [1],
+                                "dependent_minor_ids": [2],
+                                "victim_person_id": 2,
+                                "settlement_id": "aeria_north:settlement:1",
+                            },
+                            separators=(",", ":"),
+                        ),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+                ensure_checkpoint_schema(conn)
+
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                links = {
+                    (int(r["person_id"]), str(r["role"]))
+                    for r in conn.execute(
+                        """
+                        SELECT person_id, role
+                        FROM simulation_event_people
+                        ORDER BY person_id, role
+                        """
+                    )
+                }
+                self.assertIn((1, "household_member"), links)
+                self.assertIn((2, "dependent_minor"), links)
+                self.assertIn((2, "victim"), links)
+                event = conn.execute(
+                    """
+                    SELECT primary_person_id, secondary_person_id, settlement_id
+                    FROM simulation_events
+                    WHERE event_type = 'household_childcare_shortfall'
+                    """
+                ).fetchone()
+                self.assertEqual(int(event["primary_person_id"]), 2)
+                self.assertEqual(int(event["secondary_person_id"]), 1)
+                self.assertEqual(
+                    str(event["settlement_id"]), "aeria_north:settlement:1"
+                )
 
     def test_checkpoint_roundtrip_one_person(self) -> None:
         random.seed(42)
@@ -370,6 +470,25 @@ class TestSaveCheckpoint(unittest.TestCase):
                 ).fetchone()[0]
             self.assertGreaterEqual(int(ev), 1)
             self.assertEqual(int(pe), 0)
+            with sqlite3.connect(sav) as conn:
+                link_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM simulation_event_people
+                    WHERE person_id = 1
+                    """
+                ).fetchone()[0]
+                common = conn.execute(
+                    """
+                    SELECT primary_person_id
+                    FROM simulation_events
+                    WHERE event_type = 'founder_created'
+                    ORDER BY id
+                    LIMIT 1
+                    """
+                ).fetchone()
+            self.assertGreaterEqual(int(link_count), 1)
+            self.assertEqual(int(common[0]), 1)
 
     def test_partial_checkpoint_writes_simulation_meta(self) -> None:
         random.seed(2)

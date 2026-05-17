@@ -10,10 +10,26 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 
 _profile_from_year: int | None = None
 _profile_year_count: int = 0
 _sums: dict[str, float] = defaultdict(float)
+
+
+@dataclass(frozen=True)
+class ProfilePhase:
+    phase: str
+    seconds: float
+    percent: float
+
+
+@dataclass(frozen=True)
+class ProfileSnapshot:
+    from_year: int
+    year_count: int
+    total_seconds: float
+    phases: tuple[ProfilePhase, ...]
 
 
 def configure_profile_window(*, start_year: int, duration_years: int) -> None:
@@ -43,23 +59,42 @@ def accumulate(phase: str, seconds: float) -> None:
     _sums[phase] += float(seconds)
 
 
-def print_report_if_configured() -> None:
+def snapshot_if_configured() -> ProfileSnapshot | None:
     if _profile_from_year is None or _profile_year_count <= 0:
-        return
+        return None
     if not _sums:
-        return
+        return None
     total = sum(_sums.values())
     if total <= 0:
+        return None
+    phases = tuple(
+        ProfilePhase(
+            phase=phase,
+            seconds=_sums[phase],
+            percent=100.0 * _sums[phase] / total,
+        )
+        for phase in sorted(_sums.keys(), key=lambda k: -_sums[k])
+    )
+    return ProfileSnapshot(
+        from_year=int(_profile_from_year),
+        year_count=int(_profile_year_count),
+        total_seconds=float(total),
+        phases=phases,
+    )
+
+
+def print_report_if_configured() -> None:
+    snapshot = snapshot_if_configured()
+    if snapshot is None:
         return
     lines = [
         "",
-        f"HISTORY_SIM_PROFILE_LAST_N_YEARS: {_profile_year_count} years "
-        f"(sim years >= {_profile_from_year})",
-        f"Total profiled CPU time: {total:.3f}s ({total / _profile_year_count:.4f}s / year)",
+        f"HISTORY_SIM_PROFILE_LAST_N_YEARS: {snapshot.year_count} years "
+        f"(sim years >= {snapshot.from_year})",
+        f"Total profiled CPU time: {snapshot.total_seconds:.3f}s "
+        f"({snapshot.total_seconds / snapshot.year_count:.4f}s / year)",
         "Phase (sum s)  (% of profiled total)",
     ]
-    for phase in sorted(_sums.keys(), key=lambda k: -_sums[k]):
-        s = _sums[phase]
-        pct = 100.0 * s / total
-        lines.append(f"  {phase:40s} {s:10.3f}  {pct:5.1f}%")
+    for phase in snapshot.phases:
+        lines.append(f"  {phase.phase:40s} {phase.seconds:10.3f}  {phase.percent:5.1f}%")
     print("\n".join(lines))

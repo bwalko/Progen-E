@@ -27,6 +27,12 @@
 
 ### Completed Performance Work
 
+- Added durable late-year profiling records:
+  - `utils/run_population_simulation.py --profile-last-years N` sets the profiling window for one run
+  - console output still prints the phase breakdown
+  - `unit_test/population_sim_profile.tsv` records one row per profiled phase with run metadata
+  - a small `profile_smoke` run verified the recording path
+
 - Built shared annual indexes so expensive modules do not repeatedly scan all alive people:
   - `children_by_parent`
   - `household_members_by_adult`
@@ -71,7 +77,9 @@
 ### Completed Milestone Work
 
 - Built annual household/resource indexes and profiled the final years on smoke runs.
-- Still useful follow-up: run a full 250-year / 250-couple production-scale timing comparison.
+- Ran a post-indexing 250-year / 250-couple production-scale timing comparison:
+  - `unit_test/population_sim_timing.tsv` includes a 1,470 second run ending with 14,513 alive people.
+  - Future full-scale comparisons are still useful after meaningful new performance changes.
 
 ### Completed Save DB Storage Work
 
@@ -108,3 +116,20 @@
   - added `config/genome_save_columns.csv` as the configurable slot-to-trait mapping
   - save payloads use short keys (`g` for genome, `mb` for mind/body) with trait values stored as arrays
   - runtime `Person.genome` / `Person.mind_body` remain named dictionaries so existing simulation logic keeps using trait names
+
+### Still Open After Save Schema v4
+
+- Settlement/region ids are still text in the save schema; integer surrogate-key normalization remains TODO.
+
+### Completed Save Schema v4 Event Normalization
+
+- Added typed `simulation_events` columns for common query keys:
+  - `primary_person_id`
+  - `secondary_person_id`
+  - `settlement_id`
+  - `region_id`
+- Added `simulation_event_people(event_id, person_id, role)` for person timeline queries.
+- New event writes populate both the typed columns and relation rows.
+- Existing v3 event payloads are backfilled when the save schema is ensured or rebuilt.
+- Gradio person timelines prefer `simulation_event_people` and fall back to JSON scanning for legacy/fixture saves.
+- `payload_json` remains for sparse event detail and human-readable inspection.

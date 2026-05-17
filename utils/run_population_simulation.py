@@ -21,7 +21,9 @@ Environment (optional):
 - ``SIM_STORE_FLUSH_BATCH_YEARS`` (default ``50``)
 - ``POPULATION_GROWTH_SIM_SEED`` — fixed seed; otherwise a random seed is chosen and stored in env
 - ``HISTORY_SIM_RESET_WORLD`` — if ``1``/``true``, deletes ``save.sqlite`` before create (full wipe)
+- ``HISTORY_SIM_PROFILE_LAST_N_YEARS`` — profile only the last N simulation years
 - After each run, appends one TSV row to ``unit_test/population_sim_timing.tsv`` (wall time, seed, flush batch, alive count) for trend tracking. Set ``POPULATION_SIM_SKIP_TIMING_LOG=1`` to disable.
+- When late-year profiling is enabled, appends phase rows to ``unit_test/population_sim_profile.tsv``.
 """
 
 from __future__ import annotations
@@ -55,6 +57,7 @@ _OUTPUT_PATH = _REPORT_DIR / "population_growth_simulation_report.txt"
 _PEOPLE_JSON_PATH = _REPORT_DIR / "population_growth_simulation_people.json"
 _PLACES_GEO_PATH = _REPORT_DIR / "population_growth_simulation_places_geo.json"
 _TIMING_LOG_PATH = _REPORT_DIR / "population_sim_timing.tsv"
+_PROFILE_LOG_PATH = _REPORT_DIR / "population_sim_profile.tsv"
 
 
 def _append_population_sim_timing_row(
@@ -83,6 +86,37 @@ def _append_population_sim_timing_row(
     )
     with path.open("a", encoding="utf-8") as f:
         f.write(line)
+
+
+def _append_population_sim_profile_rows(
+    *,
+    path: Path,
+    iso_ts: str,
+    years: int,
+    world_id: str,
+    sim_seed: int,
+    flush: int,
+    starting_couples: int,
+    alive_end: int,
+    snapshot: simulation_timing.ProfileSnapshot,
+) -> None:
+    """Append one row per profiled phase for trend comparisons."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = (
+        "iso_timestamp\tyears\tworld_id\tsim_seed\tflush_batch_years\t"
+        "starting_couples\talive_end\tprofile_from_year\tprofile_year_count\t"
+        "profile_total_s\tphase\tphase_s\tphase_pct\n"
+    )
+    if not path.exists():
+        path.write_text(header, encoding="utf-8")
+    with path.open("a", encoding="utf-8") as f:
+        for phase in snapshot.phases:
+            f.write(
+                f"{iso_ts}\t{years}\t{world_id}\t{sim_seed}\t{flush}\t"
+                f"{starting_couples}\t{alive_end}\t{snapshot.from_year}\t"
+                f"{snapshot.year_count}\t{snapshot.total_seconds:.6f}\t"
+                f"{phase.phase}\t{phase.seconds:.6f}\t{phase.percent:.3f}\n"
+            )
 
 
 def _elapsed_hhmmss(seconds: float) -> str:
@@ -151,6 +185,13 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print SIM_PROGRESS lines after each yearly save for streaming UIs.",
     )
+    p.add_argument(
+        "--profile-last-years",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Set HISTORY_SIM_PROFILE_LAST_N_YEARS for this run.",
+    )
     args = p.parse_args()
     if args.years < 1:
         p.error("--years must be >= 1")
@@ -158,6 +199,8 @@ def _parse_args() -> argparse.Namespace:
         p.error("--starting-couples must be >= 1")
     if args.flush_batch_years is not None and args.flush_batch_years < 1:
         p.error("--flush-batch-years must be >= 1")
+    if args.profile_last_years is not None and args.profile_last_years < 1:
+        p.error("--profile-last-years must be >= 1")
     return args
 
 
@@ -167,6 +210,8 @@ def main() -> None:
         os.environ["POPULATION_GROWTH_SIM_SEED"] = str(int(args.seed))
     if args.flush_batch_years is not None:
         os.environ["SIM_STORE_FLUSH_BATCH_YEARS"] = str(int(args.flush_batch_years))
+    if args.profile_last_years is not None:
+        os.environ["HISTORY_SIM_PROFILE_LAST_N_YEARS"] = str(int(args.profile_last_years))
     if args.reset_world:
         os.environ["HISTORY_SIM_RESET_WORLD"] = "1"
     if args.skip_timing_log:
@@ -227,9 +272,11 @@ def main() -> None:
         places_geo_path=_PLACES_GEO_PATH,
     )
     simulation_timing.print_report_if_configured()
+    profile_snapshot = simulation_timing.snapshot_if_configured()
 
     elapsed = time.perf_counter() - t0
     alive_end = len(ctx.current_people_ids)
+    iso_ts = datetime.now(timezone.utc).isoformat()
     if os.environ.get("POPULATION_SIM_SKIP_TIMING_LOG", "").strip().lower() not in (
         "1",
         "true",
@@ -237,7 +284,7 @@ def main() -> None:
     ):
         _append_population_sim_timing_row(
             path=_TIMING_LOG_PATH,
-            iso_ts=datetime.now(timezone.utc).isoformat(),
+            iso_ts=iso_ts,
             elapsed_s=elapsed,
             years=int(args.years),
             world_id=str(args.world_id).strip(),
@@ -247,6 +294,19 @@ def main() -> None:
             alive_end=alive_end,
         )
         print(f"timing_log_appended={_TIMING_LOG_PATH.resolve()}")
+        if profile_snapshot is not None:
+            _append_population_sim_profile_rows(
+                path=_PROFILE_LOG_PATH,
+                iso_ts=iso_ts,
+                years=int(args.years),
+                world_id=str(args.world_id).strip(),
+                sim_seed=int(sim_seed),
+                flush=flush,
+                starting_couples=int(args.starting_couples),
+                alive_end=alive_end,
+                snapshot=profile_snapshot,
+            )
+            print(f"profile_log_appended={_PROFILE_LOG_PATH.resolve()}")
     candidates = sorted(
         (_ROOT / "worlds" / args.world_id / "temp").glob("simulation_run_*/yearly_summary.csv"),
         key=lambda path: path.stat().st_mtime,

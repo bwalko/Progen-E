@@ -7,6 +7,7 @@ import csv
 import html
 import importlib.util
 import json
+import logging
 import queue
 import shlex
 import re
@@ -28,6 +29,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 CONFIG_DIR = PROJECT_ROOT / "config"
 WORLDS_DIR = PROJECT_ROOT / "worlds"
+TEMP_DIR = PROJECT_ROOT / "temp"
+APP_LOG_PATH = TEMP_DIR / "gradio_data_browser.log"
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 1000
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -59,9 +62,33 @@ LEGACY_SCORE_KEY_TO_LABEL = {
     "martyr_reformer": "Martyr",
 }
 LEGACY_SCORE_LABEL_TO_KEY = {v: k for k, v in LEGACY_SCORE_KEY_TO_LABEL.items()}
+LOGGER = logging.getLogger("gradio_data_browser")
 
 from library.world_map_geometry import build_world_map_geometry  # noqa: E402
 from library.world_map_svg import load_world_map_overlays, render_world_map_svg  # noqa: E402
+
+
+def configure_app_logging() -> Path:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    LOGGER.setLevel(logging.DEBUG)
+    LOGGER.propagate = False
+    if not any(isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == APP_LOG_PATH for handler in LOGGER.handlers):
+        handler = logging.FileHandler(APP_LOG_PATH, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [pid=%(process)d] %(message)s"))
+        LOGGER.addHandler(handler)
+    return APP_LOG_PATH
+
+
+def _log_info(message: str, *args: object) -> None:
+    if not LOGGER.handlers:
+        configure_app_logging()
+    LOGGER.info(message, *args)
+
+
+def _log_exception(message: str, *args: object) -> None:
+    if not LOGGER.handlers:
+        configure_app_logging()
+    LOGGER.exception(message, *args)
 
 
 APP_CSS = """
@@ -254,6 +281,30 @@ body.dark .place-sheet,
 }
 .place-sheet li {
     margin: 3px 0;
+}
+.places-browser-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.places-browser-table th,
+.places-browser-table td {
+    border-bottom: 1px solid var(--place-card-border);
+    padding: 7px 8px;
+    text-align: left;
+    vertical-align: top;
+}
+.places-browser-table th {
+    color: var(--place-title) !important;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .02em;
+}
+.places-browser-table tr[data-place-row] {
+    cursor: pointer;
+}
+.places-browser-table tr[data-place-row]:hover {
+    background: var(--place-card-bg) !important;
 }
 .place-map {
     width: 100%;
@@ -708,6 +759,8 @@ def _resolve_saved_world(con: sqlite3.Connection, selected_world: str) -> str:
 
 def _dataframe(rows: Iterable[sqlite3.Row | dict[str, object]], headers: list[str], *, key: str | None = None) -> gr.Dataframe:
     values = [[row.get(header, "") if isinstance(row, dict) else row[header] for header in headers] for row in rows]
+    if key and key.startswith("places-"):
+        _log_info("dataframe key=%s rows=%s columns=%s", key, len(values), len(headers))
     return gr.Dataframe(
         value=values,
         headers=headers,
@@ -1262,8 +1315,29 @@ def _person_link_html(con: sqlite3.Connection, world: str, person_id: object) ->
 
 def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -> list[sqlite3.Row]:
     events_has_world = "world" in _table_columns(con, "simulation_events")
+    event_people_exists = _has_table(con, "simulation_event_people")
     world_clause = "where world = ? and" if events_has_world else "where"
     prefix_params: list[object] = [world] if events_has_world else []
+    if event_people_exists:
+        event_people_world_clause = "and e.world = ?" if events_has_world else ""
+        event_people_params: list[object] = [person_id]
+        if events_has_world:
+            event_people_params.append(world)
+        return con.execute(
+            f"""
+            select e.sim_year, e.event_type, e.payload_json
+            from simulation_events e
+            where exists (
+                select 1
+                from simulation_event_people ep
+                where ep.event_id = e.id
+                  and ep.person_id = ?
+            )
+            {event_people_world_clause}
+            order by e.sim_year asc, e.id asc
+            """,
+            tuple(event_people_params),
+        ).fetchall()
     return con.execute(
         f"""
         select sim_year, event_type, payload_json
@@ -2488,6 +2562,7 @@ def _snapshot_table_rows(con: sqlite3.Connection, table: str, world: str) -> lis
 
 
 def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, object]:
+    started = time.perf_counter()
     people: list[dict[str, object]] = []
     if _has_table(con, "simulation_people"):
         where, params = _alive_where(con, world)
@@ -2501,7 +2576,7 @@ def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, objec
     regions = _snapshot_table_rows(con, "simulation_regions", world)
     settlements = _snapshot_table_rows(con, "simulation_settlements", world)
     polities = _snapshot_table_rows(con, "simulation_polities", world)
-    return {
+    snapshot = {
         "world": world,
         "people": people,
         "regions": regions,
@@ -2510,6 +2585,18 @@ def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, objec
         "territory": _snapshot_table_rows(con, "simulation_polity_territory", world),
         "seats": _snapshot_table_rows(con, "simulation_office_seats", world),
     }
+    _log_info(
+        "place_snapshot_loaded world=%s people=%s regions=%s settlements=%s polities=%s territory=%s seats=%s elapsed=%.4fs",
+        world,
+        len(people),
+        len(regions),
+        len(settlements),
+        len(polities),
+        len(_snapshot_rows(snapshot, "territory")),
+        len(_snapshot_rows(snapshot, "seats")),
+        time.perf_counter() - started,
+    )
+    return snapshot
 
 
 def _snapshot_rows(snapshot: dict[str, object], name: str) -> list[dict[str, object]]:
@@ -2945,19 +3032,116 @@ def _empty_place_sheet(view: str) -> str:
     return f'<div class="place-sheet muted">Browse {html.escape(selected)}, then click a row to inspect it.</div>'
 
 
-def load_regions_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, str, str]:
-    values, headers, status, state, selected = _places_browser_data_and_state(world, "Regions", search, limit)
-    return _dataframe(values, headers, key=f"places-{selected.lower()}-{len(headers)}"), status, state, _empty_place_sheet("regions")
+def _place_row_click_onclick(key: str) -> str:
+    value = json.dumps(str(key))
+    return (
+        "event.preventDefault();"
+        "const input=document.querySelector('#place-open-key textarea,#place-open-key input');"
+        "const button=document.querySelector('#place-open-button button,#place-open-button');"
+        "if(input&&button){"
+        f"const value={value};"
+        "const descriptor=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value');"
+        "if(descriptor&&descriptor.set){descriptor.set.call(input,value);}else{input.value=value;}"
+        "input.dispatchEvent(new Event('input',{bubbles:true}));"
+        "input.dispatchEvent(new Event('change',{bubbles:true}));"
+        "button.click();"
+        "}"
+        "return false;"
+    )
 
 
-def load_towns_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, str, str]:
-    values, headers, status, state, selected = _places_browser_data_and_state(world, "Towns", search, limit)
-    return _dataframe(values, headers, key=f"places-{selected.lower()}-{len(headers)}"), status, state, _empty_place_sheet("towns")
+def _places_table_html(values: list[dict[str, object]], headers: list[str], keys: list[str], selected: str) -> str:
+    if not values:
+        return (
+            '<div class="place-sheet">'
+            f'<p class="place-muted">No {html.escape(selected.lower())} matched the current filters.</p>'
+            "</div>"
+        )
+    header_html = "".join(f"<th>{html.escape(str(header))}</th>" for header in headers)
+    row_html: list[str] = []
+    for row, key in zip(values, keys):
+        cells = "".join(f"<td>{html.escape(str(row.get(header, '')))}</td>" for header in headers)
+        onclick = html.escape(_place_row_click_onclick(key), quote=True)
+        row_html.append(f'<tr data-place-row="1" onclick="{onclick}">{cells}</tr>')
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(selected)}</h2>'
+        '<div class="place-muted">Click a row to inspect it.</div>'
+        '<table class="places-browser-table">'
+        f"<thead><tr>{header_html}</tr></thead>"
+        f"<tbody>{''.join(row_html)}</tbody>"
+        "</table>"
+        "</div>"
+    )
 
 
-def load_polities_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, str, str]:
-    values, headers, status, state, selected = _places_browser_data_and_state(world, "Polities", search, limit)
-    return _dataframe(values, headers, key=f"places-{selected.lower()}-{len(headers)}"), status, state, _empty_place_sheet("polities")
+def load_places_html_browser(world: str, view: str, search: str, limit: object) -> tuple[str, str, str]:
+    started = time.perf_counter()
+    _log_info(
+        "places_html_load_start view=%r world=%r search_len=%s limit=%r",
+        view,
+        world,
+        len(search or ""),
+        limit,
+    )
+    try:
+        values, headers, status, keys, selected = _places_browser_data(world, view, search, limit)
+        table_html = _places_table_html(values, headers, keys, selected)
+        _log_info(
+            "places_html_load_done selected=%s rows=%s headers=%s keys=%s html_bytes=%s elapsed=%.4fs status=%r",
+            selected,
+            len(values),
+            len(headers),
+            len(keys),
+            len(table_html),
+            time.perf_counter() - started,
+            status,
+        )
+        return table_html, status, _empty_place_sheet(selected.lower())
+    except Exception:
+        _log_exception("places_html_load_error view=%r world=%r limit=%r", view, world, limit)
+        raise
+
+
+def load_regions_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[list[list[object]], str, list[str], str]:
+    return _load_place_view_with_detail_reset("Regions", world, search, limit)
+
+
+def load_towns_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[list[list[object]], str, list[str], str]:
+    return _load_place_view_with_detail_reset("Towns", world, search, limit)
+
+
+def load_polities_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[list[list[object]], str, list[str], str]:
+    return _load_place_view_with_detail_reset("Polities", world, search, limit)
+
+
+def _load_place_view_with_detail_reset(view: str, world: str, search: str, limit: object) -> tuple[list[list[object]], str, list[str], str]:
+    started = time.perf_counter()
+    _log_info(
+        "place_load_start view=%s world=%r search_len=%s limit=%r",
+        view,
+        world,
+        len(search or ""),
+        limit,
+    )
+    try:
+        values, headers, status, keys, selected = _places_browser_data(world, view, search, limit)
+        table_values = _table_values(values, headers)
+        elapsed = time.perf_counter() - started
+        _log_info(
+            "place_load_done view=%s selected=%s rows=%s headers=%s keys=%s elapsed=%.4fs status=%r",
+            view,
+            selected,
+            len(values),
+            len(headers),
+            len(keys),
+            elapsed,
+            status,
+        )
+        return table_values, status, keys, _empty_place_sheet(selected.lower())
+    except Exception:
+        _log_exception("place_load_error view=%s world=%r limit=%r", view, world, limit)
+        raise
 
 
 def _places_browser_data(
@@ -3429,16 +3613,25 @@ def _places_browser_data_and_state(
     search: str,
     limit: object,
 ) -> tuple[list[dict[str, object]], list[str], str, str, str]:
+    started = time.perf_counter()
     selected = (view or "Regions").strip()
     headers = _place_headers(selected)
     if not world:
+        _log_info("places_data_skip view=%s reason=no_world elapsed=%.4fs", selected, time.perf_counter() - started)
         return [], headers, "Choose a world.", _empty_place_state_json(selected), selected
     path = _db_path(world, "Save DB")
     if not path.exists():
+        _log_info(
+            "places_data_skip view=%s reason=missing_save path=%s elapsed=%.4fs",
+            selected,
+            path,
+            time.perf_counter() - started,
+        )
         return [], headers, f"{path} is missing. Run a simulation first.", _empty_place_state_json(selected), selected
     details: dict[str, str] = {}
     with _connect_readonly(path) as con:
         saved_world = _resolve_saved_world(con, world)
+        _log_info("places_data_db_open view=%s path=%s selected_world=%s saved_world=%s", selected, path, world, saved_world)
         snapshot = _load_place_snapshot(con, saved_world)
         values, headers, item_ids, selected = _places_rows_from_snapshot(snapshot, selected, search, limit)
         for item_id in item_ids:
@@ -3446,6 +3639,15 @@ def _places_browser_data_and_state(
     saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
     status = f"{path.name}: showing {len(values)} {selected.lower()}{saved_world_note}. Click a row for details."
     state = json.dumps({"view": selected, "keys": item_ids, "details": details})
+    _log_info(
+        "places_data_done view=%s rows=%s keys=%s details=%s state_bytes=%s elapsed=%.4fs",
+        selected,
+        len(values),
+        len(item_ids),
+        len(details),
+        len(state),
+        time.perf_counter() - started,
+    )
     return values, headers, status, state, selected
 
 
@@ -3671,6 +3873,24 @@ def render_place_detail(world: str, view: str, key: object) -> str:
     return html_out
 
 
+def render_places_html_selection(world: str, view: str, key: object) -> str:
+    started = time.perf_counter()
+    try:
+        detail = render_place_detail(world, view, key)
+        _log_info(
+            "places_html_select_done view=%r world=%r key=%r detail_bytes=%s elapsed=%.4fs",
+            view,
+            world,
+            key,
+            len(detail),
+            time.perf_counter() - started,
+        )
+        return detail
+    except Exception:
+        _log_exception("places_html_select_error view=%r world=%r key=%r", view, world, key)
+        raise
+
+
 def render_world_map_selection_detail(world: str, selection_json: str) -> str:
     if not selection_json:
         return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
@@ -3732,19 +3952,40 @@ def select_place_from_table(keys: object, world: str, view: str, evt: gr.SelectD
 
 
 def _select_place_view(view: str, keys: object, world: str, evt: gr.SelectData) -> str:
+    started = time.perf_counter()
     try:
         row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
         index = int(row_index)
     except Exception:
+        _log_exception("place_select_bad_event view=%s world=%r", view, world)
         return '<div class="place-sheet muted">Click a region, town, or polity row to inspect it.</div>'
     detail = _place_detail_from_state(keys, index)
     if detail is not None:
+        _log_info(
+            "place_select_from_state view=%s world=%r row=%s detail_bytes=%s elapsed=%.4fs",
+            view,
+            world,
+            index,
+            len(detail),
+            time.perf_counter() - started,
+        )
         return detail
     try:
         key = keys[index]  # type: ignore[index]
     except Exception:
+        _log_exception("place_select_missing_key view=%s world=%r row=%s keys_type=%s", view, world, index, type(keys).__name__)
         return '<div class="place-sheet muted">Click a region, town, or polity row to inspect it.</div>'
-    return render_place_detail(world, view, key)
+    detail = render_place_detail(world, view, key)
+    _log_info(
+        "place_select_rendered view=%s world=%r row=%s key=%r detail_bytes=%s elapsed=%.4fs",
+        view,
+        world,
+        index,
+        key,
+        len(detail),
+        time.perf_counter() - started,
+    )
+    return detail
 
 
 def select_region_from_table(keys: object, world: str, evt: gr.SelectData) -> str:
@@ -4026,20 +4267,23 @@ def run_simulation_from_ui(
 
 
 def build_app(default_world: str = "default") -> gr.Blocks:
+    configure_app_logging()
+    started = time.perf_counter()
+    _log_info("build_app_start default_world=%r", default_world)
     worlds = _world_names()
     csvs = _csv_names()
     initial_world = default_world if default_world in worlds else (worlds[0] if worlds else "")
     initial_tables = _table_names(initial_world, "Config DB") if initial_world else []
-    initial_region_rows, initial_region_headers = [], PLACE_REGION_HEADERS
-    initial_town_rows, initial_town_headers = [], PLACE_TOWN_HEADERS
-    initial_polity_rows, initial_polity_headers = [], PLACE_POLITY_HEADERS
-    initial_region_status = "Click Browse Regions to load a local snapshot."
-    initial_town_status = "Click Browse Towns to load a local snapshot."
-    initial_polity_status = "Click Browse Polities to load a local snapshot."
-    initial_region_state = _empty_place_state_json("Regions")
-    initial_town_state = _empty_place_state_json("Towns")
-    initial_polity_state = _empty_place_state_json("Polities")
     initial_world_map = render_world_map_html(initial_world, True, True, True) if initial_world else ""
+    _log_info(
+        "build_app_initial_data worlds=%s csvs=%s initial_world=%r initial_tables=%s map_bytes=%s elapsed=%.4fs",
+        len(worlds),
+        len(csvs),
+        initial_world,
+        len(initial_tables),
+        len(initial_world_map),
+        time.perf_counter() - started,
+    )
 
     with gr.Blocks(title="History Project Data Browser") as app:
         gr.HTML(f"<style>{APP_CSS}</style>")
@@ -4106,99 +4350,6 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         max_lines=24,
                         interactive=False,
                         buttons=["copy"],
-                    )
-
-        with gr.Tab("Regions") as regions_tab:
-            with gr.Row(elem_classes=["world-browser"]):
-                with gr.Column(scale=5):
-                    with gr.Row():
-                        region_world = gr.Dropdown(worlds, value=initial_world, label="World")
-                        region_limit = gr.Number(value=50, label="Limit", precision=0)
-                    region_search = gr.Textbox(
-                        label="Search Regions",
-                        placeholder="Region name or id...",
-                    )
-                    region_load = gr.Button("Browse Regions", variant="primary")
-                    region_status = gr.Textbox(value=initial_region_status, label="Status", interactive=False)
-                    region_table = gr.Dataframe(
-                        value=_table_values(initial_region_rows, initial_region_headers),
-                        headers=initial_region_headers,
-                        datatype=["str"] * len(initial_region_headers),
-                        column_count=len(initial_region_headers),
-                        label="Regions",
-                        interactive=False,
-                        wrap=False,
-                        max_height=520,
-                        elem_id="region-table",
-                        buttons=["fullscreen"],
-                    )
-                    region_keys_state = gr.State(initial_region_state)
-                with gr.Column(scale=6):
-                    region_sheet = gr.HTML(
-                        value='<div class="place-sheet muted">Browse regions, then click a row to inspect it.</div>',
-                        label="Region Sheet",
-                    )
-
-        with gr.Tab("Towns") as towns_tab:
-            with gr.Row(elem_classes=["world-browser"]):
-                with gr.Column(scale=5):
-                    with gr.Row():
-                        town_world = gr.Dropdown(worlds, value=initial_world, label="World")
-                        town_limit = gr.Number(value=50, label="Limit", precision=0)
-                    town_search = gr.Textbox(
-                        label="Search Towns",
-                        placeholder="Town, region, status, or level...",
-                    )
-                    town_load = gr.Button("Browse Towns", variant="primary")
-                    town_status = gr.Textbox(value=initial_town_status, label="Status", interactive=False)
-                    town_table = gr.Dataframe(
-                        value=_table_values(initial_town_rows, initial_town_headers),
-                        headers=initial_town_headers,
-                        datatype=["str"] * len(initial_town_headers),
-                        column_count=len(initial_town_headers),
-                        label="Towns",
-                        interactive=False,
-                        wrap=False,
-                        max_height=520,
-                        elem_id="town-table",
-                        buttons=["fullscreen"],
-                    )
-                    town_keys_state = gr.State(initial_town_state)
-                with gr.Column(scale=6):
-                    town_sheet = gr.HTML(
-                        value='<div class="place-sheet muted">Browse towns, then click a row to inspect it.</div>',
-                        label="Town Sheet",
-                    )
-
-        with gr.Tab("Polities") as polities_tab:
-            with gr.Row(elem_classes=["world-browser"]):
-                with gr.Column(scale=5):
-                    with gr.Row():
-                        polity_world = gr.Dropdown(worlds, value=initial_world, label="World")
-                        polity_limit = gr.Number(value=50, label="Limit", precision=0)
-                    polity_search = gr.Textbox(
-                        label="Search Polities",
-                        placeholder="Polity name, type, or status...",
-                    )
-                    polity_load = gr.Button("Browse Polities", variant="primary")
-                    polity_status = gr.Textbox(value=initial_polity_status, label="Status", interactive=False)
-                    polity_table = gr.Dataframe(
-                        value=_table_values(initial_polity_rows, initial_polity_headers),
-                        headers=initial_polity_headers,
-                        datatype=["str"] * len(initial_polity_headers),
-                        column_count=len(initial_polity_headers),
-                        label="Polities",
-                        interactive=False,
-                        wrap=False,
-                        max_height=520,
-                        elem_id="polity-table",
-                        buttons=["fullscreen"],
-                    )
-                    polity_keys_state = gr.State(initial_polity_state)
-                with gr.Column(scale=6):
-                    polity_sheet = gr.HTML(
-                        value='<div class="place-sheet muted">Browse polities, then click a row to inspect it.</div>',
-                        label="Polity Sheet",
                     )
 
         with gr.Tab("World Map") as world_map_tab:
@@ -4334,33 +4485,12 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             person_browser_inputs,
             [person_table, person_status, person_ids_state],
         )
-        region_inputs = [region_world, region_search, region_limit]
-        town_inputs = [town_world, town_search, town_limit]
-        polity_inputs = [polity_world, polity_search, polity_limit]
-        region_outputs = [region_table, region_status, region_keys_state, region_sheet]
-        town_outputs = [town_table, town_status, town_keys_state, town_sheet]
-        polity_outputs = [polity_table, polity_status, polity_keys_state, polity_sheet]
-        region_load.click(load_regions_browser_with_detail_reset, region_inputs, region_outputs)
-        town_load.click(load_towns_browser_with_detail_reset, town_inputs, town_outputs)
-        polity_load.click(load_polities_browser_with_detail_reset, polity_inputs, polity_outputs)
-        for region_input in region_inputs:
-            region_input.change(load_regions_browser_with_detail_reset, region_inputs, region_outputs)
-        for town_input in town_inputs:
-            town_input.change(load_towns_browser_with_detail_reset, town_inputs, town_outputs)
-        for polity_input in polity_inputs:
-            polity_input.change(load_polities_browser_with_detail_reset, polity_inputs, polity_outputs)
-        region_search.submit(load_regions_browser_with_detail_reset, region_inputs, region_outputs)
-        town_search.submit(load_towns_browser_with_detail_reset, town_inputs, town_outputs)
-        polity_search.submit(load_polities_browser_with_detail_reset, polity_inputs, polity_outputs)
         map_inputs = [map_world, map_include_overlays, map_noisy_edges, map_labels]
         map_outputs = [world_map_html, map_sheet]
         map_refresh.click(render_world_map_with_detail_reset, map_inputs, map_outputs)
         for map_input in map_inputs:
             map_input.change(render_world_map_with_detail_reset, map_inputs, map_outputs)
         map_open_button.click(render_world_map_selection_detail, [map_world, map_open_selection], map_sheet)
-        region_table.select(select_region_from_table, [region_keys_state, region_world], region_sheet)
-        town_table.select(select_town_from_table, [town_keys_state, town_world], town_sheet)
-        polity_table.select(select_polity_from_table, [polity_keys_state, polity_world], polity_sheet)
         world.change(refresh_sqlite_tables, [world, db_kind], [table, sqlite_status])
         db_kind.change(refresh_sqlite_tables, [world, db_kind], [table, sqlite_status])
         sqlite_load.click(
@@ -4395,6 +4525,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             [sim_status, sim_preview, sim_stdout, sim_stderr, sim_progress],
         )
 
+    _log_info("build_app_done elapsed=%.4fs", time.perf_counter() - started)
     return app
 
 
@@ -4404,7 +4535,15 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Gradio host.")
     parser.add_argument("--port", type=int, default=7860, help="Gradio port.")
     args = parser.parse_args()
-    build_app(args.world).launch(server_name=args.host, server_port=args.port)
+    log_path = configure_app_logging()
+    _log_info(
+        "main_start argv=%r executable=%s gradio_version=%s log_path=%s",
+        sys.argv,
+        sys.executable,
+        getattr(gr, "__version__", "unknown"),
+        log_path,
+    )
+    build_app(args.world).launch(server_name=args.host, server_port=args.port, show_error=True)
 
 
 if __name__ == "__main__":

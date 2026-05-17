@@ -31,8 +31,9 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 3
+SAVE_SCHEMA_VERSION = 4
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
+EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 
 _SAVE_REBUILD_SOURCE_SCHEMA = "source_db"
 
@@ -59,6 +60,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_couples",
     "simulation_paramours",
     "simulation_events",
+    "simulation_event_people",
     "simulation_regions",
     "simulation_settlements",
     "simulation_polities",
@@ -265,7 +267,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
             f"save.sqlite schema version {version} is newer than supported "
             f"version {SAVE_SCHEMA_VERSION}"
         )
-    if version not in (0, SAVE_SCHEMA_VERSION):
+    if version not in (0, 3, SAVE_SCHEMA_VERSION):
         raise RuntimeError(
             f"save.sqlite schema version {version} needs a migration before "
             f"this code can open it"
@@ -386,6 +388,258 @@ def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
         )
 
 
+_EVENT_PERSON_SCALAR_ROLES: dict[str, str] = {
+    "person_id": "subject",
+    "person_a_id": "person_a",
+    "person_b_id": "person_b",
+    "child_id": "child",
+    "father_id": "father",
+    "mother_id": "mother",
+    "victim_person_id": "victim",
+    "purseholder_person_id": "purseholder",
+    "moved_person_id": "moved",
+    "holder_person_id": "holder",
+    "previous_holder_id": "previous_holder",
+    "prior_head_person_id": "prior_head",
+    "claimant_id": "claimant",
+}
+
+_EVENT_PERSON_LIST_ROLES: dict[str, str] = {
+    "household_member_ids": "household_member",
+    "dependent_minor_ids": "dependent_minor",
+    "moved_person_ids": "moved",
+}
+
+_EVENT_SETTLEMENT_KEYS: tuple[str, ...] = (
+    "settlement_id",
+    "to_settlement_id",
+    "from_settlement_id",
+    "current_settlement_id",
+    "birthplace_settlement_id",
+)
+
+_EVENT_REGION_KEYS: tuple[str, ...] = (
+    "region_id",
+    "to_region_id",
+    "from_region_id",
+    "current_region_id",
+    "birthplace_region_id",
+)
+
+
+def _coerce_event_person_id(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        pid = int(value)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def _coerce_event_person_id_list(value: object) -> list[int]:
+    raw = value
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                raw = json.loads(text)
+            except json.JSONDecodeError:
+                raw = text
+        if isinstance(raw, str):
+            raw = [part.strip() for part in raw.split(";")]
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    out: list[int] = []
+    seen: set[int] = set()
+    for item in raw:
+        pid = _coerce_event_person_id(item)
+        if pid is None or pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def _event_person_links_from_payload(payload: dict) -> list[tuple[int, str]]:
+    """Extract person timeline links from common event payload fields."""
+    links: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+
+    def add(pid_value: object, role: str) -> None:
+        pid = _coerce_event_person_id(pid_value)
+        clean_role = str(role or "related").strip() or "related"
+        if pid is None:
+            return
+        key = (pid, clean_role)
+        if key in seen:
+            return
+        seen.add(key)
+        links.append(key)
+
+    for key, role in _EVENT_PERSON_SCALAR_ROLES.items():
+        if key in payload:
+            add(payload.get(key), role)
+
+    for key, role in _EVENT_PERSON_LIST_ROLES.items():
+        if key in payload:
+            for pid in _coerce_event_person_id_list(payload.get(key)):
+                add(pid, role)
+
+    for key, value in payload.items():
+        if key in _EVENT_PERSON_SCALAR_ROLES or key in _EVENT_PERSON_LIST_ROLES:
+            continue
+        if key.endswith("_person_id"):
+            add(value, key[: -len("_person_id")] or "related")
+        elif key.endswith("_person_ids"):
+            role = key[: -len("_person_ids")] or "related"
+            for pid in _coerce_event_person_id_list(value):
+                add(pid, role)
+
+    return links
+
+
+def _first_payload_text(payload: dict, keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        val = payload.get(key)
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text:
+            return text
+    return None
+
+
+def _event_common_columns(payload: dict) -> tuple[int | None, int | None, str | None, str | None]:
+    person_ids: list[int] = []
+    seen: set[int] = set()
+    for pid, _role in _event_person_links_from_payload(payload):
+        if pid in seen:
+            continue
+        seen.add(pid)
+        person_ids.append(pid)
+    primary = person_ids[0] if person_ids else None
+    secondary = person_ids[1] if len(person_ids) > 1 else None
+    return (
+        primary,
+        secondary,
+        _first_payload_text(payload, _EVENT_SETTLEMENT_KEYS),
+        _first_payload_text(payload, _EVENT_REGION_KEYS),
+    )
+
+
+def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sim_year INTEGER,
+            event_type TEXT NOT NULL,
+            primary_person_id INTEGER,
+            secondary_person_id INTEGER,
+            settlement_id TEXT,
+            region_id TEXT,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS simulation_event_people (
+            event_id INTEGER NOT NULL,
+            person_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'related',
+            PRIMARY KEY (event_id, person_id, role)
+        );
+        """
+    )
+    event_cols = set(_table_columns(conn, "simulation_events"))
+    for column_sql in (
+        "primary_person_id INTEGER",
+        "secondary_person_id INTEGER",
+        "settlement_id TEXT",
+        "region_id TEXT",
+    ):
+        col = column_sql.split()[0]
+        if col not in event_cols:
+            conn.execute(f"ALTER TABLE simulation_events ADD COLUMN {column_sql}")
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_simulation_events_year
+        ON simulation_events (sim_year);
+        CREATE INDEX IF NOT EXISTS idx_simulation_events_type
+        ON simulation_events (event_type);
+        CREATE INDEX IF NOT EXISTS idx_simulation_events_primary_person
+        ON simulation_events (primary_person_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_events_settlement
+        ON simulation_events (settlement_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_events_region
+        ON simulation_events (region_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_people_person
+        ON simulation_event_people (person_id, event_id);
+        """
+    )
+    _backfill_simulation_event_people(conn)
+
+
+def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "save_metadata"):
+        done = conn.execute(
+            """
+            SELECT meta_value FROM save_metadata
+            WHERE meta_key = ?
+            """,
+            (EVENT_PEOPLE_BACKFILLED_META_KEY,),
+        ).fetchone()
+        if done is not None and str(done[0]).strip() == "1":
+            return
+    rows = conn.execute(
+        """
+        SELECT id, payload_json, primary_person_id, secondary_person_id,
+               settlement_id, region_id
+        FROM simulation_events
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        primary, secondary, settlement_id, region_id = _event_common_columns(payload)
+        updates: dict[str, object] = {}
+        if row["primary_person_id"] is None and primary is not None:
+            updates["primary_person_id"] = primary
+        if row["secondary_person_id"] is None and secondary is not None:
+            updates["secondary_person_id"] = secondary
+        if row["settlement_id"] is None and settlement_id is not None:
+            updates["settlement_id"] = settlement_id
+        if row["region_id"] is None and region_id is not None:
+            updates["region_id"] = region_id
+        if updates:
+            assignments = ", ".join(f"{_quote_identifier(k)} = ?" for k in updates)
+            conn.execute(
+                f"UPDATE simulation_events SET {assignments} WHERE id = ?",
+                (*updates.values(), row["id"]),
+            )
+        for person_id, role in _event_person_links_from_payload(payload):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO simulation_event_people (event_id, person_id, role)
+                VALUES (?, ?, ?)
+                """,
+                (row["id"], person_id, role),
+            )
+    if _table_exists(conn, "save_metadata"):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+            VALUES (?, '1')
+            """,
+            (EVENT_PEOPLE_BACKFILLED_META_KEY,),
+        )
+
+
 def _copy_common_table_columns_from_attached_source(
     conn: sqlite3.Connection, table: str
 ) -> int:
@@ -448,6 +702,7 @@ def _write_rebuilt_save_sqlite(
                         "delete and regenerate the pre-alpha save.sqlite"
                     )
                 _copy_common_table_columns_from_attached_source(conn, table)
+            _backfill_simulation_event_people(conn)
             _stamp_save_schema_version(conn, int(target_schema_version))
             conn.commit()
         finally:
@@ -571,17 +826,9 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
             person_b_id INTEGER NOT NULL,
             surname_convention TEXT
         );
-        CREATE TABLE IF NOT EXISTS simulation_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sim_year INTEGER,
-            event_type TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_simulation_events_year
-        ON simulation_events (sim_year);
         """
     )
+    _ensure_simulation_events_tables(conn)
     _ensure_simulation_people_table(conn)
     conn.executescript(_CREATE_SIMULATION_REGIONS)
     _ensure_simulation_settlements_table(conn)
@@ -997,6 +1244,7 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_couples")
         conn.execute("DELETE FROM simulation_paramours")
         conn.execute("DELETE FROM simulation_meta")
+        conn.execute("DELETE FROM simulation_event_people")
         conn.execute("DELETE FROM simulation_events")
         from library import government_checkpoint as _gov_ckpt
 
@@ -1257,13 +1505,35 @@ def append_simulation_event_rows(
     ts = created_at or _utc_now_iso()
     cur = conn.cursor()
     for sim_year, event_type, payload in rows:
+        primary, secondary, settlement_id, region_id = _event_common_columns(payload)
         cur.execute(
             """
-            INSERT INTO simulation_events (sim_year, event_type, payload_json, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO simulation_events (
+                sim_year, event_type, primary_person_id, secondary_person_id,
+                settlement_id, region_id, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (sim_year, event_type, json.dumps(payload, separators=(",", ":")), ts),
+            (
+                sim_year,
+                event_type,
+                primary,
+                secondary,
+                settlement_id,
+                region_id,
+                json.dumps(payload, separators=(",", ":")),
+                ts,
+            ),
         )
+        event_id = int(cur.lastrowid)
+        for person_id, role in _event_person_links_from_payload(payload):
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO simulation_event_people (event_id, person_id, role)
+                VALUES (?, ?, ?)
+                """,
+                (event_id, person_id, role),
+            )
 
 
 def flush_pending_simulation_events(ctx: "SimulationContext") -> None:

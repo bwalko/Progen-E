@@ -570,6 +570,42 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual([r["event_type"] for r in rows], ["household_prosperity_crisis"])
         self.assertIn("prosperity crisis", _event_sentence(con, "test", rows[0], 2))
 
+    def test_person_events_use_normalized_event_people_when_available(self) -> None:
+        con = _memory_save()
+        con.execute(
+            """
+            create table simulation_event_people (
+                event_id integer,
+                person_id integer,
+                role text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_events (id, world, sim_year, event_type, payload_json)
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                7,
+                "test",
+                12,
+                "job_assigned",
+                json.dumps({"person_id": 1, "job": "scribe"}),
+            ),
+        )
+        con.execute(
+            """
+            insert into simulation_event_people (event_id, person_id, role)
+            values (?, ?, ?)
+            """,
+            (7, 1, "subject"),
+        )
+
+        rows = _person_event_rows(con, "test", 1)
+
+        self.assertEqual([r["event_type"] for r in rows], ["job_assigned"])
+
     def test_closest_to_ideal_can_prefer_optimal_trait_phrase(self) -> None:
         con = _memory_save()
         labels = {"generosity": _genome_row(con)}
@@ -821,7 +857,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("River Country", region_html)
         self.assertIn("Fordham", town_html)
 
-    def test_place_row_selection_uses_loaded_json_snapshot(self) -> None:
+    def test_place_row_selection_uses_loaded_key_state(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "save.sqlite"
             con = _memory_place_save()
@@ -834,15 +870,11 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             gdb._db_path = lambda world, db_kind: path
             try:
                 _, _, state, _ = gdb.load_regions_browser_with_detail_reset("test", "", 50)
-            finally:
-                gdb._db_path = original_db_path
-
-            gdb._db_path = lambda world, db_kind: Path(tmp) / "missing.sqlite"
-            try:
                 html = gdb.select_region_from_table(state, "test", types.SimpleNamespace(index=0))
             finally:
                 gdb._db_path = original_db_path
 
+        self.assertEqual(state, [gdb._encode_place_key("test", "test", "r1")])
         self.assertIn("River Country", html)
         self.assertIn("Fordham", html)
 
