@@ -538,6 +538,7 @@ def births_by_settlement(
     *,
     sim_seed: int,
     by_settlement: dict[str, list[SimulationPersonRecord]],
+    resource_facts=None,
 ) -> int:
     """Run birth attempts by settlement id, then mother person id.
 
@@ -574,7 +575,9 @@ def births_by_settlement(
                 continue
             father_id = rng.choice(candidates)
             father = ctx.id_to_record[father_id]
-            pressure = resource_pressure_for_person(ctx, rec)
+            pressure = resource_pressure_for_person(
+                ctx, rec, resource_facts=resource_facts
+            )
             p_try = annual_conception_probability(
                 rec.person, father.person, pressure=pressure
             )
@@ -619,6 +622,7 @@ def run_population_growth_simulation(
     duration_years: int,
     starting_couples: int,
     progress_callback: Callable[[int], None] | None = None,
+    print_timing_report: bool = True,
 ) -> None:
     """Drive the canonical population-growth yearly loop until ``finalize_run`` (context exit)."""
     random.seed(sim_seed)
@@ -663,7 +667,11 @@ def run_population_growth_simulation(
         if prof:
             t0 = tpc()
         births_count = births_by_settlement(
-            ctx, year, sim_seed=sim_seed, by_settlement=people_by_settlement
+            ctx,
+            year,
+            sim_seed=sim_seed,
+            by_settlement=people_by_settlement,
+            resource_facts=ctx.annual_resource_facts(year),
         )
         if prof:
             simulation_timing.accumulate("runner.births", tpc() - t0)
@@ -687,7 +695,8 @@ def run_population_growth_simulation(
         ):
             progress_callback(year)
 
-    simulation_timing.print_report_if_configured()
+    if print_timing_report:
+        simulation_timing.print_report_if_configured()
 
 
 def write_population_growth_report_files(
@@ -700,39 +709,64 @@ def write_population_growth_report_files(
     people_json_path: Path,
     places_geo_path: Path,
 ) -> None:
+    prof = simulation_timing.enabled()
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+    report_text = build_population_growth_report(
+        ctx.people,
+        ctx.couples,
+        ctx.settlements_by_id,
+        random_seed=sim_seed,
+        start_year=start_year,
+        duration_years=duration_years,
+        ctx=ctx,
+    )
+    if prof:
+        simulation_timing.accumulate("report.build_text", tpc() - t0)
+        t0 = tpc()
     output_path.write_text(
-        build_population_growth_report(
-            ctx.people,
-            ctx.couples,
-            ctx.settlements_by_id,
-            random_seed=sim_seed,
-            start_year=start_year,
-            duration_years=duration_years,
-            ctx=ctx,
-        ),
+        report_text,
         encoding="utf-8",
     )
+    if prof:
+        simulation_timing.accumulate("report.write_text", tpc() - t0)
     end_exclusive = start_year + duration_years
+    if prof:
+        t0 = tpc()
+    people_payload = people_export_payload(
+        ctx.people,
+        random_seed=sim_seed,
+        simulation_start_year=start_year,
+        simulation_end_year_exclusive=end_exclusive,
+    )
+    if prof:
+        simulation_timing.accumulate("report.build_people_json", tpc() - t0)
+        t0 = tpc()
     people_json_path.write_text(
         json.dumps(
-            people_export_payload(
-                ctx.people,
-                random_seed=sim_seed,
-                simulation_start_year=start_year,
-                simulation_end_year_exclusive=end_exclusive,
-            ),
+            people_payload,
             indent=2,
             ensure_ascii=False,
         )
         + "\n",
         encoding="utf-8",
     )
+    if prof:
+        simulation_timing.accumulate("report.write_people_json", tpc() - t0)
+        t0 = tpc()
+    places_payload = settlements_geo_export_payload(ctx.settlements_by_id)
+    if prof:
+        simulation_timing.accumulate("report.build_places_geo", tpc() - t0)
+        t0 = tpc()
     places_geo_path.write_text(
         json.dumps(
-            settlements_geo_export_payload(ctx.settlements_by_id),
+            places_payload,
             indent=2,
             ensure_ascii=False,
         )
         + "\n",
         encoding="utf-8",
     )
+    if prof:
+        simulation_timing.accumulate("report.write_places_geo", tpc() - t0)

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 
+from library.config_import import load_all_csvs_into_sqlite
+from library.generator import generate_person_random
 from library.mind_body import (
     attractiveness_01,
     clamp_mind_body_value,
@@ -11,7 +15,14 @@ from library.mind_body import (
     work_trait_values,
 )
 from library.person import Person
-from library.simulation_careers import career_fitness
+from library.simulation_careers import (
+    _person_maturity_age,
+    career_fitness,
+    job_eligibility_age,
+    resolve_job_era,
+)
+from library.simulation_context import SimulationContext
+from library.simulation_mind_body import simulation_mind_body_annual_tick
 
 
 class TestMindBody(unittest.TestCase):
@@ -94,3 +105,58 @@ class TestMindBody(unittest.TestCase):
         )
         w = work_trait_values(p)
         self.assertEqual(w.get("focus"), 3.0)
+
+    def test_child_generation_defers_adult_profile_fields(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            cfg = Path(td) / "config.sqlite"
+            sav = Path(td) / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="mind-body-child",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                child = generate_person_random(
+                    age=5,
+                    simulation_year=1000,
+                    simulation_context=ctx,
+                )
+                self.assertEqual(child.mind_body, {})
+                self.assertIsNone(child.attractiveness_01)
+
+    def test_adult_profile_materializes_at_job_eligibility(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            cfg = Path(td) / "config.sqlite"
+            sav = Path(td) / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="mind-body-adult",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                person = generate_person_random(
+                    age=5,
+                    simulation_year=1000,
+                    simulation_context=ctx,
+                )
+                rec = ctx.add_person(person=person, is_founder=False)
+                job_age = job_eligibility_age(
+                    _person_maturity_age(person, cfg),
+                    resolve_job_era(ctx.get_historical_year(1000)),
+                )
+                before_year = int(person.birthyear) + int(job_age) - 1
+                eligible_year = int(person.birthyear) + int(job_age)
+                simulation_mind_body_annual_tick(ctx, before_year)
+                self.assertEqual(ctx.id_to_record[rec.person_id].person.mind_body, {})
+                simulation_mind_body_annual_tick(ctx, eligible_year)
+                materialized = ctx.id_to_record[rec.person_id].person
+                self.assertTrue(materialized.mind_body)
+                self.assertIsNotNone(materialized.attractiveness_01)

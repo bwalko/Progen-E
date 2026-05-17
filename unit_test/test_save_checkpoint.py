@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 import tempfile
@@ -14,10 +15,14 @@ from library.generator import generate_person_random
 from library.geography import _population_scale_cache, get_region
 from library.simulation_context import SimulationContext
 from library.world_save import (
+    SAVE_SCHEMA_VERSION,
     REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY,
     checkpoint_simulation_to_save,
     clear_world_checkpoint,
+    ensure_checkpoint_schema_for_file,
     parse_region_effective_cap_multipliers,
+    rebuild_save_sqlite_for_schema_upgrade,
+    save_schema_version,
     try_load_simulation_checkpoint,
 )
 
@@ -30,6 +35,99 @@ def _force_population_scale(cfg_path: Path, scale: float) -> None:
 
 
 class TestSaveCheckpoint(unittest.TestCase):
+    def test_save_schema_version_and_rebuild_copy(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            sav = root / "save.sqlite"
+            rebuilt = root / "rebuilt.sqlite"
+
+            ensure_checkpoint_schema_for_file(sav)
+            person_payload = {
+                "first_name": "Test",
+                "last_name": "Person",
+                "gender": "female",
+                "ethnic": "human",
+                "species": "human",
+                "birthyear": 1000,
+                "genome": {},
+                "mind_body": {},
+            }
+            with sqlite3.connect(sav) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS world_state (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        start_year INTEGER NOT NULL,
+                        current_year INTEGER NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO world_state (id, start_year, current_year)
+                    VALUES (1, ?, ?)
+                    """,
+                    (1000, 1001),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_people (
+                        person_id, is_founder, father_id, mother_id,
+                        is_alive, person_json
+                    )
+                    VALUES (?, ?, NULL, NULL, ?, ?)
+                    """,
+                    (
+                        1,
+                        1,
+                        1,
+                        json.dumps(person_payload, separators=(",", ":")),
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        sim_year, event_type, payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        1000,
+                        "founder_created",
+                        json.dumps({"person_id": 1}, separators=(",", ":")),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                self.assertEqual(
+                    conn.execute("PRAGMA user_version").fetchone()[0],
+                    SAVE_SCHEMA_VERSION,
+                )
+                conn.commit()
+
+            out = rebuild_save_sqlite_for_schema_upgrade(sav, output_path=rebuilt)
+            self.assertEqual(out, rebuilt)
+
+            with sqlite3.connect(rebuilt) as conn:
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM world_state").fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM simulation_people").fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM simulation_events").fetchone()[0],
+                    1,
+                )
+                row = conn.execute(
+                    "SELECT person_json FROM simulation_people WHERE person_id = 1"
+                ).fetchone()
+                self.assertEqual(json.loads(row[0])["first_name"], "Test")
+
     def test_checkpoint_roundtrip_one_person(self) -> None:
         random.seed(42)
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -52,25 +150,22 @@ class TestSaveCheckpoint(unittest.TestCase):
                 checkpoint_simulation_to_save(ctx)
                 with sqlite3.connect(sav) as conn:
                     n = conn.execute(
-                        "SELECT COUNT(*) FROM simulation_events WHERE world = ?",
-                        ("default",),
+                        "SELECT COUNT(*) FROM simulation_events",
                     ).fetchone()[0]
                     n_regions = conn.execute(
-                        "SELECT COUNT(*) FROM simulation_regions WHERE world = ?",
-                        ("default",),
+                        "SELECT COUNT(*) FROM simulation_regions",
                     ).fetchone()[0]
                     n_settle = conn.execute(
-                        "SELECT COUNT(*) FROM simulation_settlements WHERE world = ?",
-                        ("default",),
+                        "SELECT COUNT(*) FROM simulation_settlements",
                     ).fetchone()[0]
                     birth_rid = (p.birthplace_region_id or "").strip()
                     self.assertTrue(birth_rid)
                     sample_rn = conn.execute(
                         """
                         SELECT region_display_name FROM simulation_regions
-                        WHERE world = ? AND region_id = ?
+                        WHERE region_id = ?
                         """,
-                        ("default", birth_rid),
+                        (birth_rid,),
                     ).fetchone()
                     expected_label = (
                         get_region(birth_rid, world="default", db_path=cfg).region_name or ""
@@ -243,12 +338,10 @@ class TestSaveCheckpoint(unittest.TestCase):
             checkpoint_simulation_to_save(ctx, full_snapshot=False)
             with sqlite3.connect(sav) as conn:
                 ev = conn.execute(
-                    "SELECT COUNT(*) FROM simulation_events WHERE world = ?",
-                    ("default",),
+                    "SELECT COUNT(*) FROM simulation_events",
                 ).fetchone()[0]
                 pe = conn.execute(
-                    "SELECT COUNT(*) FROM simulation_people WHERE world = ?",
-                    ("default",),
+                    "SELECT COUNT(*) FROM simulation_people",
                 ).fetchone()[0]
             self.assertGreaterEqual(int(ev), 1)
             self.assertEqual(int(pe), 0)
@@ -281,16 +374,16 @@ class TestSaveCheckpoint(unittest.TestCase):
                 row = conn.execute(
                     """
                     SELECT meta_value FROM simulation_meta
-                    WHERE world = ? AND meta_key = ?
+                    WHERE meta_key = ?
                     """,
-                    ("default", REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY),
+                    (REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY,),
                 ).fetchone()
                 nid = conn.execute(
                     """
                     SELECT meta_value FROM simulation_meta
-                    WHERE world = ? AND meta_key = ?
+                    WHERE meta_key = ?
                     """,
-                    ("default", "next_person_id"),
+                    ("next_person_id",),
                 ).fetchone()
             self.assertIsNotNone(row)
             caps = parse_region_effective_cap_multipliers(str(row[0]))
@@ -370,8 +463,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 checkpoint_simulation_to_save(ctx, full_snapshot=True)
                 with sqlite3.connect(sav) as conn:
                     n = conn.execute(
-                        "SELECT COUNT(*) FROM simulation_polities WHERE world=?",
-                        ("default",),
+                        "SELECT COUNT(*) FROM simulation_polities",
                     ).fetchone()[0]
                 self.assertGreater(int(n), 0)
 

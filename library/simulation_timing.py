@@ -34,6 +34,11 @@ def active_for_year(year: int) -> bool:
     return _profile_from_year is not None and int(year) >= int(_profile_from_year)
 
 
+def enabled() -> bool:
+    """Return whether the env-gated timing profiler is configured."""
+    return _profile_from_year is not None
+
+
 def accumulate(phase: str, seconds: float) -> None:
     _sums[phase] += float(seconds)
 

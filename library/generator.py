@@ -180,6 +180,37 @@ def _resolve_birthyear(
     return anchor - int(age)
 
 
+def _defer_adult_profile_for_age(age: int, min_fertility_age: int | None) -> bool:
+    """Keep children lean; adult phenotype caches materialize at job eligibility."""
+    threshold = int(min_fertility_age) if min_fertility_age is not None else 18
+    return int(age) < threshold
+
+
+def _initial_adult_profile_fields(
+    genome: dict[str, float],
+    *,
+    age: int,
+    min_fertility_age: int | None,
+    birthyear: int,
+    max_fertility_age: int | None,
+) -> tuple[dict[str, float], float | None]:
+    if _defer_adult_profile_for_age(age, min_fertility_age):
+        return {}, None
+    mb = mind_body_from_genome(genome)
+    probe = Person(
+        first_name="",
+        last_name="",
+        gender="",
+        ethnic="",
+        species="",
+        birthyear=int(birthyear),
+        max_fertility_age=max_fertility_age,
+        genome=genome,
+        mind_body=mb,
+    )
+    return mb, round(attractiveness_01(probe, int(birthyear) + int(age)), 5)
+
+
 def _birthplace_display_label(
     *,
     region_id: str,
@@ -495,7 +526,13 @@ def generate_person_random(
     chosen_min_fertility_age, chosen_max_fertility_age = _choose_fertility_ages(
         species_row, chosen_gender
     )
-    mb = mind_body_from_genome(chosen_genome)
+    mb, initial_attractiveness = _initial_adult_profile_fields(
+        chosen_genome,
+        age=int(chosen_age),
+        min_fertility_age=chosen_min_fertility_age,
+        max_fertility_age=chosen_max_fertility_age,
+        birthyear=resolved_birthyear,
+    )
     base_person = Person(
         first_name=first,
         last_name=last,
@@ -520,10 +557,8 @@ def generate_person_random(
         sexual_nature=chosen_sexual_nature,
         gender_mind=chosen_gender_mind,
     )
-    base_person = replace(
-        base_person,
-        attractiveness_01=round(attractiveness_01(base_person, resolved_birthyear), 5),
-    )
+    if initial_attractiveness is not None:
+        base_person = replace(base_person, attractiveness_01=initial_attractiveness)
     return _with_default_residence(base_person)
 
 
@@ -712,7 +747,13 @@ def generate_person_from_birth(
         simulation_context.relocate_birthing_household_to_settlement(
             mother_person_id, post_sid
         )
-    mb = mind_body_from_genome(child_genome)
+    mb, initial_attractiveness = _initial_adult_profile_fields(
+        child_genome,
+        age=int(chosen_age),
+        min_fertility_age=chosen_min_fertility_age,
+        max_fertility_age=chosen_max_fertility_age,
+        birthyear=resolved_birthyear,
+    )
     child = Person(
         first_name=first,
         last_name=last,
@@ -738,8 +779,6 @@ def generate_person_from_birth(
         sexual_nature=chosen_sexual_nature,
         gender_mind=chosen_gender_mind,
     )
-    child = replace(
-        child,
-        attractiveness_01=round(attractiveness_01(child, resolved_birthyear), 5),
-    )
+    if initial_attractiveness is not None:
+        child = replace(child, attractiveness_01=initial_attractiveness)
     return _with_default_residence(child)

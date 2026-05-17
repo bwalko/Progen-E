@@ -9,7 +9,7 @@ from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from uuid import uuid4
 
 import numpy as np
@@ -25,6 +25,7 @@ from library.settlement_local_geography import make_settlement_name_rng
 from library.random_traits import (
     _as_int,
     _connect,
+    _species_rows,
     infer_life_stage_from_age,
     preload_trait_cache,
 )
@@ -51,6 +52,19 @@ from library.world_save import (
     maybe_import_run_store_events_csv,
     try_load_simulation_checkpoint,
 )
+
+# Default cap for person-level samples that drive settlement/regional behavior.
+#
+# Use this for bounded "what does this place/polity tend to do?" decisions:
+# leadership candidate scoring, regional mood/social signal reads, usurpation
+# claimant scans, and similar behavior pools where a representative-ish sample is
+# enough and exact all-person scans would explode at large population sizes.
+#
+# Do not use this for accounting or conservation logic: alive counts, births,
+# deaths, migration totals, checkpoint persistence, demographic summaries,
+# treasury/food/resource totals, or any code where every person must be counted.
+# Groups at or below the cap should always use the full group.
+DEFAULT_DECISION_SAMPLE_SIZE = 1_000
 
 
 @dataclass
@@ -146,6 +160,10 @@ class SimulationContext:
         default_factory=list
     )
     checkpoint_full_snapshot_every_n_years: int | None = 10
+    # Per-context override for DEFAULT_DECISION_SAMPLE_SIZE. Keep this on the
+    # context so experiments can tune decision-pool cost without changing exact
+    # population accounting or save/load behavior.
+    decision_sample_size: int = DEFAULT_DECISION_SAMPLE_SIZE
     placename_rng_salt: int = 0
     active_region_ids: frozenset[str] | None = None
     foundation_colony_region_order: tuple[str, ...] | None = None
@@ -184,6 +202,11 @@ class SimulationContext:
     next_gov_alliance_id: int = 1
     _alive_census_cache: AliveCensusCache | None = field(default=None, repr=False)
     _alive_columns_cache: tuple[int, AlivePersonColumns] | None = field(default=None, repr=False)
+    _annual_care_indexes_cache: tuple[int, Any] | None = field(default=None, repr=False)
+    _annual_resource_facts_cache: tuple[int, Any] | None = field(default=None, repr=False)
+    _species_life_stage_rows_cache: tuple[
+        str, dict[tuple[str, str], Mapping[str, Any]]
+    ] | None = field(default=None, repr=False)
 
     def __enter__(self) -> SimulationContext:
         return self
@@ -214,6 +237,7 @@ class SimulationContext:
         flush_run_store: bool = True,
         store_flush_batch_years: int = 50,
         checkpoint_full_snapshot_every_n_years: int | None = None,
+        decision_sample_size: int = DEFAULT_DECISION_SAMPLE_SIZE,
         placename_rng_salt: int = 0,
         working_set_dead_retention_years: int = 20,
     ) -> "SimulationContext":
@@ -358,6 +382,7 @@ class SimulationContext:
             current_year=current_y,
             file_store=file_store,
             checkpoint_full_snapshot_every_n_years=resolved_checkpoint_every,
+            decision_sample_size=int(decision_sample_size),
             placename_rng_salt=int(placename_rng_salt),
             active_region_ids=active_ids,
             foundation_colony_region_order=colony_region_order,
@@ -406,10 +431,41 @@ class SimulationContext:
         """Drop cached alive residence indexes after population/residence changes."""
         self._alive_census_cache = None
         self._alive_columns_cache = None
+        self.invalidate_annual_indexes()
 
     def invalidate_alive_columns_cache(self) -> None:
         """Drop cached columnar fields after relationship/job/person-field changes."""
         self._alive_columns_cache = None
+        self.invalidate_annual_indexes()
+
+    def invalidate_annual_indexes(self) -> None:
+        """Drop per-year shared indexes after population, residence, or relationship changes."""
+        self._annual_care_indexes_cache = None
+        self._annual_resource_facts_cache = None
+
+    def annual_care_indexes(self, year: int):
+        """Shared per-year household/care indexes for modules that need family facts."""
+        y = int(year)
+        cached = self._annual_care_indexes_cache
+        if cached is not None and cached[0] == y:
+            return cached[1]
+        from library.simulation_household_care import build_year_indexes
+
+        indexes = build_year_indexes(self, y)
+        self._annual_care_indexes_cache = (y, indexes)
+        return indexes
+
+    def annual_resource_facts(self, year: int):
+        """Shared per-year settlement/region pressure facts for resource decisions."""
+        y = int(year)
+        cached = self._annual_resource_facts_cache
+        if cached is not None and cached[0] == y:
+            return cached[1]
+        from library.simulation_careers import YearResourceFacts
+
+        facts = YearResourceFacts.build(self)
+        self._annual_resource_facts_cache = (y, facts)
+        return facts
 
     def alive_census_cache(self) -> AliveCensusCache:
         """Build or return the cached alive residence index for the current context state."""
@@ -1151,29 +1207,36 @@ class SimulationContext:
     def refresh_current_people_life_stages(self, simulation_year: int) -> None:
         """Recompute ``life_stage`` from age and species bands for everyone alive."""
         y = int(simulation_year)
-        path = Path(self.db_path).resolve()
-        with closing(_connect(path)) as conn:
-            for rec in self.iter_current_people(sorted_by_id=True):
-                sp = (rec.person.species or "").strip()
-                eth = (rec.person.ethnic or "").strip()
-                if not sp:
-                    continue
-                row = conn.execute(
-                    """
-                    SELECT * FROM species
-                    WHERE species = ? AND ethnic = ?
-                    LIMIT 1
-                    """,
-                    (sp, eth),
-                ).fetchone()
-                if row is None:
-                    continue
-                age = y - int(rec.person.birthyear)
-                if age < 0:
-                    continue
-                stage = infer_life_stage_from_age(age, row)
-                if rec.person.life_stage != stage:
-                    rec.person = replace(rec.person, life_stage=stage)
+        species_rows = self.species_life_stage_rows()
+        for rec in self.iter_current_people(sorted_by_id=True):
+            sp = (rec.person.species or "").strip()
+            eth = (rec.person.ethnic or "").strip()
+            if not sp:
+                continue
+            row = species_rows.get((sp, eth))
+            if row is None:
+                continue
+            age = y - int(rec.person.birthyear)
+            if age < 0:
+                continue
+            stage = infer_life_stage_from_age(age, row)
+            if rec.person.life_stage != stage:
+                rec.person = replace(rec.person, life_stage=stage)
+
+    def species_life_stage_rows(self) -> dict[tuple[str, str], Mapping[str, Any]]:
+        """Cached species rows keyed by ``(species, ethnic)`` for age-band lookups."""
+        path_s = str(Path(self.db_path).resolve())
+        cached = self._species_life_stage_rows_cache
+        if cached is not None and cached[0] == path_s:
+            return cached[1]
+        rows: dict[tuple[str, str], Mapping[str, Any]] = {}
+        for row in _species_rows(path_s):
+            sp = str(row.get("species") or "").strip()
+            eth = str(row.get("ethnic") or "").strip()
+            if sp:
+                rows[(sp, eth)] = row
+        self._species_life_stage_rows_cache = (path_s, rows)
+        return rows
 
     def mark_dead(self, dead_ids: set[int], *, deathyear: int) -> None:
         if not dead_ids:
@@ -1276,6 +1339,96 @@ class SimulationContext:
     def current_people_by_region(self) -> dict[str, list[SimulationPersonRecord]]:
         """Alive people grouped by residence region, ordered by person id."""
         return self.alive_census_cache().by_region
+
+    @staticmethod
+    def _stable_decision_seed(text: str) -> int:
+        """Small deterministic string hash for reproducible decision sampling."""
+        h = 14_695_981_039_346_656_037
+        for ch in text:
+            h ^= ord(ch)
+            h = (h * 1_099_511_628_211) & 0xFFFFFFFFFFFFFFFF
+        return h
+
+    def decision_sample_records(
+        self,
+        records: Iterable[SimulationPersonRecord],
+        *,
+        year: int | None = None,
+        scope: str,
+        stream: int = 0,
+        cap: int | None = None,
+    ) -> list[SimulationPersonRecord]:
+        """Return a deterministic capped sample for settlement/regional decisions.
+
+        Appropriate uses are behavior/candidate pools where a stable sample can
+        stand in for "the population's tendencies" at large scale. Inappropriate
+        uses are exact counts, persistence, event conservation, and demographic or
+        economic totals. The sample is deterministic for a given year/scope/stream
+        so reruns stay reproducible. Groups at or below the cap are returned
+        unchanged.
+        """
+        pool = list(records)
+        try:
+            limit = int(self.decision_sample_size if cap is None else cap)
+        except (TypeError, ValueError):
+            limit = DEFAULT_DECISION_SAMPLE_SIZE
+        if limit <= 0 or len(pool) <= limit:
+            return pool
+        y = int(
+            year
+            if year is not None
+            else self.current_year
+            if self.current_year is not None
+            else self.simulation_start_year
+        )
+        seed = self._stable_decision_seed(
+            "|".join(
+                (
+                    str(self.world),
+                    str(self.placename_rng_salt),
+                    str(y),
+                    str(int(stream)),
+                    str(scope),
+                    str(len(pool)),
+                )
+            )
+        )
+        rng = random.Random(seed)
+        return sorted(rng.sample(pool, limit), key=lambda rec: int(rec.person_id))
+
+    def decision_sample_people_in_region(
+        self,
+        region_id: str,
+        *,
+        year: int | None = None,
+        stream: int = 0,
+        cap: int | None = None,
+    ) -> list[SimulationPersonRecord]:
+        rid = (region_id or "").strip()
+        return self.decision_sample_records(
+            self.current_people_by_region().get(rid, ()),
+            year=year,
+            scope=f"region:{rid}",
+            stream=stream,
+            cap=cap,
+        )
+
+    def decision_sample_people_in_settlement(
+        self,
+        settlement_id: str,
+        *,
+        year: int | None = None,
+        stream: int = 0,
+        cap: int | None = None,
+    ) -> list[SimulationPersonRecord]:
+        sid = (settlement_id or "").strip()
+        return self.decision_sample_records(
+            self.current_people_by_settlement().get(sid, ()),
+            year=year,
+            scope=f"settlement:{sid}",
+            stream=stream,
+            cap=cap,
+        )
 
     def effective_regional_population_cap(self, region_id: str) -> int:
         """Time-varying soft cap: config ``carrying_capacity`` × per-region multiplier (≥ 1)."""
@@ -1635,20 +1788,32 @@ class SimulationContext:
                     "percent_reaching_age_100": mortality_rates["percent_reaching_age_100"],
                 }
             )
+            if prof:
+                simulation_timing.accumulate("file_store.stage_yearly_summary", tpc() - t0)
+                t0 = tpc()
             self.file_store.write_current_people_snapshot(
                 year=year, person_ids=self.current_people_ids
             )
+            if prof:
+                simulation_timing.accumulate("file_store.stage_current_people", tpc() - t0)
+                t0 = tpc()
             self.file_store.maybe_flush_after_year(year, self.simulation_start_year)
             if prof:
-                simulation_timing.accumulate("summary.file_store", tpc() - t0)
+                simulation_timing.accumulate("file_store.flush_if_due", tpc() - t0)
         if persist_to_save:
+            full_snapshot = self._should_checkpoint_snapshot(year)
             if prof:
                 t0 = tpc()
             checkpoint_simulation_to_save(
-                self, full_snapshot=self._should_checkpoint_snapshot(year)
+                self, full_snapshot=full_snapshot
             )
             if prof:
-                simulation_timing.accumulate("summary.checkpoint_save", tpc() - t0)
+                phase = (
+                    "checkpoint.full_snapshot"
+                    if full_snapshot
+                    else "checkpoint.events_meta"
+                )
+                simulation_timing.accumulate(phase, tpc() - t0)
 
     def finalize_run(self) -> None:
         """Persist simulation state to ``save.sqlite`` and flush optional file store.
@@ -1659,10 +1824,23 @@ class SimulationContext:
         """
         if self._run_finalized:
             return
+        prof = simulation_timing.enabled()
+        tpc = time.perf_counter
+        if prof:
+            t0 = tpc()
         maybe_import_run_store_events_csv(self)
+        if prof:
+            simulation_timing.accumulate("finalize.import_run_store_events", tpc() - t0)
+            t0 = tpc()
         checkpoint_simulation_to_save(self, full_snapshot=True)
+        if prof:
+            simulation_timing.accumulate("finalize.checkpoint_full_snapshot", tpc() - t0)
         if self.file_store is not None:
+            if prof:
+                t0 = tpc()
             self.file_store.finalize()
+            if prof:
+                simulation_timing.accumulate("finalize.file_store_flush", tpc() - t0)
         self._run_finalized = True
 
     def get_historical_year(self, simulation_year: int | None = None) -> int:

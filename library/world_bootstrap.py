@@ -25,16 +25,14 @@ def ensure_world_directories(world_id: str) -> Path:
 
 
 def save_has_simulation_people(save_db_path: Path | str, *, world: str) -> bool:
-    """Whether ``save.sqlite`` has at least one ``simulation_people`` row for ``world``."""
+    """Whether this single-world ``save.sqlite`` has at least one person row."""
     p = Path(save_db_path)
     if not p.exists():
         return False
-    w = world.strip()
     with _open_save(p) as conn:
         ensure_checkpoint_schema(conn)
         row = conn.execute(
-            "SELECT COUNT(*) AS c FROM simulation_people WHERE world = ?",
-            (w,),
+            "SELECT COUNT(*) AS c FROM simulation_people",
         ).fetchone()
     return row is not None and int(row["c"] or 0) > 0
 

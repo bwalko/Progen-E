@@ -261,19 +261,51 @@ def _sort_birth_order(ctx: SimulationContext, ids: list[int]) -> list[int]:
     return sorted(ids, key=key)
 
 
-def realm_resident_ids(ctx: SimulationContext, polity_id: int) -> set[int]:
+def realm_resident_records(ctx: SimulationContext, polity_id: int) -> list:
     regions = polity_regions(ctx, polity_id)
     settlements = polity_settlement_territory_ids(ctx, polity_id)
-    out: set[int] = set()
+    out: list = []
+    seen: set[int] = set()
     by_region = ctx.current_people_by_region()
     by_settlement = ctx.current_people_by_settlement()
     for rid in regions:
         for rec in by_region.get(rid, ()):
-            out.add(rec.person_id)
+            pid = int(rec.person_id)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            out.append(rec)
     for sid in settlements:
         for rec in by_settlement.get(sid, ()):
-            out.add(rec.person_id)
+            pid = int(rec.person_id)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            out.append(rec)
     return out
+
+
+def realm_resident_ids(ctx: SimulationContext, polity_id: int) -> set[int]:
+    return {int(rec.person_id) for rec in realm_resident_records(ctx, polity_id)}
+
+
+def realm_resident_decision_sample(
+    ctx: SimulationContext,
+    polity_id: int,
+    *,
+    year: int,
+    scope: str,
+    stream: int = 0,
+    cap: int | None = None,
+) -> list:
+    """Deterministic capped resident sample for realm-level decisions."""
+    return ctx.decision_sample_records(
+        realm_resident_records(ctx, polity_id),
+        year=year,
+        scope=f"polity:{int(polity_id)}:{scope}",
+        stream=stream,
+        cap=cap,
+    )
 
 
 def in_dynasty_line(

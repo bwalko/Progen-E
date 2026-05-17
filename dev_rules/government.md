@@ -67,6 +67,8 @@ Created/migrated via `ensure_checkpoint_schema` → `government_checkpoint.ensur
 - `simulation_office_seats`, `simulation_office_holdings` — seat definitions vs time-bounded holdings.
 - `simulation_dynasties`, `simulation_alliances`, `simulation_campaigns`.
 
+These save tables follow save schema v2 and do not store a `world` column; `worlds/<id>/save.sqlite` is the world boundary.
+
 Full snapshots call `checkpoint_government` from `checkpoint_simulation_snapshot`; resume loads via `load_government` inside `try_load_simulation_checkpoint`.
 
 ## CLI: polity map
@@ -74,7 +76,7 @@ Full snapshots call `checkpoint_government` from `checkpoint_simulation_snapshot
 Print open **region** ownership from a save DB::
 
     python utils/util_print_polity_map.py --world-id default
-    python utils/util_print_polity_map.py --save worlds/default/save.sqlite --sim-world default
+    python utils/util_print_polity_map.py --save worlds/default/save.sqlite
 
 ## Population report
 

@@ -1,4 +1,4 @@
-"""Persistent per-world simulation clock.
+"""Persistent simulation clock.
 
 ``world_start`` is read from the **config** database. Runtime progression lives in
 ``world_state`` in the **save** database.
@@ -28,7 +28,7 @@ def _ensure_world_state_table(conn) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS world_state (
-            world TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY CHECK (id = 1),
             start_year INTEGER NOT NULL,
             current_year INTEGER NOT NULL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -83,8 +83,7 @@ def ensure_world_state(
     with closing(_connect_save_sqlite(sav)) as sconn:
         _ensure_world_state_table(sconn)
         row = sconn.execute(
-            "SELECT start_year, current_year FROM world_state WHERE world = ?",
-            (world.strip(),),
+            "SELECT start_year, current_year FROM world_state WHERE id = 1",
         ).fetchone()
         if row is not None:
             return int(row["start_year"]), int(row["current_year"])
@@ -96,10 +95,10 @@ def ensure_world_state(
         _ensure_world_state_table(sconn)
         sconn.execute(
             """
-            INSERT INTO world_state (world, start_year, current_year)
-            VALUES (?, ?, ?)
+            INSERT INTO world_state (id, start_year, current_year)
+            VALUES (1, ?, ?)
             """,
-            (world.strip(), start_year, start_year),
+            (start_year, start_year),
         )
         sconn.commit()
         return start_year, start_year
@@ -151,9 +150,9 @@ def set_world_current_year(
             """
             UPDATE world_state
             SET current_year = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE world = ?
+            WHERE id = 1
             """,
-            (year, world.strip()),
+            (year,),
         )
         sconn.commit()
     return year
@@ -182,14 +181,14 @@ def reset_world_time(
         _ensure_world_state_table(sconn)
         sconn.execute(
             """
-            INSERT INTO world_state (world, start_year, current_year)
-            VALUES (?, ?, ?)
-            ON CONFLICT(world) DO UPDATE SET
+            INSERT INTO world_state (id, start_year, current_year)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
                 start_year = excluded.start_year,
                 current_year = excluded.current_year,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (world.strip(), start, current),
+            (start, current),
         )
         sconn.commit()
     return start, current

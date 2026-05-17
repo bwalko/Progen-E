@@ -165,6 +165,50 @@ class TestSimulationSameSexCouples(unittest.TestCase):
                 self.assertIsNone(ctx.id_to_record[r1.person_id].person.partner_person_id)
                 self.assertIsNone(ctx.id_to_record[r2.person_id].person.partner_person_id)
 
+    def test_same_sex_candidate_pool_honors_decision_sample_cap(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=903,
+                decision_sample_size=1,
+            ) as ctx:
+                st = ctx.ensure_active_settlement_for_region("aeria_north")
+                sid = st.settlement_id
+                recs = []
+                for i in range(3):
+                    p = replace(
+                        generate_person_random(
+                            gender="Female",
+                            age=24 + i,
+                            simulation_year=2000,
+                            simulation_context=ctx,
+                        ),
+                        birthyear=1976 - i,
+                        birthplace_settlement_id=sid,
+                        current_settlement_id=sid,
+                        genome={"mating drive": 0.0},
+                    )
+                    recs.append(ctx.add_person(person=p, is_founder=False))
+                rm = MagicMock()
+                rm.random.return_value = 0.0
+                with patch(
+                    "library.simulation_social._same_sex_acceptance_probability",
+                    return_value=0.99,
+                ), patch("library.simulation_social._same_sex_pair_rng", return_value=rm):
+                    maybe_form_same_sex_couples(ctx, 2000)
+                self.assertTrue(
+                    all(ctx.id_to_record[r.person_id].person.partner_person_id is None for r in recs)
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

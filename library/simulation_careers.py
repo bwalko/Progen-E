@@ -6,7 +6,7 @@ import random
 import re
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from library.genome_composites import significant_composite_names
 from library.job_economics import JobEconomicsCatalog, normalize_job_catalog_key
 from library.job_market import JobMarketCatalog, JobMarketParams
-from library.mind_body import work_trait_values
+from library.mind_body import attractiveness_01, ensure_full_mind_body, work_trait_values
 from library.personality_interpreter import interpret_genome_personality
 from library.geography import list_routes_from
 from library.random_traits import _as_int, _connect
@@ -231,11 +231,58 @@ class YearJobMarketSnapshots:
 
 
 @dataclass
+class YearResourceFacts:
+    """Reusable settlement/region pressure facts for one annual tick."""
+
+    settlement_food_pressure: dict[str, float]
+    region_population: dict[str, int]
+    region_cap: dict[str, int]
+    pressure_by_person_id: dict[int, float] = field(default_factory=dict)
+
+    @classmethod
+    def build(cls, ctx: "SimulationContext") -> "YearResourceFacts":
+        settlement_food_pressure = {
+            sid: float(getattr(st, "food_pressure", 0.0) or 0.0)
+            for sid, st in ctx.settlements_by_id.items()
+        }
+        census = ctx.alive_census_cache()
+        region_population = dict(census.count_by_region)
+        region_ids = set(region_population)
+        for st in ctx.settlements_by_id.values():
+            rid = (st.region_id or "").strip()
+            if rid:
+                region_ids.add(rid)
+        region_cap: dict[str, int] = {}
+        for rid in region_ids:
+            try:
+                region_cap[rid] = int(ctx.effective_regional_population_cap(rid))
+            except (LookupError, ValueError):
+                continue
+        return cls(
+            settlement_food_pressure=settlement_food_pressure,
+            region_population=region_population,
+            region_cap=region_cap,
+        )
+
+    def pressure_for(
+        self, ctx: "SimulationContext", rec: "SimulationPersonRecord"
+    ) -> float:
+        pid = int(rec.person_id)
+        if pid not in self.pressure_by_person_id:
+            self.pressure_by_person_id[pid] = _resource_pressure_from_facts(
+                ctx, rec, self
+            )
+        return self.pressure_by_person_id[pid]
+
+
+@dataclass
 class YearCareerFacts:
     """Reusable per-person facts for one career tick."""
 
     pressure_by_person_id: dict[int, float]
     duty_by_person_id: dict[int, float]
+    resource_facts: YearResourceFacts
+    care_indexes: object | None = None
 
     @classmethod
     def build(
@@ -244,19 +291,26 @@ class YearCareerFacts:
         year: int,
         records: list["SimulationPersonRecord"],
     ) -> "YearCareerFacts":
+        resource_facts = ctx.annual_resource_facts(year)
         pressure_by_person_id = {
-            int(rec.person_id): resource_pressure_for_person(ctx, rec)
+            int(rec.person_id): resource_facts.pressure_for(ctx, rec)
             for rec in records
         }
         from library.simulation_household_care import childcare_duty_factor
 
+        care_indexes = ctx.annual_care_indexes(year)
+
         duty_by_person_id = {
-            int(rec.person_id): float(childcare_duty_factor(ctx, rec, year))
+            int(rec.person_id): float(
+                childcare_duty_factor(ctx, rec, year, indexes=care_indexes)
+            )
             for rec in records
         }
         return cls(
             pressure_by_person_id=pressure_by_person_id,
             duty_by_person_id=duty_by_person_id,
+            resource_facts=resource_facts,
+            care_indexes=care_indexes,
         )
 
     def pressure_for(
@@ -264,7 +318,7 @@ class YearCareerFacts:
     ) -> float:
         pid = int(rec.person_id)
         if pid not in self.pressure_by_person_id:
-            self.pressure_by_person_id[pid] = resource_pressure_for_person(ctx, rec)
+            self.pressure_by_person_id[pid] = self.resource_facts.pressure_for(ctx, rec)
         return self.pressure_by_person_id[pid]
 
     def duty_for(
@@ -274,7 +328,9 @@ class YearCareerFacts:
         if pid not in self.duty_by_person_id:
             from library.simulation_household_care import childcare_duty_factor
 
-            self.duty_by_person_id[pid] = float(childcare_duty_factor(ctx, rec, year))
+            self.duty_by_person_id[pid] = float(
+                childcare_duty_factor(ctx, rec, year, indexes=self.care_indexes)
+            )
         return self.duty_by_person_id[pid]
 
 
@@ -335,6 +391,23 @@ def career_fitness(person: "Person") -> CareerFitness:
 def career_fitness_score(person: "Person") -> float:
     """Convenience wrapper for the normalized work-fitness score."""
     return career_fitness(person).score
+
+
+def materialize_adult_profile(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+) -> None:
+    """Initialize adult-facing phenotype caches once a person enters job eligibility."""
+    p = rec.person
+    if p.mind_body and p.attractiveness_01 is not None:
+        return
+    p2 = p
+    if not p2.mind_body:
+        p2 = replace(p2, mind_body=ensure_full_mind_body(p2))
+    if p2.attractiveness_01 is None:
+        p2 = replace(p2, attractiveness_01=round(attractiveness_01(p2, int(year)), 5))
+    if p2 is not p:
+        rec.person = p2
+        ctx.invalidate_alive_columns_cache()
 
 
 def resolve_job_era(historical_year: int) -> str:
@@ -667,10 +740,42 @@ def _person_residence_region(ctx: "SimulationContext", rec: "SimulationPersonRec
     return ctx._residence_region_id(rec)
 
 
+def _resource_pressure_from_facts(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    resource_facts: YearResourceFacts,
+) -> float:
+    sid = (
+        rec.person.current_settlement_id
+        or rec.person.birthplace_settlement_id
+        or ""
+    ).strip()
+    pressure = 0.0
+    if sid:
+        pressure = max(
+            pressure,
+            float(resource_facts.settlement_food_pressure.get(sid, 0.0)),
+        )
+    rid = _person_residence_region(ctx, rec)
+    if rid:
+        try:
+            cap = int(resource_facts.region_cap.get(rid, 0))
+            pop = int(resource_facts.region_population.get(rid, 0))
+            if cap > 0:
+                pressure = max(pressure, float(pop) / float(cap))
+        except (LookupError, ValueError):
+            pass
+    return round(_clamp(pressure, 0.0, 2.0), 4)
+
+
 def resource_pressure_for_person(
-    ctx: "SimulationContext", rec: "SimulationPersonRecord"
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    resource_facts: YearResourceFacts | None = None,
 ) -> float:
     """Return local pressure where 1.0 is around capacity and >1 is scarce."""
+    if resource_facts is not None:
+        return resource_facts.pressure_for(ctx, rec)
     sid = (
         rec.person.current_settlement_id
         or rec.person.birthplace_settlement_id
@@ -1172,6 +1277,7 @@ def assign_career_if_eligible(
     era = resolve_job_era(historical_year)
     if not _eligible_for_job(rec.person, ctx.db_path, year, era):
         return None
+    materialize_adult_profile(ctx, rec, year)
     pressure = (
         resource_pressure_for_person(ctx, rec) if pressure is None else float(pressure)
     )
@@ -1469,7 +1575,7 @@ def _childcare_duty_factor_safe(
     """Look up caregiver duty without taking a hard dep on household_care at import."""
     from library.simulation_household_care import childcare_duty_factor
 
-    return float(childcare_duty_factor(ctx, rec, year))
+    return float(childcare_duty_factor(ctx, rec, year, indexes=ctx.annual_care_indexes(year)))
 
 
 def maybe_assign_or_rehire(
@@ -1541,10 +1647,20 @@ def _residence_settlement_id(rec: "SimulationPersonRecord") -> str:
 
 
 def _household_ids_for_job_move(
-    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+    indexes: object | None = None,
+    use_shared_index: bool = True,
 ) -> list[int]:
     """Worker, co-resident partner, and dependent children who share that home."""
     worker_id = int(rec.person_id)
+    if indexes is None and use_shared_index and hasattr(ctx, "annual_care_indexes"):
+        indexes = ctx.annual_care_indexes(year)
+    if indexes is not None and hasattr(indexes, "household_ids_by_adult"):
+        hids = getattr(indexes, "household_ids_by_adult").get(worker_id)
+        if hids is not None:
+            return list(hids)
     origin_sid = _residence_settlement_id(rec)
     if not origin_sid:
         return [worker_id]
@@ -1583,6 +1699,7 @@ def _pick_job_seeker_destination(
     rec: "SimulationPersonRecord",
     year: int,
     rng: random.Random,
+    resource_facts: YearResourceFacts | None = None,
 ) -> str | None:
     origin_rid = _person_residence_region(ctx, rec)
     if not origin_rid:
@@ -1600,8 +1717,12 @@ def _pick_job_seeker_destination(
         if not rid or rid == origin_rid:
             continue
         try:
-            cap = ctx.effective_regional_population_cap(rid)
-            pop = ctx.count_alive_in_region(rid)
+            if resource_facts is not None:
+                cap = int(resource_facts.region_cap.get(rid, 0))
+                pop = int(resource_facts.region_population.get(rid, 0))
+            else:
+                cap = ctx.effective_regional_population_cap(rid)
+                pop = ctx.count_alive_in_region(rid)
         except (LookupError, ValueError):
             continue
         headroom = max(1.0, float(cap - pop))
@@ -1640,6 +1761,7 @@ def maybe_migrate_job_seeker_household(
     *,
     fitness: CareerFitness,
     pressure: float,
+    career_facts: YearCareerFacts | None = None,
 ) -> bool:
     if rec.person.job or rec.person.employment_status != "unemployed":
         return False
@@ -1657,14 +1779,25 @@ def maybe_migrate_job_seeker_household(
     )
     if rng.random() >= p:
         return False
-    dest_sid = _pick_job_seeker_destination(ctx, rec, year, rng)
+    dest_sid = _pick_job_seeker_destination(
+        ctx,
+        rec,
+        year,
+        rng,
+        resource_facts=career_facts.resource_facts if career_facts is not None else None,
+    )
     if not dest_sid:
         return False
     origin_sid = _residence_settlement_id(rec)
     origin_rid = _person_residence_region(ctx, rec)
     moved_ids: list[int] = []
     group_id = f"job_seeker:{rec.person_id}:{int(year)}"
-    for pid in _household_ids_for_job_move(ctx, rec, year):
+    for pid in _household_ids_for_job_move(
+        ctx,
+        rec,
+        year,
+        indexes=career_facts.care_indexes if career_facts is not None else None,
+    ):
         try:
             if ctx.queue_person_move_to_settlement(
                 pid,
@@ -1726,6 +1859,7 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
             job_age_cache[key] = min_age
         if int(year) - int(rec.person.birthyear) < min_age:
             continue
+        materialize_adult_profile(ctx, rec, year)
         potentially_eligible.append(rec)
 
     career_facts = YearCareerFacts.build(ctx, year, potentially_eligible)
@@ -1760,5 +1894,10 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
 
     for rec, fitness, pressure in eligible:
         maybe_migrate_job_seeker_household(
-            ctx, rec, year, fitness=fitness, pressure=pressure
+            ctx,
+            rec,
+            year,
+            fitness=fitness,
+            pressure=pressure,
+            career_facts=career_facts,
         )

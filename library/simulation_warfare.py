@@ -12,6 +12,7 @@ from library.leadership import military_quality_index
 from library.polity import (
     CampaignState,
     polity_regions,
+    realm_resident_decision_sample,
     realm_resident_ids,
 )
 
@@ -197,7 +198,15 @@ def roll_new_campaigns(
             (holder.person.current_settlement_id or holder.person.birthplace_settlement_id or "")
         )
         stability = float(st.stability) if st is not None else 0.5
-        for cand_id in sorted(realm_resident_ids(ctx, seat.polity_id)):
+        realm_total = max(1, len(realm_resident_ids(ctx, seat.polity_id)))
+        claimants = realm_resident_decision_sample(
+            ctx,
+            seat.polity_id,
+            year=year,
+            scope=f"usurpation:seat:{int(seat.seat_id)}",
+            stream=40_001,
+        )
+        for cand_id in sorted(int(rec.person_id) for rec in claimants):
             if cand_id == seat.holder_person_id:
                 continue
             cr = ctx.id_to_record.get(cand_id)
@@ -212,7 +221,7 @@ def roll_new_campaigns(
                 * cq
                 / max(hq, 0.2)
                 * (1.0 - stability)
-                / max(1, len(realm_resident_ids(ctx, seat.polity_id)))
+                / realm_total
             )
             if rng.random() > p:
                 continue

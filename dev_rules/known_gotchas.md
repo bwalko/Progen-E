@@ -34,7 +34,7 @@ Track behavior/documentation mismatches that can confuse future sessions.
 
 ## Archival upsert and RAM working set
 
-- On full checkpoint, ``simulation_people`` and ``simulation_settlements`` use ``INSERT OR REPLACE`` (no ``DELETE FROM … WHERE world`` for those tables), so **no loss** of previously written person/settlement rows.
+- On full checkpoint, ``simulation_people`` and ``simulation_settlements`` use ``INSERT OR REPLACE`` and the v2 save schema is single-world (the world folder names the save), so **no loss** of previously written person/settlement rows inside that save.
 - After the write, **RAM** prunes people dead longer than ``SimulationContext.working_set_dead_retention_years`` (default **20**) via ``library.world_save.prune_ancient_dead_from_ram``; ``father_id`` / ``mother_id`` may still point at ids that exist only on disk.
 - **Resume** loads all settlements from SQLite but only **alive + recent dead** people using ``world_state.current_year`` — see ``person_belongs_in_working_ram`` in ``library/world_save.py``.
 - **Birth spin-off with household move:** pass ``mother_person_id`` into ``having_sex_birth_event`` / ``generate_person_from_birth`` so spouses and dependent minors relocate with the mother when a new frontier settlement wins the spin-off roll.

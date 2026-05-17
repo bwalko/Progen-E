@@ -31,6 +31,46 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
+SAVE_SCHEMA_VERSION = 2
+SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
+
+_SAVE_REBUILD_SOURCE_SCHEMA = "source_db"
+
+_CREATE_SAVE_METADATA = """
+    CREATE TABLE IF NOT EXISTS save_metadata (
+        meta_key TEXT PRIMARY KEY,
+        meta_value TEXT NOT NULL
+    );
+"""
+
+_CREATE_WORLD_STATE = """
+    CREATE TABLE IF NOT EXISTS world_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        start_year INTEGER NOT NULL,
+        current_year INTEGER NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+"""
+
+_SAVE_REBUILD_TABLES = (
+    "world_state",
+    "simulation_meta",
+    "simulation_people",
+    "simulation_couples",
+    "simulation_paramours",
+    "simulation_events",
+    "simulation_regions",
+    "simulation_settlements",
+    "simulation_polities",
+    "simulation_polity_territory",
+    "simulation_office_seats",
+    "simulation_office_holdings",
+    "simulation_dynasties",
+    "simulation_alliances",
+    "simulation_campaigns",
+    "simulation_battles",
+)
+
 
 def person_belongs_in_working_ram(
     person: Person,
@@ -109,24 +149,257 @@ def _open_save(path: Path | str):
         conn.close()
 
 
+def _quote_identifier(identifier: str) -> str:
+    return '"' + str(identifier).replace('"', '""') + '"'
+
+
+def _ensure_save_metadata_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(_CREATE_SAVE_METADATA)
+
+
+def save_schema_version(conn: sqlite3.Connection) -> int:
+    """Return the schema version stamped on a ``save.sqlite`` connection.
+
+    Older saves predate explicit versioning and report ``0`` until
+    :func:`ensure_checkpoint_schema` stamps them as the current v1 layout.
+    """
+    has_metadata = conn.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='save_metadata'
+        """
+    ).fetchone()
+    row = None
+    if has_metadata is not None:
+        row = conn.execute(
+            """
+            SELECT meta_value FROM save_metadata
+            WHERE meta_key = ?
+            """,
+            (SAVE_SCHEMA_VERSION_META_KEY,),
+        ).fetchone()
+    if row is not None and row[0] is not None:
+        try:
+            return int(str(row[0]).strip())
+        except (TypeError, ValueError):
+            return 0
+    pragma_row = conn.execute("PRAGMA user_version").fetchone()
+    if pragma_row is not None and pragma_row[0] is not None:
+        try:
+            return int(pragma_row[0])
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+def _stamp_save_schema_version(
+    conn: sqlite3.Connection, version: int = SAVE_SCHEMA_VERSION
+) -> None:
+    _ensure_save_metadata_schema(conn)
+    v = int(version)
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+        VALUES (?, ?)
+        """,
+        (SAVE_SCHEMA_VERSION_META_KEY, str(v)),
+    )
+    conn.execute(f"PRAGMA user_version = {v}")
+
+
+def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
+    version = save_schema_version(conn)
+    if version > SAVE_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"save.sqlite schema version {version} is newer than supported "
+            f"version {SAVE_SCHEMA_VERSION}"
+        )
+    if version not in (0, SAVE_SCHEMA_VERSION):
+        raise RuntimeError(
+            f"save.sqlite schema version {version} needs a migration before "
+            f"this code can open it"
+        )
+    if version == 0 and _save_looks_like_legacy_multiworld(conn):
+        raise RuntimeError(
+            "save.sqlite uses the legacy multi-world schema. Delete the save or "
+            "rebuild it before opening with the single-world v2 schema."
+        )
+    _stamp_save_schema_version(conn, SAVE_SCHEMA_VERSION)
+
+
+def _table_exists(conn: sqlite3.Connection, table: str, *, schema: str = "main") -> bool:
+    schema_sql = _quote_identifier(schema)
+    row = conn.execute(
+        f"""
+        SELECT name FROM {schema_sql}.sqlite_master
+        WHERE type='table' AND name=?
+        """,
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _table_columns(
+    conn: sqlite3.Connection, table: str, *, schema: str = "main"
+) -> list[str]:
+    schema_sql = _quote_identifier(schema)
+    table_sql = _quote_identifier(table)
+    return [
+        str(row[1])
+        for row in conn.execute(f"PRAGMA {schema_sql}.table_info({table_sql})")
+    ]
+
+
+def _save_looks_like_legacy_multiworld(conn: sqlite3.Connection) -> bool:
+    for table in (
+        "world_state",
+        "simulation_meta",
+        "simulation_people",
+        "simulation_events",
+        "simulation_regions",
+        "simulation_settlements",
+    ):
+        if _table_exists(conn, table) and "world" in _table_columns(conn, table):
+            return True
+    return False
+
+
+def _copy_common_table_columns_from_attached_source(
+    conn: sqlite3.Connection, table: str
+) -> int:
+    """Copy columns shared by source and destination table.
+
+    This is the safe rebuild spine for storage migrations: v2 can keep this
+    common-column copy for unchanged tables and add explicit transforms for
+    tables whose shape changes.
+    """
+    if not _table_exists(conn, table, schema=_SAVE_REBUILD_SOURCE_SCHEMA):
+        return 0
+    if not _table_exists(conn, table):
+        return 0
+    source_cols = set(
+        _table_columns(conn, table, schema=_SAVE_REBUILD_SOURCE_SCHEMA)
+    )
+    cols = [c for c in _table_columns(conn, table) if c in source_cols]
+    if not cols:
+        return 0
+    table_sql = _quote_identifier(table)
+    cols_sql = ", ".join(_quote_identifier(c) for c in cols)
+    cur = conn.execute(
+        f"""
+        INSERT INTO main.{table_sql} ({cols_sql})
+        SELECT {cols_sql}
+        FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.{table_sql}
+        """
+    )
+    return int(cur.rowcount if cur.rowcount is not None else 0)
+
+
+def _write_rebuilt_save_sqlite(
+    source_db_path: Path,
+    rebuilt_db_path: Path,
+    *,
+    target_schema_version: int,
+) -> None:
+    if int(target_schema_version) != SAVE_SCHEMA_VERSION:
+        raise ValueError(
+            f"no transform is registered for save schema version {target_schema_version}; "
+            f"current supported version is {SAVE_SCHEMA_VERSION}"
+        )
+    with _open_save(rebuilt_db_path) as conn:
+        conn.executescript(_CREATE_WORLD_STATE)
+        ensure_checkpoint_schema(conn)
+        conn.execute(
+            f"ATTACH DATABASE ? AS {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}",
+            (str(source_db_path),),
+        )
+        try:
+            for table in _SAVE_REBUILD_TABLES:
+                _copy_common_table_columns_from_attached_source(conn, table)
+            _stamp_save_schema_version(conn, int(target_schema_version))
+            conn.commit()
+        finally:
+            conn.execute(f"DETACH DATABASE {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}")
+
+
+def rebuild_save_sqlite_for_schema_upgrade(
+    save_db_path: Path | str,
+    *,
+    output_path: Path | str | None = None,
+    replace_original: bool = False,
+    backup_path: Path | str | None = None,
+    overwrite: bool = False,
+    target_schema_version: int = SAVE_SCHEMA_VERSION,
+) -> Path:
+    """Rebuild ``save.sqlite`` through a new file before an optional swap.
+
+    The current implementation copies the v1 schema losslessly while stamping a
+    schema version. Future v2 storage changes should plug their transforms into
+    ``_write_rebuilt_save_sqlite`` so migrations never rewrite the live DB in
+    place.
+    """
+    source = Path(save_db_path)
+    if not source.exists():
+        raise FileNotFoundError(source)
+    target_version = int(target_schema_version)
+    if replace_original and output_path is not None:
+        raise ValueError("output_path cannot be used with replace_original=True")
+
+    if replace_original:
+        final_path = source
+    else:
+        final_path = (
+            Path(output_path)
+            if output_path is not None
+            else source.with_name(f"{source.stem}.schema{target_version}{source.suffix}")
+        )
+        if final_path.exists() and not overwrite:
+            raise FileExistsError(final_path)
+
+    temp_path = final_path.with_name(f".{final_path.name}.tmp")
+    if temp_path.exists():
+        temp_path.unlink()
+
+    _write_rebuilt_save_sqlite(
+        source,
+        temp_path,
+        target_schema_version=target_version,
+    )
+
+    if replace_original:
+        with _open_save(source) as source_conn:
+            source_version = save_schema_version(source_conn)
+        backup = (
+            Path(backup_path)
+            if backup_path is not None
+            else source.with_name(f"{source.name}.schema{source_version}.bak")
+        )
+        if backup.exists() and not overwrite:
+            temp_path.unlink()
+            raise FileExistsError(backup)
+        source.replace(backup)
+        temp_path.replace(source)
+        return source
+
+    temp_path.replace(final_path)
+    return final_path
+
+
 _CREATE_SIMULATION_REGIONS = """
     CREATE TABLE IF NOT EXISTS simulation_regions (
-        world TEXT NOT NULL,
-        region_id TEXT NOT NULL,
+        region_id TEXT PRIMARY KEY,
         region_display_name TEXT NOT NULL DEFAULT '',
         total_population_cap INTEGER NOT NULL,
         total_household_cap INTEGER NOT NULL,
         food_pressure REAL NOT NULL,
         stability REAL NOT NULL,
-        market_pull REAL NOT NULL,
-        PRIMARY KEY (world, region_id)
+        market_pull REAL NOT NULL
     );
 """
 
 _CREATE_SIMULATION_SETTLEMENTS_V2 = """
     CREATE TABLE simulation_settlements (
-        world TEXT NOT NULL,
-        settlement_id TEXT NOT NULL,
+        settlement_id TEXT PRIMARY KEY,
         region_id TEXT NOT NULL,
         level TEXT NOT NULL,
         population_cap INTEGER NOT NULL,
@@ -140,11 +413,10 @@ _CREATE_SIMULATION_SETTLEMENTS_V2 = """
         name_category_secondary TEXT,
         name_culture_primary TEXT,
         name_culture_secondary TEXT,
-        local_geography_json TEXT,
-        PRIMARY KEY (world, settlement_id)
+        local_geography_json TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_simulation_settlements_world_region
-    ON simulation_settlements (world, region_id);
+    CREATE INDEX IF NOT EXISTS idx_simulation_settlements_region
+    ON simulation_settlements (region_id);
 """
 
 
@@ -152,47 +424,38 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS simulation_meta (
-            world TEXT NOT NULL,
-            meta_key TEXT NOT NULL,
-            meta_value TEXT NOT NULL,
-            PRIMARY KEY (world, meta_key)
+            meta_key TEXT PRIMARY KEY,
+            meta_value TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS simulation_people (
-            person_id INTEGER NOT NULL,
-            world TEXT NOT NULL,
+            person_id INTEGER PRIMARY KEY,
             is_founder INTEGER NOT NULL,
             father_id INTEGER,
             mother_id INTEGER,
             is_alive INTEGER NOT NULL,
-            person_json TEXT NOT NULL,
-            PRIMARY KEY (world, person_id)
+            person_json TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS simulation_couples (
-            world TEXT NOT NULL,
-            sort_order INTEGER NOT NULL,
+            sort_order INTEGER PRIMARY KEY,
             person_a_id INTEGER NOT NULL,
             person_b_id INTEGER NOT NULL,
-            surname_convention TEXT,
-            PRIMARY KEY (world, sort_order)
+            surname_convention TEXT
         );
         CREATE TABLE IF NOT EXISTS simulation_paramours (
-            world TEXT NOT NULL,
-            sort_order INTEGER NOT NULL,
+            sort_order INTEGER PRIMARY KEY,
             person_a_id INTEGER NOT NULL,
             person_b_id INTEGER NOT NULL,
-            surname_convention TEXT,
-            PRIMARY KEY (world, sort_order)
+            surname_convention TEXT
         );
         CREATE TABLE IF NOT EXISTS simulation_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            world TEXT NOT NULL,
             sim_year INTEGER,
             event_type TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_simulation_events_world_year
-        ON simulation_events (world, sim_year);
+        CREATE INDEX IF NOT EXISTS idx_simulation_events_year
+        ON simulation_events (sim_year);
         """
     )
     conn.executescript(_CREATE_SIMULATION_REGIONS)
@@ -207,11 +470,12 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     from library import government_checkpoint as _gov_ckpt
 
     _gov_ckpt.ensure_government_schema(conn)
+    _ensure_supported_save_schema(conn)
     conn.commit()
 
 
 def _ensure_simulation_settlements_table(conn: sqlite3.Connection) -> None:
-    """Create ``simulation_settlements`` with per-settlement PK or migrate legacy region-keyed rows."""
+    """Create ``simulation_settlements`` with per-settlement primary keys."""
     exists = conn.execute(
         """
         SELECT name FROM sqlite_master
@@ -227,33 +491,10 @@ def _ensure_simulation_settlements_table(conn: sqlite3.Connection) -> None:
         for r in conn.execute("PRAGMA table_info(simulation_settlements)").fetchall()
     }
     if "settlement_id" not in cols:
-        conn.execute(
-            "ALTER TABLE simulation_settlements RENAME TO simulation_settlements_legacy"
+        raise RuntimeError(
+            "simulation_settlements uses a pre-v2 schema. Delete or rebuild save.sqlite "
+            "before opening it with the single-world schema."
         )
-        conn.executescript(_CREATE_SIMULATION_SETTLEMENTS_V2)
-        conn.execute(
-            """
-            INSERT INTO simulation_settlements (
-                world, settlement_id, region_id, level, population_cap, household_cap,
-                food_pressure, stability, market_pull,
-                display_name, etymology, local_geography_json
-            )
-            SELECT
-                world,
-                region_id || ?,
-                region_id,
-                level, population, households,
-                food_pressure, stability, market_pull,
-                display_name, etymology, local_geography_json
-            FROM simulation_settlements_legacy
-            """,
-            (PRIMARY_SETTLEMENT_SUFFIX,),
-        )
-        conn.execute("DROP TABLE simulation_settlements_legacy")
-        cols = {
-            str(r[1])
-            for r in conn.execute("PRAGMA table_info(simulation_settlements)").fetchall()
-        }
 
     if "display_name" not in cols:
         conn.execute(
@@ -622,20 +863,19 @@ def ensure_checkpoint_schema_for_file(save_db_path: Path | str) -> None:
 
 
 def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
-    """Remove checkpoint rows for ``world`` (not ``world_state``)."""
-    w = world.strip()
+    """Remove checkpoint rows from this single-world save (not ``world_state``)."""
     with _open_save(save_db_path) as conn:
         ensure_checkpoint_schema(conn)
-        conn.execute("DELETE FROM simulation_people WHERE world = ?", (w,))
-        conn.execute("DELETE FROM simulation_settlements WHERE world = ?", (w,))
-        conn.execute("DELETE FROM simulation_regions WHERE world = ?", (w,))
-        conn.execute("DELETE FROM simulation_couples WHERE world = ?", (w,))
-        conn.execute("DELETE FROM simulation_paramours WHERE world = ?", (w,))
-        conn.execute("DELETE FROM simulation_meta WHERE world = ?", (w,))
-        conn.execute("DELETE FROM simulation_events WHERE world = ?", (w,))
+        conn.execute("DELETE FROM simulation_people")
+        conn.execute("DELETE FROM simulation_settlements")
+        conn.execute("DELETE FROM simulation_regions")
+        conn.execute("DELETE FROM simulation_couples")
+        conn.execute("DELETE FROM simulation_paramours")
+        conn.execute("DELETE FROM simulation_meta")
+        conn.execute("DELETE FROM simulation_events")
         from library import government_checkpoint as _gov_ckpt
 
-        _gov_ckpt.clear_government_tables(conn, world=w)
+        _gov_ckpt.clear_government_tables(conn, world=world)
         conn.commit()
 
 
@@ -889,16 +1129,15 @@ def append_simulation_event_rows(
     created_at: str | None = None,
 ) -> None:
     """Insert append-only simulation event rows. Each row is (sim_year, event_type, payload_dict)."""
-    w = world.strip()
     ts = created_at or _utc_now_iso()
     cur = conn.cursor()
     for sim_year, event_type, payload in rows:
         cur.execute(
             """
-            INSERT INTO simulation_events (world, sim_year, event_type, payload_json, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO simulation_events (sim_year, event_type, payload_json, created_at)
+            VALUES (?, ?, ?, ?)
             """,
-            (w, sim_year, event_type, json.dumps(payload, separators=(",", ":")), ts),
+            (sim_year, event_type, json.dumps(payload, separators=(",", ":")), ts),
         )
 
 
@@ -907,10 +1146,9 @@ def flush_pending_simulation_events(ctx: "SimulationContext") -> None:
     pending = ctx._pending_simulation_events
     if not pending:
         return
-    w = ctx.world.strip()
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
-        append_simulation_event_rows(conn, w, pending)
+        append_simulation_event_rows(conn, ctx.world.strip(), pending)
         conn.commit()
     pending.clear()
 
@@ -921,60 +1159,56 @@ def flush_simulation_meta_checkpoint(ctx: "SimulationContext") -> None:
     Used when ``checkpoint_simulation_to_save(..., full_snapshot=False)`` so runs that
     flush events between sparse full snapshots still save resume-relevant meta.
     """
-    w = ctx.world.strip()
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
-            (w, "next_person_id", str(ctx.next_person_id)),
+            ("next_person_id", str(ctx.next_person_id)),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
             (
-                w,
                 REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY,
                 serialize_region_effective_cap_multipliers(ctx),
             ),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
             (
-                w,
                 REGION_DISPLAY_LABEL_OVERRIDES_META_KEY,
                 serialize_region_display_label_overrides(ctx),
             ),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
-            (w, REGION_NAMING_AUX_META_KEY, serialize_region_naming_aux(ctx)),
+            (REGION_NAMING_AUX_META_KEY, serialize_region_naming_aux(ctx)),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
-            (w, SETTLEMENT_SPINOFF_STATE_META_KEY, serialize_settlement_spinoff_state(ctx)),
+            (SETTLEMENT_SPINOFF_STATE_META_KEY, serialize_settlement_spinoff_state(ctx)),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
             (
-                w,
                 PENDING_SETTLEMENT_MOVES_META_KEY,
                 serialize_pending_settlement_moves(ctx),
             ),
@@ -990,21 +1224,19 @@ def maybe_import_run_store_events_csv(ctx: "SimulationContext") -> None:
     path = store.root_dir / "events.csv"
     if not path.is_file():
         return
-    w = ctx.world.strip()
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         cnt_row = conn.execute(
-            "SELECT COUNT(*) AS c FROM simulation_events WHERE world = ?",
-            (w,),
+            "SELECT COUNT(*) AS c FROM simulation_events",
         ).fetchone()
         if cnt_row is not None and int(cnt_row["c"] or 0) > 0:
             return
         row = conn.execute(
             """
             SELECT meta_value FROM simulation_meta
-            WHERE world = ? AND meta_key = ?
+            WHERE meta_key = ?
             """,
-            (w, RUN_STORE_EVENTS_IMPORTED_META_KEY),
+            (RUN_STORE_EVENTS_IMPORTED_META_KEY,),
         ).fetchone()
         if row is not None and str(row["meta_value"] or "").strip() == "1":
             return
@@ -1018,13 +1250,13 @@ def maybe_import_run_store_events_csv(ctx: "SimulationContext") -> None:
                 et = str(r.get("event_type") or "").strip() or "unknown"
                 imported.append((sim_year, et, payload))
         if imported:
-            append_simulation_event_rows(conn, w, imported)
+            append_simulation_event_rows(conn, ctx.world.strip(), imported)
         conn.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
-            (w, RUN_STORE_EVENTS_IMPORTED_META_KEY, "1"),
+            (RUN_STORE_EVENTS_IMPORTED_META_KEY, "1"),
         )
         conn.commit()
 
@@ -1229,13 +1461,12 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
     After a successful commit, long-dead persons are dropped from RAM (see
     :func:`prune_ancient_dead_from_ram`).
     """
-    w = ctx.world.strip()
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         cur = conn.cursor()
-        cur.execute("DELETE FROM simulation_regions WHERE world = ?", (w,))
-        cur.execute("DELETE FROM simulation_couples WHERE world = ?", (w,))
-        cur.execute("DELETE FROM simulation_paramours WHERE world = ?", (w,))
+        cur.execute("DELETE FROM simulation_regions")
+        cur.execute("DELETE FROM simulation_couples")
+        cur.execute("DELETE FROM simulation_paramours")
 
         alive = ctx.current_people_ids
         for rec in ctx.people:
@@ -1243,13 +1474,12 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             cur.execute(
                 """
                 INSERT OR REPLACE INTO simulation_people (
-                    person_id, world, is_founder, father_id, mother_id, is_alive, person_json
+                    person_id, is_founder, father_id, mother_id, is_alive, person_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     rec.person_id,
-                    w,
                     1 if rec.is_founder else 0,
                     rec.father_id,
                     rec.mother_id,
@@ -1264,7 +1494,7 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             cur.execute(
                 """
                 INSERT OR REPLACE INTO simulation_settlements (
-                    world, settlement_id, region_id, level, population_cap, household_cap,
+                    settlement_id, region_id, level, population_cap, household_cap,
                     food_pressure, prosperity_pool, stability, market_pull,
                     display_name, etymology,
                     name_category_primary, name_category_secondary,
@@ -1273,10 +1503,9 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                     founded_sim_year, abandoned_sim_year, status,
                     consecutive_empty_years, site_slot
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    w,
                     st.settlement_id,
                     st.region_id,
                     st.level,
@@ -1307,15 +1536,14 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             cur.execute(
                 """
                 INSERT INTO simulation_regions (
-                    world, region_id, region_display_name,
+                    region_id, region_display_name,
                     total_population_cap, total_household_cap,
                     food_pressure, stability, market_pull,
                     prosperity_pool, treasury_balance
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    w,
                     region_id,
                     r_label,
                     tot_pop,
@@ -1339,11 +1567,11 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             cur.execute(
                 """
                 INSERT INTO simulation_couples (
-                    world, sort_order, person_a_id, person_b_id, surname_convention
+                    sort_order, person_a_id, person_b_id, surname_convention
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?)
                 """,
-                (w, i, a_id, b_id, convention),
+                (i, a_id, b_id, convention),
             )
 
         for i, (a_id, b_id) in enumerate(ctx.paramours):
@@ -1353,11 +1581,11 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             cur.execute(
                 """
                 INSERT INTO simulation_paramours (
-                    world, sort_order, person_a_id, person_b_id, surname_convention
+                    sort_order, person_a_id, person_b_id, surname_convention
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?)
                 """,
-                (w, i, a_id, b_id, convention),
+                (i, a_id, b_id, convention),
             )
 
         from library.government_checkpoint import checkpoint_government as _checkpoint_gov
@@ -1366,54 +1594,51 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
 
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
-            (w, "next_person_id", str(ctx.next_person_id)),
+            ("next_person_id", str(ctx.next_person_id)),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
             (
-                w,
                 REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY,
                 serialize_region_effective_cap_multipliers(ctx),
             ),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
             (
-                w,
                 REGION_DISPLAY_LABEL_OVERRIDES_META_KEY,
                 serialize_region_display_label_overrides(ctx),
             ),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
-            (w, REGION_NAMING_AUX_META_KEY, serialize_region_naming_aux(ctx)),
+            (REGION_NAMING_AUX_META_KEY, serialize_region_naming_aux(ctx)),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
-            (w, SETTLEMENT_SPINOFF_STATE_META_KEY, serialize_settlement_spinoff_state(ctx)),
+            (SETTLEMENT_SPINOFF_STATE_META_KEY, serialize_settlement_spinoff_state(ctx)),
         )
         cur.execute(
             """
-            INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
             """,
             (
-                w,
                 PENDING_SETTLEMENT_MOVES_META_KEY,
                 serialize_pending_settlement_moves(ctx),
             ),
@@ -1439,29 +1664,26 @@ def checkpoint_simulation_to_save(
 
 
 def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
-    """If a checkpoint exists for ``ctx.world``, load working-set state into ``ctx``.
+    """If a checkpoint exists, load working-set state into ``ctx``.
 
     All ``simulation_settlements`` rows load into RAM; only alive + recent dead people
     (see :func:`person_belongs_in_working_ram`) load so long runs stay bounded.
     """
     from library.simulation_context import SimulationPersonRecord
 
-    w = ctx.world.strip()
     cap_multipliers: dict[str, float] = {}
     spin_pending: dict[str, int] = {}
     spin_last: dict[str, int] = {}
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         row = conn.execute(
-            "SELECT COUNT(*) AS c FROM simulation_people WHERE world = ?",
-            (w,),
+            "SELECT COUNT(*) AS c FROM simulation_people",
         ).fetchone()
         if row is None or int(row["c"] or 0) == 0:
             return False
 
         ref_row = conn.execute(
-            "SELECT current_year FROM world_state WHERE world = ?",
-            (w,),
+            "SELECT current_year FROM world_state WHERE id = 1",
         ).fetchone()
         reference_year = int(ctx.simulation_start_year)
         if ref_row is not None and ref_row["current_year"] is not None:
@@ -1473,8 +1695,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         )
 
         people_rows = conn.execute(
-            "SELECT * FROM simulation_people WHERE world = ? ORDER BY person_id",
-            (w,),
+            "SELECT * FROM simulation_people ORDER BY person_id",
         ).fetchall()
         loaded: list[SimulationPersonRecord] = []
         alive: set[int] = set()
@@ -1509,8 +1730,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                 alive.add(pid)
 
         settle_rows = conn.execute(
-            "SELECT * FROM simulation_settlements WHERE world = ?",
-            (w,),
+            "SELECT * FROM simulation_settlements",
         ).fetchall()
         settlements_by_id: dict[str, SettlementState] = {}
         settlement_ids_by_region: dict[str, list[str]] = defaultdict(list)
@@ -1525,8 +1745,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         region_prosperity_loaded: dict[str, float] = {}
         region_treasury_loaded: dict[str, float] = {}
         region_rows = conn.execute(
-            "SELECT * FROM simulation_regions WHERE world = ?",
-            (w,),
+            "SELECT * FROM simulation_regions",
         ).fetchall()
         for r in region_rows:
             rid = str(r["region_id"] or "").strip()
@@ -1548,10 +1767,8 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             """
             SELECT person_a_id, person_b_id, surname_convention
             FROM simulation_couples
-            WHERE world = ?
             ORDER BY sort_order
             """,
-            (w,),
         ).fetchall()
         couple_ids: list[tuple[int, int]] = [
             (int(r["person_a_id"]), int(r["person_b_id"])) for r in couple_rows
@@ -1570,9 +1787,8 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                 """
                 SELECT person_a_id, person_b_id, surname_convention
                 FROM simulation_paramours
-                WHERE world = ? ORDER BY sort_order
+                ORDER BY sort_order
                 """,
-                (w,),
             ).fetchall()
         except sqlite3.OperationalError:
             paramour_rows = []
@@ -1588,13 +1804,12 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                 surname_conventions_by_pair[tuple(sorted((a, b)))] = convention
 
         meta_row = conn.execute(
-            "SELECT meta_value FROM simulation_meta WHERE world = ? AND meta_key = ?",
-            (w, "next_person_id"),
+            "SELECT meta_value FROM simulation_meta WHERE meta_key = ?",
+            ("next_person_id",),
         ).fetchone()
         max_loaded = max((r.person_id for r in loaded), default=0)
         mx_row = conn.execute(
-            "SELECT MAX(person_id) AS m FROM simulation_people WHERE world = ?",
-            (w,),
+            "SELECT MAX(person_id) AS m FROM simulation_people",
         ).fetchone()
         max_any = max_loaded
         if mx_row is not None and mx_row["m"] is not None:
@@ -1606,9 +1821,9 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         cap_m_row = conn.execute(
             """
             SELECT meta_value FROM simulation_meta
-            WHERE world = ? AND meta_key = ?
+            WHERE meta_key = ?
             """,
-            (w, REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY),
+            (REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY,),
         ).fetchone()
         cap_raw = cap_m_row["meta_value"] if cap_m_row is not None else None
         cap_multipliers = parse_region_effective_cap_multipliers(
@@ -1618,9 +1833,9 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         lbl_m_row = conn.execute(
             """
             SELECT meta_value FROM simulation_meta
-            WHERE world = ? AND meta_key = ?
+            WHERE meta_key = ?
             """,
-            (w, REGION_DISPLAY_LABEL_OVERRIDES_META_KEY),
+            (REGION_DISPLAY_LABEL_OVERRIDES_META_KEY,),
         ).fetchone()
         lbl_raw = lbl_m_row["meta_value"] if lbl_m_row is not None else None
         display_overrides = parse_region_display_label_overrides(
@@ -1630,9 +1845,9 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         aux_m_row = conn.execute(
             """
             SELECT meta_value FROM simulation_meta
-            WHERE world = ? AND meta_key = ?
+            WHERE meta_key = ?
             """,
-            (w, REGION_NAMING_AUX_META_KEY),
+            (REGION_NAMING_AUX_META_KEY,),
         ).fetchone()
         aux_raw = aux_m_row["meta_value"] if aux_m_row is not None else None
         label_src, miss_streak = parse_region_naming_aux(
@@ -1642,9 +1857,9 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         spin_m_row = conn.execute(
             """
             SELECT meta_value FROM simulation_meta
-            WHERE world = ? AND meta_key = ?
+            WHERE meta_key = ?
             """,
-            (w, SETTLEMENT_SPINOFF_STATE_META_KEY),
+            (SETTLEMENT_SPINOFF_STATE_META_KEY,),
         ).fetchone()
         spin_raw = spin_m_row["meta_value"] if spin_m_row is not None else None
         spin_pending, spin_last = parse_settlement_spinoff_state(
@@ -1654,9 +1869,9 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         moves_m_row = conn.execute(
             """
             SELECT meta_value FROM simulation_meta
-            WHERE world = ? AND meta_key = ?
+            WHERE meta_key = ?
             """,
-            (w, PENDING_SETTLEMENT_MOVES_META_KEY),
+            (PENDING_SETTLEMENT_MOVES_META_KEY,),
         ).fetchone()
         moves_raw = moves_m_row["meta_value"] if moves_m_row is not None else None
         pending_moves = parse_pending_settlement_moves(

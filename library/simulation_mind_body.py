@@ -12,17 +12,35 @@ from library.mind_body import (
     maybe_apply_elder_mind_body_year,
     mind_body_aging_rng_seed,
 )
+from library.simulation_careers import (
+    _person_maturity_age,
+    job_eligibility_age,
+    resolve_job_era,
+)
 
 if TYPE_CHECKING:
     from library.simulation_context import SimulationContext
 
 
 def simulation_mind_body_annual_tick(ctx: "SimulationContext", year: int) -> None:
-    """Before careers: sync mind_body with genome keys, elder nudges, attractiveness."""
+    """Before careers: materialize adult profiles, elder nudges, attractiveness."""
     y = int(year)
     salt = int(ctx.placename_rng_salt)
+    era = resolve_job_era(ctx.get_historical_year(y))
+    job_age_cache: dict[tuple[str, str, int | None], int] = {}
     for rec in ctx.iter_current_people(sorted_by_id=True):
         p = rec.person
+        key = (
+            (p.species or "").strip(),
+            (p.ethnic or "").strip(),
+            int(p.min_fertility_age) if p.min_fertility_age is not None else None,
+        )
+        min_age = job_age_cache.get(key)
+        if min_age is None:
+            min_age = job_eligibility_age(_person_maturity_age(p, ctx.db_path), era)
+            job_age_cache[key] = min_age
+        if y - int(p.birthyear) < min_age:
+            continue
         mb = maybe_apply_elder_mind_body_year(
             replace(p, mind_body=ensure_full_mind_body(p)),
             year=y,

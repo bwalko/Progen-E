@@ -65,7 +65,8 @@ def _leader_candidate(ctx: "SimulationContext", rec: "SimulationPersonRecord") -
     lt = (rec.person.leader_tendency or "").strip().lower()
     if lq not in ("strong", "high") and lt not in ("high", "strong"):
         return False
-    duty = childcare_duty_factor(ctx, rec, int(ctx.current_year or 0))
+    y = int(ctx.current_year or 0)
+    duty = childcare_duty_factor(ctx, rec, y, indexes=ctx.annual_care_indexes(y))
     return duty <= LEADER_CHILD_DUTY_EXCLUSION_THRESHOLD
 
 
@@ -144,7 +145,12 @@ def _household_current_savings(ctx: "SimulationContext", hkey: frozenset[int]) -
     return vals[0] if vals else HOUSEHOLD_STARTING_PROSPERITY
 
 
-def _update_household_prosperity(ctx: "SimulationContext", year: int) -> None:
+def _update_household_prosperity(
+    ctx: "SimulationContext",
+    year: int,
+    *,
+    care_indexes: object | None = None,
+) -> None:
     """Accumulate annual household savings from wages minus household expenses."""
     seen: set[frozenset[int]] = set()
     for rec in ctx.iter_current_people(sorted_by_id=True):
@@ -152,7 +158,7 @@ def _update_household_prosperity(ctx: "SimulationContext", year: int) -> None:
             continue
         if ctx._person_is_dependent_minor(rec, year):
             continue
-        hkey = frozenset(_household_ids_for_job_move(ctx, rec, year))
+        hkey = frozenset(_household_ids_for_job_move(ctx, rec, year, indexes=care_indexes))
         if not hkey or hkey in seen:
             continue
         seen.add(hkey)
@@ -223,6 +229,8 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
     market_catalog = JobMarketCatalog.load(ctx.db_path)
     y = int(year)
     hist = ctx.get_historical_year(y)
+    resource_facts = ctx.annual_resource_facts(y)
+    care_indexes = ctx.annual_care_indexes(y)
 
     # --- Pull pools toward baselines supported by settlement / region pressure ---
     next_settlements: dict[str, SettlementState] = {}
@@ -250,8 +258,8 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
             rid_all.add(rid)
 
     for rid in rid_all:
-        cap = max(1, int(ctx.effective_regional_population_cap(rid)))
-        pop = int(ctx.count_alive_in_region(rid))
+        cap = max(1, int(resource_facts.region_cap.get(rid, 0) or ctx.effective_regional_population_cap(rid)))
+        pop = int(resource_facts.region_population.get(rid, 0))
         rp = float(pop) / float(cap)
         region_target = _clamp(
             1.0 - min(1.0, rp) / 2.0 + 0.18,
@@ -325,7 +333,7 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
             total_draw += draw_i
             value_back += VALUE_ADD_ON_DRAW_SCALE * float(je.value_add) * (draw_i + 0.02)
             wage_unit = float(je.wage_yield) * WAGE_BASE_SCALE
-            pressure = resource_pressure_for_person(ctx, rec)
+            pressure = resource_pressure_for_person(ctx, rec, resource_facts=resource_facts)
             press_rel = _clamp(1.0 - 0.42 * pressure, 0.25, 1.0)
             market_rel = 0.72 + 0.28 * float(jm.taxability)
             wage_score = _clamp01(
@@ -397,17 +405,20 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
                 REGION_POOL_MAX,
             )
 
-    _update_household_prosperity(ctx, y)
+    _update_household_prosperity(ctx, y, care_indexes=care_indexes)
 
     # --- Leader spending from treasury ---
-    by_region_alive = ctx.current_people_by_region()
     for rid in rid_all:
         treasury = float(ctx.region_treasury_balance.get(rid, 0.0))
         if treasury < 0.35:
             continue
         leaders = [
             rec
-            for rec in by_region_alive.get(rid, ())
+            for rec in ctx.decision_sample_people_in_region(
+                rid,
+                year=y,
+                stream=30_001,
+            )
             if _leader_candidate(ctx, rec)
         ]
         if not leaders:

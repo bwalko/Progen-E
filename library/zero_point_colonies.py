@@ -297,6 +297,7 @@ def births_and_couples_for_region(
     births = 0
     rid_seed = sum((i + 1) * ord(ch) for i, ch in enumerate(rid))
     rng = random.Random(int(year) * 100_003 + rid_seed)
+    resource_facts = ctx.annual_resource_facts(year)
     for rec in records:
         if (rec.person.gender or "").strip() != "Female":
             continue
@@ -327,7 +328,7 @@ def births_and_couples_for_region(
             continue
         father_id = rng.choice(candidates)
         father = ctx.id_to_record[father_id]
-        pressure = resource_pressure_for_person(ctx, rec)
+        pressure = resource_pressure_for_person(ctx, rec, resource_facts=resource_facts)
         p_try = annual_conception_probability(rec.person, father.person, pressure=pressure)
         crng = conception_rng(year, rid_seed, rec.person_id, father_id)
         if crng.random() >= p_try:

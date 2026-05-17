@@ -13,6 +13,7 @@ from utils.gradio_data_browser import (
     _event_sentence_html,
     _person_event_rows,
     _sort_rows_by_legacy_score,
+    _trait_display_values,
     _trait_phrase,
 )
 
@@ -338,6 +339,27 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             _trait_phrase("generosity", 63.0, labels, soften_typical=True),
             "extravagant",
         )
+
+    def test_trait_display_values_show_current_and_base_when_atrophied(self) -> None:
+        current, base, shown = _trait_display_values(
+            "physical",
+            {"physical": 72.25},
+            {"physical": 18.0},
+        )
+
+        self.assertEqual(current, 72.25)
+        self.assertEqual(base, 18.0)
+        self.assertIn("+72.2", shown)
+        self.assertIn("base +18.0", shown)
+
+    def test_trait_display_values_hide_base_when_current_matches(self) -> None:
+        _, _, shown = _trait_display_values(
+            "focus",
+            {"focus": -4.0},
+            {"focus": -4.0},
+        )
+
+        self.assertEqual(shown, "-4.0")
 
 
 if __name__ == "__main__":

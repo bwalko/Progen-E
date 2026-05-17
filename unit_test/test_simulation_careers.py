@@ -40,6 +40,7 @@ from library.simulation_export import split_person_for_export
 from library.simulation_careers import (
     PREMIUM_JOB_FITNESS_THRESHOLD,
     PREMIUM_JOB_MAX_PROB,
+    YearResourceFacts,
     assign_career_if_eligible,
     career_fitness,
     career_fitness_score,
@@ -54,6 +55,7 @@ from library.simulation_careers import (
     premium_job_roll_probability,
     rehire_probability,
     resolve_job_era,
+    resource_pressure_for_person,
     score_genome_job_row,
     simulation_careers_annual_tick,
     _job_allowed_for_person,
@@ -580,6 +582,103 @@ class TestSimulationCareers(unittest.TestCase):
                 self.assertEqual(rec.person.life_stage, "child")
                 ctx.refresh_current_people_life_stages(2001)
                 self.assertEqual(rec.person.life_stage, "mature")
+
+    def test_refresh_life_stages_reuses_species_lookup_cache(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=2000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                st = ctx.ensure_active_settlement_for_region("aeria_north")
+                for birthyear in (1990, 1980):
+                    p = replace(
+                        _person(birthyear=birthyear, genome={"focus": 0.0}),
+                        ethnic="Fixture",
+                        species="Human",
+                        life_stage="child",
+                        birthplace_region_id="aeria_north",
+                        birthplace_settlement_id=st.settlement_id,
+                        current_settlement_id=st.settlement_id,
+                    )
+                    ctx.add_person(person=p, is_founder=True)
+
+                rows = (
+                    {
+                        "species": "Human",
+                        "ethnic": "Fixture",
+                        "maturity": 15,
+                        "prime": 25,
+                        "middleaged": 45,
+                        "elder": 65,
+                        "lifespan": 80,
+                    },
+                )
+                with patch(
+                    "library.simulation_context._species_rows", return_value=rows
+                ) as species_rows:
+                    ctx.refresh_current_people_life_stages(2000)
+                    ctx.refresh_current_people_life_stages(2001)
+
+                self.assertEqual(species_rows.call_count, 1)
+                stages_by_birthyear = {
+                    rec.person.birthyear: rec.person.life_stage
+                    for rec in ctx.iter_current_people()
+                }
+                self.assertEqual(stages_by_birthyear[1990], "child")
+                self.assertEqual(stages_by_birthyear[1980], "mature")
+
+    def test_year_resource_facts_cache_person_pressure(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=2000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                st = ctx.ensure_active_settlement_for_region("aeria_north")
+                ctx.settlements_by_id[st.settlement_id] = replace(
+                    st, food_pressure=1.25
+                )
+                p = replace(
+                    _person(birthyear=1980, genome={"focus": 0.0}),
+                    birthplace_region_id="aeria_north",
+                    birthplace_settlement_id=st.settlement_id,
+                    current_settlement_id=st.settlement_id,
+                )
+                rec = ctx.add_person(person=p, is_founder=True)
+
+                facts = ctx.annual_resource_facts(2000)
+                self.assertIsInstance(facts, YearResourceFacts)
+                self.assertEqual(
+                    resource_pressure_for_person(ctx, rec, resource_facts=facts),
+                    1.25,
+                )
+                self.assertIn(rec.person_id, facts.pressure_by_person_id)
+
+                ctx.settlements_by_id[st.settlement_id] = replace(
+                    ctx.settlements_by_id[st.settlement_id], food_pressure=0.1
+                )
+                self.assertEqual(facts.pressure_for(ctx, rec), 1.25)
+                ctx.invalidate_annual_indexes()
+                self.assertEqual(
+                    ctx.annual_resource_facts(2000).pressure_for(ctx, rec), 0.1
+                )
 
     def test_career_fitness_rewards_near_perfect_and_penalizes_high_deviation(self) -> None:
         fit = _person(birthyear=1980, genome=_full_genome(0.0))

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
+from library.simulation_careers import _household_ids_for_job_move
 from library.simulation_context import SimulationContext
 from library.simulation_household_care import (
     CHILD_DUTY_FACTOR_CAP,
@@ -636,6 +637,145 @@ class TestSimulationHouseholdCare(unittest.TestCase):
 
                 # The unrelated co-resident adult has no implicit children -> still 0.
                 self.assertEqual(childcare_duty_factor(ctx, sr, 2000), 0.0)
+
+    def test_year_index_matches_household_helper(self) -> None:
+        """Indexed household membership must preserve the legacy helper semantics."""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=39,
+                flush_run_store=False,
+            ) as ctx:
+                from dataclasses import replace
+
+                st = ctx.ensure_active_settlement_for_region("aeria_north")
+                sid = st.settlement_id
+                adults = []
+                for gender in ("Female", "Male", "Female"):
+                    p = generate_person_random(
+                        gender=gender,
+                        age=32,
+                        simulation_year=2000,
+                        simulation_context=ctx,
+                    )
+                    p = replace(
+                        p,
+                        birthyear=1968,
+                        birthplace_settlement_id=sid,
+                        current_settlement_id=sid,
+                    )
+                    adults.append(ctx.add_person(person=p, is_founder=False))
+                ctx.add_couple(adults[0].person_id, adults[1].person_id)
+
+                for i, parents in enumerate(
+                    (
+                        (adults[0].person_id, adults[1].person_id),
+                        (None, adults[0].person_id),
+                        (None, adults[2].person_id),
+                    )
+                ):
+                    ch = generate_person_random(
+                        gender="Male",
+                        age=2 + i,
+                        simulation_year=2000,
+                        simulation_context=ctx,
+                    )
+                    ch = replace(
+                        ch,
+                        birthyear=1998 - i,
+                        birthplace_settlement_id=sid,
+                        current_settlement_id=sid,
+                        min_fertility_age=18,
+                    )
+                    ctx.add_person(
+                        person=ch,
+                        is_founder=False,
+                        father_id=parents[0],
+                        mother_id=parents[1],
+                    )
+
+                indexes = build_year_indexes(ctx, 2000)
+                for rec in adults:
+                    self.assertEqual(
+                        _household_ids_for_job_move(
+                            ctx, rec, 2000, use_shared_index=False
+                        ),
+                        _household_ids_for_job_move(ctx, rec, 2000, indexes=indexes),
+                    )
+
+    def test_context_reuses_and_invalidates_annual_care_index(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=41,
+                flush_run_store=False,
+            ) as ctx:
+                from dataclasses import replace
+
+                st = ctx.ensure_active_settlement_for_region("aeria_north")
+                sid = st.settlement_id
+                adult = generate_person_random(
+                    gender="Female",
+                    age=30,
+                    simulation_year=2000,
+                    simulation_context=ctx,
+                )
+                adult = replace(
+                    adult,
+                    birthyear=1970,
+                    birthplace_settlement_id=sid,
+                    current_settlement_id=sid,
+                )
+                ar = ctx.add_person(person=adult, is_founder=False)
+
+                idx1 = ctx.annual_care_indexes(2000)
+                idx2 = ctx.annual_care_indexes(2000)
+                self.assertIs(idx1, idx2)
+
+                child = generate_person_random(
+                    gender="Male",
+                    age=2,
+                    simulation_year=2000,
+                    simulation_context=ctx,
+                )
+                child = replace(
+                    child,
+                    birthyear=1998,
+                    birthplace_settlement_id=sid,
+                    current_settlement_id=sid,
+                    min_fertility_age=18,
+                )
+                cr = ctx.add_person(
+                    person=child,
+                    is_founder=False,
+                    mother_id=ar.person_id,
+                    father_id=None,
+                )
+
+                idx3 = ctx.annual_care_indexes(2000)
+                self.assertIsNot(idx1, idx3)
+                self.assertIn(cr.person_id, idx3.minor_ids)
+                self.assertEqual(
+                    idx3.dependent_minor_count_by_adult.get(ar.person_id), 1
+                )
 
 
 if __name__ == "__main__":

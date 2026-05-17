@@ -48,8 +48,7 @@ class TestWorkingSetCheckpoint(unittest.TestCase):
 
                 with sqlite3.connect(sav) as conn:
                     n_db = conn.execute(
-                        "SELECT COUNT(*) FROM simulation_people WHERE world = ?",
-                        ("default",),
+                        "SELECT COUNT(*) FROM simulation_people",
                     ).fetchone()[0]
 
                 self.assertEqual(int(n_db), 2)

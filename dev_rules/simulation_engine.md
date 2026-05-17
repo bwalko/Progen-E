@@ -13,6 +13,8 @@ Reference for integrating and testing full simulation runs (`SimulationContext`)
 
 Ensure the world directory and `temp/` exist before a run; [`ensure_world_directories`](../library/world_bootstrap.py) does this (`SimulationContext.create` calls it).
 
+`save.sqlite` schema v2 is single-world: runtime tables do **not** include a `world` column. The folder path (`worlds/<id>/`) is the world identity. The immutable `config.sqlite` tables still keep their `world` column because they are imported from shared CSV config.
+
 ## Reset world for tests
 
 **Flag:** `reset_world_for_test` on `SimulationContext.create` ([`simulation_context.py`](../library/simulation_context.py)), **or** environment variable **`HISTORY_SIM_RESET_WORLD`** set to `1`, `true`, or `yes` (combined with OR).
@@ -32,7 +34,7 @@ On `SimulationContext.create` ([`simulation_context.py`](../library/simulation_c
 |------------------|----------|
 | `True` | Always reload all `config/*.csv` into the per-world `config.sqlite`. |
 | `False` | Never reload; use existing `config.sqlite` on disk. |
-| `None` (default) | **Auto:** refresh if **reset-world** is on; **else** refresh if `save.sqlite` has **no** `simulation_people` checkpoint rows for `world`; **else** refresh if **`start_year`** is passed to `SimulationContext.create` (a new scheduled run clears checkpoints and is treated like a fresh CSV pull). Otherwise skip refresh when resuming (`start_year is None`) with an existing population checkpoint. Explicit `refresh_config=False` still wins. |
+| `None` (default) | **Auto:** refresh if **reset-world** is on; **else** refresh if `save.sqlite` has **no** `simulation_people` checkpoint rows; **else** refresh if **`start_year`** is passed to `SimulationContext.create` (a new scheduled run clears checkpoints and is treated like a fresh CSV pull). Otherwise skip refresh when resuming (`start_year is None`) with an existing population checkpoint. Explicit `refresh_config=False` still wins. |
 
 ## Zero-point multi-colony foundation
 

@@ -48,7 +48,7 @@ from library.polity import (
     polity_settlement_territory_ids,
     polities_in_region,
     primogeniture_candidates,
-    realm_resident_ids,
+    realm_resident_decision_sample,
 )
 from library.world_save import _open_save
 
@@ -73,7 +73,8 @@ def _childcare_duty_factor_safe(
     """Look up caregiver duty factor without taking a hard dep at module import."""
     from library.simulation_household_care import childcare_duty_factor
 
-    return float(childcare_duty_factor(ctx, rec, year))
+    y = int(year)
+    return float(childcare_duty_factor(ctx, rec, y, indexes=ctx.annual_care_indexes(y)))
 
 
 def init_government_state(ctx: "SimulationContext") -> None:
@@ -196,11 +197,19 @@ def _pick_head_candidate_in_region(
     rid = (region_id or "").strip()
     if not rid:
         return None
-    residents = list(ctx.current_people_by_region().get(rid, ()))
+    eff_year = int(year) if year is not None else int(ctx.current_year or 0)
+    residents = ctx.decision_sample_people_in_region(
+        rid,
+        year=eff_year,
+        stream=20_001,
+    )
     if not residents:
         return None
+    already_holding = _holder_ids_currently_in_office(ctx)
+    available = [r for r in residents if int(r.person_id) not in already_holding]
+    if available:
+        residents = available
     pref = float(head_title.male_weight) if head_title is not None else 0.5
-    eff_year = int(year) if year is not None else int(ctx.current_year or 0)
 
     def head_score(rec) -> tuple[float, float, int]:
         li = leadership_index(rec.person, composite_rows=composite_rows)
@@ -227,11 +236,19 @@ def _pick_head_candidate_in_settlement(
     sid = (settlement_id or "").strip()
     if not sid:
         return None
-    residents = list(ctx.current_people_by_settlement().get(sid, ()))
+    eff_year = int(year) if year is not None else int(ctx.current_year or 0)
+    residents = ctx.decision_sample_people_in_settlement(
+        sid,
+        year=eff_year,
+        stream=20_002,
+    )
     if not residents:
         return None
+    already_holding = _holder_ids_currently_in_office(ctx)
+    available = [r for r in residents if int(r.person_id) not in already_holding]
+    if available:
+        residents = available
     pref = float(head_title.male_weight) if head_title is not None else 0.5
-    eff_year = int(year) if year is not None else int(ctx.current_year or 0)
 
     def head_score(rec) -> tuple[float, float, int]:
         li = leadership_index(rec.person, composite_rows=composite_rows)
@@ -577,24 +594,25 @@ def _fill_merit_or_election(
     rng: random.Random,
 ) -> None:
     already_holding = _holder_ids_currently_in_office(ctx)
-    pool = list(realm_resident_ids(ctx, seat.polity_id))
     if seat.scope_settlement_id:
-        pool = [
-            pid
-            for pid in pool
-            if ctx.id_to_record.get(pid) is not None
-            and (
-                ctx.id_to_record[pid].person.current_settlement_id
-                or ctx.id_to_record[pid].person.birthplace_settlement_id
-                or ""
-            ).strip()
-            == seat.scope_settlement_id
-        ]
+        records = ctx.decision_sample_people_in_settlement(
+            seat.scope_settlement_id,
+            year=year,
+            stream=20_103 + int(seat.seat_id),
+        )
+    else:
+        records = realm_resident_decision_sample(
+            ctx,
+            seat.polity_id,
+            year=year,
+            scope=f"seat:{int(seat.seat_id)}",
+            stream=20_100,
+        )
     scored: list[tuple[float, int]] = []
-    for pid in pool:
+    for rec in records:
+        pid = int(rec.person_id)
         if int(pid) in already_holding:
             continue
-        rec = ctx.id_to_record.get(pid)
         if rec is None or rec.person.deathyear is not None:
             continue
         age = year - int(rec.person.birthyear)
@@ -1014,11 +1032,11 @@ def _succession_tick(
             cur = conn.execute(
                 """
                 SELECT holder_person_id FROM simulation_office_holdings
-                WHERE world = ? AND seat_id = ?
+                WHERE seat_id = ?
                 ORDER BY COALESCE(end_sim_year, start_sim_year) DESC, holding_id DESC
                 LIMIT 1
                 """,
-                (ctx.world.strip(), seat.seat_id),
+                (seat.seat_id,),
             ).fetchone()
         prev = int(cur[0]) if cur and cur[0] is not None else None
         if prev is None:

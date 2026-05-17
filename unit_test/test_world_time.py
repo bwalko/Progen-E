@@ -1,4 +1,4 @@
-"""Tests for per-world simulation clock behavior."""
+"""Tests for single-save simulation clock behavior."""
 
 from __future__ import annotations
 
@@ -49,15 +49,15 @@ class TestWorldTime(unittest.TestCase):
             resolve_world_current_year(db_path=self.db_path, world="default"), 1000
         )
 
-    def test_worlds_advance_independently(self) -> None:
+    def test_save_clock_is_single_world(self) -> None:
         ensure_world_state(db_path=self.db_path, world="default")
-        ensure_world_state(db_path=self.db_path, world="alt")
+        self.assertEqual(ensure_world_state(db_path=self.db_path, world="alt"), (1000, 1000))
 
         self.assertEqual(advance_world_time(db_path=self.db_path, world="default"), 1001)
         self.assertEqual(
             resolve_world_current_year(db_path=self.db_path, world="default"), 1001
         )
-        self.assertEqual(resolve_world_current_year(db_path=self.db_path, world="alt"), 1200)
+        self.assertEqual(resolve_world_current_year(db_path=self.db_path, world="alt"), 1001)
 
     def test_world_time_persists_across_calls(self) -> None:
         self.assertEqual(advance_world_time(db_path=self.db_path, world="default"), 1001)

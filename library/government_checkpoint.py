@@ -20,8 +20,7 @@ def ensure_government_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS simulation_polities (
-            polity_id INTEGER NOT NULL,
-            world TEXT NOT NULL,
+            polity_id INTEGER PRIMARY KEY,
             polity_type_id TEXT NOT NULL,
             parent_polity_id INTEGER,
             name TEXT NOT NULL DEFAULT '',
@@ -30,30 +29,27 @@ def ensure_government_schema(conn: sqlite3.Connection) -> None:
             founded_sim_year INTEGER NOT NULL DEFAULT 0,
             dissolved_sim_year INTEGER,
             status TEXT NOT NULL DEFAULT 'active',
-            notes_json TEXT NOT NULL DEFAULT '{}',
-            PRIMARY KEY (world, polity_id)
+            notes_json TEXT NOT NULL DEFAULT '{}'
         );
-        CREATE INDEX IF NOT EXISTS idx_simulation_polities_world_parent
-        ON simulation_polities (world, parent_polity_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_polities_parent
+        ON simulation_polities (parent_polity_id);
 
         CREATE TABLE IF NOT EXISTS simulation_polity_territory (
             row_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            world TEXT NOT NULL,
             polity_id INTEGER NOT NULL,
             target_kind TEXT NOT NULL,
             target_id TEXT NOT NULL,
             since_sim_year INTEGER NOT NULL,
             until_sim_year INTEGER
         );
-        CREATE INDEX IF NOT EXISTS idx_gov_territory_world_polity
-        ON simulation_polity_territory (world, polity_id);
+        CREATE INDEX IF NOT EXISTS idx_gov_territory_polity
+        ON simulation_polity_territory (polity_id);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_gov_territory_open_unique
-        ON simulation_polity_territory(world, polity_id, target_kind, target_id)
+        ON simulation_polity_territory(polity_id, target_kind, target_id)
         WHERE until_sim_year IS NULL;
 
         CREATE TABLE IF NOT EXISTS simulation_office_seats (
-            seat_id INTEGER NOT NULL,
-            world TEXT NOT NULL,
+            seat_id INTEGER PRIMARY KEY,
             polity_id INTEGER NOT NULL,
             title_id TEXT NOT NULL,
             slot_index INTEGER NOT NULL DEFAULT 0,
@@ -61,55 +57,48 @@ def ensure_government_schema(conn: sqlite3.Connection) -> None:
             vacant_since_sim_year INTEGER,
             status TEXT NOT NULL DEFAULT 'active',
             holder_person_id INTEGER,
-            term_expires_sim_year INTEGER,
-            PRIMARY KEY (world, seat_id)
+            term_expires_sim_year INTEGER
         );
         DROP INDEX IF EXISTS idx_gov_seat_unique_slot;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_gov_seat_unique_slot
         ON simulation_office_seats(
-            world, polity_id, title_id, COALESCE(scope_settlement_id, ''), slot_index
+            polity_id, title_id, COALESCE(scope_settlement_id, ''), slot_index
         );
 
         CREATE TABLE IF NOT EXISTS simulation_office_holdings (
             holding_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            world TEXT NOT NULL,
             seat_id INTEGER NOT NULL,
             holder_person_id INTEGER NOT NULL,
             start_sim_year INTEGER NOT NULL,
             end_sim_year INTEGER,
             end_reason TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_gov_holdings_world_seat
-        ON simulation_office_holdings(world, seat_id);
+        CREATE INDEX IF NOT EXISTS idx_gov_holdings_seat
+        ON simulation_office_holdings(seat_id);
 
         CREATE TABLE IF NOT EXISTS simulation_dynasties (
-            dynasty_id INTEGER NOT NULL,
-            world TEXT NOT NULL,
+            dynasty_id INTEGER PRIMARY KEY,
             founder_person_id INTEGER NOT NULL,
             house_name TEXT NOT NULL DEFAULT '',
             founded_sim_year INTEGER NOT NULL,
             extinct_sim_year INTEGER,
-            line TEXT NOT NULL DEFAULT 'agnatic',
-            PRIMARY KEY (world, dynasty_id)
+            line TEXT NOT NULL DEFAULT 'agnatic'
         );
 
         CREATE TABLE IF NOT EXISTS simulation_alliances (
-            alliance_id INTEGER NOT NULL,
-            world TEXT NOT NULL,
+            alliance_id INTEGER PRIMARY KEY,
             polity_a_id INTEGER NOT NULL,
             polity_b_id INTEGER NOT NULL,
             kind TEXT NOT NULL,
             since_sim_year INTEGER NOT NULL,
             until_sim_year INTEGER,
-            payload_json TEXT NOT NULL DEFAULT '{}',
-            PRIMARY KEY (world, alliance_id)
+            payload_json TEXT NOT NULL DEFAULT '{}'
         );
-        CREATE INDEX IF NOT EXISTS idx_gov_alliances_world
-        ON simulation_alliances (world, polity_a_id, polity_b_id);
+        CREATE INDEX IF NOT EXISTS idx_gov_alliances_polities
+        ON simulation_alliances (polity_a_id, polity_b_id);
 
         CREATE TABLE IF NOT EXISTS simulation_campaigns (
-            campaign_id INTEGER NOT NULL,
-            world TEXT NOT NULL,
+            campaign_id INTEGER PRIMARY KEY,
             attacker_polity_id INTEGER NOT NULL,
             defender_polity_id INTEGER NOT NULL,
             kind TEXT NOT NULL,
@@ -122,13 +111,11 @@ def ensure_government_schema(conn: sqlite3.Connection) -> None:
             attacker_treasury_spent REAL NOT NULL DEFAULT 0,
             defender_treasury_spent REAL NOT NULL DEFAULT 0,
             siege_target_settlement_id TEXT,
-            siege_years INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (world, campaign_id)
+            siege_years INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS simulation_battles (
             battle_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            world TEXT NOT NULL,
             campaign_id INTEGER NOT NULL,
             sim_year INTEGER NOT NULL,
             location_settlement_id TEXT,
@@ -139,15 +126,15 @@ def ensure_government_schema(conn: sqlite3.Connection) -> None:
             outcome TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_gov_battles_campaign
-        ON simulation_battles(world, campaign_id);
+        ON simulation_battles(campaign_id);
         """
     )
 
 
 def _meta_get(conn: sqlite3.Connection, world: str, key: str, default: int) -> int:
     row = conn.execute(
-        "SELECT meta_value FROM simulation_meta WHERE world = ? AND meta_key = ?",
-        (world, key),
+        "SELECT meta_value FROM simulation_meta WHERE meta_key = ?",
+        (key,),
     ).fetchone()
     if row is None or row[0] is None:
         return default
@@ -160,10 +147,10 @@ def _meta_get(conn: sqlite3.Connection, world: str, key: str, default: int) -> i
 def _meta_set(cur: sqlite3.Cursor, world: str, key: str, value: int) -> None:
     cur.execute(
         """
-        INSERT OR REPLACE INTO simulation_meta (world, meta_key, meta_value)
-        VALUES (?, ?, ?)
+        INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+        VALUES (?, ?)
         """,
-        (world, key, str(int(value))),
+        (key, str(int(value))),
     )
 
 
@@ -177,16 +164,15 @@ def insert_ongoing_campaign(
     conn.execute(
         """
         INSERT OR REPLACE INTO simulation_campaigns (
-            campaign_id, world, attacker_polity_id, defender_polity_id, kind,
+            campaign_id, attacker_polity_id, defender_polity_id, kind,
             objective_json, start_sim_year, end_sim_year, outcome,
             attacker_force_strength, defender_force_strength,
             attacker_treasury_spent, defender_treasury_spent,
             siege_target_settlement_id, siege_years
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(campaign["campaign_id"]),
-            world.strip(),
             int(campaign["attacker_polity_id"]),
             int(campaign["defender_polity_id"]),
             str(campaign["kind"]),
@@ -204,7 +190,6 @@ def insert_ongoing_campaign(
 
 
 def clear_government_tables(conn: sqlite3.Connection, *, world: str) -> None:
-    w = world.strip()
     ensure_government_schema(conn)
     for tbl in (
         "simulation_battles",
@@ -217,7 +202,7 @@ def clear_government_tables(conn: sqlite3.Connection, *, world: str) -> None:
         "simulation_polities",
     ):
         try:
-            conn.execute(f'DELETE FROM "{tbl}" WHERE world = ?', (w,))
+            conn.execute(f'DELETE FROM "{tbl}"')
         except sqlite3.OperationalError:
             pass
 
@@ -328,7 +313,6 @@ def government_meta_ids(ctx: "SimulationContext") -> dict[str, int]:
 def checkpoint_government(ctx: "SimulationContext", cur: sqlite3.Cursor) -> None:
     """Persist government RAM state; call inside an open save transaction."""
     ensure_government_schema(cur.connection)
-    w = ctx.world.strip()
     payload = government_checkpoint_payload(ctx)
     polities = payload["polities"]
     seats = payload["seats"]
@@ -337,19 +321,18 @@ def checkpoint_government(ctx: "SimulationContext", cur: sqlite3.Cursor) -> None
     alliances = payload["alliances"]
     campaigns = payload["campaigns"]
 
-    cur.execute("DELETE FROM simulation_polities WHERE world = ?", (w,))
+    cur.execute("DELETE FROM simulation_polities")
     for p in polities:
         cur.execute(
             """
             INSERT INTO simulation_polities (
-                polity_id, world, polity_type_id, parent_polity_id, name,
+                polity_id, polity_type_id, parent_polity_id, name,
                 capital_settlement_id, founding_dynasty_id, founded_sim_year,
                 dissolved_sim_year, status, notes_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(p["polity_id"]),
-                w,
                 str(p["polity_type_id"]),
                 p.get("parent_polity_id"),
                 str(p.get("name") or ""),
@@ -363,18 +346,16 @@ def checkpoint_government(ctx: "SimulationContext", cur: sqlite3.Cursor) -> None
         )
 
     cur.execute(
-        "DELETE FROM simulation_polity_territory WHERE world = ? AND until_sim_year IS NULL",
-        (w,),
+        "DELETE FROM simulation_polity_territory WHERE until_sim_year IS NULL",
     )
     for t in territory_open:
         cur.execute(
             """
             INSERT INTO simulation_polity_territory (
-                world, polity_id, target_kind, target_id, since_sim_year, until_sim_year
-            ) VALUES (?, ?, ?, ?, ?, NULL)
+                polity_id, target_kind, target_id, since_sim_year, until_sim_year
+            ) VALUES (?, ?, ?, ?, NULL)
             """,
             (
-                w,
                 int(t["polity_id"]),
                 str(t["target_kind"]),
                 str(t["target_id"]),
@@ -382,18 +363,17 @@ def checkpoint_government(ctx: "SimulationContext", cur: sqlite3.Cursor) -> None
             ),
         )
 
-    cur.execute("DELETE FROM simulation_office_seats WHERE world = ?", (w,))
+    cur.execute("DELETE FROM simulation_office_seats")
     for s in seats:
         cur.execute(
             """
             INSERT INTO simulation_office_seats (
-                seat_id, world, polity_id, title_id, slot_index, scope_settlement_id,
+                seat_id, polity_id, title_id, slot_index, scope_settlement_id,
                 vacant_since_sim_year, status, holder_person_id, term_expires_sim_year
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(s["seat_id"]),
-                w,
                 int(s["polity_id"]),
                 str(s["title_id"]),
                 int(s.get("slot_index") or 0),
@@ -405,18 +385,17 @@ def checkpoint_government(ctx: "SimulationContext", cur: sqlite3.Cursor) -> None
             ),
         )
 
-    cur.execute("DELETE FROM simulation_dynasties WHERE world = ?", (w,))
+    cur.execute("DELETE FROM simulation_dynasties")
     for d in dynasties:
         cur.execute(
             """
             INSERT INTO simulation_dynasties (
-                dynasty_id, world, founder_person_id, house_name,
+                dynasty_id, founder_person_id, house_name,
                 founded_sim_year, extinct_sim_year, line
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 int(d["dynasty_id"]),
-                w,
                 int(d["founder_person_id"]),
                 str(d.get("house_name") or ""),
                 int(d["founded_sim_year"]),
@@ -425,18 +404,17 @@ def checkpoint_government(ctx: "SimulationContext", cur: sqlite3.Cursor) -> None
             ),
         )
 
-    cur.execute("DELETE FROM simulation_alliances WHERE world = ? AND until_sim_year IS NULL", (w,))
+    cur.execute("DELETE FROM simulation_alliances WHERE until_sim_year IS NULL")
     for a in alliances:
         cur.execute(
             """
             INSERT INTO simulation_alliances (
-                alliance_id, world, polity_a_id, polity_b_id, kind,
+                alliance_id, polity_a_id, polity_b_id, kind,
                 since_sim_year, until_sim_year, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(a["alliance_id"]),
-                w,
                 int(a["polity_a_id"]),
                 int(a["polity_b_id"]),
                 str(a["kind"]),
@@ -447,23 +425,22 @@ def checkpoint_government(ctx: "SimulationContext", cur: sqlite3.Cursor) -> None
         )
 
     cur.execute(
-        "DELETE FROM simulation_campaigns WHERE world = ? AND outcome = ?",
-        (w, "ongoing"),
+        "DELETE FROM simulation_campaigns WHERE outcome = ?",
+        ("ongoing",),
     )
     for c in campaigns:
         cur.execute(
             """
             INSERT OR REPLACE INTO simulation_campaigns (
-                campaign_id, world, attacker_polity_id, defender_polity_id, kind,
+                campaign_id, attacker_polity_id, defender_polity_id, kind,
                 objective_json, start_sim_year, end_sim_year, outcome,
                 attacker_force_strength, defender_force_strength,
                 attacker_treasury_spent, defender_treasury_spent,
                 siege_target_settlement_id, siege_years
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(c["campaign_id"]),
-                w,
                 int(c["attacker_polity_id"]),
                 int(c["defender_polity_id"]),
                 str(c["kind"]),
@@ -481,11 +458,11 @@ def checkpoint_government(ctx: "SimulationContext", cur: sqlite3.Cursor) -> None
         )
 
     ids = government_meta_ids(ctx)
-    _meta_set(cur, w, META_NEXT_POLITY_ID, ids["next_polity_id"])
-    _meta_set(cur, w, META_NEXT_SEAT_ID, ids["next_seat_id"])
-    _meta_set(cur, w, META_NEXT_DYNASTY_ID, ids["next_dynasty_id"])
-    _meta_set(cur, w, META_NEXT_CAMPAIGN_ID, ids["next_campaign_id"])
-    _meta_set(cur, w, META_NEXT_ALLIANCE_ID, ids["next_alliance_id"])
+    _meta_set(cur, ctx.world.strip(), META_NEXT_POLITY_ID, ids["next_polity_id"])
+    _meta_set(cur, ctx.world.strip(), META_NEXT_SEAT_ID, ids["next_seat_id"])
+    _meta_set(cur, ctx.world.strip(), META_NEXT_DYNASTY_ID, ids["next_dynasty_id"])
+    _meta_set(cur, ctx.world.strip(), META_NEXT_CAMPAIGN_ID, ids["next_campaign_id"])
+    _meta_set(cur, ctx.world.strip(), META_NEXT_ALLIANCE_ID, ids["next_alliance_id"])
 
 
 def apply_loaded_government(
@@ -528,11 +505,9 @@ def load_government(
     )
 
     ensure_government_schema(conn)
-    w = ctx.world.strip()
 
     polity_rows = conn.execute(
-        "SELECT * FROM simulation_polities WHERE world = ? ORDER BY polity_id",
-        (w,),
+        "SELECT * FROM simulation_polities ORDER BY polity_id",
     ).fetchall()
     if not polity_rows:
         apply_loaded_government(ctx, [], [], [], [], [], [], {})
@@ -581,9 +556,8 @@ def load_government(
         """
         SELECT polity_id, target_kind, target_id, since_sim_year
         FROM simulation_polity_territory
-        WHERE world = ? AND until_sim_year IS NULL
+        WHERE until_sim_year IS NULL
         """,
-        (w,),
     ).fetchall()
     territory: list[TerritoryOpenRow] = [
         TerritoryOpenRow(
@@ -596,8 +570,7 @@ def load_government(
     ]
 
     seat_rows = conn.execute(
-        "SELECT * FROM simulation_office_seats WHERE world = ? ORDER BY seat_id",
-        (w,),
+        "SELECT * FROM simulation_office_seats ORDER BY seat_id",
     ).fetchall()
     seats: list[OfficeSeatState] = []
     for r in seat_rows:
@@ -633,8 +606,7 @@ def load_government(
         )
 
     dyn_rows = conn.execute(
-        "SELECT * FROM simulation_dynasties WHERE world = ? ORDER BY dynasty_id",
-        (w,),
+        "SELECT * FROM simulation_dynasties ORDER BY dynasty_id",
     ).fetchall()
     dynasties: list[DynastyState] = []
     for r in dyn_rows:
@@ -657,10 +629,9 @@ def load_government(
     ally_rows = conn.execute(
         """
         SELECT * FROM simulation_alliances
-        WHERE world = ? AND until_sim_year IS NULL
+        WHERE until_sim_year IS NULL
         ORDER BY alliance_id
         """,
-        (w,),
     ).fetchall()
     alliances: list[AllianceState] = []
     for r in ally_rows:
@@ -685,10 +656,10 @@ def load_government(
     camp_rows = conn.execute(
         """
         SELECT * FROM simulation_campaigns
-        WHERE world = ? AND (outcome = ? OR outcome IS NULL OR outcome = '')
+        WHERE outcome = ? OR outcome IS NULL OR outcome = ''
         ORDER BY campaign_id
         """,
-        (w, "ongoing"),
+        ("ongoing",),
     ).fetchall()
     campaigns: list[CampaignState] = []
     for r in camp_rows:
@@ -751,15 +722,15 @@ def load_government(
 
     meta_ids = {
         "next_polity_id": max(
-            _meta_get(conn, w, META_NEXT_POLITY_ID, 1), max_p + 1
+            _meta_get(conn, ctx.world.strip(), META_NEXT_POLITY_ID, 1), max_p + 1
         ),
-        "next_seat_id": max(_meta_get(conn, w, META_NEXT_SEAT_ID, 1), max_s + 1),
-        "next_dynasty_id": max(_meta_get(conn, w, META_NEXT_DYNASTY_ID, 1), max_d + 1),
+        "next_seat_id": max(_meta_get(conn, ctx.world.strip(), META_NEXT_SEAT_ID, 1), max_s + 1),
+        "next_dynasty_id": max(_meta_get(conn, ctx.world.strip(), META_NEXT_DYNASTY_ID, 1), max_d + 1),
         "next_campaign_id": max(
-            _meta_get(conn, w, META_NEXT_CAMPAIGN_ID, 1), max_c + 1
+            _meta_get(conn, ctx.world.strip(), META_NEXT_CAMPAIGN_ID, 1), max_c + 1
         ),
         "next_alliance_id": max(
-            _meta_get(conn, w, META_NEXT_ALLIANCE_ID, 1), max_a + 1
+            _meta_get(conn, ctx.world.strip(), META_NEXT_ALLIANCE_ID, 1), max_a + 1
         ),
     }
 
@@ -788,10 +759,10 @@ def append_office_holding(
     cur.execute(
         """
         INSERT INTO simulation_office_holdings (
-            world, seat_id, holder_person_id, start_sim_year, end_sim_year, end_reason
-        ) VALUES (?, ?, ?, ?, NULL, NULL)
+            seat_id, holder_person_id, start_sim_year, end_sim_year, end_reason
+        ) VALUES (?, ?, ?, NULL, NULL)
         """,
-        (world.strip(), int(seat_id), int(holder_person_id), int(start_sim_year)),
+        (int(seat_id), int(holder_person_id), int(start_sim_year)),
     )
     return int(cur.lastrowid or 0)
 
@@ -810,13 +781,12 @@ def close_office_holding(
         """
         UPDATE simulation_office_holdings
         SET end_sim_year = ?, end_reason = ?
-        WHERE world = ? AND seat_id = ? AND holder_person_id = ?
+        WHERE seat_id = ? AND holder_person_id = ?
           AND end_sim_year IS NULL
         """,
         (
             int(end_sim_year),
             str(end_reason),
-            world.strip(),
             int(seat_id),
             int(holder_person_id),
         ),
@@ -840,13 +810,12 @@ def append_battle_row(
     conn.execute(
         """
         INSERT INTO simulation_battles (
-            world, campaign_id, sim_year, location_settlement_id,
+            campaign_id, sim_year, location_settlement_id,
             attacker_force_strength, defender_force_strength,
             attacker_casualties, defender_casualties, outcome
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            world.strip(),
             int(campaign_id),
             int(sim_year),
             location_settlement_id,
@@ -873,10 +842,10 @@ def close_territory_row(
         """
         UPDATE simulation_polity_territory
         SET until_sim_year = ?
-        WHERE world = ? AND polity_id = ? AND target_kind = ? AND target_id = ?
+        WHERE polity_id = ? AND target_kind = ? AND target_id = ?
           AND until_sim_year IS NULL
         """,
-        (int(until_sim_year), world.strip(), int(polity_id), target_kind, target_id),
+        (int(until_sim_year), int(polity_id), target_kind, target_id),
     )
 
 
@@ -893,10 +862,10 @@ def insert_territory_open(
     conn.execute(
         """
         INSERT INTO simulation_polity_territory (
-            world, polity_id, target_kind, target_id, since_sim_year, until_sim_year
-        ) VALUES (?, ?, ?, ?, ?, NULL)
+            polity_id, target_kind, target_id, since_sim_year, until_sim_year
+        ) VALUES (?, ?, ?, ?, NULL)
         """,
-        (world.strip(), int(polity_id), target_kind, target_id, int(since_sim_year)),
+        (int(polity_id), target_kind, target_id, int(since_sim_year)),
     )
 
 
@@ -912,8 +881,8 @@ def update_campaign_row(
     ensure_government_schema(conn)
     cols = ", ".join(f'"{k}" = ?' for k in fields)
     vals = list(fields.values())
-    vals.extend([world.strip(), int(campaign_id)])
+    vals.append(int(campaign_id))
     conn.execute(
-        f'UPDATE simulation_campaigns SET {cols} WHERE world = ? AND campaign_id = ?',
+        f'UPDATE simulation_campaigns SET {cols} WHERE campaign_id = ?',
         vals,
     )

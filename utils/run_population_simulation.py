@@ -38,6 +38,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import library.simulation_context as sc  # noqa: E402
+from library import simulation_timing  # noqa: E402
 from library.population_growth_runner import (  # noqa: E402
     resolve_population_sim_seed,
     run_population_growth_simulation,
@@ -213,6 +214,7 @@ def main() -> None:
             duration_years=int(args.years),
             starting_couples=int(args.starting_couples),
             progress_callback=_print_progress,
+            print_timing_report=False,
         )
 
     write_population_growth_report_files(
@@ -224,6 +226,7 @@ def main() -> None:
         people_json_path=_PEOPLE_JSON_PATH,
         places_geo_path=_PLACES_GEO_PATH,
     )
+    simulation_timing.print_report_if_configured()
 
     elapsed = time.perf_counter() - t0
     alive_end = len(ctx.current_people_ids)

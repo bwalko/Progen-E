@@ -7,11 +7,13 @@ import csv
 import html
 import importlib.util
 import json
+import queue
 import shlex
 import re
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -59,6 +61,49 @@ APP_CSS = """
 .world-browser {
     font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+.sim-progress-card {
+    --sim-progress-card-bg: #fff;
+    --sim-progress-card-border: #d8d8d8;
+    --sim-progress-label-color: #2f343b;
+    --sim-progress-track-bg: #ececec;
+    --sim-progress-fill-start: #2f6fed;
+    --sim-progress-fill-end: #55a6ff;
+    border: 1px solid var(--sim-progress-card-border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: var(--sim-progress-card-bg);
+}
+.sim-progress-label {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--sim-progress-label-color);
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+.sim-progress-track {
+    height: 12px;
+    border-radius: 999px;
+    background: var(--sim-progress-track-bg);
+    overflow: hidden;
+}
+.sim-progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--sim-progress-fill-start), var(--sim-progress-fill-end));
+    transition: width .2s linear;
+}
+.dark .sim-progress-card,
+body.dark .sim-progress-card,
+[data-theme="dark"] .sim-progress-card {
+    --sim-progress-card-bg: #171b22;
+    --sim-progress-card-border: #4b5565;
+    --sim-progress-label-color: #f3f6fb;
+    --sim-progress-track-bg: #303745;
+    --sim-progress-fill-start: #60a5fa;
+    --sim-progress-fill-end: #93c5fd;
+}
 #person-table,
 #person-table table,
 #person-table .table-wrap,
@@ -88,11 +133,57 @@ APP_CSS = """
     max-width: 230px !important;
 }
 .person-sheet {
-    border: 1px solid #d6c7a1 !important;
-    background: linear-gradient(180deg, #fbf8ef 0%, #f4ecd8 100%) !important;
-    color: #2f2a21 !important;
+    --person-sheet-bg-start: #fbf8ef;
+    --person-sheet-bg-end: #f4ecd8;
+    --person-sheet-border: #d6c7a1;
+    --person-sheet-text: #2f2a21;
+    --person-sheet-title: #58452a;
+    --person-sheet-muted: #6f6046;
+    --person-sheet-rule: #dccda9;
+    --person-sheet-card-bg: rgba(255, 255, 255, .55);
+    --person-sheet-card-border: #e4d7b8;
+    --person-sheet-accent: #9d8352;
+    --person-sheet-badge-text: #4f3f25;
+    --person-sheet-pill-border: #b99f69;
+    --person-sheet-pill-bg: rgba(255,255,255,.48);
+    --person-sheet-relation-bg: rgba(255,255,255,.45);
+    --person-sheet-link: #4d5f35;
+    --person-sheet-link-hover: #263515;
+    --person-sheet-trait-track: linear-gradient(90deg, #9c4f48 0%, #d8c27a 28%, #4f7f74 50%, #d8c27a 72%, #9c4f48 100%);
+    --person-sheet-trait-marker: #211b14;
+    --person-sheet-trait-marker-ring: rgba(255,255,255,.8);
+    --person-sheet-legacy-track: rgba(111, 96, 70, .20);
+    --person-sheet-legacy-fill: #6a7d3e;
+    border: 1px solid var(--person-sheet-border) !important;
+    background: linear-gradient(180deg, var(--person-sheet-bg-start) 0%, var(--person-sheet-bg-end) 100%) !important;
+    color: var(--person-sheet-text) !important;
     padding: 18px;
     border-radius: 8px;
+}
+.dark .person-sheet,
+body.dark .person-sheet,
+[data-theme="dark"] .person-sheet {
+    --person-sheet-bg-start: #171b1f;
+    --person-sheet-bg-end: #22201a;
+    --person-sheet-border: #5f533d;
+    --person-sheet-text: #f4ead7;
+    --person-sheet-title: #f3d79b;
+    --person-sheet-muted: #cbb995;
+    --person-sheet-rule: #5f533d;
+    --person-sheet-card-bg: rgba(255, 255, 255, .07);
+    --person-sheet-card-border: #5a513f;
+    --person-sheet-accent: #c5a86a;
+    --person-sheet-badge-text: #f3d79b;
+    --person-sheet-pill-border: #8d7549;
+    --person-sheet-pill-bg: rgba(255,255,255,.08);
+    --person-sheet-relation-bg: rgba(255,255,255,.06);
+    --person-sheet-link: #bddd89;
+    --person-sheet-link-hover: #ddf7b5;
+    --person-sheet-trait-track: linear-gradient(90deg, #a85a5a 0%, #c4a95c 28%, #5ba88c 50%, #c4a95c 72%, #a85a5a 100%);
+    --person-sheet-trait-marker: #f8f3e8;
+    --person-sheet-trait-marker-ring: rgba(0,0,0,.75);
+    --person-sheet-legacy-track: rgba(244, 234, 215, .18);
+    --person-sheet-legacy-fill: #9fc46b;
 }
 .person-sheet,
 .person-sheet * {
@@ -100,26 +191,26 @@ APP_CSS = """
 }
 .person-sheet :where(h1, h2, h3, h4, h5, h6, p, div, span, strong, em, li, section, article),
 .person-sheet :where(.prose, .markdown, .md, .output-html, .gr-html) {
-    color: #2f2a21 !important;
+    color: var(--person-sheet-text) !important;
 }
 .person-title {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    border-bottom: 1px solid #dccda9;
+    border-bottom: 1px solid var(--person-sheet-rule);
     padding-bottom: 12px;
     margin-bottom: 14px;
 }
 .person-title h2 {
-    color: #2f2a21 !important;
+    color: var(--person-sheet-text) !important;
     font-size: 28px;
     line-height: 1.1;
     margin: 0;
 }
 .person-title .badge {
-    border: 1px solid #9d8352;
-    color: #4f3f25 !important;
+    border: 1px solid var(--person-sheet-accent);
+    color: var(--person-sheet-badge-text) !important;
     border-radius: 999px;
     padding: 4px 10px;
     font-size: 12px;
@@ -133,24 +224,24 @@ APP_CSS = """
     margin: 12px 0 16px;
 }
 .detail-card {
-    background: rgba(255, 255, 255, .55) !important;
-    border: 1px solid #e4d7b8 !important;
+    background: var(--person-sheet-card-bg) !important;
+    border: 1px solid var(--person-sheet-card-border) !important;
     border-radius: 6px;
     padding: 10px;
 }
 .detail-label {
-    color: #6f6046 !important;
+    color: var(--person-sheet-muted) !important;
     font-size: 12px;
     text-transform: uppercase;
 }
 .detail-value {
-    color: #2f2a21 !important;
+    color: var(--person-sheet-text) !important;
     font-size: 16px;
     font-weight: 650;
 }
 .section-title {
     margin: 18px 0 8px;
-    color: #58452a !important;
+    color: var(--person-sheet-title) !important;
     font-size: 18px;
 }
 .trait-grid {
@@ -160,25 +251,30 @@ APP_CSS = """
 }
 .trait-row {
     display: grid;
-    grid-template-columns: 96px 48px 1fr;
+    grid-template-columns: 96px minmax(72px, auto) 1fr;
     align-items: center;
     gap: 8px;
     font-size: 13px;
 }
 .trait-name {
-    color: #2f2a21 !important;
+    color: var(--person-sheet-text) !important;
     text-transform: capitalize;
 }
 .trait-value {
-    color: #2f2a21 !important;
+    color: var(--person-sheet-text) !important;
     font-variant-numeric: tabular-nums;
     text-align: right;
+}
+.trait-base-value {
+    color: var(--person-sheet-muted) !important;
+    font-size: 11px;
+    font-weight: 500;
 }
 .trait-track {
     position: relative;
     height: 12px;
     border-radius: 999px;
-    background: linear-gradient(90deg, #9c4f48 0%, #d8c27a 28%, #4f7f74 50%, #d8c27a 72%, #9c4f48 100%);
+    background: var(--person-sheet-trait-track);
     overflow: hidden;
 }
 .trait-marker {
@@ -187,8 +283,8 @@ APP_CSS = """
     width: 4px;
     height: 18px;
     border-radius: 3px;
-    background: #211b14;
-    box-shadow: 0 0 0 1px rgba(255,255,255,.8);
+    background: var(--person-sheet-trait-marker);
+    box-shadow: 0 0 0 1px var(--person-sheet-trait-marker-ring);
 }
 .legacy-grid {
     display: grid;
@@ -196,8 +292,8 @@ APP_CSS = """
     gap: 8px;
 }
 .legacy-score {
-    border: 1px solid #d9c79f !important;
-    background: rgba(255,255,255,.42) !important;
+    border: 1px solid var(--person-sheet-card-border) !important;
+    background: var(--person-sheet-card-bg) !important;
     border-radius: 6px;
     padding: 8px 9px;
 }
@@ -209,7 +305,7 @@ APP_CSS = """
     font-weight: 700;
 }
 .legacy-score-desc {
-    color: #6f6046 !important;
+    color: var(--person-sheet-muted) !important;
     font-size: 12px;
     line-height: 1.25;
     margin-top: 4px;
@@ -217,14 +313,14 @@ APP_CSS = """
 .legacy-track {
     height: 7px;
     border-radius: 999px;
-    background: rgba(111, 96, 70, .20) !important;
+    background: var(--person-sheet-legacy-track) !important;
     margin-top: 7px;
     overflow: hidden;
 }
 .legacy-fill {
     height: 100%;
     border-radius: 999px;
-    background: #6a7d3e !important;
+    background: var(--person-sheet-legacy-fill) !important;
 }
 .pill-list {
     display: flex;
@@ -232,9 +328,9 @@ APP_CSS = """
     gap: 6px;
 }
 .pill {
-    border: 1px solid #b99f69;
-    background: rgba(255,255,255,.48);
-    color: #2f2a21 !important;
+    border: 1px solid var(--person-sheet-pill-border);
+    background: var(--person-sheet-pill-bg);
+    color: var(--person-sheet-text) !important;
     border-radius: 999px;
     padding: 4px 9px;
     font-size: 13px;
@@ -245,23 +341,23 @@ APP_CSS = """
     gap: 8px;
 }
 .relation {
-    border-left: 3px solid #9d8352;
-    background: rgba(255,255,255,.45);
-    color: #2f2a21 !important;
+    border-left: 3px solid var(--person-sheet-accent);
+    background: var(--person-sheet-relation-bg);
+    color: var(--person-sheet-text) !important;
     padding: 7px 9px;
 }
 .muted {
-    color: #6f6046 !important;
+    color: var(--person-sheet-muted) !important;
 }
 .person-link {
-    color: #4d5f35 !important;
+    color: var(--person-sheet-link) !important;
     font-weight: 700;
     text-decoration: underline;
     text-underline-offset: 2px;
     cursor: pointer;
 }
 .person-link:hover {
-    color: #263515 !important;
+    color: var(--person-sheet-link-hover) !important;
 }
 .sr-only {
     position: absolute;
@@ -354,6 +450,12 @@ def _saved_world_names(con: sqlite3.Connection) -> list[str]:
     seen: set[str] = set()
     for table in ("world_state", "simulation_people"):
         if not _has_table(con, table):
+            continue
+        columns = _table_columns(con, table)
+        if "world" not in columns:
+            if "default" not in seen:
+                worlds.append("default")
+                seen.add("default")
             continue
         for row in con.execute(f"select distinct world from {_quote_identifier(table)} order by world"):
             world = str(row["world"] or "").strip()
@@ -552,7 +654,11 @@ def _sort_rows_by_legacy_score(
 
 
 def _current_year(con: sqlite3.Connection, world: str) -> int | None:
-    row = con.execute("select current_year from world_state where world = ?", (world,)).fetchone()
+    columns = _table_columns(con, "world_state") if _has_table(con, "world_state") else []
+    if "world" in columns:
+        row = con.execute("select current_year from world_state where world = ?", (world,)).fetchone()
+    else:
+        row = con.execute("select current_year from world_state where id = 1").fetchone()
     return int(row["current_year"]) if row and row["current_year"] is not None else None
 
 
@@ -578,8 +684,13 @@ def load_people_browser(
         current_year = _current_year(con, saved_world)
 
     age_sql = "coalesce(json_extract(person_json, '$.deathyear'), ?) - json_extract(person_json, '$.birthyear')"
-    clauses = ["world = ?"]
-    params: list[object] = [saved_world]
+    clauses: list[str] = []
+    params: list[object] = []
+    with _connect_readonly(path) as con:
+        people_has_world = "world" in _table_columns(con, "simulation_people")
+    if people_has_world:
+        clauses.append("world = ?")
+        params.append(saved_world)
     if life_filter == "Alive":
         clauses.append("is_alive = 1")
     elif life_filter == "Dead":
@@ -594,7 +705,7 @@ def load_people_browser(
         clauses.append(f"{age_sql} <= ?")
         params.extend([current_year, _safe_int(max_age, 10_000, 0, 10_000)])
 
-    where_sql = " and ".join(clauses)
+    where_sql = " and ".join(clauses) if clauses else "1 = 1"
     legacy_sort = sort_by in LEGACY_SCORE_COLUMNS
     sort_map = {
         "ID": "person_id",
@@ -678,20 +789,32 @@ def _lookup_person(con: sqlite3.Connection, world: str, person_id: object) -> tu
         pid = int(person_id)
     except (TypeError, ValueError):
         return None, {}
-    row = con.execute(
-        "select * from simulation_people where world = ? and person_id = ?",
-        (world, pid),
-    ).fetchone()
+    if "world" in _table_columns(con, "simulation_people"):
+        row = con.execute(
+            "select * from simulation_people where world = ? and person_id = ?",
+            (world, pid),
+        ).fetchone()
+    else:
+        row = con.execute(
+            "select * from simulation_people where person_id = ?",
+            (pid,),
+        ).fetchone()
     return row, _load_json_object(row["person_json"]) if row else {}
 
 
 def _settlement_name(con: sqlite3.Connection, world: str, settlement_id: object) -> str:
     if not settlement_id:
         return ""
-    row = con.execute(
-        "select display_name from simulation_settlements where world = ? and settlement_id = ?",
-        (world, str(settlement_id)),
-    ).fetchone()
+    if "world" in _table_columns(con, "simulation_settlements"):
+        row = con.execute(
+            "select display_name from simulation_settlements where world = ? and settlement_id = ?",
+            (world, str(settlement_id)),
+        ).fetchone()
+    else:
+        row = con.execute(
+            "select display_name from simulation_settlements where settlement_id = ?",
+            (str(settlement_id),),
+        ).fetchone()
     return str(row["display_name"] or settlement_id) if row else str(settlement_id)
 
 
@@ -742,12 +865,14 @@ def _person_link_html(con: sqlite3.Connection, world: str, person_id: object) ->
 
 
 def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -> list[sqlite3.Row]:
+    events_has_world = "world" in _table_columns(con, "simulation_events")
+    world_clause = "where world = ? and" if events_has_world else "where"
+    prefix_params: list[object] = [world] if events_has_world else []
     return con.execute(
-        """
+        f"""
         select sim_year, event_type, payload_json
         from simulation_events
-        where world = ?
-          and (
+        {world_clause} (
             json_extract(payload_json, '$.person_id') = ?
             or json_extract(payload_json, '$.person_a_id') = ?
             or json_extract(payload_json, '$.person_b_id') = ?
@@ -775,7 +900,7 @@ def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -
         order by sim_year asc, id asc
         """,
         (
-            world,
+            *prefix_params,
             person_id,
             person_id,
             person_id,
@@ -1338,6 +1463,29 @@ def _trait_accessibility_label(trait: str, value: float, phrase: str) -> str:
     return f"{trait}: {value:+.1f}, {band} on the {side}{phrase_part}."
 
 
+def _trait_display_values(
+    trait: str, current_traits: object, base_traits: object
+) -> tuple[float | None, float | None, str]:
+    current_raw = current_traits.get(trait) if isinstance(current_traits, dict) else None
+    base_raw = base_traits.get(trait) if isinstance(base_traits, dict) else None
+    try:
+        current = float(current_raw)
+    except (TypeError, ValueError):
+        current = None
+    try:
+        base = float(base_raw)
+    except (TypeError, ValueError):
+        base = None
+    if current is None:
+        current = base
+    if current is None:
+        return None, base, "Unknown"
+    shown = f"{current:+.1f}"
+    if base is not None and abs(current - base) >= 0.05:
+        shown += f'<br><span class="trait-base-value">base {base:+.1f}</span>'
+    return current, base, shown
+
+
 def _render_detail_card(label: str, value: object) -> str:
     shown = html.escape(str(value if value not in (None, "") else "Unknown"))
     return f'<div class="detail-card"><div class="detail-label">{html.escape(label)}</div><div class="detail-value">{shown}</div></div>'
@@ -1417,15 +1565,20 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     mother_html = _person_link_html(con, world, row["mother_id"]) if row["mother_id"] else "Unknown"
     partner_html = _person_link_html(con, world, person.get("partner_person_id")) if person.get("partner_person_id") else "None"
     paramour_html = _person_link_html(con, world, person.get("paramour_person_id")) if person.get("paramour_person_id") else "None"
+    people_has_world = "world" in _table_columns(con, "simulation_people")
     children = con.execute(
-        """
+        f"""
         select person_id, person_json
         from simulation_people
-        where world = ? and (father_id = ? or mother_id = ?)
+        where {'world = ? and ' if people_has_world else ''}(father_id = ? or mother_id = ?)
         order by person_id
         limit 12
         """,
-        (world, row["person_id"], row["person_id"]),
+        (
+            *([world] if people_has_world else []),
+            row["person_id"],
+            row["person_id"],
+        ),
     ).fetchall()
     child_items = [
         f'<div class="relation">{_person_link_html(con, world, child["person_id"])}</div>'
@@ -1447,20 +1600,35 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         event_items = ['<div class="relation muted">No matching events found</div>']
 
     labels = _genome_labels(con)
-    genome = person.get("mind_body") or person.get("genome") or {}
-    legacy_scores_html = _render_legacy_scores(genome)
+    base_genome = person.get("genome") or {}
+    current_genome = person.get("mind_body") or base_genome
+    legacy_scores_html = _render_legacy_scores(current_genome)
     trait_rows: list[str] = []
-    if isinstance(genome, dict):
-        for trait, raw_value in sorted(genome.items(), key=lambda item: -abs(float(item[1]))):
-            value = float(raw_value)
+    if isinstance(current_genome, dict) or isinstance(base_genome, dict):
+        traits = sorted(
+            set(current_genome if isinstance(current_genome, dict) else {})
+            | set(base_genome if isinstance(base_genome, dict) else {})
+        )
+        display_rows = [
+            (trait, *_trait_display_values(str(trait), current_genome, base_genome))
+            for trait in traits
+        ]
+        for trait, value, base_value, shown_value in sorted(
+            display_rows,
+            key=lambda item: -abs(float(item[1] if item[1] is not None else item[2] or 0)),
+        ):
+            if value is None:
+                continue
             pos = max(0, min(100, (value + 100) / 2))
             phrase = _trait_phrase(str(trait), value, labels, soften_typical=True)
             aria_label = _trait_accessibility_label(str(trait), value, phrase)
+            if base_value is not None and abs(value - base_value) >= 0.05:
+                aria_label = f"{aria_label} Base genome value was {base_value:+.1f}."
             trait_rows.append(
                 '<div class="trait-row" role="group" '
                 f'aria-label="{html.escape(aria_label)}">'
                 f'<div class="trait-name" title="{html.escape(phrase)}">{html.escape(str(trait))}</div>'
-                f'<div class="trait-value">{value:+.1f}</div>'
+                f'<div class="trait-value">{shown_value}</div>'
                 f'<div class="trait-track" role="meter" aria-label="{html.escape(aria_label)}" '
                 'aria-valuemin="-100" aria-valuemax="100" '
                 f'aria-valuenow="{value:.1f}" aria-valuetext="{html.escape(aria_label)}">'
@@ -1572,15 +1740,20 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     if not deviation_trait_lines:
         deviation_trait_lines.append("- No genome data recorded.")
 
+    people_has_world = "world" in _table_columns(con, "simulation_people")
     children = con.execute(
-        """
+        f"""
         select person_id, person_json
         from simulation_people
-        where world = ? and (father_id = ? or mother_id = ?)
+        where {'world = ? and ' if people_has_world else ''}(father_id = ? or mother_id = ?)
         order by person_id
         limit 12
         """,
-        (world, row["person_id"], row["person_id"]),
+        (
+            *([world] if people_has_world else []),
+            row["person_id"],
+            row["person_id"],
+        ),
     ).fetchall()
     child_lines = [
         f"- {_person_name(_load_json_object(child['person_json']))}"
@@ -1800,6 +1973,50 @@ def preview_sim_command(
     return subprocess.list2cmdline(command)
 
 
+def _elapsed_hhmmss(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _sim_progress_html(
+    current_year: int, end_year: int, elapsed: str, *, start_year: int
+) -> str:
+    current = int(current_year)
+    end = int(end_year)
+    start = int(start_year)
+    if end == start:
+        pct = 100.0 if current >= end else 0.0
+    elif end > start:
+        pct = ((current - start) / float(end - start)) * 100.0
+    else:
+        pct = 100.0
+    shown_pct = max(0.0, min(100.0, pct))
+    return (
+        '<div class="sim-progress-card" role="status" aria-live="polite">'
+        '<div class="sim-progress-label">'
+        f'<span>Year {html.escape(str(current))} / {html.escape(str(end))}</span>'
+        f'<span>Elapsed {html.escape(elapsed)}</span>'
+        '</div>'
+        '<div class="sim-progress-track" aria-hidden="true">'
+        f'<div class="sim-progress-fill" style="width: {shown_pct:.1f}%"></div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _read_pipe_to_queue(pipe, stream_name: str, out_q: "queue.Queue[tuple[str, str]]") -> None:
+    try:
+        for line in pipe:
+            out_q.put((stream_name, line))
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
 def run_simulation_from_ui(
     world_id: str,
     years: object,
@@ -1811,12 +2028,6 @@ def run_simulation_from_ui(
     skip_timing_log: bool,
     extra_args: str,
 ) -> Iterator[tuple[str, str, str, str, str]]:
-    def _elapsed_hhmmss(seconds: float) -> str:
-        total = max(0, int(seconds))
-        hours, rem = divmod(total, 3600)
-        minutes, secs = divmod(rem, 60)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
     try:
         start_int = int(start_year)
         years_int = _positive_int(years, "years")
@@ -1839,14 +2050,14 @@ def run_simulation_from_ui(
 
     command_text = subprocess.list2cmdline(command)
     stdout_lines: list[str] = []
-    stderr_text = ""
+    stderr_lines: list[str] = []
     start_t = time.perf_counter()
     yield (
         f"Simulation starting. Elapsed 00:00:00. Year {start_int} / {end_year}.",
         command_text,
         "",
         "",
-        f"{start_int} / {end_year}",
+        _sim_progress_html(start_int, end_year, "00:00:00", start_year=start_int),
     )
 
     proc = subprocess.Popen(
@@ -1857,24 +2068,53 @@ def run_simulation_from_ui(
         text=True,
         bufsize=1,
     )
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        stdout_lines.append(line)
-        match = SIM_PROGRESS_RE.search(line)
-        if match:
-            current_year = int(match.group("year"))
-            expected_end = int(match.group("end_year"))
-            elapsed = match.group("elapsed")
+    stream_q: queue.Queue[tuple[str, str]] = queue.Queue()
+    if proc.stdout is not None:
+        threading.Thread(
+            target=_read_pipe_to_queue,
+            args=(proc.stdout, "stdout", stream_q),
+            daemon=True,
+        ).start()
+    if proc.stderr is not None:
+        threading.Thread(
+            target=_read_pipe_to_queue,
+            args=(proc.stderr, "stderr", stream_q),
+            daemon=True,
+        ).start()
+
+    current_year = start_int
+    expected_end = end_year
+    last_emit = 0.0
+    while proc.poll() is None or not stream_q.empty():
+        changed = False
+        try:
+            stream_name, line = stream_q.get(timeout=0.25)
+        except queue.Empty:
+            stream_name, line = "", ""
+        if line:
+            changed = True
+            if stream_name == "stderr":
+                stderr_lines.append(line)
+            else:
+                stdout_lines.append(line)
+                match = SIM_PROGRESS_RE.search(line)
+                if match:
+                    current_year = int(match.group("year"))
+                    expected_end = int(match.group("end_year"))
+        now = time.perf_counter()
+        elapsed = _elapsed_hhmmss(now - start_t)
+        if changed or now - last_emit >= 1.0:
+            last_emit = now
             yield (
                 f"Running. Elapsed {elapsed}. Year {current_year} / {expected_end}.",
                 command_text,
                 "".join(reversed(stdout_lines)),
-                stderr_text,
-                f"{current_year} / {expected_end}",
+                "".join(stderr_lines),
+                _sim_progress_html(
+                    current_year, expected_end, elapsed, start_year=start_int
+                ),
             )
 
-    if proc.stderr is not None:
-        stderr_text = proc.stderr.read()
     return_code = proc.wait()
     elapsed = _elapsed_hhmmss(time.perf_counter() - start_t)
     final_status = (
@@ -1886,8 +2126,13 @@ def run_simulation_from_ui(
         final_status,
         command_text,
         "".join(reversed(stdout_lines)),
-        stderr_text,
-        f"{end_year if return_code == 0 else start_int} / {end_year}",
+        "".join(stderr_lines),
+        _sim_progress_html(
+            end_year if return_code == 0 else current_year,
+            end_year,
+            elapsed,
+            start_year=start_int,
+        ),
     )
 
 
@@ -2021,13 +2266,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                 )
                 sim_preview = gr.Textbox(label="Command Preview", lines=2, interactive=False)
             with gr.Row():
-                sim_progress = gr.Textbox(
-                    label="Progress",
-                    value="",
-                    interactive=False,
-                    scale=1,
-                    min_width=140,
-                )
+                sim_progress = gr.HTML(value="", scale=2, min_width=220)
                 sim_status = gr.Textbox(label="Status", interactive=False, scale=5)
             sim_stdout = gr.Textbox(label="Output (newest first)", lines=8, max_lines=10, interactive=False)
             sim_stderr = gr.Textbox(label="Errors", lines=8, interactive=False)

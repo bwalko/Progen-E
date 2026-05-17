@@ -41,6 +41,7 @@ def _pick_destination_region(
     origin_rid: str,
     year: int,
     rng: random.Random,
+    resource_facts=None,
 ) -> str | None:
     routes = list_routes_from(
         origin_rid,
@@ -56,8 +57,14 @@ def _pick_destination_region(
         dst = (route.to_region_id or "").strip()
         if not dst or dst == origin_rid:
             continue
-        cap = ctx.effective_regional_population_cap(dst)
-        pop = ctx.count_alive_in_region(dst)
+        if resource_facts is not None:
+            cap = int(resource_facts.region_cap.get(dst, 0))
+            pop = int(resource_facts.region_population.get(dst, 0))
+            if cap <= 0:
+                cap = ctx.effective_regional_population_cap(dst)
+        else:
+            cap = ctx.effective_regional_population_cap(dst)
+            pop = ctx.count_alive_in_region(dst)
         headroom = max(1.0, float(cap - pop))
         w = headroom / (1.0 + max(0.0, float(route.friction)))
         dest_ids.append(dst)
@@ -77,12 +84,8 @@ def _pick_least_loaded_settlement(ctx: "SimulationContext", region_id: str):
 def _eligible_migrant_pool(ctx: "SimulationContext", origin_rid: str, year: int) -> list[int]:
     """Adults 18+ in ``origin_rid``; one id per couple (``min`` id) so partners migrate together."""
     out: list[int] = []
-    for pid in ctx.current_people_ids:
-        rec = ctx.id_to_record.get(pid)
-        if rec is None:
-            continue
-        if (ctx._residence_region_id(rec) or "") != origin_rid:
-            continue
+    for rec in ctx.current_people_by_region().get(origin_rid, ()):
+        pid = int(rec.person_id)
         age = int(year) - int(rec.person.birthyear)
         if age < 18:
             continue
@@ -143,13 +146,14 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
     rng = random.Random(
         int(year) * 500_011 + int(ctx.placename_rng_salt) + 4241
     )
+    resource_facts = ctx.annual_resource_facts(year)
 
     for r in list_regions(world=ctx.world, db_path=ctx.db_path):
         rid = (r.region_id or "").strip()
         if not rid:
             continue
-        cap = ctx.effective_regional_population_cap(rid)
-        pop = ctx.count_alive_in_region(rid)
+        cap = int(resource_facts.region_cap.get(rid, 0))
+        pop = int(resource_facts.region_population.get(rid, 0))
         if cap <= 0 or pop <= 0:
             continue
         pressure = float(pop) / float(cap)
@@ -168,7 +172,9 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
             continue
         rng.shuffle(pool)
         for pid in pool[:trials]:
-            dst_rid = _pick_destination_region(ctx, rid, year, rng)
+            dst_rid = _pick_destination_region(
+                ctx, rid, year, rng, resource_facts=resource_facts
+            )
             if dst_rid is None:
                 continue
             try:
@@ -178,3 +184,4 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 continue
 
     tick_region_effective_cap_multipliers(ctx, rng)
+    ctx.invalidate_annual_indexes()

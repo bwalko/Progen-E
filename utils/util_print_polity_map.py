@@ -9,7 +9,7 @@ with ``simulation_polities``. Typical::
 
 Or with an explicit save path (e.g. temp test DB)::
 
-    python utils/util_print_polity_map.py --save path/to/save.sqlite --sim-world default
+    python utils/util_print_polity_map.py --save path/to/save.sqlite
 """
 
 from __future__ import annotations
@@ -27,8 +27,7 @@ from library.world_paths import config_db_path, derive_save_db_path_from_config
 from library.world_save import ensure_checkpoint_schema
 
 
-def _print_map(save_path: Path, *, sim_world: str) -> None:
-    w = sim_world.strip()
+def _print_map(save_path: Path) -> None:
     with sqlite3.connect(save_path) as conn:
         conn.row_factory = sqlite3.Row
         ensure_checkpoint_schema(conn)
@@ -43,17 +42,15 @@ def _print_map(save_path: Path, *, sim_world: str) -> None:
                 p.parent_polity_id
             FROM simulation_polity_territory t
             JOIN simulation_polities p
-              ON p.world = t.world AND p.polity_id = t.polity_id
-            WHERE t.world = ?
-              AND t.until_sim_year IS NULL
+              ON p.polity_id = t.polity_id
+            WHERE t.until_sim_year IS NULL
               AND t.target_kind = 'region'
             ORDER BY t.target_id, p.polity_id
             """,
-            (w,),
         ).fetchall()
 
     if not rows:
-        print(f"(no open region territory rows for world={w!r} in {save_path})")
+        print(f"(no open region territory rows in {save_path})")
         return
 
     hdr = (
@@ -88,11 +85,6 @@ def main() -> None:
         default=None,
         help="Explicit path to save.sqlite (overrides --world-id layout).",
     )
-    ap.add_argument(
-        "--sim-world",
-        default="default",
-        help="Simulation ``world`` column in checkpoint tables (usually 'default').",
-    )
     args = ap.parse_args()
 
     save_path = args.save
@@ -103,7 +95,7 @@ def main() -> None:
     if not save_path.exists():
         raise SystemExit(f"save DB not found: {save_path}")
 
-    _print_map(save_path, sim_world=str(args.sim_world))
+    _print_map(save_path)
 
 
 if __name__ == "__main__":

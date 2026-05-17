@@ -66,6 +66,12 @@ class YearCareIndexes:
     by_settlement: dict[str, tuple[SimulationPersonRecord, ...]]
     minor_ids: tuple[int, ...]
     children_by_parent: Mapping[int, frozenset[int]]
+    household_ids_by_adult: Mapping[int, tuple[int, ...]]
+    dependent_minor_count_by_adult: Mapping[int, int]
+    minor_ids_by_household: Mapping[frozenset[int], frozenset[int]]
+    household_settlement_id: Mapping[frozenset[int], str]
+    grandparent_extras_by_household: Mapping[frozenset[int], frozenset[int]]
+    largest_active_settlement_id: str | None
 
 
 def _tick_rng(year: int, salt: int, stream: int) -> random.Random:
@@ -93,11 +99,108 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
 
     frozen_children = {k: frozenset(v) for k, v in children_by_parent.items()}
     frozen_by_settlement = {k: tuple(v) for k, v in by_settlement.items()}
+    household_ids_by_adult: dict[int, tuple[int, ...]] = {}
+    dependent_minor_count_by_adult: dict[int, int] = {}
+    minor_ids_by_household_mut: dict[frozenset[int], set[int]] = {}
+    household_settlement_id: dict[frozenset[int], str] = {}
+
+    def indexed_household_ids(rec: SimulationPersonRecord) -> tuple[int, ...]:
+        worker_id = int(rec.person_id)
+        origin_sid = _residence_sid(rec)
+        if not origin_sid:
+            return (worker_id,)
+        ids: set[int] = {worker_id}
+        partner_id = rec.person.partner_person_id
+        partner_rec = ctx.id_to_record.get(partner_id) if partner_id is not None else None
+        if (
+            partner_id is not None
+            and partner_id in alive_ids
+            and partner_rec is not None
+            and _residence_sid(partner_rec) == origin_sid
+        ):
+            ids.add(int(partner_id))
+
+        parent_set = {worker_id}
+        if partner_id is not None:
+            parent_set.add(int(partner_id))
+        candidate_child_ids: set[int] = set(children_by_parent.get(worker_id, ()))
+        if partner_id is not None:
+            candidate_child_ids.update(children_by_parent.get(int(partner_id), ()))
+        for child_id in candidate_child_ids:
+            if child_id in parent_set:
+                continue
+            child = ctx.id_to_record.get(child_id)
+            if child is None or child_id not in alive_ids:
+                continue
+            if _residence_sid(child) != origin_sid:
+                continue
+            child_parents = {x for x in (child.father_id, child.mother_id) if x is not None}
+            if not child_parents:
+                continue
+            if not child_parents.issubset(parent_set):
+                continue
+            if ctx._person_is_dependent_minor(child, year):
+                ids.add(int(child_id))
+        return tuple(sorted(ids))
+
+    for rec in ctx.iter_current_people(sorted_by_id=True):
+        if ctx._person_is_dependent_minor(rec, year):
+            continue
+        hids = indexed_household_ids(rec)
+        household_ids_by_adult[int(rec.person_id)] = hids
+        hkey = frozenset(hids)
+        household_settlement_id.setdefault(hkey, _household_settlement_id(ctx, hkey))
+        n_minors = 0
+        minors_for_household = minor_ids_by_household_mut.setdefault(hkey, set())
+        for mid in hids:
+            mrec = ctx.id_to_record.get(mid)
+            if mrec is None:
+                continue
+            if ctx._person_is_dependent_minor(mrec, year):
+                n_minors += 1
+                minors_for_household.add(int(mid))
+        dependent_minor_count_by_adult[int(rec.person_id)] = n_minors
+
+    for mid in minor_ids:
+        mrec = ctx.id_to_record.get(int(mid))
+        if mrec is None:
+            continue
+        msid = _residence_sid(mrec)
+        hkey: frozenset[int] | None = None
+        for pid in (mrec.father_id, mrec.mother_id):
+            if pid is None or pid not in alive_ids:
+                continue
+            prec = ctx.id_to_record.get(pid)
+            if prec is None or _residence_sid(prec) != msid:
+                continue
+            parent_hids = household_ids_by_adult.get(int(pid))
+            if parent_hids is not None:
+                hkey = frozenset(parent_hids)
+                break
+        if hkey is None:
+            hkey = frozenset({int(mid)})
+            household_settlement_id.setdefault(hkey, msid)
+        minor_ids_by_household_mut.setdefault(hkey, set()).add(int(mid))
+
+    minor_ids_by_household = {
+        hkey: frozenset(ids) for hkey, ids in minor_ids_by_household_mut.items()
+    }
+    grandparent_extras_by_household = {
+        hkey: _grandparent_supply_extras(ctx, year, hkey, minors, household_settlement_id.get(hkey, ""))
+        for hkey, minors in minor_ids_by_household.items()
+        if minors
+    }
     return YearCareIndexes(
         alive_ids=frozenset(alive_ids),
         by_settlement=frozen_by_settlement,
         minor_ids=tuple(minor_ids),
         children_by_parent=frozen_children,
+        household_ids_by_adult=household_ids_by_adult,
+        dependent_minor_count_by_adult=dependent_minor_count_by_adult,
+        minor_ids_by_household=minor_ids_by_household,
+        household_settlement_id=household_settlement_id,
+        grandparent_extras_by_household=grandparent_extras_by_household,
+        largest_active_settlement_id=_largest_active_settlement_id(ctx),
     )
 
 
@@ -233,7 +336,10 @@ def effective_caregiver_supply(ctx: SimulationContext, rec: SimulationPersonReco
 
 
 def dependent_minors_in_implicit_household(
-    ctx: SimulationContext, rec: SimulationPersonRecord, year: int
+    ctx: SimulationContext,
+    rec: SimulationPersonRecord,
+    year: int,
+    indexes: YearCareIndexes | None = None,
 ) -> int:
     """Number of dependent minors sharing ``rec``'s implicit job-move household.
 
@@ -242,6 +348,8 @@ def dependent_minors_in_implicit_household(
     """
     if ctx._person_is_dependent_minor(rec, year):
         return 0
+    if indexes is not None:
+        return int(indexes.dependent_minor_count_by_adult.get(int(rec.person_id), 0))
     hkey = _implicit_household_frozenset(ctx, rec, year)
     n = 0
     for mid in hkey:
@@ -254,7 +362,10 @@ def dependent_minors_in_implicit_household(
 
 
 def childcare_duty_factor(
-    ctx: SimulationContext, rec: SimulationPersonRecord, year: int
+    ctx: SimulationContext,
+    rec: SimulationPersonRecord,
+    year: int,
+    indexes: YearCareIndexes | None = None,
 ) -> float:
     """Caregiver burden in ``[0, CHILD_DUTY_FACTOR_CAP]``.
 
@@ -266,22 +377,35 @@ def childcare_duty_factor(
     """
     if ctx._person_is_dependent_minor(rec, year):
         return 0.0
-    n = dependent_minors_in_implicit_household(ctx, rec, year)
+    n = dependent_minors_in_implicit_household(ctx, rec, year, indexes=indexes)
     if n <= 0:
         return 0.0
     raw = 1.0 - math.exp(-CHILD_DUTY_GROWTH * float(n))
 
-    hkey = _implicit_household_frozenset(ctx, rec, year)
-    minors = frozenset(
-        mid
-        for mid in hkey
-        if (mr := ctx.id_to_record.get(mid)) is not None
-        and ctx._person_is_dependent_minor(mr, year)
+    hkey = (
+        frozenset(indexes.household_ids_by_adult.get(int(rec.person_id), (int(rec.person_id),)))
+        if indexes is not None
+        else _implicit_household_frozenset(ctx, rec, year)
+    )
+    minors = (
+        indexes.minor_ids_by_household.get(hkey, frozenset())
+        if indexes is not None
+        else frozenset(
+            mid
+            for mid in hkey
+            if (mr := ctx.id_to_record.get(mid)) is not None
+            and ctx._person_is_dependent_minor(mr, year)
+        )
     )
     relief = 0.0
     if minors:
-        hh_sid = _household_settlement_id(ctx, hkey)
-        extras = _grandparent_supply_extras(ctx, year, hkey, minors, hh_sid)
+        extras = (
+            indexes.grandparent_extras_by_household.get(hkey, frozenset())
+            if indexes is not None
+            else _grandparent_supply_extras(
+                ctx, year, hkey, minors, _household_settlement_id(ctx, hkey)
+            )
+        )
         relief = float(len(extras)) * CHILD_DUTY_GRANDPARENT_RELIEF
     duty = max(0.0, raw - relief)
     return min(CHILD_DUTY_FACTOR_CAP, duty)
@@ -300,13 +424,23 @@ def _largest_active_settlement_id(ctx: SimulationContext) -> str | None:
 
 
 def _implicit_household_frozenset(
-    ctx: SimulationContext, head_rec: SimulationPersonRecord, year: int
+    ctx: SimulationContext,
+    head_rec: SimulationPersonRecord,
+    year: int,
+    indexes: YearCareIndexes | None = None,
 ) -> frozenset[int]:
+    if indexes is not None:
+        return frozenset(
+            indexes.household_ids_by_adult.get(int(head_rec.person_id), (int(head_rec.person_id),))
+        )
     return frozenset(_household_ids_for_job_move(ctx, head_rec, year))
 
 
 def _household_key_for_minor(
-    ctx: SimulationContext, child_rec: SimulationPersonRecord, year: int
+    ctx: SimulationContext,
+    child_rec: SimulationPersonRecord,
+    year: int,
+    indexes: YearCareIndexes | None = None,
 ) -> frozenset[int]:
     """Household containing the minor; prefers a co-resident parent's implicit home."""
     child_sid = _residence_sid(child_rec)
@@ -315,7 +449,7 @@ def _household_key_for_minor(
             continue
         pr = ctx.id_to_record[pid]
         if _residence_sid(pr) == child_sid:
-            return _implicit_household_frozenset(ctx, pr, year)
+            return _implicit_household_frozenset(ctx, pr, year, indexes=indexes)
     return frozenset({int(child_rec.person_id)})
 
 
@@ -379,6 +513,8 @@ def _collect_household_keys_with_minors(
     ctx: SimulationContext, year: int, indexes: YearCareIndexes | None = None
 ) -> dict[frozenset[int], frozenset[int]]:
     """Map implicit household member set -> dependent minor ids in that set."""
+    if indexes is not None:
+        return dict(indexes.minor_ids_by_household)
     out: dict[frozenset[int], set[int]] = {}
     minor_ids = indexes.minor_ids if indexes is not None else tuple(
         int(rec.person_id)
@@ -389,7 +525,7 @@ def _collect_household_keys_with_minors(
         crec = ctx.id_to_record.get(int(mid))
         if crec is None or int(mid) not in ctx.current_people_ids:
             continue
-        key = _household_key_for_minor(ctx, crec, year)
+        key = _household_key_for_minor(ctx, crec, year, indexes=indexes)
         out.setdefault(key, set()).add(int(mid))
     return {k: frozenset(v) for k, v in out.items()}
 
@@ -555,8 +691,8 @@ def simulation_household_care_annual_tick(ctx: SimulationContext, year: int) -> 
     """Yearly batch: partner residence fix, orphan gates + routing, childcare shortfall."""
     y = int(year)
     _reconcile_partner_residence_mismatch(ctx, y)
-    indexes = build_year_indexes(ctx, y)
-    largest = _largest_active_settlement_id(ctx)
+    indexes = ctx.annual_care_indexes(y)
+    largest = indexes.largest_active_settlement_id
 
     uncovered: list[int] = []
     for mid in indexes.minor_ids:

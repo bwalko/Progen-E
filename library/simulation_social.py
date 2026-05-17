@@ -211,14 +211,16 @@ def _paramour_pair_probability(
     )
 
 
-def _paramour_bond_score_01(ctx: SimulationContext, ra, rb, year: int) -> float:
+def _paramour_bond_score_01(
+    ctx: SimulationContext, ra, rb, year: int, resource_facts=None
+) -> float:
     pa, pb = ra.person, rb.person
     romantic = _romantic_infatuation_score(pa, pb, int(year))
     prosperity = pair_prosperity_01(
         pa,
         pb,
-        pressure_a=resource_pressure_for_person(ctx, ra),
-        pressure_b=resource_pressure_for_person(ctx, rb),
+        pressure_a=resource_pressure_for_person(ctx, ra, resource_facts=resource_facts),
+        pressure_b=resource_pressure_for_person(ctx, rb, resource_facts=resource_facts),
     )
     stability = 1.0 - (
         _deviation_01(pa, "neurochemical") + _deviation_01(pb, "neurochemical")
@@ -234,7 +236,9 @@ def _has_outside_paramour(person: Person, partner_id: int) -> bool:
     return pid is not None and int(pid) != int(partner_id)
 
 
-def _person_breakup_stress_01(ctx: SimulationContext, rec, partner_id: int) -> tuple[float, list[str]]:
+def _person_breakup_stress_01(
+    ctx: SimulationContext, rec, partner_id: int, resource_facts=None
+) -> tuple[float, list[str]]:
     p = rec.person
     stress = 0.0
     reasons: list[str] = []
@@ -272,7 +276,7 @@ def _person_breakup_stress_01(ctx: SimulationContext, rec, partner_id: int) -> t
         stress += 0.05
         reasons.append("indulgence")
 
-    pressure = resource_pressure_for_person(ctx, rec)
+    pressure = resource_pressure_for_person(ctx, rec, resource_facts=resource_facts)
     if pressure >= 1.0:
         stress += min(0.18, 0.06 * float(pressure))
         reasons.append("resource_pressure")
@@ -285,9 +289,15 @@ def _person_breakup_stress_01(ctx: SimulationContext, rec, partner_id: int) -> t
     return _clamp01(stress), reasons
 
 
-def _partner_breakup_probability(ctx: SimulationContext, ra, rb) -> tuple[float, list[str]]:
-    sa, reasons_a = _person_breakup_stress_01(ctx, ra, int(rb.person_id))
-    sb, reasons_b = _person_breakup_stress_01(ctx, rb, int(ra.person_id))
+def _partner_breakup_probability(
+    ctx: SimulationContext, ra, rb, resource_facts=None
+) -> tuple[float, list[str]]:
+    sa, reasons_a = _person_breakup_stress_01(
+        ctx, ra, int(rb.person_id), resource_facts=resource_facts
+    )
+    sb, reasons_b = _person_breakup_stress_01(
+        ctx, rb, int(ra.person_id), resource_facts=resource_facts
+    )
     stress = sa + sb
     if stress <= 0.0:
         return PARTNER_BREAKUP_BASE_PROB, []
@@ -301,7 +311,9 @@ def _partner_breakup_rng(year: int, salt: int, person_a_id: int, person_b_id: in
     return random.Random(int(year) * PARTNER_BREAKUP_RNG_STREAM + int(salt) * 31 + lo * 10_009 + hi)
 
 
-def maybe_dissolve_partner_couples(ctx: SimulationContext, year: int) -> None:
+def maybe_dissolve_partner_couples(
+    ctx: SimulationContext, year: int, resource_facts=None
+) -> None:
     """Rare annual breakup roll for official partners under stacked stress."""
     salt = int(ctx.placename_rng_salt)
     for a_id, b_id in list(ctx.couples):
@@ -313,7 +325,9 @@ def maybe_dissolve_partner_couples(ctx: SimulationContext, year: int) -> None:
             continue
         if ra.person.partner_person_id != b_id or rb.person.partner_person_id != a_id:
             continue
-        p, reasons = _partner_breakup_probability(ctx, ra, rb)
+        p, reasons = _partner_breakup_probability(
+            ctx, ra, rb, resource_facts=resource_facts
+        )
         rng = _partner_breakup_rng(int(year), salt, a_id, b_id)
         if rng.random() >= p:
             continue
@@ -357,9 +371,13 @@ def dissolve_distant_paramours(ctx: SimulationContext) -> None:
             )
 
 
-def _paramour_end_probability(ctx: SimulationContext, ra, rb, year: int) -> tuple[float, list[str]]:
+def _paramour_end_probability(
+    ctx: SimulationContext, ra, rb, year: int, resource_facts=None
+) -> tuple[float, list[str]]:
     pa, pb = ra.person, rb.person
-    bond = _paramour_bond_score_01(ctx, ra, rb, int(year))
+    bond = _paramour_bond_score_01(
+        ctx, ra, rb, int(year), resource_facts=resource_facts
+    )
     p = PARAMOUR_END_BASE_PROB + 0.12 * max(0.0, 0.45 - bond)
     reasons: list[str] = []
 
@@ -376,7 +394,10 @@ def _paramour_end_probability(ctx: SimulationContext, ra, rb, year: int) -> tupl
     if instability > 0.70:
         p += 0.08
         reasons.append("emotional_volatility")
-    pressure = max(resource_pressure_for_person(ctx, ra), resource_pressure_for_person(ctx, rb))
+    pressure = max(
+        resource_pressure_for_person(ctx, ra, resource_facts=resource_facts),
+        resource_pressure_for_person(ctx, rb, resource_facts=resource_facts),
+    )
     if pressure >= 1.0:
         p += min(0.12, 0.04 * float(pressure))
         reasons.append("hardship")
@@ -390,7 +411,9 @@ def _paramour_end_rng(year: int, salt: int, person_a_id: int, person_b_id: int) 
     return random.Random(int(year) * PARAMOUR_END_RNG_STREAM + int(salt) * 17 + lo * 20_011 + hi)
 
 
-def maybe_end_paramour_relationships(ctx: SimulationContext, year: int) -> None:
+def maybe_end_paramour_relationships(
+    ctx: SimulationContext, year: int, resource_facts=None
+) -> None:
     salt = int(ctx.placename_rng_salt)
     for a_id, b_id in list(ctx.paramours):
         ra = ctx.id_to_record.get(a_id)
@@ -399,7 +422,9 @@ def maybe_end_paramour_relationships(ctx: SimulationContext, year: int) -> None:
             continue
         if a_id not in ctx.current_people_ids or b_id not in ctx.current_people_ids:
             continue
-        p, reasons = _paramour_end_probability(ctx, ra, rb, int(year))
+        p, reasons = _paramour_end_probability(
+            ctx, ra, rb, int(year), resource_facts=resource_facts
+        )
         rng = _paramour_end_rng(int(year), salt, a_id, b_id)
         if rng.random() >= p:
             continue
@@ -413,9 +438,13 @@ def maybe_end_paramour_relationships(ctx: SimulationContext, year: int) -> None:
         )
 
 
-def _paramour_promotion_probability(ctx: SimulationContext, ra, rb, year: int) -> tuple[float, list[str]]:
+def _paramour_promotion_probability(
+    ctx: SimulationContext, ra, rb, year: int, resource_facts=None
+) -> tuple[float, list[str]]:
     pa, pb = ra.person, rb.person
-    bond = _paramour_bond_score_01(ctx, ra, rb, int(year))
+    bond = _paramour_bond_score_01(
+        ctx, ra, rb, int(year), resource_facts=resource_facts
+    )
     p = 0.02 + 0.22 * max(0.0, bond - 0.50)
     reasons: list[str] = []
     if bond >= 0.65:
@@ -447,7 +476,9 @@ def _paramour_promotion_rng(year: int, salt: int, person_a_id: int, person_b_id:
     return random.Random(int(year) * PARAMOUR_PROMOTION_RNG_STREAM + int(salt) * 19 + lo * 30_011 + hi)
 
 
-def maybe_promote_paramours_to_partners(ctx: SimulationContext, year: int) -> None:
+def maybe_promote_paramours_to_partners(
+    ctx: SimulationContext, year: int, resource_facts=None
+) -> None:
     salt = int(ctx.placename_rng_salt)
     for a_id, b_id in list(ctx.paramours):
         ra = ctx.id_to_record.get(a_id)
@@ -458,7 +489,9 @@ def maybe_promote_paramours_to_partners(ctx: SimulationContext, year: int) -> No
             continue
         if not paramour_pair_eligible(ra, rb, int(year)):
             continue
-        p, reasons = _paramour_promotion_probability(ctx, ra, rb, int(year))
+        p, reasons = _paramour_promotion_probability(
+            ctx, ra, rb, int(year), resource_facts=resource_facts
+        )
         rng = _paramour_promotion_rng(int(year), salt, a_id, b_id)
         if rng.random() >= p:
             continue
@@ -525,6 +558,31 @@ def _maybe_form_paramours_one_settlement(
         pairs = _sample_paramour_contact_pairs(residents, trials, rng)
     for ia, ib in pairs:
         _maybe_form_paramour_pair(ctx, year, rng, ia, ib)
+
+
+def _decision_sample_person_ids(
+    ctx: SimulationContext,
+    person_ids: list[int],
+    *,
+    year: int,
+    scope: str,
+    stream: int,
+) -> list[int]:
+    """Cap social behavior candidate ids using the shared decision-sample policy."""
+    records = [
+        rec
+        for pid in person_ids
+        if (rec := ctx.id_to_record.get(int(pid))) is not None
+    ]
+    return [
+        int(rec.person_id)
+        for rec in ctx.decision_sample_records(
+            records,
+            year=year,
+            scope=scope,
+            stream=stream,
+        )
+    ]
 
 
 def _paramour_contact_trial_budget(resident_count: int, pair_count: int | None = None) -> int:
@@ -604,8 +662,17 @@ def maybe_form_paramours(ctx: SimulationContext, year: int, rng: random.Random) 
     cols = ctx.alive_person_columns(year)
     candidate_mask = (cols.ages >= PARAMOUR_MIN_SIM_AGE) & (~cols.has_paramour)
     for code in sorted(int(c) for c in set(cols.settlement_codes[candidate_mask]) if int(c) != 0):
+        sid = cols.settlement_id_by_code.get(code, "")
         sid_mask = candidate_mask & (cols.settlement_codes == code)
         ids = cols.person_ids_for_mask(sid_mask)
+        if sid:
+            ids = _decision_sample_person_ids(
+                ctx,
+                ids,
+                year=int(year),
+                scope=f"settlement:{sid}:paramour_contacts",
+                stream=50_001,
+            )
         _maybe_form_paramours_one_settlement(ctx, year, rng, ids)
 
 
@@ -684,6 +751,7 @@ def _maybe_form_same_sex_couples_one_gender(
     sid: str,
     eligible_ids: list[int],
     paired_ids: set[int],
+    resource_facts=None,
 ) -> None:
     pool = [pid for pid in eligible_ids if pid not in paired_ids]
     if len(pool) < 2:
@@ -707,8 +775,8 @@ def _maybe_form_same_sex_couples_one_gender(
             continue
         pa, pb = ra.person, rb.person
         romantic = _romantic_infatuation_score(pa, pb, year)
-        pa_p = resource_pressure_for_person(ctx, ra)
-        pb_p = resource_pressure_for_person(ctx, rb)
+        pa_p = resource_pressure_for_person(ctx, ra, resource_facts=resource_facts)
+        pb_p = resource_pressure_for_person(ctx, rb, resource_facts=resource_facts)
         prosperity = pair_prosperity_01(pa, pb, pressure_a=pa_p, pressure_b=pb_p)
         p_acc = _same_sex_acceptance_probability(
             romantic_01=romantic, prosperity_01=prosperity
@@ -740,7 +808,9 @@ def _maybe_form_same_sex_couples_one_gender(
         pool = [p for p in pool if p not in (ia, ib)]
 
 
-def maybe_form_same_sex_couples(ctx: SimulationContext, year: int) -> None:
+def maybe_form_same_sex_couples(
+    ctx: SimulationContext, year: int, resource_facts=None
+) -> None:
     """Form female-female and male-male couples from romantic compatibility and prosperity."""
     paired_ids = _paired_person_ids(ctx)
     cols = ctx.alive_person_columns(year)
@@ -770,8 +840,26 @@ def maybe_form_same_sex_couples(ctx: SimulationContext, year: int) -> None:
             if (rec := ctx.id_to_record.get(pid)) is not None
             and _eligible_same_sex_couple_candidate(ctx, rec, y, paired_ids)
         ]
-        _maybe_form_same_sex_couples_one_gender(ctx, y, sid, females, paired_ids)
-        _maybe_form_same_sex_couples_one_gender(ctx, y, sid, males, paired_ids)
+        females = _decision_sample_person_ids(
+            ctx,
+            females,
+            year=y,
+            scope=f"settlement:{sid}:same_sex:female",
+            stream=50_101,
+        )
+        males = _decision_sample_person_ids(
+            ctx,
+            males,
+            year=y,
+            scope=f"settlement:{sid}:same_sex:male",
+            stream=50_102,
+        )
+        _maybe_form_same_sex_couples_one_gender(
+            ctx, y, sid, females, paired_ids, resource_facts=resource_facts
+        )
+        _maybe_form_same_sex_couples_one_gender(
+            ctx, y, sid, males, paired_ids, resource_facts=resource_facts
+        )
 
 
 def simulation_social_annual_tick(ctx: SimulationContext, year: int) -> None:
@@ -779,10 +867,11 @@ def simulation_social_annual_tick(ctx: SimulationContext, year: int) -> None:
     rng = random.Random(
         int(year) * 400_009 + int(ctx.placename_rng_salt) + 1777
     )
+    resource_facts = ctx.annual_resource_facts(year)
     dissolve_invalid_paramours(ctx, year)
     dissolve_distant_paramours(ctx)
-    maybe_promote_paramours_to_partners(ctx, year)
-    maybe_end_paramour_relationships(ctx, year)
-    maybe_dissolve_partner_couples(ctx, year)
+    maybe_promote_paramours_to_partners(ctx, year, resource_facts=resource_facts)
+    maybe_end_paramour_relationships(ctx, year, resource_facts=resource_facts)
+    maybe_dissolve_partner_couples(ctx, year, resource_facts=resource_facts)
     maybe_form_paramours(ctx, year, rng)
-    maybe_form_same_sex_couples(ctx, year)
+    maybe_form_same_sex_couples(ctx, year, resource_facts=resource_facts)
