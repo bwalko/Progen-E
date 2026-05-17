@@ -414,8 +414,9 @@ def seed_settlement_naming_for_region(
     ctx: "SimulationContext",
     lex: PlacenameLexicon,
     rng: random.Random,
+    settlement_slots: int = 1,
 ) -> tuple[GeneratedSettlementName, str]:
-    """Return generated name and JSON string for local placement (single slot)."""
+    """Return generated name and shared region placement JSON."""
     weights = region_ethnic_weights(ctx, region.region_id, db_path=ctx.db_path)
     prominent = pick_prominent_resident(ctx, region.region_id, rng)
     inhabitant_cultures = _inhabitant_cultures_for_region(ctx, region.region_id, lex, rng)
@@ -435,9 +436,10 @@ def seed_settlement_naming_for_region(
         world=world,
         region=region,
         rng=geo_rng,
-        settlement_slots=1,
+        settlement_slots=max(1, int(settlement_slots)),
         primary_meaning=gen.primary_meaning,
         primary_category=gen.primary_category,
+        db_path=ctx.db_path,
     )
     placement_json = graph.to_json()
     return gen, placement_json

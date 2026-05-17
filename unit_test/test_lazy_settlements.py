@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 import unittest
 
@@ -65,6 +66,42 @@ class TestLazySettlements(unittest.TestCase):
                 self.assertEqual(new.founded_sim_year, 1005)
                 self.assertEqual(new.display_name, "Oldtown")
                 self.assertEqual(new.status, "active")
+            finally:
+                ctx.finalize_run()
+
+    def test_additional_settlements_share_multi_slot_region_geography(self) -> None:
+        from library.simulation_context import SimulationContext
+        from pathlib import Path
+        import tempfile
+        from library.config_import import load_all_csvs_into_sqlite
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext(
+                db_path=cfg,
+                save_db_path=root / "save.sqlite",
+                world="default",
+                simulation_start_year=1000,
+                history_equivalent_start_year=1000,
+                current_year=1005,
+            )
+            try:
+                first = ctx.ensure_active_settlement_for_region("boreas_fjord_shore")
+                second = ctx.create_additional_active_settlement("boreas_fjord_shore")
+                third = ctx.create_additional_active_settlement("boreas_fjord_shore")
+
+                self.assertEqual([first.site_slot, second.site_slot, third.site_slot], [1, 2, 3])
+                shared_geo = first.local_geography_json
+                self.assertEqual(second.local_geography_json, shared_geo)
+                self.assertEqual(third.local_geography_json, shared_geo)
+
+                data = json.loads(shared_geo or "{}")
+                sites = data.get("settlements", [])
+                self.assertEqual(len(sites), 3)
+                coords = {(round(float(site["x"]), 6), round(float(site["y"]), 6)) for site in sites}
+                self.assertEqual(len(coords), 3)
             finally:
                 ctx.finalize_run()
 

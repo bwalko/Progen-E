@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 2
+SAVE_SCHEMA_VERSION = 3
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 
 _SAVE_REBUILD_SOURCE_SCHEMA = "source_db"
@@ -69,6 +69,57 @@ _SAVE_REBUILD_TABLES = (
     "simulation_alliances",
     "simulation_campaigns",
     "simulation_battles",
+)
+
+_PERSON_CHECKPOINT_COLUMNS: tuple[str, ...] = (
+    "first_name",
+    "last_name",
+    "gender",
+    "ethnic",
+    "species",
+    "birthyear",
+    "deathyear",
+    "birthplace",
+    "birthplace_region_id",
+    "birthplace_settlement_id",
+    "current_settlement_id",
+    "partner_person_id",
+    "paramour_person_id",
+    "last_birth_event_year",
+    "job",
+    "job_assigned_year",
+    "job_era",
+    "job_tier",
+    "status_tendency",
+    "leader_quality",
+    "leader_tendency",
+    "employment_status",
+    "job_lost_year",
+    "unemployment_started_year",
+    "last_job",
+    "career_fitness_score",
+    "job_prosperity_01",
+    "household_prosperity",
+    "household_purseholder_person_id",
+    "birth_litter_size",
+    "life_stage",
+    "maturity_height_cm",
+    "maturity_weight_kg",
+    "skin_tone",
+    "hair",
+    "eyes",
+    "min_fertility_age",
+    "max_fertility_age",
+    "attractiveness_01",
+    "sexual_nature",
+    "gender_mind",
+    "father_name",
+    "mother_name",
+)
+
+_PERSON_EXTENSION_KEYS: tuple[str, ...] = (
+    "genome_composite_names",
+    "genome_trait_phrases",
 )
 
 
@@ -222,7 +273,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
     if version == 0 and _save_looks_like_legacy_multiworld(conn):
         raise RuntimeError(
             "save.sqlite uses the legacy multi-world schema. Delete the save or "
-            "rebuild it before opening with the single-world v2 schema."
+            "rebuild it before opening with the compact single-world schema."
         )
     _stamp_save_schema_version(conn, SAVE_SCHEMA_VERSION)
 
@@ -262,6 +313,77 @@ def _save_looks_like_legacy_multiworld(conn: sqlite3.Connection) -> bool:
         if _table_exists(conn, table) and "world" in _table_columns(conn, table):
             return True
     return False
+
+
+def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_people (
+            person_id INTEGER PRIMARY KEY,
+            is_founder INTEGER NOT NULL,
+            father_id INTEGER,
+            mother_id INTEGER,
+            is_alive INTEGER NOT NULL,
+            first_name TEXT NOT NULL DEFAULT '',
+            last_name TEXT NOT NULL DEFAULT '',
+            gender TEXT NOT NULL DEFAULT '',
+            ethnic TEXT NOT NULL DEFAULT '',
+            species TEXT NOT NULL DEFAULT '',
+            birthyear INTEGER NOT NULL DEFAULT 0,
+            deathyear INTEGER,
+            birthplace TEXT NOT NULL DEFAULT 'Placeholder',
+            birthplace_region_id TEXT,
+            birthplace_settlement_id TEXT,
+            current_settlement_id TEXT,
+            partner_person_id INTEGER,
+            paramour_person_id INTEGER,
+            last_birth_event_year INTEGER,
+            job TEXT,
+            job_assigned_year INTEGER,
+            job_era TEXT,
+            job_tier TEXT,
+            status_tendency TEXT,
+            leader_quality TEXT,
+            leader_tendency TEXT,
+            employment_status TEXT,
+            job_lost_year INTEGER,
+            unemployment_started_year INTEGER,
+            last_job TEXT,
+            career_fitness_score REAL,
+            job_prosperity_01 REAL,
+            household_prosperity REAL,
+            household_purseholder_person_id INTEGER,
+            birth_litter_size INTEGER NOT NULL DEFAULT 1,
+            life_stage TEXT,
+            maturity_height_cm REAL,
+            maturity_weight_kg REAL,
+            skin_tone TEXT,
+            hair TEXT,
+            eyes TEXT,
+            min_fertility_age INTEGER,
+            max_fertility_age INTEGER,
+            attractiveness_01 REAL,
+            sexual_nature TEXT,
+            gender_mind TEXT,
+            father_name TEXT,
+            mother_name TEXT,
+            person_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_alive
+        ON simulation_people (is_alive);
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_birthyear
+        ON simulation_people (birthyear);
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_current_settlement
+        ON simulation_people (current_settlement_id);
+        """
+    )
+    cols = set(_table_columns(conn, "simulation_people"))
+    missing = [c for c in _PERSON_CHECKPOINT_COLUMNS if c not in cols]
+    if missing:
+        raise RuntimeError(
+            "simulation_people uses a pre-v3 schema. Delete or rebuild save.sqlite "
+            "before opening it with the compact people checkpoint schema."
+        )
 
 
 def _copy_common_table_columns_from_attached_source(
@@ -315,6 +437,16 @@ def _write_rebuilt_save_sqlite(
         )
         try:
             for table in _SAVE_REBUILD_TABLES:
+                if (
+                    table == "simulation_people"
+                    and _table_exists(conn, table, schema=_SAVE_REBUILD_SOURCE_SCHEMA)
+                    and "first_name"
+                    not in _table_columns(conn, table, schema=_SAVE_REBUILD_SOURCE_SCHEMA)
+                ):
+                    raise RuntimeError(
+                        "source simulation_people is older than compact schema v3; "
+                        "delete and regenerate the pre-alpha save.sqlite"
+                    )
                 _copy_common_table_columns_from_attached_source(conn, table)
             _stamp_save_schema_version(conn, int(target_schema_version))
             conn.commit()
@@ -333,8 +465,8 @@ def rebuild_save_sqlite_for_schema_upgrade(
 ) -> Path:
     """Rebuild ``save.sqlite`` through a new file before an optional swap.
 
-    The current implementation copies the v1 schema losslessly while stamping a
-    schema version. Future v2 storage changes should plug their transforms into
+    The current implementation copies the current schema losslessly while stamping a
+    schema version. Future storage changes should plug their transforms into
     ``_write_rebuilt_save_sqlite`` so migrations never rewrite the live DB in
     place.
     """
@@ -427,14 +559,6 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
             meta_key TEXT PRIMARY KEY,
             meta_value TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS simulation_people (
-            person_id INTEGER PRIMARY KEY,
-            is_founder INTEGER NOT NULL,
-            father_id INTEGER,
-            mother_id INTEGER,
-            is_alive INTEGER NOT NULL,
-            person_json TEXT NOT NULL
-        );
         CREATE TABLE IF NOT EXISTS simulation_couples (
             sort_order INTEGER PRIMARY KEY,
             person_a_id INTEGER NOT NULL,
@@ -458,6 +582,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
         ON simulation_events (sim_year);
         """
     )
+    _ensure_simulation_people_table(conn)
     conn.executescript(_CREATE_SIMULATION_REGIONS)
     _ensure_simulation_settlements_table(conn)
     _migrate_cap_named_columns(conn)
@@ -1277,6 +1402,154 @@ def _parse_genome_trait_phrases(raw: object) -> tuple[str, ...]:
     return ()
 
 
+def _trait_slots_from_config(config_db_path: Path | str) -> tuple[str, ...]:
+    """Return compact save slot -> trait order from config.
+
+    ``config/genome_save_columns.csv`` is the normal source. Tiny test fixtures
+    may not include it, so they fall back to the ``genome`` table order.
+    """
+    path = Path(config_db_path)
+    if not path.exists():
+        return ()
+    try:
+        with sqlite3.connect(path) as conn:
+            conn.row_factory = sqlite3.Row
+            has_map = conn.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='genome_save_columns'
+                """
+            ).fetchone()
+            if has_map is not None:
+                rows = conn.execute(
+                    """
+                    SELECT trait
+                    FROM genome_save_columns
+                    WHERE trait IS NOT NULL AND trim(trait) <> ''
+                    ORDER BY CAST(sort_order AS INTEGER), slot
+                    """
+                ).fetchall()
+                traits = tuple(str(r["trait"]).strip() for r in rows if str(r["trait"]).strip())
+                if traits:
+                    return traits
+            has_genome = conn.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='genome'
+                """
+            ).fetchone()
+            if has_genome is not None:
+                rows = conn.execute(
+                    """
+                    SELECT trait
+                    FROM genome
+                    WHERE trait IS NOT NULL AND trim(trait) <> ''
+                    ORDER BY rowid
+                    """
+                ).fetchall()
+                return tuple(str(r["trait"]).strip() for r in rows if str(r["trait"]).strip())
+    except sqlite3.Error:
+        return ()
+    return ()
+
+
+def _trait_slots_for_checkpoint(ctx: "SimulationContext") -> tuple[str, ...]:
+    slots = _trait_slots_from_config(ctx.db_path)
+    if slots:
+        known = set(slots)
+        extra: set[str] = set()
+        for rec in getattr(ctx, "people", []):
+            extra.update(
+                str(k) for k in (rec.person.genome or {}).keys() if str(k) not in known
+            )
+            extra.update(
+                str(k)
+                for k in (rec.person.mind_body or {}).keys()
+                if str(k) not in known
+            )
+        if extra:
+            names = ", ".join(sorted(extra))
+            raise RuntimeError(
+                "genome_save_columns is missing trait slot mappings for: "
+                f"{names}"
+            )
+        return slots
+    traits: set[str] = set()
+    for rec in getattr(ctx, "people", []):
+        traits.update(str(k) for k in (rec.person.genome or {}).keys())
+        traits.update(str(k) for k in (rec.person.mind_body or {}).keys())
+    return tuple(sorted(traits))
+
+
+def _encode_trait_array(traits: dict[str, float], trait_slots: tuple[str, ...]) -> list[float | None]:
+    encoded: list[float | None] = []
+    for trait in trait_slots:
+        raw = traits.get(trait)
+        encoded.append(None if raw is None else float(raw))
+    return encoded
+
+
+def _decode_trait_array(
+    values: object,
+    trait_slots: tuple[str, ...],
+) -> dict[str, float]:
+    if not isinstance(values, list):
+        return {}
+    out: dict[str, float] = {}
+    for trait, raw in zip(trait_slots, values):
+        if raw is None:
+            continue
+        try:
+            out[str(trait)] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _person_checkpoint_payload(
+    person: Person,
+    trait_slots: tuple[str, ...],
+    *,
+    include_trait_slots: bool,
+) -> tuple[dict[str, object], str]:
+    """Split a person into scalar columns plus compact extension JSON."""
+    raw = asdict(person)
+    cols = {k: raw.get(k) for k in _PERSON_CHECKPOINT_COLUMNS}
+    ext = {k: raw.get(k) for k in _PERSON_EXTENSION_KEYS if raw.get(k) not in (None, {}, (), [])}
+    ext["v"] = 2
+    if include_trait_slots:
+        ext["ts"] = list(trait_slots)
+    genome = person.genome or {}
+    if genome:
+        ext["g"] = _encode_trait_array(genome, trait_slots)
+    mind_body = person.mind_body or {}
+    if mind_body and mind_body != genome:
+        ext["mb"] = _encode_trait_array(mind_body, trait_slots)
+    return cols, json.dumps(ext, separators=(",", ":"))
+
+
+def _person_dict_from_checkpoint_row(
+    row: sqlite3.Row,
+    trait_slots: tuple[str, ...],
+) -> dict[str, object]:
+    d: dict[str, object] = {}
+    raw_payload = row["person_json"] if "person_json" in row.keys() else None
+    if raw_payload:
+        loaded = json.loads(raw_payload)
+        if isinstance(loaded, dict):
+            d.update(loaded)
+            row_slots = tuple(str(x) for x in loaded.get("ts", []) if str(x).strip())
+            slots = row_slots or trait_slots
+            if "g" in loaded and "genome" not in loaded:
+                d["genome"] = _decode_trait_array(loaded.get("g"), slots)
+            if "mb" in loaded and "mind_body" not in loaded:
+                d["mind_body"] = _decode_trait_array(loaded.get("mb"), slots)
+    for key in _PERSON_CHECKPOINT_COLUMNS:
+        if key in row.keys():
+            d[key] = row[key]
+    return d
+
+
 def _person_from_dict(d: dict) -> Person:
     genome_raw = d.get("genome") or {}
     genome = {str(k): float(v) for k, v in genome_raw.items()} if genome_raw else {}
@@ -1469,23 +1742,40 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         cur.execute("DELETE FROM simulation_paramours")
 
         alive = ctx.current_people_ids
+        trait_slots = _trait_slots_for_checkpoint(ctx)
+        include_trait_slots = not bool(_trait_slots_from_config(ctx.db_path))
         for rec in ctx.people:
-            payload = json.dumps(asdict(rec.person))
+            person_cols, payload = _person_checkpoint_payload(
+                rec.person,
+                trait_slots,
+                include_trait_slots=include_trait_slots,
+            )
+            column_names = (
+                "person_id",
+                "is_founder",
+                "father_id",
+                "mother_id",
+                "is_alive",
+                *_PERSON_CHECKPOINT_COLUMNS,
+                "person_json",
+            )
+            values = (
+                rec.person_id,
+                1 if rec.is_founder else 0,
+                rec.father_id,
+                rec.mother_id,
+                1 if rec.person_id in alive else 0,
+                *(person_cols[c] for c in _PERSON_CHECKPOINT_COLUMNS),
+                payload,
+            )
+            cols_sql = ", ".join(column_names)
+            placeholders = ", ".join("?" for _ in column_names)
             cur.execute(
-                """
-                INSERT OR REPLACE INTO simulation_people (
-                    person_id, is_founder, father_id, mother_id, is_alive, person_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
+                f"""
+                INSERT OR REPLACE INTO simulation_people ({cols_sql})
+                VALUES ({placeholders})
                 """,
-                (
-                    rec.person_id,
-                    1 if rec.is_founder else 0,
-                    rec.father_id,
-                    rec.mother_id,
-                    1 if rec.person_id in alive else 0,
-                    payload,
-                ),
+                values,
             )
 
         by_region: dict[str, list[SettlementState]] = defaultdict(list)
@@ -1682,9 +1972,18 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         if row is None or int(row["c"] or 0) == 0:
             return False
 
-        ref_row = conn.execute(
-            "SELECT current_year FROM world_state WHERE id = 1",
-        ).fetchone()
+        world_state_cols = _table_columns(conn, "world_state") if _table_exists(conn, "world_state") else []
+        if "id" in world_state_cols:
+            ref_row = conn.execute(
+                "SELECT current_year FROM world_state WHERE id = 1",
+            ).fetchone()
+        elif "world" in world_state_cols:
+            ref_row = conn.execute(
+                "SELECT current_year FROM world_state WHERE world = ?",
+                (ctx.world,),
+            ).fetchone()
+        else:
+            ref_row = None
         reference_year = int(ctx.simulation_start_year)
         if ref_row is not None and ref_row["current_year"] is not None:
             reference_year = int(ref_row["current_year"])
@@ -1697,12 +1996,13 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         people_rows = conn.execute(
             "SELECT * FROM simulation_people ORDER BY person_id",
         ).fetchall()
+        trait_slots = _trait_slots_from_config(ctx.db_path)
         loaded: list[SimulationPersonRecord] = []
         alive: set[int] = set()
         id_to: dict[int, SimulationPersonRecord] = {}
         for row in people_rows:
             pid = int(row["person_id"])
-            person = _person_from_dict(json.loads(row["person_json"]))
+            person = _person_from_dict(_person_dict_from_checkpoint_row(row, trait_slots))
             if not person_belongs_in_working_ram(
                 person,
                 reference_year=reference_year,
@@ -1921,6 +2221,8 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         rid: [sid for sid in settlement_ids_by_region[rid]]
         for rid in settlement_ids_by_region
     }
+    if hasattr(ctx, "refresh_all_region_local_geographies"):
+        ctx.refresh_all_region_local_geographies()
     ctx.next_person_id = next_id
     ctx.region_effective_cap_multiplier = cap_multipliers
     ctx.region_display_label_overrides = display_overrides

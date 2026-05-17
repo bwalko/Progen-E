@@ -2,24 +2,45 @@ import json
 import importlib.util
 import sqlite3
 import sys
+import tempfile
 import types
 import unittest
+from contextlib import closing
+from pathlib import Path
 
 if "gradio" not in sys.modules and importlib.util.find_spec("gradio") is None:
     sys.modules["gradio"] = types.SimpleNamespace()
 
+import utils.gradio_data_browser as gdb
+from library.config_import import load_all_csvs_into_sqlite
 from utils.gradio_data_browser import (
     _event_sentence,
     _event_sentence_html,
+    _person_from_row,
     _person_event_rows,
+    _render_polity_sheet,
+    _render_region_sheet,
+    _render_town_sheet,
     _sort_rows_by_legacy_score,
     _trait_display_values,
     _trait_phrase,
+    load_places_browser,
+    render_world_map_selection_detail,
+    render_world_map_html,
 )
 
 
+_OPEN_TEST_CONNECTIONS: list[sqlite3.Connection] = []
+
+
+def _test_connect(database: str | Path) -> sqlite3.Connection:
+    con = sqlite3.connect(database)
+    _OPEN_TEST_CONNECTIONS.append(con)
+    return con
+
+
 def _memory_save() -> sqlite3.Connection:
-    con = sqlite3.connect(":memory:")
+    con = _test_connect(":memory:")
     con.row_factory = sqlite3.Row
     con.execute(
         """
@@ -95,6 +116,210 @@ def _memory_save() -> sqlite3.Connection:
     return con
 
 
+def _memory_place_save() -> sqlite3.Connection:
+    con = _memory_save()
+    for column_def in (
+        "birthplace_region_id text",
+        "birthplace_settlement_id text",
+        "current_settlement_id text",
+        "job text",
+        "career_fitness_score real",
+    ):
+        con.execute(f"alter table simulation_people add column {column_def}")
+    con.execute(
+        """
+        create table simulation_regions (
+            region_id text,
+            region_display_name text,
+            total_population_cap integer,
+            total_household_cap integer,
+            food_pressure real,
+            stability real,
+            market_pull real,
+            prosperity_pool real,
+            treasury_balance real
+        )
+        """
+    )
+    con.execute(
+        """
+        create table simulation_settlements (
+            settlement_id text,
+            region_id text,
+            level text,
+            population_cap integer,
+            household_cap integer,
+            food_pressure real,
+            stability real,
+            market_pull real,
+            display_name text,
+            etymology text,
+            name_category_primary text,
+            name_category_secondary text,
+            name_culture_primary text,
+            name_culture_secondary text,
+            local_geography_json text,
+            founded_sim_year integer,
+            abandoned_sim_year integer,
+            status text,
+            consecutive_empty_years integer,
+            site_slot integer,
+            prosperity_pool real
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_regions values (
+            'r1', 'River Country', 12, 3, 0.25, 0.71, 0.08, 1.5, 7.25
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_settlements values (
+            'r1:s1', 'r1', 'hamlet', 12, 3, 0.25, 0.71, 0.08,
+            'Fordham', 'Ford · home', 'Engineering', null, 'Middle English', null,
+            ?, 1, null, 'active', 0, 1, 0.8
+        )
+        """,
+        (
+            json.dumps(
+                {
+                    "features": [{"kind": "river", "x": 0.2, "y": 0.3}],
+                    "settlements": [{"settlement_slot": 0, "x": 0.55, "y": 0.45}],
+                }
+            ),
+        ),
+    )
+    con.execute(
+        """
+        update simulation_people
+        set birthplace_region_id = 'r1',
+            birthplace_settlement_id = 'r1:s1',
+            current_settlement_id = 'r1:s1',
+            job = 'miller'
+        where person_id = 1
+        """
+    )
+    con.execute(
+        """
+        update simulation_people
+        set birthplace_region_id = 'r1',
+            birthplace_settlement_id = 'r1:s1',
+            current_settlement_id = 'r1:s1',
+            job = 'guard'
+        where person_id = 2
+        """
+    )
+    return con
+
+
+def _memory_legacy_place_save() -> sqlite3.Connection:
+    con = _memory_save()
+    con.execute(
+        """
+        create table simulation_regions (
+            region_id text,
+            region_display_name text,
+            total_population_cap integer,
+            total_household_cap integer,
+            food_pressure real,
+            stability real,
+            market_pull real,
+            prosperity_pool real,
+            treasury_balance real
+        )
+        """
+    )
+    con.execute(
+        """
+        create table simulation_settlements (
+            settlement_id text,
+            region_id text,
+            level text,
+            population_cap integer,
+            household_cap integer,
+            food_pressure real,
+            stability real,
+            market_pull real,
+            display_name text,
+            etymology text,
+            name_category_primary text,
+            name_category_secondary text,
+            name_culture_primary text,
+            name_culture_secondary text,
+            local_geography_json text,
+            founded_sim_year integer,
+            abandoned_sim_year integer,
+            status text,
+            consecutive_empty_years integer,
+            site_slot integer,
+            prosperity_pool real
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_regions values (
+            'boreas_peat_river', 'Peat River', 12, 3, 0.25, 0.71, 0.08, 1.5, 7.25
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_settlements values (
+            'boreas_peat_river:s11', 'boreas_peat_river', 'hamlet', 12, 3, 0.25, 0.71, 0.08,
+            'Nycholinnis', 'river · hall', 'Water', null, 'Middle English', null,
+            ?, 1, null, 'active', 0, 1, 0.8
+        )
+        """,
+        (
+            json.dumps(
+                {
+                    "features": [{"kind": "river", "x": 0.2, "y": 0.3}],
+                    "settlements": [{"settlement_slot": 0, "x": 0.55, "y": 0.45}],
+                }
+            ),
+        ),
+    )
+    con.execute(
+        "update simulation_people set person_json = ? where person_id = 1",
+        (
+            json.dumps(
+                {
+                    "first_name": "Ada",
+                    "last_name": "Forge",
+                    "birthyear": 0,
+                    "birthplace_region_id": "boreas_peat_river",
+                    "birthplace_settlement_id": "boreas_peat_river:s11",
+                    "current_settlement_id": "boreas_peat_river:s11",
+                    "job": "miller",
+                    "career_fitness_score": 0.99,
+                }
+            ),
+        ),
+    )
+    con.execute(
+        "update simulation_people set person_json = ? where person_id = 2",
+        (
+            json.dumps(
+                {
+                    "first_name": "Bea",
+                    "last_name": "Forge",
+                    "birthyear": 8,
+                    "birthplace_region_id": "boreas_peat_river",
+                    "birthplace_settlement_id": "boreas_peat_river:s11",
+                    "current_settlement_id": "boreas_peat_river:s11",
+                    "job": "guard",
+                    "career_fitness_score": 0.5,
+                }
+            ),
+        ),
+    )
+    return con
+
+
 def _event_row(con: sqlite3.Connection, event_type: str, payload: dict[str, object]) -> sqlite3.Row:
     return con.execute(
         "select ? as sim_year, ? as event_type, ? as payload_json",
@@ -134,6 +359,14 @@ def _person_sort_row(con: sqlite3.Connection, person_id: int, traits: dict[str, 
 
 
 class GradioDataBrowserEventTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        while _OPEN_TEST_CONNECTIONS:
+            con = _OPEN_TEST_CONNECTIONS.pop()
+            try:
+                con.close()
+            except sqlite3.ProgrammingError:
+                pass
+
     def test_job_event_fitness_uses_event_payload_not_current_person_score(self) -> None:
         con = _memory_save()
         event = _event_row(
@@ -219,7 +452,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("job fit 0.42", html)
 
     def test_people_browser_can_sort_by_legacy_score_columns(self) -> None:
-        con = sqlite3.connect(":memory:")
+        con = _test_connect(":memory:")
         con.row_factory = sqlite3.Row
         low_beauty = _person_sort_row(
             con,
@@ -239,6 +472,26 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         )
 
         self.assertEqual([int(row["person_id"]) for row in rows], [2, 1])
+
+    def test_person_from_row_expands_compact_trait_arrays(self) -> None:
+        con = _test_connect(":memory:")
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "select 1 as person_id, ? as person_json",
+            (
+                json.dumps(
+                    {
+                        "g": [0.0, -80.0],
+                        "mb": [5.0, -75.0],
+                    }
+                ),
+            ),
+        ).fetchone()
+
+        person = _person_from_row(row, ("focus", "courage"))
+
+        self.assertEqual(person["genome"], {"focus": 0.0, "courage": -80.0})
+        self.assertEqual(person["mind_body"], {"focus": 5.0, "courage": -75.0})
 
     def test_couple_formed_shows_rare_kinship_exception(self) -> None:
         con = _memory_save()
@@ -360,6 +613,356 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         )
 
         self.assertEqual(shown, "-4.0")
+
+    def test_region_sheet_summarizes_settlements_jobs_and_map(self) -> None:
+        con = _memory_place_save()
+
+        html = _render_region_sheet(con, "test", "r1")
+
+        self.assertIn("River Country", html)
+        self.assertIn("Fordham", html)
+        self.assertIn("miller: 1", html)
+        self.assertIn("<svg", html)
+
+    def test_places_browser_batches_counts_and_filters_saved_world(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _test_connect(path)
+            con.row_factory = sqlite3.Row
+            con.execute(
+                """
+                create table simulation_people (
+                    person_id integer,
+                    world text,
+                    is_alive integer,
+                    birthplace_region_id text,
+                    current_settlement_id text,
+                    job text,
+                    person_json text
+                )
+                """
+            )
+            con.execute(
+                """
+                create table simulation_regions (
+                    world text,
+                    region_id text,
+                    region_display_name text,
+                    total_population_cap integer,
+                    total_household_cap integer,
+                    food_pressure real,
+                    stability real,
+                    market_pull real,
+                    prosperity_pool real,
+                    treasury_balance real
+                )
+                """
+            )
+            con.execute(
+                """
+                create table simulation_settlements (
+                    world text,
+                    settlement_id text,
+                    region_id text,
+                    level text,
+                    population_cap integer,
+                    household_cap integer,
+                    food_pressure real,
+                    stability real,
+                    market_pull real,
+                    display_name text,
+                    etymology text,
+                    name_category_primary text,
+                    name_category_secondary text,
+                    name_culture_primary text,
+                    name_culture_secondary text,
+                    local_geography_json text,
+                    founded_sim_year integer,
+                    abandoned_sim_year integer,
+                    status text,
+                    consecutive_empty_years integer,
+                    site_slot integer,
+                    prosperity_pool real
+                )
+                """
+            )
+            con.executemany(
+                """
+                insert into simulation_regions values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("default", "r1", "River Country", 20, 5, 0.2, 0.7, 0.1, 1.0, 3.0),
+                    ("other", "r2", "Other Country", 99, 9, 0.8, 0.1, 0.2, 2.0, 5.0),
+                ],
+            )
+            con.executemany(
+                """
+                insert into simulation_settlements values (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                [
+                    (
+                        "default",
+                        "r1:s1",
+                        "r1",
+                        "hamlet",
+                        20,
+                        5,
+                        0.2,
+                        0.7,
+                        0.1,
+                        "Fordham",
+                        "",
+                        "",
+                        None,
+                        "",
+                        None,
+                        "{}",
+                        1,
+                        None,
+                        "active",
+                        0,
+                        1,
+                        1.0,
+                    ),
+                    (
+                        "other",
+                        "r2:s1",
+                        "r2",
+                        "city",
+                        99,
+                        9,
+                        0.8,
+                        0.1,
+                        0.2,
+                        "Otherham",
+                        "",
+                        "",
+                        None,
+                        "",
+                        None,
+                        "{}",
+                        1,
+                        None,
+                        "active",
+                        0,
+                        1,
+                        1.0,
+                    ),
+                ],
+            )
+            con.executemany(
+                """
+                insert into simulation_people values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (1, "default", 1, "r1", "r1:s1", "miller", "{}"),
+                    (2, "default", 1, "r1", "r1:s1", "guard", "{}"),
+                    (3, "other", 1, "r2", "r2:s1", "scribe", "{}"),
+                    (4, "default", 0, "r1", "r1:s1", "miller", "{}"),
+                ],
+            )
+            con.commit()
+            con.close()
+
+            original_db_path = gdb._db_path
+            gdb._db_path = lambda world, db_kind: path
+            try:
+                region_rows, _, _, _, _ = gdb._places_browser_data("default", "Regions", "", 50)
+                town_rows, _, _, _, _ = gdb._places_browser_data("default", "Towns", "", 50)
+            finally:
+                gdb._db_path = original_db_path
+
+        self.assertEqual([row["Name"] for row in region_rows], ["River Country"])
+        self.assertEqual(region_rows[0]["Alive"], 2)
+        self.assertEqual(region_rows[0]["Settlements"], 1)
+        self.assertIn("guard (1)", region_rows[0]["Top Jobs"])
+        self.assertEqual([row["Name"] for row in town_rows], ["Fordham"])
+        self.assertEqual(town_rows[0]["Alive"], 2)
+        self.assertIn("miller (1)", town_rows[0]["Top Jobs"])
+
+    def test_world_map_html_renders_generated_svg(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            world_dir = root / "default"
+            world_dir.mkdir()
+            load_all_csvs_into_sqlite(world_dir / "config.sqlite")
+            old_worlds_dir = gdb.WORLDS_DIR
+            gdb.WORLDS_DIR = root
+            try:
+                shown = render_world_map_html("default", include_overlays=False)
+            finally:
+                gdb.WORLDS_DIR = old_worlds_dir
+
+        self.assertIn("Generated polygon geography", shown)
+        self.assertIn("<svg", shown)
+        self.assertIn('class="cell terrain-', shown)
+        self.assertIn('onclick="', shown)
+        self.assertIn("map-open-selection", shown)
+
+    def test_world_map_selection_opens_existing_region_or_town_sheet(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            gdb._db_path = lambda world, db_kind: path
+            try:
+                region_html = render_world_map_selection_detail("test", json.dumps({"view": "Regions", "id": "r1"}))
+                town_html = render_world_map_selection_detail("test", json.dumps({"view": "Towns", "id": "r1:s1"}))
+            finally:
+                gdb._db_path = original_db_path
+
+        self.assertIn("River Country", region_html)
+        self.assertIn("Fordham", town_html)
+
+    def test_place_row_selection_uses_loaded_json_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            gdb._db_path = lambda world, db_kind: path
+            try:
+                _, _, state, _ = gdb.load_regions_browser_with_detail_reset("test", "", 50)
+            finally:
+                gdb._db_path = original_db_path
+
+            gdb._db_path = lambda world, db_kind: Path(tmp) / "missing.sqlite"
+            try:
+                html = gdb.select_region_from_table(state, "test", types.SimpleNamespace(index=0))
+            finally:
+                gdb._db_path = original_db_path
+
+        self.assertIn("River Country", html)
+        self.assertIn("Fordham", html)
+
+    def test_town_sheet_summarizes_residents_jobs_and_name_origin(self) -> None:
+        con = _memory_place_save()
+
+        html = _render_town_sheet(con, "test", "r1:s1")
+
+        self.assertIn("Fordham", html)
+        self.assertIn("Ford · home", html)
+        self.assertIn("miller: 1", html)
+        self.assertIn("Ada Forge", html)
+
+    def test_town_sheet_supports_legacy_json_person_rows(self) -> None:
+        con = _memory_legacy_place_save()
+
+        html = _render_town_sheet(con, "test", "boreas_peat_river:s11")
+
+        self.assertIn("Nycholinnis", html)
+        self.assertIn("miller: 1", html)
+        self.assertIn("Ada Forge", html)
+
+    def test_missing_town_detail_explains_stale_current_save_row(self) -> None:
+        con = _memory_place_save()
+
+        html = _render_town_sheet(con, "test", "boreas_clear_river:s26")
+
+        self.assertIn("is no longer in the current save", html)
+        self.assertNotIn("No town named", html)
+
+    def test_encoded_place_key_uses_row_source_world(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            wrong_path = root / "wrong.sqlite"
+            right_path = root / "right.sqlite"
+
+            wrong = _memory_place_save()
+            right = _memory_place_save()
+            right.execute(
+                """
+                update simulation_regions
+                set region_id = 'boreas_fjord_shore',
+                    region_display_name = 'Boreas Fjord Shore'
+                where region_id = 'r1'
+                """
+            )
+            right.execute(
+                "update simulation_settlements set region_id = 'boreas_fjord_shore' where region_id = 'r1'"
+            )
+            wrong.commit()
+            right.commit()
+            with closing(sqlite3.connect(wrong_path)) as out:
+                wrong.backup(out)
+            with closing(sqlite3.connect(right_path)) as out:
+                right.backup(out)
+            wrong.close()
+            right.close()
+
+            original_db_path = gdb._db_path
+            gdb._db_path = lambda world, db_kind: right_path if world == "right_world" else wrong_path
+            try:
+                key = gdb._encode_place_key("right_world", "test", "boreas_fjord_shore")
+                html = gdb.render_place_detail("wrong_world", "Regions", key)
+            finally:
+                gdb._db_path = original_db_path
+
+        self.assertIn("Boreas Fjord Shore", html)
+        self.assertNotIn("No region named", html)
+
+    def test_polities_browser_handles_empty_result_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _test_connect(path)
+            con.execute(
+                """
+                create table simulation_polities (
+                    polity_id integer primary key,
+                    polity_type_id text,
+                    parent_polity_id integer,
+                    name text,
+                    capital_settlement_id text,
+                    founded_sim_year integer,
+                    status text
+                )
+                """
+            )
+            con.commit()
+            con.close()
+
+            original_db_path = gdb._db_path
+            gdb._db_path = lambda world, db_kind: path
+            try:
+                _, status, keys = load_places_browser("test", "Polities", "", 50)
+            finally:
+                gdb._db_path = original_db_path
+
+        self.assertEqual(keys, [])
+        self.assertIn("showing 0 polities", status)
+
+    def test_empty_polity_detail_explains_current_save_has_none(self) -> None:
+        con = _test_connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.execute(
+            """
+            create table simulation_polities (
+                polity_id integer primary key,
+                polity_type_id text,
+                parent_polity_id integer,
+                name text,
+                capital_settlement_id text,
+                founded_sim_year integer,
+                status text
+            )
+            """
+        )
+
+        html = _render_polity_sheet(con, "test", "1")
+
+        self.assertIn("No polities are recorded", html)
+        self.assertNotIn("No polity #1", html)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,252 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-label="Generated world map">
+<style>
+.cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2f82ad;stroke-linecap:round;stroke-linejoin:round}.settlement{stroke:#f3ead4;stroke-width:1.4}.settlement.abandoned{opacity:.35}.feature-label,.region-label,.settlement-label{font-family:Georgia,serif;paint-order:stroke;stroke:#f3ead4;stroke-width:3px;stroke-linejoin:round}.feature-label{font-size:9px;fill:#3d3427}.region-label{font-size:11px;fill:#2f281f;font-weight:600}.settlement-label{font-size:10px;fill:#2c2118}
+</style>
+<rect width="100%" height="100%" fill="#efe3c5" />
+<path class="cell terrain-riverland" data-region-id="aeria_eastwater_river" d="M 316.5 299.9 L 304.1 272.4 L 291.1 245.3 L 276.6 219.0 L 261.1 193.2 L 261.3 192.8 L 261.5 192.5 L 261.7 192.1 L 261.9 191.8 L 307.5 182.0 L 353.8 175.5 L 400.4 172.9 L 447.0 169.8 L 453.8 202.2 L 461.0 234.4 L 468.0 266.7 L 474.9 299.1 L 435.2 298.3 L 395.7 295.3 L 356.2 299.4 Z" fill="#c3d3a0" opacity="0.82" />
+<path class="cell terrain-highlands" data-region-id="aeria_granite_range" d="M 225.6 136.3 L 189.4 135.6 L 153.3 136.3 L 117.2 137.3 L 81.1 136.3 L 81.7 118.4 L 83.7 100.7 L 83.2 82.8 L 81.1 65.1 L 122.6 63.2 L 164.1 61.0 L 205.6 63.5 L 247.1 65.1 L 241.8 82.9 L 235.3 100.4 L 230.5 118.3 Z" fill="#b9ad9a" opacity="0.82" />
+<path class="cell terrain-riverland" data-region-id="aeria_midland_basin" d="M 81.1 260.5 L 126.2 243.8 L 172.3 229.9 L 216.0 209.8 L 261.1 193.2 L 274.2 220.3 L 289.1 246.3 L 303.7 272.7 L 316.5 299.9 L 292.7 321.2 L 268.8 342.6 L 245.1 364.0 L 221.3 385.4 L 186.3 383.7 L 151.2 380.8 L 116.3 384.4 L 81.1 385.4 L 82.1 354.2 L 82.2 323.0 L 80.5 291.7 Z" fill="#c3d3a0" opacity="0.82" />
+<path class="cell terrain-coast" data-region-id="aeria_north" d="M 474.9 299.1 L 468.7 266.6 L 462.9 234.0 L 454.9 201.9 L 447.0 169.8 L 449.3 168.1 L 451.7 166.6 L 453.9 164.7 L 456.2 163.0 L 486.5 162.4 L 516.8 160.8 L 547.1 161.5 L 577.4 163.0 L 575.2 209.2 L 572.2 255.3 L 572.9 301.6 L 577.4 347.7 L 551.0 337.2 L 525.5 324.8 L 499.6 313.1 Z" fill="#d6c08d" opacity="0.82" />
+<path class="cell terrain-coast" data-region-id="aeria_port" d="M 456.2 163.0 L 450.8 138.4 L 445.9 113.7 L 438.8 89.5 L 432.6 65.1 L 468.7 62.5 L 505.0 61.9 L 541.2 65.0 L 577.4 65.1 L 578.0 89.6 L 578.2 114.0 L 578.6 138.5 L 577.4 163.0 L 547.1 164.2 L 516.8 167.5 L 486.5 165.7 Z" fill="#d6c08d" opacity="0.82" />
+<path class="cell terrain-highlands" data-region-id="aeria_slate_range" d="M 81.1 260.5 L 78.7 229.5 L 78.8 198.4 L 78.7 167.3 L 81.1 136.3 L 117.2 137.2 L 153.3 138.9 L 189.5 137.9 L 225.6 136.3 L 234.6 150.2 L 244.1 163.8 L 252.4 178.1 L 261.9 191.8 L 261.7 192.1 L 261.5 192.5 L 261.3 192.8 L 261.1 193.2 L 216.4 210.8 L 172.3 230.0 L 127.0 246.1 Z" fill="#b9ad9a" opacity="0.82" />
+<path class="cell terrain-plains" data-region-id="aeria_south" d="M 456.2 163.0 L 454.0 164.8 L 451.8 166.7 L 449.3 168.1 L 447.0 169.8 L 400.5 172.9 L 354.0 177.2 L 307.9 184.3 L 261.9 191.8 L 253.0 177.7 L 245.1 163.1 L 235.1 149.8 L 225.6 136.3 L 231.5 118.7 L 237.0 100.9 L 241.9 82.9 L 247.1 65.1 L 293.5 62.6 L 339.8 63.7 L 386.2 63.6 L 432.6 65.1 L 438.6 89.6 L 442.6 114.5 L 449.1 138.8 Z" fill="#ccca98" opacity="0.82" />
+<path class="cell terrain-riverland" data-region-id="aeria_westwater_river" d="M 316.5 299.9 L 356.1 297.7 L 395.7 297.3 L 435.3 297.0 L 474.9 299.1 L 501.2 309.6 L 526.9 321.8 L 552.5 334.0 L 577.4 347.7 L 576.9 357.1 L 577.1 366.6 L 577.0 376.0 L 577.4 385.4 L 488.4 384.6 L 399.4 383.5 L 310.4 387.5 L 221.3 385.4 L 246.3 365.3 L 271.7 345.8 L 294.1 322.8 Z" fill="#c3d3a0" opacity="0.82" />
+<path class="cell terrain-forest" data-region-id="boreas_boreal_deep" d="M 801.5 269.7 L 756.9 273.5 L 712.0 273.2 L 667.3 272.7 L 622.6 269.7 L 623.2 241.7 L 623.5 213.7 L 621.8 185.7 L 622.6 157.7 L 652.5 156.5 L 682.5 156.2 L 712.4 155.7 L 742.4 157.7 L 769.2 174.7 L 797.1 190.0 L 826.5 202.2 L 855.9 214.3 L 858.8 217.6 L 861.6 220.9 L 864.4 224.2 L 867.4 227.4 L 851.5 238.9 L 835.5 250.1 L 819.0 260.7 Z" fill="#94b37d" opacity="0.82" />
+<path class="cell terrain-riverland" data-region-id="boreas_clear_river" d="M 880.4 229.5 L 877.1 229.2 L 873.9 228.7 L 870.7 228.0 L 867.4 227.4 L 864.4 224.2 L 861.7 220.8 L 858.7 217.6 L 855.9 214.3 L 870.6 177.5 L 886.3 141.1 L 895.8 102.6 L 908.7 65.1 L 933.2 66.2 L 957.8 66.2 L 982.4 66.3 L 1007.0 65.1 L 1018.4 92.3 L 1030.6 119.2 L 1042.8 146.1 L 1057.3 171.9 L 1012.2 183.5 L 967.3 196.0 L 923.7 212.5 Z" fill="#c3d3a0" opacity="0.82" />
+<path class="cell terrain-highlands" data-region-id="boreas_east" d="M 1057.3 171.9 L 1044.0 145.5 L 1031.1 119.0 L 1019.2 92.0 L 1007.0 65.1 L 1034.9 67.4 L 1062.9 69.0 L 1090.9 67.2 L 1118.9 65.1 L 1119.6 91.8 L 1120.9 118.5 L 1120.0 145.2 L 1118.9 171.9 L 1103.5 172.6 L 1088.1 173.5 L 1072.7 172.8 Z" fill="#b9ad9a" opacity="0.82" />
+<path class="cell terrain-coast" data-region-id="boreas_fjord_shore" d="M 622.6 269.7 L 667.3 269.1 L 712.0 270.5 L 756.8 268.7 L 801.5 269.7 L 786.8 298.8 L 773.9 328.8 L 758.4 357.6 L 741.4 385.4 L 711.7 383.1 L 682.0 383.5 L 652.2 383.4 L 622.6 385.4 L 625.2 356.6 L 625.9 327.6 L 624.8 298.6 Z" fill="#d6c08d" opacity="0.82" />
+<path class="cell terrain-highlands" data-region-id="boreas_glacier_alps" d="M 970.4 302.8 L 1007.6 301.7 L 1044.7 303.0 L 1081.8 305.1 L 1118.9 307.9 L 1117.7 327.3 L 1116.2 346.7 L 1117.2 366.1 L 1118.9 385.4 L 1081.8 387.0 L 1044.7 386.1 L 1007.5 386.7 L 970.4 385.4 L 971.7 364.8 L 972.1 344.1 L 971.2 323.5 Z" fill="#b9ad9a" opacity="0.82" />
+<path class="cell terrain-riverland" data-region-id="boreas_peat_river" d="M 742.4 157.7 L 712.4 159.4 L 682.5 160.5 L 652.5 159.5 L 622.6 157.7 L 623.6 134.5 L 622.5 111.4 L 621.8 88.3 L 622.6 65.1 L 652.5 64.9 L 682.5 62.8 L 712.4 63.5 L 742.4 65.1 L 741.4 88.3 L 739.8 111.4 L 742.0 134.5 Z" fill="#c3d3a0" opacity="0.82" />
+<path class="cell terrain-coast" data-region-id="boreas_port" d="M 855.9 214.3 L 826.0 203.4 L 797.0 190.2 L 769.7 173.9 L 742.4 157.7 L 743.3 134.5 L 742.2 111.4 L 742.2 88.3 L 742.4 65.1 L 784.0 66.3 L 825.5 64.3 L 867.1 66.6 L 908.7 65.1 L 896.4 102.7 L 883.8 140.2 L 871.1 177.7 Z" fill="#d6c08d" opacity="0.82" />
+<path class="cell terrain-highlands" data-region-id="boreas_quartz_range" d="M 970.4 302.8 L 947.2 285.3 L 925.6 266.0 L 903.4 247.3 L 880.4 229.5 L 924.6 214.8 L 969.7 203.4 L 1013.2 186.7 L 1057.3 171.9 L 1072.7 172.8 L 1088.1 174.2 L 1103.4 172.3 L 1118.9 171.9 L 1119.5 206.0 L 1122.6 239.9 L 1119.6 273.9 L 1118.9 307.9 L 1081.7 305.9 L 1044.8 301.6 L 1007.6 301.3 Z" fill="#b9ad9a" opacity="0.82" />
+<path class="cell terrain-forest" data-region-id="boreas_west" d="M 801.5 269.7 L 818.0 259.0 L 834.8 249.0 L 850.9 237.8 L 867.4 227.4 L 870.7 227.6 L 874.0 228.0 L 877.2 228.8 L 880.4 229.5 L 902.1 248.8 L 925.0 266.6 L 946.9 285.7 L 970.4 302.8 L 971.1 323.5 L 973.3 344.1 L 971.6 364.8 L 970.4 385.4 L 913.2 383.2 L 855.9 381.7 L 798.7 384.8 L 741.4 385.4 L 755.9 356.2 L 768.1 325.8 L 785.2 298.0 Z" fill="#94b37d" opacity="0.82" />
+<path class="cell terrain-coast" data-region-id="cyrene_delta_mouth" d="M 81.1 658.0 L 114.6 660.3 L 148.2 660.1 L 181.8 659.3 L 215.3 658.0 L 218.7 660.1 L 222.1 662.2 L 225.1 664.8 L 228.2 667.3 L 227.8 684.2 L 227.7 701.1 L 228.4 718.0 L 228.2 734.9 L 191.4 737.0 L 154.7 740.2 L 118.0 736.1 L 81.1 734.9 L 81.8 715.7 L 82.2 696.4 L 81.7 677.2 Z" fill="#d6c08d" opacity="0.82" />
+<path class="cell terrain-riverland" data-region-id="cyrene_grand_channel" d="M 140.8 526.6 L 158.3 533.6 L 175.8 540.3 L 193.4 546.8 L 210.9 553.5 L 213.3 579.5 L 214.9 605.7 L 214.7 631.8 L 215.3 658.0 L 181.7 658.0 L 148.2 656.0 L 114.7 656.8 L 81.1 658.0 L 78.7 625.1 L 76.9 592.3 L 78.6 559.4 L 81.1 526.6 L 96.1 526.7 L 111.0 527.7 L 125.9 527.1 Z" fill="#c3d3a0" opacity="0.82" />
+<path class="cell terrain-highlands" data-region-id="cyrene_inland" d="M 422.9 644.2 L 422.7 621.4 L 422.9 598.5 L 421.5 575.8 L 420.0 553.0 L 435.4 545.9 L 450.2 537.8 L 464.7 529.2 L 479.0 520.3 L 503.7 519.1 L 528.2 516.9 L 552.9 517.7 L 577.4 520.3 L 577.8 574.0 L 576.3 627.6 L 578.5 681.2 L 577.4 734.9 L 568.1 735.6 L 558.8 735.8 L 549.5 735.2 L 540.2 734.9 L 510.3 712.9 L 482.5 688.3 L 452.8 666.1 Z" fill="#b9ad9a" opacity="0.82" />
+<path class="cell terrain-coast" data-region-id="cyrene_leeward_littoral" d="M 228.2 667.3 L 225.1 664.9 L 221.7 662.7 L 218.5 660.3 L 215.3 658.0 L 213.9 631.8 L 210.9 605.8 L 209.9 579.7 L 210.9 553.5 L 235.8 549.2 L 260.4 543.3 L 284.9 537.0 L 309.8 532.3 L 336.7 540.4 L 364.3 546.0 L 392.2 548.8 L 420.0 553.0 L 420.0 575.8 L 420.0 598.6 L 421.5 621.4 L 422.9 644.2 L 374.0 647.6 L 325.1 652.3 L 276.9 661.0 Z" fill="#d6c08d" opacity="0.82" />
+<path class="cell terrain-coast" data-region-id="cyrene_port" d="M 140.8 526.6 L 125.9 525.8 L 111.0 525.7 L 96.1 526.8 L 81.1 526.6 L 83.0 498.6 L 82.4 470.6 L 82.4 442.5 L 81.1 414.6 L 113.2 412.2 L 145.4 410.6 L 177.5 411.5 L 209.6 414.6 L 193.3 443.1 L 177.8 472.2 L 158.6 498.8 Z" fill="#d6c08d" opacity="0.82" />
+<path class="cell terrain-highlands" data-region-id="cyrene_rift_highlands" d="M 479.0 520.3 L 466.4 494.5 L 455.4 467.9 L 445.5 440.9 L 434.0 414.6 L 469.9 415.0 L 505.7 418.6 L 541.5 415.2 L 577.4 414.6 L 578.6 441.0 L 579.9 467.4 L 578.7 493.9 L 577.4 520.3 L 552.9 517.9 L 528.2 517.0 L 503.6 517.7 Z" fill="#b9ad9a" opacity="0.82" />
+<path class="cell terrain-riverland" data-region-id="cyrene_river" d="M 228.2 667.3 L 276.4 658.3 L 325.1 651.9 L 374.1 649.0 L 422.9 644.2 L 452.8 666.1 L 481.6 689.4 L 510.7 712.3 L 540.2 734.9 L 462.2 734.1 L 384.2 732.8 L 306.2 731.2 L 228.2 734.9 L 226.6 718.0 L 225.9 701.1 L 227.1 684.2 Z" fill="#c3d3a0" opacity="0.82" />
+<path class="cell terrain-highlands" data-region-id="cyrene_salt_steppe" d="M 309.8 532.3 L 285.2 538.2 L 260.5 543.7 L 235.7 548.6 L 210.9 553.5 L 193.2 547.3 L 176.0 539.7 L 158.7 532.4 L 140.8 526.6 L 160.8 500.3 L 179.3 473.0 L 193.7 443.4 L 209.6 414.6 L 231.1 412.4 L 252.6 412.2 L 274.2 412.8 L 295.6 414.6 L 302.0 443.6 L 306.8 473.0 L 308.4 502.6 Z" fill="#b9ad9a" opacity="0.82" />
+<path class="cell terrain-riverland" data-region-id="cyrene_white_fork" d="M 479.0 520.3 L 464.6 529.1 L 450.4 538.2 L 435.4 546.0 L 420.0 553.0 L 392.1 550.2 L 364.3 545.9 L 337.1 538.7 L 309.8 532.3 L 305.1 503.0 L 299.4 473.8 L 296.4 444.3 L 295.6 414.6 L 330.2 416.1 L 364.8 414.5 L 399.4 413.3 L 434.0 414.6 L 443.3 441.8 L 453.8 468.6 L 465.6 494.8 Z" fill="#c3d3a0" opacity="0.82" />
+<path class="route land_route" data-from="aeria_eastwater_river" data-to="aeria_midland_basin" d="M 383.2 239.2 L 206.7 277.4" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_eastwater_river" data-to="aeria_port" d="M 383.2 239.2 L 537.7 100.6" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_eastwater_river" data-to="aeria_slate_range" d="M 383.2 239.2 L 120.8 181.8" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_eastwater_river" data-to="aeria_south" d="M 383.2 239.2 L 349.1 119.6" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_granite_range" data-to="aeria_midland_basin" d="M 120.8 90.7 L 206.7 277.4" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_granite_range" data-to="aeria_north" d="M 120.8 90.7 L 537.7 225.3" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_granite_range" data-to="aeria_slate_range" d="M 120.8 90.7 L 120.8 181.8" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="aeria_midland_basin" data-to="aeria_port" d="M 206.7 277.4 L 537.7 100.6" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_midland_basin" data-to="aeria_westwater_river" d="M 206.7 277.4 L 384.7 359.8" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_north" data-to="aeria_port" d="M 537.7 225.3 L 537.7 100.6" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="aeria_north" data-to="aeria_westwater_river" d="M 537.7 225.3 L 384.7 359.8" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_port" data-to="aeria_south" d="M 537.7 100.6 L 349.1 119.6" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route sea_route" data-from="aeria_port" data-to="boreas_port" d="M 537.7 100.6 L 822.5 90.7" fill="none" stroke-width="0.65" opacity="0.28" />
+<path class="route land_route" data-from="aeria_slate_range" data-to="aeria_south" d="M 120.8 181.8 L 349.1 119.6" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="aeria_south" data-to="aeria_westwater_river" d="M 349.1 119.6 L 384.7 359.8" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="boreas_boreal_deep" data-to="boreas_peat_river" d="M 662.3 224.6 L 662.3 90.7" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="boreas_boreal_deep" data-to="boreas_west" d="M 662.3 224.6 L 870.6 359.8" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="boreas_clear_river" data-to="boreas_east" d="M 969.1 112.3 L 1079.2 90.7" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="boreas_clear_river" data-to="boreas_peat_river" d="M 969.1 112.3 L 662.3 90.7" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="boreas_clear_river" data-to="boreas_port" d="M 969.1 112.3 L 822.5 90.7" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="boreas_clear_river" data-to="boreas_quartz_range" d="M 969.1 112.3 L 1079.2 253.0" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="boreas_east" data-to="boreas_port" d="M 1079.2 90.7 L 822.5 90.7" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="boreas_east" data-to="boreas_quartz_range" d="M 1079.2 90.7 L 1079.2 253.0" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="boreas_fjord_shore" data-to="boreas_glacier_alps" d="M 662.3 314.7 L 1070.3 359.8" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="boreas_fjord_shore" data-to="boreas_peat_river" d="M 662.3 314.7 L 662.3 90.7" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="boreas_fjord_shore" data-to="boreas_port" d="M 662.3 314.7 L 822.5 90.7" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="boreas_glacier_alps" data-to="boreas_quartz_range" d="M 1070.3 359.8 L 1079.2 253.0" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="boreas_glacier_alps" data-to="boreas_west" d="M 1070.3 359.8 L 870.6 359.8" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route sea_route" data-from="boreas_port" data-to="cyrene_port" d="M 822.5 90.7 L 120.8 446.5" fill="none" stroke-width="0.65" opacity="0.28" />
+<path class="route land_route" data-from="boreas_quartz_range" data-to="boreas_west" d="M 1079.2 253.0 L 870.6 359.8" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_delta_mouth" data-to="cyrene_grand_channel" d="M 120.8 709.3 L 120.8 606.7" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_delta_mouth" data-to="cyrene_leeward_littoral" d="M 120.8 709.3 L 305.4 603.4" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_delta_mouth" data-to="cyrene_port" d="M 120.8 709.3 L 120.8 446.5" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_delta_mouth" data-to="cyrene_river" d="M 120.8 709.3 L 335.6 709.3" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_grand_channel" data-to="cyrene_leeward_littoral" d="M 120.8 606.7 L 305.4 603.4" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_grand_channel" data-to="cyrene_port" d="M 120.8 606.7 L 120.8 446.5" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_grand_channel" data-to="cyrene_river" d="M 120.8 606.7 L 335.6 709.3" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_grand_channel" data-to="cyrene_white_fork" d="M 120.8 606.7 L 365.1 470.8" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_inland" data-to="cyrene_rift_highlands" d="M 537.7 600.4 L 537.7 440.2" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_inland" data-to="cyrene_salt_steppe" d="M 537.7 600.4 L 240.4 477.0" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_leeward_littoral" data-to="cyrene_port" d="M 305.4 603.4 L 120.8 446.5" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_rift_highlands" data-to="cyrene_salt_steppe" d="M 537.7 440.2 L 240.4 477.0" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_rift_highlands" data-to="cyrene_white_fork" d="M 537.7 440.2 L 365.1 470.8" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_river" data-to="cyrene_white_fork" d="M 335.6 709.3 L 365.1 470.8" fill="none" stroke-width="1.54" opacity="0.28" />
+<path class="route land_route" data-from="cyrene_salt_steppe" data-to="cyrene_white_fork" d="M 240.4 477.0 L 365.1 470.8" fill="none" stroke-width="1.34" opacity="0.28" />
+<path class="river major_river" data-river-id="aeria_eastwater_river:to:aeria_westwater_river" d="M 352.3 230.7 L 392.9 287.1 L 433.5 343.5" fill="none" stroke-width="3.17" opacity="0.82" />
+<path class="river minor_river" data-river-id="aeria_granite_range:to:aeria_slate_range" d="M 158.7 100.7 L 170.4 142.1 L 182.2 183.6" fill="none" stroke-width="2.39" opacity="0.82" />
+<path class="river minor_river" data-river-id="aeria_midland_basin:to:aeria_north" d="M 192.2 304.9 L 349.4 266.7 L 506.6 228.5" fill="none" stroke-width="2.39" opacity="0.82" />
+<path class="river major_river" data-river-id="aeria_north:to:aeria_eastwater_river" d="M 506.6 228.5 L 429.4 229.6 L 352.3 230.7" fill="none" stroke-width="2.78" opacity="0.82" />
+<path class="river minor_river" data-river-id="aeria_slate_range:to:aeria_south" d="M 182.2 183.6 L 263.6 157.7 L 345.1 131.8" fill="none" stroke-width="2.57" opacity="0.82" />
+<path class="river minor_river" data-river-id="aeria_south:to:aeria_midland_basin" d="M 345.1 131.8 L 268.7 218.4 L 192.2 304.9" fill="none" stroke-width="2.57" opacity="0.82" />
+<path class="river major_river" data-river-id="aeria_westwater_river:to:aeria_port" d="M 433.5 343.5 L 472.2 228.8 L 510.9 114.0" fill="none" stroke-width="3.19" opacity="0.82" />
+<path class="river minor_river" data-river-id="boreas_boreal_deep:to:boreas_west" d="M 752.1 216.1 L 812.0 258.0 L 871.9 300.0" fill="none" stroke-width="2.28" opacity="0.82" />
+<path class="river major_river" data-river-id="boreas_clear_river:to:boreas_peat_river" d="M 929.4 162.2 L 806.0 136.8 L 682.5 111.4" fill="none" stroke-width="2.98" opacity="0.82" />
+<path class="river minor_river" data-river-id="boreas_east:to:boreas_glacier_alps" d="M 1075.5 118.5 L 1060.1 232.0 L 1044.7 345.4" fill="none" stroke-width="2.20" opacity="0.82" />
+<path class="river major_river" data-river-id="boreas_fjord_shore:to:boreas_port" d="M 697.0 327.6 L 754.7 226.5 L 812.3 125.5" fill="none" stroke-width="3.12" opacity="0.82" />
+<path class="river minor_river" data-river-id="boreas_glacier_alps:to:boreas_quartz_range" d="M 1044.7 345.4 L 1036.9 291.1 L 1029.2 236.8" fill="none" stroke-width="2.20" opacity="0.82" />
+<path class="river major_river" data-river-id="boreas_peat_river:to:boreas_fjord_shore" d="M 682.5 111.4 L 689.7 219.5 L 697.0 327.6" fill="none" stroke-width="3.00" opacity="0.82" />
+<path class="river minor_river" data-river-id="boreas_quartz_range:to:boreas_boreal_deep" d="M 1029.2 236.8 L 890.6 226.4 L 752.1 216.1" fill="none" stroke-width="2.24" opacity="0.82" />
+<path class="river minor_river" data-river-id="boreas_west:to:boreas_clear_river" d="M 871.9 300.0 L 900.7 231.1 L 929.4 162.2" fill="none" stroke-width="2.63" opacity="0.82" />
+<path class="river minor_river" data-river-id="cyrene_delta_mouth:to:cyrene_leeward_littoral" d="M 166.8 690.6 L 234.0 646.0 L 301.2 601.4" fill="none" stroke-width="2.62" opacity="0.82" />
+<path class="river major_river" data-river-id="cyrene_grand_channel:to:cyrene_river" d="M 145.9 584.5 L 250.4 639.9 L 354.9 695.3" fill="none" stroke-width="3.40" opacity="0.82" />
+<path class="river minor_river" data-river-id="cyrene_leeward_littoral:to:cyrene_port" d="M 301.2 601.4 L 214.7 536.0 L 128.2 470.6" fill="none" stroke-width="2.62" opacity="0.82" />
+<path class="river major_river" data-river-id="cyrene_river:to:cyrene_white_fork" d="M 354.9 695.3 L 371.3 591.1 L 387.7 487.0" fill="none" stroke-width="3.29" opacity="0.82" />
+<path class="river minor_river" data-river-id="cyrene_salt_steppe:to:cyrene_grand_channel" d="M 233.4 488.3 L 189.6 536.4 L 145.9 584.5" fill="none" stroke-width="2.31" opacity="0.82" />
+<path class="river major_river" data-river-id="cyrene_white_fork:to:cyrene_delta_mouth" d="M 387.7 487.0 L 277.2 588.8 L 166.8 690.6" fill="none" stroke-width="3.10" opacity="0.82" />
+<circle class="feature water" data-feature-id="aeria_eastwater_river:wf0" cx="343.9" cy="276.1" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<text class="feature-label" x="348.9" y="272.1">River</text>
+<circle class="feature relief" data-feature-id="aeria_granite_range:wf0" cx="134.2" cy="123.8" r="3.3" fill="#7b6757" opacity="0.9" />
+<text class="feature-label" x="139.2" y="119.8">Ridge</text>
+<circle class="feature water" data-feature-id="aeria_midland_basin:wf0" cx="213.1" cy="248.4" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<text class="feature-label" x="218.1" y="244.4">River</text>
+<circle class="feature coast" data-feature-id="aeria_north:wf0" cx="491.4" cy="269.1" r="3.7" fill="#4f83a2" opacity="0.9" />
+<text class="feature-label" x="496.4" y="265.1">Coast</text>
+<circle class="feature coast" data-feature-id="aeria_port:wf0" cx="467.6" cy="136.6" r="3.7" fill="#4f83a2" opacity="0.9" />
+<text class="feature-label" x="472.6" y="132.6">Coast</text>
+<circle class="feature relief" data-feature-id="aeria_slate_range:wf0" cx="120.8" cy="153.7" r="3.3" fill="#7b6757" opacity="0.9" />
+<text class="feature-label" x="125.8" y="149.7">Ridge</text>
+<circle class="feature settlement_support" data-feature-id="aeria_south:wf0" cx="319.6" cy="96.2" r="2.8" fill="#8b6f3d" opacity="0.9" />
+<text class="feature-label" x="324.6" y="92.2">Meadow</text>
+<circle class="feature water" data-feature-id="aeria_westwater_river:wf0" cx="530.9" cy="367.2" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<text class="feature-label" x="535.9" y="363.2">River</text>
+<circle class="feature vegetation" data-feature-id="boreas_boreal_deep:wf0" cx="704.1" cy="191.0" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<text class="feature-label" x="709.1" y="187.0">Forest</text>
+<circle class="feature water" data-feature-id="boreas_clear_river:wf0" cx="886.5" cy="181.9" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<text class="feature-label" x="891.5" y="177.9">River</text>
+<circle class="feature relief" data-feature-id="boreas_east:wf0" cx="1060.5" cy="135.8" r="3.3" fill="#7b6757" opacity="0.9" />
+<text class="feature-label" x="1065.5" y="131.8">Ridge</text>
+<circle class="feature coast" data-feature-id="boreas_fjord_shore:wf0" cx="658.0" cy="297.7" r="3.7" fill="#4f83a2" opacity="0.9" />
+<text class="feature-label" x="663.0" y="293.7">Coast</text>
+<circle class="feature relief" data-feature-id="boreas_glacier_alps:wf0" cx="999.1" cy="327.0" r="3.3" fill="#7b6757" opacity="0.9" />
+<text class="feature-label" x="1004.1" y="323.0">Ridge</text>
+<circle class="feature water" data-feature-id="boreas_peat_river:wf0" cx="720.9" cy="88.6" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<text class="feature-label" x="725.9" y="84.6">River</text>
+<circle class="feature coast" data-feature-id="boreas_port:wf0" cx="843.7" cy="95.9" r="3.7" fill="#4f83a2" opacity="0.9" />
+<text class="feature-label" x="848.7" y="91.9">Coast</text>
+<circle class="feature relief" data-feature-id="boreas_quartz_range:wf0" cx="1075.8" cy="215.7" r="3.3" fill="#7b6757" opacity="0.9" />
+<text class="feature-label" x="1080.8" y="211.7">Ridge</text>
+<circle class="feature vegetation" data-feature-id="boreas_west:wf0" cx="820.8" cy="283.6" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<text class="feature-label" x="825.8" y="279.6">Forest</text>
+<circle class="feature coast" data-feature-id="cyrene_delta_mouth:wf0" cx="204.0" cy="681.0" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_grand_channel:wf0" cx="110.2" cy="572.0" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<text class="feature-label" x="115.2" y="568.0">River</text>
+<circle class="feature water" data-feature-id="cyrene_inland:wf0" cx="508.4" cy="578.6" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature coast" data-feature-id="cyrene_leeward_littoral:wf0" cx="333.2" cy="622.6" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature coast" data-feature-id="cyrene_port:wf0" cx="161.2" cy="448.6" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature relief" data-feature-id="cyrene_rift_highlands:wf0" cx="518.7" cy="482.2" r="3.3" fill="#7b6757" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_river:wf0" cx="327.4" cy="701.3" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_salt_steppe:wf0" cx="214.7" cy="464.9" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_white_fork:wf0" cx="406.5" cy="516.9" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="aeria_eastwater_river:wf1" cx="337.9" cy="260.1" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="aeria_granite_range:wf1" cx="183.9" cy="87.3" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="aeria_midland_basin:wf1" cx="132.6" cy="275.5" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature coast" data-feature-id="aeria_north:wf1" cx="498.9" cy="250.8" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature coast" data-feature-id="aeria_port:wf1" cx="549.7" cy="147.6" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature water" data-feature-id="aeria_slate_range:wf1" cx="219.8" cy="198.3" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature settlement_support" data-feature-id="aeria_south:wf1" cx="302.5" cy="95.0" r="2.8" fill="#8b6f3d" opacity="0.9" />
+<circle class="feature water" data-feature-id="aeria_westwater_river:wf1" cx="435.2" cy="316.1" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_boreal_deep:wf1" cx="744.1" cy="182.4" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_clear_river:wf1" cx="995.1" cy="158.6" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_east:wf1" cx="1083.9" cy="139.9" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature coast" data-feature-id="boreas_fjord_shore:wf1" cx="770.3" cy="292.3" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_glacier_alps:wf1" cx="1017.1" cy="353.6" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_peat_river:wf1" cx="649.8" cy="81.9" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature coast" data-feature-id="boreas_port:wf1" cx="820.7" cy="170.2" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_quartz_range:wf1" cx="1008.3" cy="281.0" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_west:wf1" cx="913.5" cy="296.3" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature coast" data-feature-id="cyrene_delta_mouth:wf1" cx="204.1" cy="677.0" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_grand_channel:wf1" cx="184.9" cy="564.1" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature settlement_support" data-feature-id="cyrene_inland:wf1" cx="467.6" cy="620.3" r="2.8" fill="#8b6f3d" opacity="0.9" />
+<circle class="feature coast" data-feature-id="cyrene_leeward_littoral:wf1" cx="258.5" cy="579.9" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature coast" data-feature-id="cyrene_port:wf1" cx="163.6" cy="455.4" r="3.7" fill="#4f83a2" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_rift_highlands:wf1" cx="456.4" cy="433.6" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_river:wf1" cx="262.6" cy="681.7" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature settlement_support" data-feature-id="cyrene_salt_steppe:wf1" cx="260.9" cy="453.9" r="2.8" fill="#8b6f3d" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_white_fork:wf1" cx="425.0" cy="500.1" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="aeria_eastwater_river:wf2" cx="410.9" cy="258.5" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="aeria_slate_range:wf2" cx="188.4" cy="152.1" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_boreal_deep:wf2" cx="760.5" cy="237.7" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_clear_river:wf2" cx="972.0" cy="166.9" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_east:wf2" cx="1085.1" cy="137.8" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_fjord_shore:wf2" cx="657.0" cy="308.5" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_glacier_alps:wf2" cx="1020.7" cy="361.5" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_peat_river:wf2" cx="650.2" cy="92.7" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_port:wf2" cx="872.7" cy="94.0" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_quartz_range:wf2" cx="945.0" cy="230.1" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_west:wf2" cx="924.7" cy="298.6" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_delta_mouth:wf2" cx="182.8" cy="699.3" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_leeward_littoral:wf2" cx="311.5" cy="560.8" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_rift_highlands:wf2" cx="473.6" cy="431.9" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_clear_river:wf3" cx="889.0" cy="180.0" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_east:wf3" cx="1066.3" cy="104.4" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_fjord_shore:wf3" cx="656.1" cy="357.0" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_glacier_alps:wf3" cx="1093.0" cy="323.0" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_peat_river:wf3" cx="700.4" cy="76.2" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature vegetation" data-feature-id="boreas_quartz_range:wf3" cx="1076.3" cy="264.0" r="2.8" fill="#3f7f4c" opacity="0.9" />
+<circle class="feature water" data-feature-id="cyrene_delta_mouth:wf3" cx="107.5" cy="718.2" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature settlement_support" data-feature-id="cyrene_leeward_littoral:wf3" cx="308.8" cy="571.7" r="2.8" fill="#8b6f3d" opacity="0.9" />
+<circle class="feature settlement_support" data-feature-id="cyrene_rift_highlands:wf3" cx="545.1" cy="442.3" r="2.8" fill="#8b6f3d" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_glacier_alps:wf4" cx="1005.6" cy="363.7" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="feature water" data-feature-id="boreas_peat_river:wf4" cx="638.0" cy="129.1" r="3.7" fill="#3f8fbc" opacity="0.9" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s1" data-region-id="cyrene_port" cx="108.3" cy="497.6" r="6.4" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_delta_mouth:s2" data-region-id="cyrene_delta_mouth" cx="152.9" cy="712.3" r="4.1" fill="#5a3824" />
+<text class="settlement-label" x="158.9" y="715.3">Nicholasmille</text>
+<circle class="settlement active" data-settlement-id="cyrene_delta_mouth:s1" data-region-id="cyrene_delta_mouth" cx="113.7" cy="720.8" r="4.0" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_delta_mouth:s3" data-region-id="cyrene_delta_mouth" cx="191.4" cy="716.5" r="4.0" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_leeward_littoral:s1" data-region-id="cyrene_leeward_littoral" cx="256.3" cy="642.2" r="4.0" fill="#5a3824" />
+<text class="settlement-label" x="262.2" y="645.2">Auberlinecke</text>
+<circle class="settlement active" data-settlement-id="cyrene_leeward_littoral:s2" data-region-id="cyrene_leeward_littoral" cx="316.3" cy="627.5" r="3.9" fill="#5a3824" />
+<text class="settlement-label" x="322.2" y="630.5">Bertoldusweerd</text>
+<circle class="settlement active" data-settlement-id="cyrene_leeward_littoral:s3" data-region-id="cyrene_leeward_littoral" cx="373.6" cy="640.5" r="3.9" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="boreas_port:s2" data-region-id="boreas_port" cx="826.1" cy="179.7" r="3.9" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s19" data-region-id="cyrene_port" cx="182.5" cy="502.3" r="3.8" fill="#5a3824" />
+<text class="settlement-label" x="188.2" y="505.3">Bridrode</text>
+<circle class="settlement active" data-settlement-id="cyrene_port:s8" data-region-id="cyrene_port" cx="134.9" cy="494.3" r="3.8" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s20" data-region-id="cyrene_port" cx="182.5" cy="495.0" r="3.7" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s6" data-region-id="cyrene_port" cx="119.8" cy="494.1" r="3.7" fill="#5a3824" />
+<text class="settlement-label" x="125.5" y="497.1">Annlintal</text>
+<circle class="settlement active" data-settlement-id="cyrene_port:s12" data-region-id="cyrene_port" cx="155.3" cy="503.7" r="3.7" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s15" data-region-id="cyrene_port" cx="171.4" cy="499.7" r="3.7" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s17" data-region-id="cyrene_port" cx="177.4" cy="502.0" r="3.7" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s4" data-region-id="cyrene_port" cx="114.6" cy="500.3" r="3.7" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s9" data-region-id="cyrene_port" cx="133.8" cy="500.9" r="3.6" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s2" data-region-id="cyrene_port" cx="108.3" cy="493.0" r="3.6" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s13" data-region-id="cyrene_port" cx="158.3" cy="502.9" r="3.6" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s16" data-region-id="cyrene_port" cx="174.6" cy="503.6" r="3.6" fill="#5a3824" />
+<circle class="settlement active" data-settlement-id="cyrene_port:s18" data-region-id="cyrene_port" cx="182.2" cy="497.5" r="3.4" fill="#5a3824" />
+<circle class="settlement abandoned" data-settlement-id="boreas_port:s1" data-region-id="boreas_port" cx="826.1" cy="179.7" r="3.4" fill="#5a3824" />
+<circle class="settlement abandoned" data-settlement-id="cyrene_port:s10" data-region-id="cyrene_port" cx="141.3" cy="501.0" r="3.4" fill="#5a3824" />
+<circle class="settlement abandoned" data-settlement-id="cyrene_port:s11" data-region-id="cyrene_port" cx="143.7" cy="504.6" r="3.4" fill="#5a3824" />
+<circle class="settlement abandoned" data-settlement-id="cyrene_port:s14" data-region-id="cyrene_port" cx="165.8" cy="502.0" r="3.4" fill="#5a3824" />
+<circle class="settlement abandoned" data-settlement-id="cyrene_port:s3" data-region-id="cyrene_port" cx="108.3" cy="497.6" r="3.4" fill="#5a3824" />
+<circle class="settlement abandoned" data-settlement-id="cyrene_port:s5" data-region-id="cyrene_port" cx="118.7" cy="498.7" r="3.4" fill="#5a3824" />
+<circle class="settlement abandoned" data-settlement-id="cyrene_port:s7" data-region-id="cyrene_port" cx="130.9" cy="492.6" r="3.4" fill="#5a3824" />
+<text class="region-label" data-region-label="aeria_eastwater_river" x="352.3" y="230.7" text-anchor="middle">Aeria Eastwater River</text>
+<text class="region-label" data-region-label="aeria_granite_range" x="158.7" y="100.7" text-anchor="middle">Aeria Granite Range</text>
+<text class="region-label" data-region-label="aeria_midland_basin" x="192.2" y="304.9" text-anchor="middle">Aeria Midland Basin</text>
+<text class="region-label" data-region-label="aeria_north" x="506.6" y="228.5" text-anchor="middle">Aeria North</text>
+<text class="region-label" data-region-label="aeria_port" x="510.9" y="114.0" text-anchor="middle">Aeria Port</text>
+<text class="region-label" data-region-label="aeria_slate_range" x="182.2" y="183.6" text-anchor="middle">Aeria Slate Range</text>
+<text class="region-label" data-region-label="aeria_south" x="345.1" y="131.8" text-anchor="middle">Aeria South</text>
+<text class="region-label" data-region-label="aeria_westwater_river" x="433.5" y="343.5" text-anchor="middle">Aeria Westwater River</text>
+<text class="region-label" data-region-label="boreas_boreal_deep" x="752.1" y="216.1" text-anchor="middle">Boreas Boreal Deep</text>
+<text class="region-label" data-region-label="boreas_clear_river" x="929.4" y="162.2" text-anchor="middle">Boreas Clear River</text>
+<text class="region-label" data-region-label="boreas_east" x="1075.5" y="118.5" text-anchor="middle">Boreas East</text>
+<text class="region-label" data-region-label="boreas_fjord_shore" x="697.0" y="327.6" text-anchor="middle">Boreas Fjord Shore</text>
+<text class="region-label" data-region-label="boreas_glacier_alps" x="1044.7" y="345.4" text-anchor="middle">Boreas Glacier Alps</text>
+<text class="region-label" data-region-label="boreas_peat_river" x="682.5" y="111.4" text-anchor="middle">Boreas Peat River</text>
+<text class="region-label" data-region-label="boreas_port" x="812.3" y="125.5" text-anchor="middle">Boreas Port</text>
+<text class="region-label" data-region-label="boreas_quartz_range" x="1029.2" y="236.8" text-anchor="middle">Boreas Quartz Range</text>
+<text class="region-label" data-region-label="boreas_west" x="871.9" y="300.0" text-anchor="middle">Boreas West</text>
+<text class="region-label" data-region-label="cyrene_delta_mouth" x="166.8" y="690.6" text-anchor="middle">Cyrene Delta Mouth</text>
+<text class="region-label" data-region-label="cyrene_grand_channel" x="145.9" y="584.5" text-anchor="middle">Cyrene Grand Channel</text>
+<text class="region-label" data-region-label="cyrene_inland" x="502.8" y="617.9" text-anchor="middle">Cyrene Inland</text>
+<text class="region-label" data-region-label="cyrene_leeward_littoral" x="301.2" y="601.4" text-anchor="middle">Cyrene Leeward Littoral</text>
+<text class="region-label" data-region-label="cyrene_port" x="128.2" y="470.6" text-anchor="middle">Cyrene Port</text>
+<text class="region-label" data-region-label="cyrene_rift_highlands" x="517.0" y="467.4" text-anchor="middle">Cyrene Rift Highlands</text>
+<text class="region-label" data-region-label="cyrene_river" x="354.9" y="695.3" text-anchor="middle">Cyrene River</text>
+<text class="region-label" data-region-label="cyrene_salt_steppe" x="233.4" y="488.3" text-anchor="middle">Cyrene Salt Steppe</text>
+<text class="region-label" data-region-label="cyrene_white_fork" x="387.7" y="487.0" text-anchor="middle">Cyrene White Fork</text>
+</svg>

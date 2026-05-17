@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import tempfile
 import unittest
@@ -243,6 +244,7 @@ class TestLocalGeography(unittest.TestCase):
         data = json.loads(graph.to_json())
         self.assertEqual(data["region_id"], "aeria_north")
         self.assertTrue(data["features"])
+        self.assertTrue(data["borders"])
         self.assertEqual(len(data["settlements"]), 1)
 
     def test_synthesize_features_deterministic(self) -> None:
@@ -255,6 +257,47 @@ class TestLocalGeography(unittest.TestCase):
         for a, b in zip(f1, f2):
             self.assertEqual(a.kind, b.kind)
             self.assertAlmostEqual(a.x, b.x, places=10)
+
+    def test_settlement_anchors_are_near_town_pins(self) -> None:
+        region = get_region("boreas_peat_river", world="default", db_path=self.cfg)
+        rng = make_region_geography_rng("default", "boreas_peat_river", slot=0)
+        graph = build_local_region_graph(
+            world="default",
+            region=region,
+            rng=rng,
+            settlement_slots=3,
+            primary_meaning="ford",
+            primary_category="Topography",
+        )
+        by_id = {f.feature_id: f for f in graph.features}
+
+        for pin in graph.settlements:
+            anchor = by_id[str(pin.anchor_feature_id)]
+            distance = math.hypot(pin.x - anchor.x, pin.y - anchor.y)
+            self.assertLessEqual(distance, 0.16)
+
+    def test_feature_kinds_follow_region_terrain(self) -> None:
+        coast = get_region("aeria_port", world="default", db_path=self.cfg)
+        river = get_region("boreas_peat_river", world="default", db_path=self.cfg)
+        coast_features = {
+            f.kind
+            for f in synthesize_features(
+                coast,
+                make_region_geography_rng("default", "aeria_port", slot=0),
+                n_features=8,
+            )
+        }
+        river_features = {
+            f.kind
+            for f in synthesize_features(
+                river,
+                make_region_geography_rng("default", "boreas_peat_river", slot=0),
+                n_features=8,
+            )
+        }
+
+        self.assertTrue(coast_features & {"coast", "bay", "harbor", "cliff"})
+        self.assertTrue(river_features & {"river", "stream", "ford", "bridge", "marsh", "bog"})
 
 
 class TestRegionEthnicWeights(unittest.TestCase):

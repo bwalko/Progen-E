@@ -60,6 +60,12 @@ The genome table also carries human-readable poles used for UI, narration, or fu
 
 Random generation today reads **`trait`**, **`gender_skew_high`**, and **`gender_skew_low`** from SQLite (`genome` table) after importing `config/*.csv` into the world’s `config.sqlite` (via `utils/util_load_config.py` or `library.config_import`).
 
+## Compact save encoding
+
+`Person.genome` and `Person.mind_body` remain normal `dict[str, float]` values in runtime code. In `save.sqlite`, checkpoints compact those maps into arrays inside `simulation_people.person_json`: `g` stores immutable genome values and `mb` stores current mind/body values only when they differ from genome. The array order is configured by `config/genome_save_columns.csv`, imported into config SQLite as `genome_save_columns`.
+
+This keeps internal code free to ask for named traits such as `physical`, `focus`, or `mating drive`, while avoiding repeated long JSON trait keys for every saved person. If a tiny test fixture lacks `genome_save_columns`, checkpoint code falls back to `genome` table order or stores a per-row slot list for that fixture.
+
 ## Derived per-person summaries (composites and trait phrases)
 
 When `library.simulation_careers.assign_career_if_eligible` first assigns a job to a person, it computes two narrative summaries from the immutable signed genome and stores them on `Person` so reports and downstream systems do not have to recompute:
@@ -76,6 +82,7 @@ Both summaries are also echoed into the `job_assigned` `simulation_events` paylo
 ## Related files
 
 - `config/genome.csv` — source data.
+- `config/genome_save_columns.csv` — compact save slot order for genome/mind-body arrays.
 - `library/random_traits.py` — `choose_genome`, `_genome_trait_definitions`, `_p_positive_genome_sign`.
 - `library/person.py` — `Person.genome`, `Person.genome_composite_names`, `Person.genome_trait_phrases`.
 - `library/personality_interpreter.py` — `interpret_genome_personality` (single-trait extreme phrases).
@@ -95,6 +102,7 @@ When changing genome behavior or docs, keep these invariants:
 - **Magnitude generation remains separate from sign generation**: distribution tuning should not silently change sign logic.
 - **Sex skew only biases sign probability**: `gender_skew_high` / `gender_skew_low` should not alter magnitude.
 - **Trait keys remain data-driven** from `config/genome.csv` -> SQLite `genome` table.
+- **Save slot mapping remains data-driven** from `config/genome_save_columns.csv` -> SQLite `genome_save_columns`.
 - **Person contract stays stable**: `Person.genome` remains `dict[str, float]`.
 
 If you change any of these, update:

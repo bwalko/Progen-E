@@ -21,7 +21,11 @@ from library.geography import get_region, list_regions, region_connectivity_scor
 from library.random_names import preload_name_cache
 from library.placenames_lexicon import PlacenameLexicon, preload_placename_cache
 from library.placenames_generation import seed_settlement_naming_for_region
-from library.settlement_local_geography import make_settlement_name_rng
+from library.settlement_local_geography import (
+    build_local_region_graph,
+    make_region_geography_rng,
+    make_settlement_name_rng,
+)
 from library.random_traits import (
     _as_int,
     _connect,
@@ -1491,6 +1495,46 @@ class SimulationContext:
             return int(self.current_year)
         return int(self.simulation_start_year)
 
+    def _set_region_local_geography(self, region_id: str, local_geography_json: str) -> None:
+        rid = (region_id or "").strip()
+        for st in self.settlements_by_id.values():
+            if st.region_id == rid:
+                st.local_geography_json = local_geography_json
+
+    def refresh_region_local_geography(self, region_id: str) -> str | None:
+        rid = (region_id or "").strip()
+        slots = self.max_site_slot_in_region(rid)
+        if slots < 1:
+            return None
+        region = get_region(rid, world=self.world, db_path=self.db_path)
+        first = min(
+            (st for st in self.settlements_by_id.values() if st.region_id == rid),
+            key=lambda st: (int(st.site_slot), st.founded_sim_year or 0, st.settlement_id),
+            default=None,
+        )
+        geo_rng = make_region_geography_rng(
+            self.world,
+            rid,
+            slot=0,
+            salt=self.placename_rng_salt,
+        )
+        graph = build_local_region_graph(
+            world=self.world,
+            region=region,
+            rng=geo_rng,
+            settlement_slots=slots,
+            primary_meaning="",
+            primary_category=first.name_category_primary if first is not None else None,
+            db_path=self.db_path,
+        )
+        geo_json = graph.to_json()
+        self._set_region_local_geography(rid, geo_json)
+        return geo_json
+
+    def refresh_all_region_local_geographies(self) -> None:
+        for rid in sorted({st.region_id for st in self.settlements_by_id.values()}):
+            self.refresh_region_local_geography(rid)
+
     def reestablish_from_abandoned(self, abandoned: SettlementState) -> SettlementState:
         rid = abandoned.region_id
         seq = next_settlement_sequence(rid, list(self.settlements_by_id.keys()))
@@ -1531,6 +1575,7 @@ class SimulationContext:
             ctx=self,
             lex=lex,
             rng=rng,
+            settlement_slots=1,
         )
         rid = region.region_id
         seq = next_settlement_sequence(rid, list(self.settlements_by_id.keys()))
@@ -1602,6 +1647,7 @@ class SimulationContext:
             ctx=self,
             lex=lex,
             rng=r_rng,
+            settlement_slots=slot,
         )
         seq = next_settlement_sequence(rid, list(self.settlements_by_id.keys()))
         sid = make_settlement_id(rid, seq)
@@ -1625,6 +1671,7 @@ class SimulationContext:
             consecutive_empty_years=0,
         )
         self.settlements_by_id[sid] = st
+        self._set_region_local_geography(rid, geo_json)
         self.rebuild_settlement_region_index()
         return st
 

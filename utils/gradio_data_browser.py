@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, Iterable
 
@@ -23,6 +24,8 @@ import gradio as gr
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 CONFIG_DIR = PROJECT_ROOT / "config"
 WORLDS_DIR = PROJECT_ROOT / "worlds"
 DEFAULT_LIMIT = 100
@@ -56,6 +59,10 @@ LEGACY_SCORE_KEY_TO_LABEL = {
     "martyr_reformer": "Martyr",
 }
 LEGACY_SCORE_LABEL_TO_KEY = {v: k for k, v in LEGACY_SCORE_KEY_TO_LABEL.items()}
+
+from library.world_map_geometry import build_world_map_geometry  # noqa: E402
+from library.world_map_svg import load_world_map_overlays, render_world_map_svg  # noqa: E402
+
 
 APP_CSS = """
 .world-browser {
@@ -159,6 +166,122 @@ body.dark .sim-progress-card,
     color: var(--person-sheet-text) !important;
     padding: 18px;
     border-radius: 8px;
+}
+.place-sheet {
+    --place-bg: #fbf8ef;
+    --place-border: #d6c7a1;
+    --place-text: #2f2a21;
+    --place-muted: #6f6046;
+    --place-title: #58452a;
+    --place-card-bg: rgba(255, 255, 255, .55);
+    --place-card-border: #e4d7b8;
+    --place-map-bg: #efe6cd;
+    --place-map-land: #d9c79c;
+    --place-map-water: #9dbbd2;
+    --place-map-feature: #8c7959;
+    --place-map-town: #583b22;
+    border: 1px solid var(--place-border) !important;
+    background: var(--place-bg) !important;
+    color: var(--place-text) !important;
+    border-radius: 8px;
+    padding: 14px;
+}
+.dark .place-sheet,
+body.dark .place-sheet,
+[data-theme="dark"] .place-sheet {
+    --place-bg: #171b1f;
+    --place-border: #5f533d;
+    --place-text: #f4ead7;
+    --place-muted: #cbb995;
+    --place-title: #f3d79b;
+    --place-card-bg: rgba(255,255,255,.07);
+    --place-card-border: #5a513f;
+    --place-map-bg: #20262d;
+    --place-map-land: #4d503f;
+    --place-map-water: #31546d;
+    --place-map-feature: #b9a67f;
+    --place-map-town: #f2d59a;
+}
+.place-sheet,
+.place-sheet * {
+    box-sizing: border-box;
+}
+.place-sheet h2 {
+    color: var(--place-title) !important;
+    margin: 0 0 4px;
+    font-size: 24px;
+}
+.place-sheet h3 {
+    color: var(--place-title) !important;
+    margin: 16px 0 8px;
+    font-size: 16px;
+}
+.place-subtitle,
+.place-muted {
+    color: var(--place-muted) !important;
+}
+.place-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 8px;
+    margin: 12px 0;
+}
+.place-card {
+    background: var(--place-card-bg) !important;
+    border: 1px solid var(--place-card-border) !important;
+    border-radius: 6px;
+    padding: 8px;
+}
+.place-card .label {
+    display: block;
+    color: var(--place-muted) !important;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+.place-card .value {
+    color: var(--place-text) !important;
+    font-size: 16px;
+    font-weight: 650;
+}
+.place-columns {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr);
+    gap: 12px;
+}
+.place-sheet ul {
+    margin: 6px 0 0 18px;
+    padding: 0;
+}
+.place-sheet li {
+    margin: 3px 0;
+}
+.place-map {
+    width: 100%;
+    max-height: 360px;
+    border: 1px solid var(--place-card-border);
+    border-radius: 6px;
+    background: var(--place-map-bg);
+}
+.world-map-card svg {
+    width: 100%;
+    height: auto;
+    max-height: 760px;
+    border: 1px solid var(--place-card-border);
+    border-radius: 6px;
+    background: var(--place-map-bg);
+}
+.world-map-card [data-region-id],
+.world-map-card [data-region-label],
+.world-map-card [data-settlement-id] {
+    cursor: pointer;
+}
+.world-map-open-controls {
+    display: none !important;
+}
+@media (max-width: 900px) {
+    .place-columns {
+        grid-template-columns: 1fr;
+    }
 }
 .dark .person-sheet,
 body.dark .person-sheet,
@@ -392,6 +515,112 @@ def _db_path(world: str, db_kind: str) -> Path:
     return WORLDS_DIR / (world or "").strip() / filename
 
 
+def _file_mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def render_world_map_html(
+    world: str,
+    include_overlays: bool = True,
+    noisy_edges: bool = True,
+    labels: bool = True,
+) -> str:
+    world_id = (world or "").strip() or "default"
+    cfg = _db_path(world_id, "Config DB")
+    if not cfg.exists():
+        return (
+            '<div class="place-sheet">'
+            f'<p class="place-muted">No config.sqlite found for {html.escape(world_id)}.</p>'
+            "</div>"
+        )
+    save = _db_path(world_id, "Save DB")
+    return _render_world_map_html_cached(
+        world_id,
+        bool(include_overlays),
+        bool(noisy_edges),
+        bool(labels),
+        str(cfg),
+        _file_mtime_ns(cfg),
+        str(save),
+        _file_mtime_ns(save),
+    )
+
+
+@lru_cache(maxsize=32)
+def _render_world_map_html_cached(
+    world_id: str,
+    include_overlays: bool,
+    noisy_edges: bool,
+    labels: bool,
+    cfg_path: str,
+    _cfg_mtime_ns: int,
+    save_path: str,
+    _save_mtime_ns: int,
+) -> str:
+    cfg = Path(cfg_path)
+    save = Path(save_path)
+    try:
+        geometry = build_world_map_geometry(world=world_id, db_path=cfg)
+        overlays = (
+            load_world_map_overlays(geometry=geometry, save_db_path=save)
+            if include_overlays
+            else None
+        )
+        svg = render_world_map_svg(
+            geometry,
+            width=1200,
+            height=800,
+            noisy_edges=bool(noisy_edges),
+            labels=bool(labels),
+            overlays=overlays,
+        )
+    except Exception as exc:
+        return (
+            '<div class="place-sheet">'
+            f'<p class="place-muted">Could not render world map: {html.escape(str(exc))}</p>'
+            "</div>"
+        )
+    overlay_text = "settlements and polities" if include_overlays else "base geography only"
+    return (
+        f'<div class="place-sheet world-map-card" onclick="{_world_map_click_onclick()}">'
+        f"<h2>{html.escape(world_id)} World Map</h2>"
+        f'<p class="place-muted">Generated polygon geography; showing {html.escape(overlay_text)}. '
+        "Click a region or settlement to open its detail sheet.</p>"
+        f"{svg}"
+        "</div>"
+    )
+
+
+def _world_map_click_onclick() -> str:
+    return html.escape(
+        (
+            "const target=event.target;"
+            "if(!target||!target.closest){return true;}"
+            "const town=target.closest('[data-settlement-id]');"
+            "const region=town||target.closest('[data-region-id],[data-region-label]');"
+            "if(!region){return true;}"
+            "const id=town?town.dataset.settlementId:(region.dataset.regionId||region.dataset.regionLabel);"
+            "if(!id){return true;}"
+            "event.preventDefault();event.stopPropagation();"
+            "const input=document.querySelector('#map-open-selection textarea,#map-open-selection input');"
+            "const button=document.querySelector('#map-open-button button,#map-open-button');"
+            "if(input&&button){"
+            "const value=JSON.stringify({view:town?'Towns':'Regions',id:id});"
+            "const descriptor=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value');"
+            "if(descriptor&&descriptor.set){descriptor.set.call(input,value);}else{input.value=value;}"
+            "input.dispatchEvent(new Event('input',{bubbles:true}));"
+            "input.dispatchEvent(new Event('change',{bubbles:true}));"
+            "button.click();"
+            "}"
+            "return false;"
+        ),
+        quote=True,
+    )
+
+
 @contextmanager
 def _connect_readonly(path: Path) -> Iterator[sqlite3.Connection]:
     if not path.exists():
@@ -477,9 +706,20 @@ def _resolve_saved_world(con: sqlite3.Connection, selected_world: str) -> str:
     return selected
 
 
-def _dataframe(rows: Iterable[sqlite3.Row | dict[str, object]], headers: list[str]) -> gr.Dataframe:
+def _dataframe(rows: Iterable[sqlite3.Row | dict[str, object]], headers: list[str], *, key: str | None = None) -> gr.Dataframe:
     values = [[row.get(header, "") if isinstance(row, dict) else row[header] for header in headers] for row in rows]
-    return gr.Dataframe(value=values, headers=headers, datatype=["str"] * len(headers), interactive=False)
+    return gr.Dataframe(
+        value=values,
+        headers=headers,
+        datatype=["str"] * len(headers),
+        column_count=len(headers),
+        interactive=False,
+        key=key,
+    )
+
+
+def _table_values(rows: Iterable[sqlite3.Row | dict[str, object]], headers: list[str]) -> list[list[object]]:
+    return [[row.get(header, "") if isinstance(row, dict) else row[header] for header in headers] for row in rows]
 
 
 def refresh_sqlite_tables(world: str, db_kind: str) -> tuple[gr.Dropdown, str]:
@@ -565,6 +805,134 @@ def _load_json_object(raw: object) -> dict[str, object]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _trait_slots_for_world(world: str) -> tuple[str, ...]:
+    cfg_path = _db_path(world, "Config DB")
+    if not cfg_path.exists():
+        return ()
+    try:
+        with _connect_readonly(cfg_path) as con:
+            if _has_table(con, "genome_save_columns"):
+                rows = con.execute(
+                    """
+                    select trait
+                    from genome_save_columns
+                    where trait is not null and trim(trait) <> ''
+                    order by cast(sort_order as integer), slot
+                    """
+                ).fetchall()
+                traits = tuple(str(r["trait"]).strip() for r in rows if str(r["trait"]).strip())
+                if traits:
+                    return traits
+            if _has_table(con, "genome"):
+                rows = con.execute(
+                    """
+                    select trait
+                    from genome
+                    where trait is not null and trim(trait) <> ''
+                    order by rowid
+                    """
+                ).fetchall()
+                return tuple(str(r["trait"]).strip() for r in rows if str(r["trait"]).strip())
+    except sqlite3.Error:
+        return ()
+    return ()
+
+
+def _decode_trait_array(values: object, trait_slots: tuple[str, ...]) -> dict[str, float]:
+    if not isinstance(values, list):
+        return {}
+    out: dict[str, float] = {}
+    for trait, raw in zip(trait_slots, values):
+        if raw is None:
+            continue
+        try:
+            out[str(trait)] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+_PERSON_COLUMN_KEYS = (
+    "first_name",
+    "last_name",
+    "gender",
+    "ethnic",
+    "species",
+    "birthyear",
+    "deathyear",
+    "birthplace",
+    "birthplace_region_id",
+    "birthplace_settlement_id",
+    "current_settlement_id",
+    "partner_person_id",
+    "paramour_person_id",
+    "last_birth_event_year",
+    "job",
+    "job_assigned_year",
+    "job_era",
+    "job_tier",
+    "status_tendency",
+    "leader_quality",
+    "leader_tendency",
+    "employment_status",
+    "job_lost_year",
+    "unemployment_started_year",
+    "last_job",
+    "career_fitness_score",
+    "job_prosperity_01",
+    "household_prosperity",
+    "household_purseholder_person_id",
+    "birth_litter_size",
+    "life_stage",
+    "maturity_height_cm",
+    "maturity_weight_kg",
+    "skin_tone",
+    "hair",
+    "eyes",
+    "min_fertility_age",
+    "max_fertility_age",
+    "attractiveness_01",
+    "sexual_nature",
+    "gender_mind",
+    "father_name",
+    "mother_name",
+)
+
+
+def _person_from_row(
+    row: sqlite3.Row,
+    trait_slots: tuple[str, ...] = (),
+) -> dict[str, object]:
+    person = _load_json_object(row["person_json"]) if "person_json" in row.keys() else {}
+    row_slots = tuple(str(x) for x in person.get("ts", []) if str(x).strip())
+    slots = row_slots or trait_slots
+    if "g" in person and "genome" not in person:
+        person["genome"] = _decode_trait_array(person.get("g"), slots)
+    if "mb" in person and "mind_body" not in person:
+        person["mind_body"] = _decode_trait_array(person.get("mb"), slots)
+    for key in _PERSON_COLUMN_KEYS:
+        if key in row.keys():
+            person[key] = row[key]
+    return person
+
+
+def _person_from_mapping(
+    row: dict[str, object],
+    trait_slots: tuple[str, ...] = (),
+) -> dict[str, object]:
+    person = _load_json_object(row.get("person_json"))
+    row_slots = tuple(str(x) for x in person.get("ts", []) if str(x).strip())
+    slots = row_slots or trait_slots
+    if "g" in person and "genome" not in person:
+        person["genome"] = _decode_trait_array(person.get("g"), slots)
+    if "mb" in person and "mind_body" not in person:
+        person["mind_body"] = _decode_trait_array(person.get("mb"), slots)
+    for key in _PERSON_COLUMN_KEYS:
+        if key in row:
+            person[key] = row[key]
+    return person
+
+
 def _person_name(person: dict[str, object]) -> str:
     first = str(person.get("first_name") or "").strip()
     last = str(person.get("last_name") or "").strip()
@@ -582,8 +950,12 @@ def _same_person_id(a: object, b: object) -> bool:
         return False
 
 
-def _person_summary_row(row: sqlite3.Row, current_year: int | None) -> dict[str, object]:
-    person = _load_json_object(row["person_json"])
+def _person_summary_row(
+    row: sqlite3.Row,
+    current_year: int | None,
+    trait_slots: tuple[str, ...] = (),
+) -> dict[str, object]:
+    person = _person_from_row(row, trait_slots)
     birthyear = person.get("birthyear")
     deathyear = person.get("deathyear")
     age = ""
@@ -641,12 +1013,13 @@ def _sort_rows_by_legacy_score(
     *,
     sort_by: str,
     sort_dir: str,
+    trait_slots: tuple[str, ...] = (),
 ) -> list[sqlite3.Row]:
     reverse = sort_dir != "Ascending"
     return sorted(
         rows,
         key=lambda row: (
-            _legacy_score_value(_load_json_object(row["person_json"]), str(sort_by)),
+            _legacy_score_value(_person_from_row(row, trait_slots), str(sort_by)),
             int(row["person_id"]),
         ),
         reverse=reverse,
@@ -682,12 +1055,19 @@ def load_people_browser(
     with _connect_readonly(path) as con:
         saved_world = _resolve_saved_world(con, world)
         current_year = _current_year(con, saved_world)
+    trait_slots = _trait_slots_for_world(saved_world)
 
-    age_sql = "coalesce(json_extract(person_json, '$.deathyear'), ?) - json_extract(person_json, '$.birthyear')"
     clauses: list[str] = []
     params: list[object] = []
     with _connect_readonly(path) as con:
-        people_has_world = "world" in _table_columns(con, "simulation_people")
+        people_columns = _table_columns(con, "simulation_people")
+        people_has_world = "world" in people_columns
+        people_has_compact_columns = "birthyear" in people_columns
+    age_sql = (
+        "coalesce(deathyear, ?) - birthyear"
+        if people_has_compact_columns
+        else "coalesce(json_extract(person_json, '$.deathyear'), ?) - json_extract(person_json, '$.birthyear')"
+    )
     if people_has_world:
         clauses.append("world = ?")
         params.append(saved_world)
@@ -696,8 +1076,15 @@ def load_people_browser(
     elif life_filter == "Dead":
         clauses.append("is_alive = 0")
     if search:
-        clauses.append("person_json like ?")
-        params.append(f"%{search}%")
+        if people_has_compact_columns:
+            clauses.append(
+                "(person_json like ? or first_name like ? or last_name like ? "
+                "or current_settlement_id like ? or birthplace like ?)"
+            )
+            params.extend([f"%{search}%"] * 5)
+        else:
+            clauses.append("person_json like ?")
+            params.append(f"%{search}%")
     if min_age not in (None, ""):
         clauses.append(f"{age_sql} >= ?")
         params.extend([current_year, _safe_int(min_age, 0, 0, 10_000)])
@@ -709,14 +1096,18 @@ def load_people_browser(
     legacy_sort = sort_by in LEGACY_SCORE_COLUMNS
     sort_map = {
         "ID": "person_id",
-        "Name": "json_extract(person_json, '$.last_name') collate nocase, json_extract(person_json, '$.first_name') collate nocase",
+        "Name": (
+            "last_name collate nocase, first_name collate nocase"
+            if people_has_compact_columns
+            else "json_extract(person_json, '$.last_name') collate nocase, json_extract(person_json, '$.first_name') collate nocase"
+        ),
         "Age": age_sql,
-        "Born": "json_extract(person_json, '$.birthyear')",
-        "Died": "json_extract(person_json, '$.deathyear')",
-        "Gender": "json_extract(person_json, '$.gender') collate nocase",
-        "Species": "json_extract(person_json, '$.species') collate nocase",
-        "Ethnic": "json_extract(person_json, '$.ethnic') collate nocase",
-        "Home": "coalesce(json_extract(person_json, '$.current_settlement_id'), json_extract(person_json, '$.birthplace')) collate nocase",
+        "Born": "birthyear" if people_has_compact_columns else "json_extract(person_json, '$.birthyear')",
+        "Died": "deathyear" if people_has_compact_columns else "json_extract(person_json, '$.deathyear')",
+        "Gender": "gender collate nocase" if people_has_compact_columns else "json_extract(person_json, '$.gender') collate nocase",
+        "Species": "species collate nocase" if people_has_compact_columns else "json_extract(person_json, '$.species') collate nocase",
+        "Ethnic": "ethnic collate nocase" if people_has_compact_columns else "json_extract(person_json, '$.ethnic') collate nocase",
+        "Home": "coalesce(current_settlement_id, birthplace) collate nocase" if people_has_compact_columns else "coalesce(json_extract(person_json, '$.current_settlement_id'), json_extract(person_json, '$.birthplace')) collate nocase",
     }
     direction = "asc" if sort_dir == "Ascending" else "desc"
     order_sql_default = sort_map.get("Age" or "", "is_alive desc, person_id desc")
@@ -742,7 +1133,7 @@ def load_people_browser(
             query_params.append(row_limit)
         rows = con.execute(
             f"""
-            select person_id, is_alive, person_json
+            select *
             from simulation_people
             where {where_sql}
             order by {order_clause}
@@ -766,8 +1157,13 @@ def load_people_browser(
         *LEGACY_SCORE_COLUMNS,
     ]
     if legacy_sort:
-        rows = _sort_rows_by_legacy_score(rows, sort_by=str(sort_by), sort_dir=sort_dir)[:row_limit]
-    values = [_person_summary_row(row, current_year) for row in rows]
+        rows = _sort_rows_by_legacy_score(
+            rows,
+            sort_by=str(sort_by),
+            sort_dir=sort_dir,
+            trait_slots=trait_slots,
+        )[:row_limit]
+    values = [_person_summary_row(row, current_year, trait_slots) for row in rows]
     person_ids = [int(row["person_id"]) for row in rows]
     filter_bits = []
     if min_age not in (None, ""):
@@ -799,7 +1195,7 @@ def _lookup_person(con: sqlite3.Connection, world: str, person_id: object) -> tu
             "select * from simulation_people where person_id = ?",
             (pid,),
         ).fetchone()
-    return row, _load_json_object(row["person_json"]) if row else {}
+    return row, _person_from_row(row, _trait_slots_for_world(world)) if row else {}
 
 
 def _settlement_name(con: sqlite3.Connection, world: str, settlement_id: object) -> str:
@@ -1568,7 +1964,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     people_has_world = "world" in _table_columns(con, "simulation_people")
     children = con.execute(
         f"""
-        select person_id, person_json
+        select *
         from simulation_people
         where {'world = ? and ' if people_has_world else ''}(father_id = ? or mother_id = ?)
         order by person_id
@@ -1743,7 +2139,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     people_has_world = "world" in _table_columns(con, "simulation_people")
     children = con.execute(
         f"""
-        select person_id, person_json
+        select *
         from simulation_people
         where {'world = ? and ' if people_has_world else ''}(father_id = ? or mother_id = ?)
         order by person_id
@@ -1756,7 +2152,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
         ),
     ).fetchall()
     child_lines = [
-        f"- {_person_name(_load_json_object(child['person_json']))}"
+        f"- {_person_name(_person_from_row(child, _trait_slots_for_world(world)))}"
         for child in children
     ] or ["- No recorded children."]
 
@@ -1868,6 +2264,1499 @@ def select_person_from_table(person_ids: list[int], world: str, evt: gr.SelectDa
             "Click a person row to generate share text.",
         )
     return render_person_outputs(world, person_id)
+
+
+def _fmt_number(value: object, digits: int = 2) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:.{digits}f}"
+
+
+def _saved_table_has_world(con: sqlite3.Connection, table: str) -> bool:
+    return _has_table(con, table) and "world" in _table_columns(con, table)
+
+
+def _world_where(con: sqlite3.Connection, table: str, world: str) -> tuple[str, list[object]]:
+    if _saved_table_has_world(con, table):
+        return "world = ?", [world]
+    return "1 = 1", []
+
+
+def _alive_where(con: sqlite3.Connection, world: str) -> tuple[str, list[object]]:
+    where, params = _world_where(con, "simulation_people", world)
+    return f"{where} and is_alive = 1", params
+
+
+def _person_expr(con: sqlite3.Connection, column: str, json_key: str | None = None) -> str:
+    columns = _table_columns(con, "simulation_people")
+    if column in columns:
+        return column
+    key = json_key or column
+    return f"json_extract(person_json, '$.{key}')"
+
+
+def _person_residence_sql(con: sqlite3.Connection) -> str:
+    columns = _table_columns(con, "simulation_people")
+    if "current_settlement_id" in columns and "birthplace_settlement_id" in columns:
+        return "coalesce(nullif(current_settlement_id, ''), nullif(birthplace_settlement_id, ''))"
+    if "current_settlement_id" in columns:
+        return "nullif(current_settlement_id, '')"
+    if "birthplace_settlement_id" in columns:
+        return "nullif(birthplace_settlement_id, '')"
+    return (
+        "coalesce("
+        "nullif(json_extract(person_json, '$.current_settlement_id'), ''), "
+        "nullif(json_extract(person_json, '$.birthplace_settlement_id'), '')"
+        ")"
+    )
+
+
+def _person_birth_region_sql(con: sqlite3.Connection) -> str:
+    return _person_expr(con, "birthplace_region_id")
+
+
+def _person_job_sql(con: sqlite3.Connection) -> str:
+    return _person_expr(con, "job")
+
+
+def _person_career_fitness_sql(con: sqlite3.Connection) -> str:
+    return _person_expr(con, "career_fitness_score")
+
+
+def _count_one(con: sqlite3.Connection, sql: str, params: Iterable[object] = ()) -> int:
+    row = con.execute(sql, tuple(params)).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def _open_territory_clause() -> str:
+    return "until_sim_year is null"
+
+
+def _polity_names_for_region(con: sqlite3.Connection, region_id: str) -> str:
+    if not (_has_table(con, "simulation_polities") and _has_table(con, "simulation_polity_territory")):
+        return ""
+    rows = con.execute(
+        """
+        select distinct p.name
+        from simulation_polities p
+        join simulation_polity_territory t on t.polity_id = p.polity_id
+        left join simulation_settlements s
+          on t.target_kind = 'settlement' and s.settlement_id = t.target_id
+        where t.until_sim_year is null
+          and p.status = 'active'
+          and (
+            (t.target_kind = 'region' and t.target_id = ?)
+            or (t.target_kind = 'settlement' and s.region_id = ?)
+          )
+        order by p.name
+        """,
+        (region_id, region_id),
+    ).fetchall()
+    return ", ".join(str(r["name"] or "").strip() for r in rows if str(r["name"] or "").strip())
+
+
+def _polity_names_for_settlement(con: sqlite3.Connection, settlement_id: str, region_id: str) -> str:
+    if not (_has_table(con, "simulation_polities") and _has_table(con, "simulation_polity_territory")):
+        return ""
+    rows = con.execute(
+        """
+        select distinct p.name
+        from simulation_polities p
+        join simulation_polity_territory t on t.polity_id = p.polity_id
+        where t.until_sim_year is null
+          and p.status = 'active'
+          and (
+            (t.target_kind = 'settlement' and t.target_id = ?)
+            or (t.target_kind = 'region' and t.target_id = ?)
+          )
+        order by p.name
+        """,
+        (settlement_id, region_id),
+    ).fetchall()
+    return ", ".join(str(r["name"] or "").strip() for r in rows if str(r["name"] or "").strip())
+
+
+def _top_jobs_for_where(
+    con: sqlite3.Connection,
+    world: str,
+    where_extra: str,
+    extra_params: Iterable[object],
+    *,
+    limit: int = 5,
+) -> list[tuple[str, int]]:
+    people_where, params = _alive_where(con, world)
+    job_sql = _person_job_sql(con)
+    rows = con.execute(
+        f"""
+        select coalesce(nullif({job_sql}, ''), 'Unassigned') as job_name, count(*) as n
+        from simulation_people
+        where {people_where}
+          and {where_extra}
+        group by job_name
+        order by n desc, job_name collate nocase
+        limit ?
+        """,
+        (*params, *tuple(extra_params), int(limit)),
+    ).fetchall()
+    return [(str(r["job_name"]), int(r["n"] or 0)) for r in rows]
+
+
+def _alive_counts_and_top_jobs_by_place(
+    con: sqlite3.Connection,
+    world: str,
+    place_sql: str,
+    place_ids: Iterable[str],
+    *,
+    limit: int = 3,
+) -> tuple[dict[str, int], dict[str, list[tuple[str, int]]]]:
+    ids = [str(place_id) for place_id in place_ids if str(place_id).strip()]
+    if not ids or not _has_table(con, "simulation_people"):
+        return {}, {}
+    placeholders = ", ".join("?" for _ in ids)
+    people_where, people_params = _alive_where(con, world)
+    job_sql = _person_job_sql(con)
+    rows = con.execute(
+        f"""
+        select
+          {place_sql} as place_id,
+          coalesce(nullif({job_sql}, ''), 'Unassigned') as job_name,
+          count(*) as n
+        from simulation_people
+        where {people_where}
+          and {place_sql} in ({placeholders})
+        group by place_id, job_name
+        order by place_id, n desc, job_name collate nocase
+        """,
+        (*people_params, *ids),
+    ).fetchall()
+    alive_counts: dict[str, int] = {place_id: 0 for place_id in ids}
+    top_jobs: dict[str, list[tuple[str, int]]] = {place_id: [] for place_id in ids}
+    for row in rows:
+        place_id = str(row["place_id"] or "")
+        count = int(row["n"] or 0)
+        if not place_id:
+            continue
+        alive_counts[place_id] = alive_counts.get(place_id, 0) + count
+        if len(top_jobs.setdefault(place_id, [])) < limit:
+            top_jobs[place_id].append((str(row["job_name"]), count))
+    return alive_counts, top_jobs
+
+
+def _active_settlement_counts_by_region(
+    con: sqlite3.Connection,
+    world: str,
+    region_ids: Iterable[str],
+) -> dict[str, int]:
+    ids = [str(region_id) for region_id in region_ids if str(region_id).strip()]
+    if not ids or not _has_table(con, "simulation_settlements"):
+        return {}
+    placeholders = ", ".join("?" for _ in ids)
+    world_where, world_params = _world_where(con, "simulation_settlements", world)
+    rows = con.execute(
+        f"""
+        select region_id, count(*) as n
+        from simulation_settlements
+        where {world_where}
+          and region_id in ({placeholders})
+          and status = 'active'
+        group by region_id
+        """,
+        (*world_params, *ids),
+    ).fetchall()
+    return {str(row["region_id"]): int(row["n"] or 0) for row in rows}
+
+
+def _row_to_dict(row: sqlite3.Row) -> dict[str, object]:
+    return {key: row[key] for key in row.keys()}
+
+
+def _snapshot_table_rows(con: sqlite3.Connection, table: str, world: str) -> list[dict[str, object]]:
+    if not _has_table(con, table):
+        return []
+    where, params = _world_where(con, table, world)
+    rows = con.execute(
+        f"select * from {_quote_identifier(table)} where {where}",
+        tuple(params),
+    ).fetchall()
+    return [_row_to_dict(row) for row in rows]
+
+
+def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, object]:
+    people: list[dict[str, object]] = []
+    if _has_table(con, "simulation_people"):
+        where, params = _alive_where(con, world)
+        people = [
+            _row_to_dict(row)
+            for row in con.execute(
+                f"select * from simulation_people where {where}",
+                tuple(params),
+            ).fetchall()
+        ]
+    regions = _snapshot_table_rows(con, "simulation_regions", world)
+    settlements = _snapshot_table_rows(con, "simulation_settlements", world)
+    polities = _snapshot_table_rows(con, "simulation_polities", world)
+    return {
+        "world": world,
+        "people": people,
+        "regions": regions,
+        "settlements": settlements,
+        "polities": polities,
+        "territory": _snapshot_table_rows(con, "simulation_polity_territory", world),
+        "seats": _snapshot_table_rows(con, "simulation_office_seats", world),
+    }
+
+
+def _snapshot_rows(snapshot: dict[str, object], name: str) -> list[dict[str, object]]:
+    rows = snapshot.get(name)
+    return rows if isinstance(rows, list) else []
+
+
+def _snapshot_map(snapshot: dict[str, object], name: str, key: str) -> dict[str, dict[str, object]]:
+    return {str(row.get(key)): row for row in _snapshot_rows(snapshot, name) if row.get(key) not in (None, "")}
+
+
+def _snapshot_person(snapshot: dict[str, object], person_id: object) -> dict[str, object]:
+    try:
+        pid = int(person_id)
+    except (TypeError, ValueError):
+        return {}
+    for row in _snapshot_rows(snapshot, "people"):
+        try:
+            if int(row.get("person_id")) == pid:
+                return _person_from_mapping(row, _trait_slots_for_world(str(snapshot.get("world") or "")))
+        except (TypeError, ValueError):
+            continue
+    return {}
+
+
+def _snapshot_person_link_text(snapshot: dict[str, object], person_id: object) -> str:
+    person = _snapshot_person(snapshot, person_id)
+    if not person:
+        return "Unknown"
+    years = f"b. {person.get('birthyear', '?')}"
+    if person.get("deathyear") is not None:
+        years += f"-{person.get('deathyear')}"
+    return f"{_person_name(person)} ({years})"
+
+
+def _snapshot_settlement_name(snapshot: dict[str, object], settlement_id: object) -> str:
+    if not settlement_id:
+        return ""
+    row = _snapshot_map(snapshot, "settlements", "settlement_id").get(str(settlement_id))
+    if not row:
+        return str(settlement_id)
+    return str(row.get("display_name") or settlement_id)
+
+
+def _snapshot_person_job(person: dict[str, object]) -> str:
+    return str(person.get("job") or "Unassigned")
+
+
+def _top_jobs_from_people(people: Iterable[dict[str, object]], limit: int) -> list[tuple[str, int]]:
+    counts: dict[str, int] = {}
+    for person in people:
+        job = _snapshot_person_job(person)
+        counts[job] = counts.get(job, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
+
+
+def _person_birth_region(person: dict[str, object]) -> str:
+    return str(person.get("birthplace_region_id") or "")
+
+
+def _person_residence(person: dict[str, object]) -> str:
+    return str(person.get("current_settlement_id") or person.get("birthplace_settlement_id") or "")
+
+
+def _snapshot_alive_people(snapshot: dict[str, object]) -> list[dict[str, object]]:
+    slots = _trait_slots_for_world(str(snapshot.get("world") or ""))
+    return [_person_from_mapping(row, slots) for row in _snapshot_rows(snapshot, "people")]
+
+
+def _snapshot_people_by_region(snapshot: dict[str, object], region_id: str) -> list[dict[str, object]]:
+    return [person for person in _snapshot_alive_people(snapshot) if _person_birth_region(person) == region_id]
+
+
+def _snapshot_people_by_settlement(snapshot: dict[str, object], settlement_id: str) -> list[dict[str, object]]:
+    return [person for person in _snapshot_alive_people(snapshot) if _person_residence(person) == settlement_id]
+
+
+def _snapshot_region_settlements(snapshot: dict[str, object], region_id: str) -> list[dict[str, object]]:
+    rows = [row for row in _snapshot_rows(snapshot, "settlements") if str(row.get("region_id") or "") == region_id]
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("status") or "") != "active",
+            -_safe_int(row.get("population_cap"), 0),
+            str(row.get("display_name") or "").lower(),
+        ),
+    )
+
+
+def _snapshot_open_territory(snapshot: dict[str, object], polity_id: object | None = None) -> list[dict[str, object]]:
+    rows = [row for row in _snapshot_rows(snapshot, "territory") if row.get("until_sim_year") is None]
+    if polity_id is not None:
+        rows = [row for row in rows if str(row.get("polity_id")) == str(polity_id)]
+    return rows
+
+
+def _snapshot_polity_names_for_region(snapshot: dict[str, object], region_id: str) -> str:
+    polities = _snapshot_map(snapshot, "polities", "polity_id")
+    settlements = _snapshot_map(snapshot, "settlements", "settlement_id")
+    names: set[str] = set()
+    for terr in _snapshot_open_territory(snapshot):
+        polity = polities.get(str(terr.get("polity_id")))
+        if not polity or polity.get("status") != "active":
+            continue
+        target_kind = str(terr.get("target_kind") or "")
+        target_id = str(terr.get("target_id") or "")
+        if target_kind == "region" and target_id == region_id:
+            names.add(str(polity.get("name") or "").strip())
+        elif target_kind == "settlement" and str(settlements.get(target_id, {}).get("region_id") or "") == region_id:
+            names.add(str(polity.get("name") or "").strip())
+    return ", ".join(sorted(name for name in names if name))
+
+
+def _snapshot_polity_names_for_settlement(snapshot: dict[str, object], settlement_id: str, region_id: str) -> str:
+    polities = _snapshot_map(snapshot, "polities", "polity_id")
+    names: set[str] = set()
+    for terr in _snapshot_open_territory(snapshot):
+        polity = polities.get(str(terr.get("polity_id")))
+        if not polity or polity.get("status") != "active":
+            continue
+        target_kind = str(terr.get("target_kind") or "")
+        target_id = str(terr.get("target_id") or "")
+        if (target_kind == "settlement" and target_id == settlement_id) or (
+            target_kind == "region" and target_id == region_id
+        ):
+            names.add(str(polity.get("name") or "").strip())
+    return ", ".join(sorted(name for name in names if name))
+
+
+def _snapshot_region_map_html(
+    snapshot: dict[str, object],
+    region_id: str,
+    *,
+    focus_settlement_id: str | None = None,
+) -> str:
+    settlements = _snapshot_region_settlements(snapshot, region_id)
+    geo: dict[str, object] = {}
+    for row in settlements:
+        geo = _load_local_geography(row.get("local_geography_json"))
+        if geo:
+            break
+    return _render_local_map(geo, settlements, focus_settlement_id=focus_settlement_id)
+
+
+def _snapshot_notable_people(people: Iterable[dict[str, object]], limit: int = 8) -> list[str]:
+    ranked = sorted(
+        people,
+        key=lambda person: (-float(person.get("career_fitness_score") or 0.0), int(person.get("person_id") or 0)),
+    )
+    return [f"{_person_name(person)} — {person.get('job') or 'unassigned'}" for person in ranked[:limit]]
+
+
+def _top_people_for_where(
+    con: sqlite3.Connection,
+    world: str,
+    where_extra: str,
+    extra_params: Iterable[object],
+    *,
+    limit: int = 8,
+) -> list[sqlite3.Row]:
+    people_where, params = _alive_where(con, world)
+    career_sql = _person_career_fitness_sql(con)
+    return con.execute(
+        f"""
+        select *
+        from simulation_people
+        where {people_where}
+          and {where_extra}
+        order by coalesce({career_sql}, 0) desc, person_id
+        limit ?
+        """,
+        (*params, *tuple(extra_params), int(limit)),
+    ).fetchall()
+
+
+def _ul(items: Iterable[str], empty: str = "None yet.") -> str:
+    clean = [str(item).strip() for item in items if str(item).strip()]
+    if not clean:
+        return f'<p class="place-muted">{html.escape(empty)}</p>'
+    return "<ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in clean) + "</ul>"
+
+
+def _detail_card(label: str, value: object) -> str:
+    return (
+        '<div class="place-card">'
+        f'<span class="label">{html.escape(label)}</span>'
+        f'<span class="value">{html.escape(str(value if value not in (None, "") else "—"))}</span>'
+        "</div>"
+    )
+
+
+def _load_local_geography(raw: object) -> dict[str, object]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _feature_color(kind: str) -> str:
+    k = (kind or "").strip().lower()
+    if k in {"coast", "coastline", "river", "river_boundary", "stream", "ford", "lake", "marsh", "bog", "bay", "harbor", "spring", "wadi", "fishery"}:
+        return "var(--place-map-water)"
+    if k in {"forest", "forest_boundary", "grove", "clearing", "meadow", "pasture", "orchard", "hill", "ridge", "ridge_boundary", "mountain", "pass", "cliff", "mesa", "landmark", "sacred", "engineering"}:
+        return "var(--place-map-feature)"
+    return "var(--place-map-feature)"
+
+
+def _render_local_map(
+    geography: dict[str, object],
+    settlements: Iterable[sqlite3.Row],
+    *,
+    focus_settlement_id: str | None = None,
+) -> str:
+    features = geography.get("features")
+    sites = geography.get("settlements")
+    borders = geography.get("borders")
+    if not isinstance(features, list) or not isinstance(sites, list):
+        return '<p class="place-muted">No local geography map recorded for this place yet.</p>'
+    site_by_slot: dict[int, dict[str, object]] = {}
+    for site in sites:
+        if isinstance(site, dict):
+            try:
+                site_by_slot[int(site.get("settlement_slot", 0)) + 1] = site
+            except (TypeError, ValueError):
+                continue
+    parts = [
+        '<svg class="place-map" viewBox="0 0 100 100" role="img" aria-label="Local geography map">',
+        '<rect x="0" y="0" width="100" height="100" fill="var(--place-map-bg)" />',
+        '<rect x="3" y="3" width="94" height="94" rx="6" fill="var(--place-map-land)" opacity=".45" />',
+    ]
+    if isinstance(borders, list):
+        for border in borders:
+            if not isinstance(border, dict):
+                continue
+            points = border.get("points")
+            if not isinstance(points, list) or len(points) < 2:
+                continue
+            xy: list[str] = []
+            for point in points:
+                if not isinstance(point, (list, tuple)) or len(point) < 2:
+                    continue
+                try:
+                    x = max(1.5, min(98.5, float(point[0]) * 100.0))
+                    y = max(1.5, min(98.5, float(point[1]) * 100.0))
+                except (TypeError, ValueError):
+                    continue
+                xy.append(f"{x:.1f},{y:.1f}")
+            if len(xy) < 2:
+                continue
+            kind = str(border.get("kind") or "boundary")
+            parts.append(
+                f'<polyline points="{" ".join(xy)}" fill="none" '
+                f'stroke="{_feature_color(kind)}" stroke-width="1.2" opacity=".65" '
+                'stroke-linecap="round" stroke-linejoin="round" />'
+            )
+    for feat in features:
+        if not isinstance(feat, dict):
+            continue
+        try:
+            x = max(4.0, min(96.0, float(feat.get("x", 0.5)) * 100.0))
+            y = max(4.0, min(96.0, float(feat.get("y", 0.5)) * 100.0))
+        except (TypeError, ValueError):
+            continue
+        kind = str(feat.get("kind") or "feature")
+        color = _feature_color(kind)
+        if kind.lower() in {"river", "stream", "coast", "bay", "harbor", "wadi", "fishery"}:
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="{color}" opacity=".75" />')
+        else:
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.6" fill="{color}" opacity=".8" />')
+        parts.append(
+            f'<text x="{x + 2.5:.1f}" y="{y - 2.5:.1f}" font-size="3" fill="var(--place-muted)">'
+            f'{html.escape(kind[:12])}</text>'
+        )
+    for row in settlements:
+        slot = int(row["site_slot"] or 1) if "site_slot" in row.keys() else 1
+        site = site_by_slot.get(slot)
+        if not site:
+            continue
+        try:
+            x = max(4.0, min(96.0, float(site.get("x", 0.5)) * 100.0))
+            y = max(4.0, min(96.0, float(site.get("y", 0.5)) * 100.0))
+        except (TypeError, ValueError):
+            continue
+        sid = str(row["settlement_id"] or "")
+        label = str(row["display_name"] or sid)
+        focused = sid == (focus_settlement_id or "")
+        radius = 4.4 if focused else 3.4
+        stroke = "var(--place-text)" if focused else "var(--place-map-bg)"
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" '
+            f'fill="var(--place-map-town)" stroke="{stroke}" stroke-width="1.1" />'
+        )
+        parts.append(
+            f'<text x="{x + 3.6:.1f}" y="{y + 1.2:.1f}" font-size="3.4" '
+            f'fill="var(--place-text)">{html.escape(label[:18])}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _region_settlements(con: sqlite3.Connection, region_id: str) -> list[sqlite3.Row]:
+    if not _has_table(con, "simulation_settlements"):
+        return []
+    return con.execute(
+        """
+        select *
+        from simulation_settlements
+        where region_id = ?
+        order by status = 'active' desc, population_cap desc, display_name collate nocase
+        """,
+        (region_id,),
+    ).fetchall()
+
+
+def _region_map_html(con: sqlite3.Connection, region_id: str, *, focus_settlement_id: str | None = None) -> str:
+    settlements = _region_settlements(con, region_id)
+    geo: dict[str, object] = {}
+    for row in settlements:
+        geo = _load_local_geography(row["local_geography_json"] if "local_geography_json" in row.keys() else None)
+        if geo:
+            break
+    return _render_local_map(geo, settlements, focus_settlement_id=focus_settlement_id)
+
+
+PLACE_REGION_HEADERS = [
+    "Name",
+    "Alive",
+    "Settlements",
+    "Food",
+    "Stability",
+    "Market",
+    "Prosperity",
+    "Treasury",
+    "Polities",
+    "Top Jobs",
+]
+PLACE_TOWN_HEADERS = [
+    "Name",
+    "Level",
+    "Alive",
+    "Region",
+    "Status",
+    "Food",
+    "Stability",
+    "Prosperity",
+    "Polity",
+    "Top Jobs",
+]
+PLACE_POLITY_HEADERS = [
+    "Name",
+    "Type",
+    "Status",
+    "Territory",
+    "Seats",
+    "Holders",
+    "Parent",
+    "Capital",
+    "Founded",
+]
+
+
+_PLACE_KEY_SEP = "\x1f"
+
+
+def _encode_place_key(path_world: str, saved_world: str, item_id: object) -> str:
+    return _PLACE_KEY_SEP.join(
+        [
+            (path_world or "").strip(),
+            (saved_world or "").strip(),
+            str(item_id or "").strip(),
+        ]
+    )
+
+
+def _decode_place_key(current_world: str, key: object) -> tuple[str, str | None, str]:
+    raw = str(key or "")
+    parts = raw.split(_PLACE_KEY_SEP)
+    if len(parts) == 3:
+        path_world, saved_world, item_id = parts
+        return path_world or current_world, saved_world or None, item_id
+    return current_world, None, raw
+
+
+def _place_headers(view: str) -> list[str]:
+    selected = (view or "Regions").strip()
+    if selected == "Towns":
+        return PLACE_TOWN_HEADERS
+    if selected == "Polities":
+        return PLACE_POLITY_HEADERS
+    return PLACE_REGION_HEADERS
+
+
+def load_places_browser(
+    world: str,
+    view: str,
+    search: str,
+    limit: object,
+) -> tuple[gr.Dataframe, str, list[str]]:
+    values, headers, status, keys, selected = _places_browser_data(world, view, search, limit)
+    return (
+        _dataframe(values, headers, key=f"places-{selected.lower()}-{len(headers)}"),
+        status,
+        keys,
+    )
+
+
+def _load_place_view(view: str, world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, list[str]]:
+    values, headers, status, keys, selected = _places_browser_data(world, view, search, limit)
+    return (
+        _dataframe(values, headers, key=f"places-{selected.lower()}-{len(headers)}"),
+        status,
+        keys,
+    )
+
+
+def load_regions_browser(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, list[str]]:
+    return _load_place_view("Regions", world, search, limit)
+
+
+def load_towns_browser(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, list[str]]:
+    return _load_place_view("Towns", world, search, limit)
+
+
+def load_polities_browser(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, list[str]]:
+    return _load_place_view("Polities", world, search, limit)
+
+
+def _empty_place_sheet(view: str) -> str:
+    selected = (view or "Places").strip().lower()
+    return f'<div class="place-sheet muted">Browse {html.escape(selected)}, then click a row to inspect it.</div>'
+
+
+def load_regions_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, str, str]:
+    values, headers, status, state, selected = _places_browser_data_and_state(world, "Regions", search, limit)
+    return _dataframe(values, headers, key=f"places-{selected.lower()}-{len(headers)}"), status, state, _empty_place_sheet("regions")
+
+
+def load_towns_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, str, str]:
+    values, headers, status, state, selected = _places_browser_data_and_state(world, "Towns", search, limit)
+    return _dataframe(values, headers, key=f"places-{selected.lower()}-{len(headers)}"), status, state, _empty_place_sheet("towns")
+
+
+def load_polities_browser_with_detail_reset(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, str, str]:
+    values, headers, status, state, selected = _places_browser_data_and_state(world, "Polities", search, limit)
+    return _dataframe(values, headers, key=f"places-{selected.lower()}-{len(headers)}"), status, state, _empty_place_sheet("polities")
+
+
+def _places_browser_data(
+    world: str,
+    view: str,
+    search: str,
+    limit: object,
+) -> tuple[list[dict[str, object]], list[str], str, list[str], str]:
+    selected = (view or "Regions").strip()
+    headers = _place_headers(selected)
+    if not world:
+        return [], headers, "Choose a world.", [], selected
+    row_limit = _safe_int(limit, 50, 1, 250)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return [], headers, f"{path} is missing. Run a simulation first.", [], selected
+    values: list[dict[str, object]] = []
+    keys: list[str] = []
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        needle = f"%{search.strip()}%" if search else ""
+        if selected == "Towns":
+            if not _has_table(con, "simulation_settlements"):
+                return [], headers, "No simulation_settlements table found.", [], selected
+            world_where, params = _world_where(con, "simulation_settlements", saved_world)
+            clauses = [world_where]
+            if needle:
+                clauses.append(
+                    "(settlement_id like ? or region_id like ? or display_name like ? or level like ? or status like ?)"
+                )
+                params.extend([needle] * 5)
+            rows = con.execute(
+                f"""
+                select *
+                from simulation_settlements
+                where {' and '.join(clauses)}
+                order by status = 'active' desc, population_cap desc, display_name collate nocase
+                limit ?
+                """,
+                (*params, row_limit),
+            ).fetchall()
+            settlement_ids = [str(row["settlement_id"]) for row in rows]
+            residence_sql = _person_residence_sql(con)
+            alive_counts, top_jobs_by_settlement = _alive_counts_and_top_jobs_by_place(
+                con,
+                saved_world,
+                residence_sql,
+                settlement_ids,
+                limit=3,
+            )
+            for row in rows:
+                sid = str(row["settlement_id"])
+                rid = str(row["region_id"])
+                alive = alive_counts.get(sid, 0)
+                jobs = ", ".join(f"{job} ({n})" for job, n in top_jobs_by_settlement.get(sid, []))
+                values.append(
+                    {
+                        "Name": row["display_name"] or sid,
+                        "Level": row["level"] or "",
+                        "Alive": alive,
+                        "Region": rid,
+                        "Status": row["status"] or "",
+                        "Food": _fmt_number(row["food_pressure"]),
+                        "Stability": _fmt_number(row["stability"]),
+                        "Prosperity": _fmt_number(row["prosperity_pool"]),
+                        "Polity": _polity_names_for_settlement(con, sid, rid),
+                        "Top Jobs": jobs,
+                    }
+                )
+                keys.append(_encode_place_key(world, saved_world, sid))
+        elif selected == "Polities":
+            if not _has_table(con, "simulation_polities"):
+                return [], headers, "No simulation_polities table found.", [], selected
+            world_where, params = _world_where(con, "simulation_polities", saved_world)
+            clauses = [world_where]
+            if needle:
+                clauses.append("(cast(polity_id as text) like ? or name like ? or polity_type_id like ? or status like ?)")
+                params.extend([needle] * 4)
+            rows = con.execute(
+                f"""
+                select *
+                from simulation_polities
+                where {' and '.join(clauses)}
+                order by status = 'active' desc, polity_id
+                limit ?
+                """,
+                (*params, row_limit),
+            ).fetchall()
+            for row in rows:
+                pid = int(row["polity_id"])
+                terr = _count_one(
+                    con,
+                    "select count(*) from simulation_polity_territory where polity_id = ? and until_sim_year is null",
+                    (pid,),
+                ) if _has_table(con, "simulation_polity_territory") else 0
+                seats = _count_one(
+                    con,
+                    "select count(*) from simulation_office_seats where polity_id = ? and status = 'active'",
+                    (pid,),
+                ) if _has_table(con, "simulation_office_seats") else 0
+                holders = _count_one(
+                    con,
+                    "select count(*) from simulation_office_seats where polity_id = ? and status = 'active' and holder_person_id is not null",
+                    (pid,),
+                ) if _has_table(con, "simulation_office_seats") else 0
+                values.append(
+                    {
+                        "Name": row["name"] or f"Polity {pid}",
+                        "Type": row["polity_type_id"] or "",
+                        "Status": row["status"] or "",
+                        "Territory": terr,
+                        "Seats": seats,
+                        "Holders": holders,
+                        "Parent": row["parent_polity_id"] or "",
+                        "Capital": _settlement_name(con, saved_world, row["capital_settlement_id"]),
+                        "Founded": row["founded_sim_year"] or "",
+                    }
+                )
+                keys.append(_encode_place_key(world, saved_world, pid))
+        else:
+            if not _has_table(con, "simulation_regions"):
+                return [], headers, "No simulation_regions table found.", [], selected
+            world_where, params = _world_where(con, "simulation_regions", saved_world)
+            clauses = [world_where]
+            if needle:
+                clauses.append("(region_id like ? or region_display_name like ?)")
+                params.extend([needle] * 2)
+            rows = con.execute(
+                f"""
+                select *
+                from simulation_regions
+                where {' and '.join(clauses)}
+                order by total_population_cap desc, region_display_name collate nocase
+                limit ?
+                """,
+                (*params, row_limit),
+            ).fetchall()
+            region_ids = [str(row["region_id"]) for row in rows]
+            birth_region_sql = _person_birth_region_sql(con)
+            alive_counts, top_jobs_by_region = _alive_counts_and_top_jobs_by_place(
+                con,
+                saved_world,
+                birth_region_sql,
+                region_ids,
+                limit=3,
+            )
+            active_settlement_counts = _active_settlement_counts_by_region(con, saved_world, region_ids)
+            for row in rows:
+                rid = str(row["region_id"])
+                alive = alive_counts.get(rid, 0)
+                active_settlements = active_settlement_counts.get(rid, 0)
+                jobs = ", ".join(f"{job} ({n})" for job, n in top_jobs_by_region.get(rid, []))
+                values.append(
+                    {
+                        "Name": row["region_display_name"] or rid,
+                        "Alive": alive,
+                        "Settlements": active_settlements,
+                        "Food": _fmt_number(row["food_pressure"]),
+                        "Stability": _fmt_number(row["stability"]),
+                        "Market": _fmt_number(row["market_pull"]),
+                        "Prosperity": _fmt_number(row["prosperity_pool"]),
+                        "Treasury": _fmt_number(row["treasury_balance"]),
+                        "Polities": _polity_names_for_region(con, rid),
+                        "Top Jobs": jobs,
+                    }
+                )
+                keys.append(_encode_place_key(world, saved_world, rid))
+    headers = list(values[0].keys()) if values else _place_headers(selected)
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = f"{path.name}: showing {len(values)} {selected.lower()}{saved_world_note}. Click a row for details."
+    return values, headers, status, keys, selected
+
+
+def _empty_place_state_json(view: str = "Places") -> str:
+    return json.dumps({"view": view, "keys": [], "details": {}})
+
+
+def _render_region_sheet_from_snapshot(snapshot: dict[str, object], region_id: str) -> str:
+    row = _snapshot_map(snapshot, "regions", "region_id").get(region_id)
+    if not row:
+        return f'<div class="place-sheet muted">No region named {html.escape(region_id)}.</div>'
+    people = _snapshot_people_by_region(snapshot, region_id)
+    settlements = _snapshot_region_settlements(snapshot, region_id)
+    jobs = [f"{job}: {n}" for job, n in _top_jobs_from_people(people, 8)]
+    residents = _snapshot_notable_people(people, 8)
+    settlement_items = [
+        (
+            f"{s.get('display_name') or s.get('settlement_id')} "
+            f"({s.get('level')}, {s.get('status')}, pop {s.get('population_cap')})"
+        )
+        for s in settlements[:12]
+    ]
+    cards = "".join(
+        [
+            _detail_card("Alive", len(people)),
+            _detail_card("Settlements", len(settlements)),
+            _detail_card("Food Pressure", _fmt_number(row.get("food_pressure"))),
+            _detail_card("Stability", _fmt_number(row.get("stability"))),
+            _detail_card("Market Pull", _fmt_number(row.get("market_pull"))),
+            _detail_card("Prosperity", _fmt_number(row.get("prosperity_pool"))),
+            _detail_card("Treasury", _fmt_number(row.get("treasury_balance"))),
+            _detail_card("Polities", _snapshot_polity_names_for_region(snapshot, region_id) or "None"),
+        ]
+    )
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(str(row.get("region_display_name") or region_id))}</h2>'
+        f'<div class="place-subtitle">Region {html.escape(region_id)}</div>'
+        f'<div class="place-grid">{cards}</div>'
+        f'{_snapshot_region_map_html(snapshot, region_id)}'
+        '<div class="place-columns">'
+        f'<section><h3>Settlements</h3>{_ul(settlement_items)}</section>'
+        f'<section><h3>Top Jobs</h3>{_ul(jobs)}</section>'
+        f'<section><h3>Notable Residents</h3>{_ul(residents)}</section>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _render_town_sheet_from_snapshot(snapshot: dict[str, object], settlement_id: str) -> str:
+    row = _snapshot_map(snapshot, "settlements", "settlement_id").get(settlement_id)
+    if not row:
+        if not _snapshot_rows(snapshot, "settlements"):
+            return '<div class="place-sheet muted">No towns are recorded in the current save yet. Browse Towns after the simulation creates one.</div>'
+        return (
+            '<div class="place-sheet muted">'
+            f'Town {html.escape(settlement_id)} is no longer in the current save. '
+            'Browse Towns to refresh the list.'
+            '</div>'
+        )
+    sid = str(row.get("settlement_id") or settlement_id)
+    rid = str(row.get("region_id") or "")
+    people = _snapshot_people_by_settlement(snapshot, sid)
+    jobs = [f"{job}: {n}" for job, n in _top_jobs_from_people(people, 8)]
+    residents = _snapshot_notable_people(people, 8)
+    cards = "".join(
+        [
+            _detail_card("Alive", len(people)),
+            _detail_card("Level", row.get("level") or ""),
+            _detail_card("Status", row.get("status") or ""),
+            _detail_card("Region", rid),
+            _detail_card("Food Pressure", _fmt_number(row.get("food_pressure"))),
+            _detail_card("Stability", _fmt_number(row.get("stability"))),
+            _detail_card("Market Pull", _fmt_number(row.get("market_pull"))),
+            _detail_card("Prosperity", _fmt_number(row.get("prosperity_pool"))),
+            _detail_card("Polity", _snapshot_polity_names_for_settlement(snapshot, sid, rid) or "None"),
+            _detail_card("Founded", row.get("founded_sim_year") or "Unknown"),
+        ]
+    )
+    name_bits = [row.get("etymology"), row.get("name_category_primary"), row.get("name_culture_primary")]
+    name_line = " | ".join(str(x) for x in name_bits if x)
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(str(row.get("display_name") or sid))}</h2>'
+        f'<div class="place-subtitle">{html.escape(str(row.get("level") or "settlement"))} in {html.escape(rid)}</div>'
+        f'<div class="place-muted">{html.escape(name_line)}</div>'
+        f'<div class="place-grid">{cards}</div>'
+        f'{_snapshot_region_map_html(snapshot, rid, focus_settlement_id=sid)}'
+        '<div class="place-columns">'
+        f'<section><h3>Top Jobs</h3>{_ul(jobs)}</section>'
+        f'<section><h3>Notable Residents</h3>{_ul(residents)}</section>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: str) -> str:
+    try:
+        pid = int(polity_id)
+    except (TypeError, ValueError):
+        return '<div class="place-sheet muted">Choose a polity row to inspect it.</div>'
+    row = _snapshot_map(snapshot, "polities", "polity_id").get(str(pid))
+    if not row:
+        if not _snapshot_rows(snapshot, "polities"):
+            return '<div class="place-sheet muted">No polities are recorded in the current save yet. Browse Polities after the simulation forms one.</div>'
+        return f'<div class="place-sheet muted">Polity #{pid} is no longer in the current save. Browse Polities to refresh the list.</div>'
+    territories = sorted(
+        _snapshot_open_territory(snapshot, pid),
+        key=lambda terr: (str(terr.get("target_kind") or ""), str(terr.get("target_id") or "")),
+    )
+    seats = sorted(
+        [
+            seat
+            for seat in _snapshot_rows(snapshot, "seats")
+            if str(seat.get("polity_id")) == str(pid) and seat.get("status") == "active"
+        ],
+        key=lambda seat: (str(seat.get("title_id") or ""), _safe_int(seat.get("slot_index"), 0)),
+    )
+    vassals = sorted(
+        [
+            polity
+            for polity in _snapshot_rows(snapshot, "polities")
+            if str(polity.get("parent_polity_id")) == str(pid) and polity.get("status") == "active"
+        ],
+        key=lambda polity: str(polity.get("name") or ""),
+    )
+    territory_items = []
+    for terr in territories[:16]:
+        target = str(terr.get("target_id") or "")
+        if terr.get("target_kind") == "settlement":
+            target = _snapshot_settlement_name(snapshot, target)
+        territory_items.append(f"{terr.get('target_kind')}: {target} since {terr.get('since_sim_year')}")
+    seat_items = []
+    for seat in seats[:16]:
+        holder = _snapshot_person_link_text(snapshot, seat.get("holder_person_id")) if seat.get("holder_person_id") else "vacant"
+        scope = f" at {_snapshot_settlement_name(snapshot, seat.get('scope_settlement_id'))}" if seat.get("scope_settlement_id") else ""
+        seat_items.append(f"{seat.get('title_id')}{scope}: {holder}")
+    vassal_items = [f"{v.get('name')} ({v.get('polity_type_id')})" for v in vassals]
+    cards = "".join(
+        [
+            _detail_card("Type", row.get("polity_type_id") or ""),
+            _detail_card("Status", row.get("status") or ""),
+            _detail_card("Territories", len(territories)),
+            _detail_card("Seats", len(seats)),
+            _detail_card("Held Seats", sum(1 for seat in seats if seat.get("holder_person_id") is not None)),
+            _detail_card("Vassals", len(vassals)),
+            _detail_card("Capital", _snapshot_settlement_name(snapshot, row.get("capital_settlement_id")) or "None"),
+            _detail_card("Founded", row.get("founded_sim_year") or "Unknown"),
+        ]
+    )
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(str(row.get("name") or f"Polity {pid}"))}</h2>'
+        f'<div class="place-subtitle">Polity #{pid}</div>'
+        f'<div class="place-grid">{cards}</div>'
+        '<div class="place-columns">'
+        f'<section><h3>Territory</h3>{_ul(territory_items)}</section>'
+        f'<section><h3>Offices</h3>{_ul(seat_items)}</section>'
+        f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _render_place_sheet_from_snapshot(snapshot: dict[str, object], view: str, item_id: str) -> str:
+    selected = (view or "Regions").strip()
+    if selected == "Towns":
+        return _render_town_sheet_from_snapshot(snapshot, item_id)
+    if selected == "Polities":
+        return _render_polity_sheet_from_snapshot(snapshot, item_id)
+    return _render_region_sheet_from_snapshot(snapshot, item_id)
+
+
+def _snapshot_matches(row: dict[str, object], columns: Iterable[str], needle: str) -> bool:
+    if not needle:
+        return True
+    lowered = needle.lower()
+    return any(lowered in str(row.get(column) or "").lower() for column in columns)
+
+
+def _places_rows_from_snapshot(
+    snapshot: dict[str, object],
+    view: str,
+    search: str,
+    limit: object,
+) -> tuple[list[dict[str, object]], list[str], list[str], str]:
+    selected = (view or "Regions").strip()
+    headers = _place_headers(selected)
+    row_limit = _safe_int(limit, 50, 1, 250)
+    needle = (search or "").strip()
+    values: list[dict[str, object]] = []
+    item_ids: list[str] = []
+    if selected == "Towns":
+        rows = [
+            row
+            for row in _snapshot_rows(snapshot, "settlements")
+            if _snapshot_matches(row, ("settlement_id", "region_id", "display_name", "level", "status"), needle)
+        ]
+        rows = sorted(
+            rows,
+            key=lambda row: (
+                str(row.get("status") or "") != "active",
+                -_safe_int(row.get("population_cap"), 0),
+                str(row.get("display_name") or "").lower(),
+            ),
+        )[:row_limit]
+        for row in rows:
+            sid = str(row.get("settlement_id") or "")
+            rid = str(row.get("region_id") or "")
+            people = _snapshot_people_by_settlement(snapshot, sid)
+            jobs = ", ".join(f"{job} ({n})" for job, n in _top_jobs_from_people(people, 3))
+            values.append(
+                {
+                    "Name": row.get("display_name") or sid,
+                    "Level": row.get("level") or "",
+                    "Alive": len(people),
+                    "Region": rid,
+                    "Status": row.get("status") or "",
+                    "Food": _fmt_number(row.get("food_pressure")),
+                    "Stability": _fmt_number(row.get("stability")),
+                    "Prosperity": _fmt_number(row.get("prosperity_pool")),
+                    "Polity": _snapshot_polity_names_for_settlement(snapshot, sid, rid),
+                    "Top Jobs": jobs,
+                }
+            )
+            item_ids.append(sid)
+    elif selected == "Polities":
+        rows = [
+            row
+            for row in _snapshot_rows(snapshot, "polities")
+            if _snapshot_matches(row, ("polity_id", "name", "polity_type_id", "status"), needle)
+        ]
+        rows = sorted(
+            rows,
+            key=lambda row: (str(row.get("status") or "") != "active", _safe_int(row.get("polity_id"), 0)),
+        )[:row_limit]
+        for row in rows:
+            pid = str(row.get("polity_id") or "")
+            territories = _snapshot_open_territory(snapshot, pid)
+            seats = [
+                seat
+                for seat in _snapshot_rows(snapshot, "seats")
+                if str(seat.get("polity_id")) == pid and seat.get("status") == "active"
+            ]
+            values.append(
+                {
+                    "Name": row.get("name") or f"Polity {pid}",
+                    "Type": row.get("polity_type_id") or "",
+                    "Status": row.get("status") or "",
+                    "Territory": len(territories),
+                    "Seats": len(seats),
+                    "Holders": sum(1 for seat in seats if seat.get("holder_person_id") is not None),
+                    "Parent": row.get("parent_polity_id") or "",
+                    "Capital": _snapshot_settlement_name(snapshot, row.get("capital_settlement_id")),
+                    "Founded": row.get("founded_sim_year") or "",
+                }
+            )
+            item_ids.append(pid)
+    else:
+        rows = [
+            row
+            for row in _snapshot_rows(snapshot, "regions")
+            if _snapshot_matches(row, ("region_id", "region_display_name"), needle)
+        ]
+        rows = sorted(
+            rows,
+            key=lambda row: (-_safe_int(row.get("total_population_cap"), 0), str(row.get("region_display_name") or "").lower()),
+        )[:row_limit]
+        for row in rows:
+            rid = str(row.get("region_id") or "")
+            people = _snapshot_people_by_region(snapshot, rid)
+            jobs = ", ".join(f"{job} ({n})" for job, n in _top_jobs_from_people(people, 3))
+            active_settlements = sum(
+                1 for settlement in _snapshot_region_settlements(snapshot, rid) if settlement.get("status") == "active"
+            )
+            values.append(
+                {
+                    "Name": row.get("region_display_name") or rid,
+                    "Alive": len(people),
+                    "Settlements": active_settlements,
+                    "Food": _fmt_number(row.get("food_pressure")),
+                    "Stability": _fmt_number(row.get("stability")),
+                    "Market": _fmt_number(row.get("market_pull")),
+                    "Prosperity": _fmt_number(row.get("prosperity_pool")),
+                    "Treasury": _fmt_number(row.get("treasury_balance")),
+                    "Polities": _snapshot_polity_names_for_region(snapshot, rid),
+                    "Top Jobs": jobs,
+                }
+            )
+            item_ids.append(rid)
+    if values:
+        headers = list(values[0].keys())
+    return values, headers, item_ids, selected
+
+
+def _places_browser_data_and_state(
+    world: str,
+    view: str,
+    search: str,
+    limit: object,
+) -> tuple[list[dict[str, object]], list[str], str, str, str]:
+    selected = (view or "Regions").strip()
+    headers = _place_headers(selected)
+    if not world:
+        return [], headers, "Choose a world.", _empty_place_state_json(selected), selected
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return [], headers, f"{path} is missing. Run a simulation first.", _empty_place_state_json(selected), selected
+    details: dict[str, str] = {}
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        snapshot = _load_place_snapshot(con, saved_world)
+        values, headers, item_ids, selected = _places_rows_from_snapshot(snapshot, selected, search, limit)
+        for item_id in item_ids:
+            details[item_id] = _render_place_sheet_from_snapshot(snapshot, selected, item_id)
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = f"{path.name}: showing {len(values)} {selected.lower()}{saved_world_note}. Click a row for details."
+    state = json.dumps({"view": selected, "keys": item_ids, "details": details})
+    return values, headers, status, state, selected
+
+
+def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) -> str:
+    if _saved_table_has_world(con, "simulation_regions"):
+        row = con.execute(
+            "select * from simulation_regions where world = ? and region_id = ?",
+            (world, region_id),
+        ).fetchone()
+    else:
+        row = con.execute("select * from simulation_regions where region_id = ?", (region_id,)).fetchone()
+    if not row:
+        return f'<div class="place-sheet muted">No region named {html.escape(region_id)}.</div>'
+    people_where, people_params = _alive_where(con, world)
+    birth_region_sql = _person_birth_region_sql(con)
+    alive = _count_one(
+        con,
+        f"select count(*) from simulation_people where {people_where} and {birth_region_sql} = ?",
+        (*people_params, region_id),
+    )
+    settlements = _region_settlements(con, region_id)
+    jobs = [f"{job}: {n}" for job, n in _top_jobs_for_where(con, world, f"{birth_region_sql} = ?", (region_id,), limit=8)]
+    people = []
+    for p in _top_people_for_where(con, world, f"{birth_region_sql} = ?", (region_id,), limit=8):
+        person = _person_from_row(p, _trait_slots_for_world(world))
+        people.append(f"{_person_name(person)} — {person.get('job') or 'unassigned'}")
+    settlement_items = [
+        f"{s['display_name'] or s['settlement_id']} ({s['level']}, {s['status']}, pop {s['population_cap']})"
+        for s in settlements[:12]
+    ]
+    cards = "".join(
+        [
+            _detail_card("Alive", alive),
+            _detail_card("Settlements", len(settlements)),
+            _detail_card("Food Pressure", _fmt_number(row["food_pressure"])),
+            _detail_card("Stability", _fmt_number(row["stability"])),
+            _detail_card("Market Pull", _fmt_number(row["market_pull"])),
+            _detail_card("Prosperity", _fmt_number(row["prosperity_pool"])),
+            _detail_card("Treasury", _fmt_number(row["treasury_balance"])),
+            _detail_card("Polities", _polity_names_for_region(con, region_id) or "None"),
+        ]
+    )
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(str(row["region_display_name"] or region_id))}</h2>'
+        f'<div class="place-subtitle">Region {html.escape(region_id)}</div>'
+        f'<div class="place-grid">{cards}</div>'
+        f'{_region_map_html(con, region_id)}'
+        '<div class="place-columns">'
+        f'<section><h3>Settlements</h3>{_ul(settlement_items)}</section>'
+        f'<section><h3>Top Jobs</h3>{_ul(jobs)}</section>'
+        f'<section><h3>Notable Residents</h3>{_ul(people)}</section>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) -> str:
+    if _saved_table_has_world(con, "simulation_settlements"):
+        row = con.execute(
+            "select * from simulation_settlements where world = ? and settlement_id = ?",
+            (world, settlement_id),
+        ).fetchone()
+    else:
+        row = con.execute("select * from simulation_settlements where settlement_id = ?", (settlement_id,)).fetchone()
+    if not row:
+        if _has_table(con, "simulation_settlements"):
+            where, params = _world_where(con, "simulation_settlements", world)
+            total = _count_one(con, f"select count(*) from simulation_settlements where {where}", params)
+            if total == 0:
+                return '<div class="place-sheet muted">No towns are recorded in the current save yet. Browse Towns after the simulation creates one.</div>'
+        return (
+            '<div class="place-sheet muted">'
+            f'Town {html.escape(settlement_id)} is no longer in the current save. '
+            'Browse Towns to refresh the list.'
+            '</div>'
+        )
+    sid = str(row["settlement_id"])
+    rid = str(row["region_id"])
+    people_where, people_params = _alive_where(con, world)
+    residence_sql = _person_residence_sql(con)
+    alive = _count_one(
+        con,
+        f"select count(*) from simulation_people where {people_where} and {residence_sql} = ?",
+        (*people_params, sid),
+    )
+    jobs = [f"{job}: {n}" for job, n in _top_jobs_for_where(con, world, f"{residence_sql} = ?", (sid,), limit=8)]
+    residents = []
+    for p in _top_people_for_where(con, world, f"{residence_sql} = ?", (sid,), limit=8):
+        person = _person_from_row(p, _trait_slots_for_world(world))
+        residents.append(f"{_person_name(person)} — {person.get('job') or 'unassigned'}")
+    cards = "".join(
+        [
+            _detail_card("Alive", alive),
+            _detail_card("Level", row["level"] or ""),
+            _detail_card("Status", row["status"] or ""),
+            _detail_card("Region", rid),
+            _detail_card("Food Pressure", _fmt_number(row["food_pressure"])),
+            _detail_card("Stability", _fmt_number(row["stability"])),
+            _detail_card("Market Pull", _fmt_number(row["market_pull"])),
+            _detail_card("Prosperity", _fmt_number(row["prosperity_pool"])),
+            _detail_card("Polity", _polity_names_for_settlement(con, sid, rid) or "None"),
+            _detail_card("Founded", row["founded_sim_year"] or "Unknown"),
+        ]
+    )
+    name_bits = [row["etymology"], row["name_category_primary"], row["name_culture_primary"]]
+    name_line = " | ".join(str(x) for x in name_bits if x)
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(str(row["display_name"] or sid))}</h2>'
+        f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(rid)}</div>'
+        f'<div class="place-muted">{html.escape(name_line)}</div>'
+        f'<div class="place-grid">{cards}</div>'
+        f'{_region_map_html(con, rid, focus_settlement_id=sid)}'
+        '<div class="place-columns">'
+        f'<section><h3>Top Jobs</h3>{_ul(jobs)}</section>'
+        f'<section><h3>Notable Residents</h3>{_ul(residents)}</section>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) -> str:
+    try:
+        pid = int(polity_id)
+    except (TypeError, ValueError):
+        return '<div class="place-sheet muted">Choose a polity row to inspect it.</div>'
+    if _saved_table_has_world(con, "simulation_polities"):
+        row = con.execute(
+            "select * from simulation_polities where world = ? and polity_id = ?",
+            (world, pid),
+        ).fetchone()
+    else:
+        row = con.execute("select * from simulation_polities where polity_id = ?", (pid,)).fetchone()
+    if not row:
+        if _has_table(con, "simulation_polities"):
+            where, params = _world_where(con, "simulation_polities", world)
+            total = _count_one(con, f"select count(*) from simulation_polities where {where}", params)
+            if total == 0:
+                return '<div class="place-sheet muted">No polities are recorded in the current save yet. Browse Polities after the simulation forms one.</div>'
+        return f'<div class="place-sheet muted">Polity #{pid} is no longer in the current save. Browse Polities to refresh the list.</div>'
+    territories = con.execute(
+        """
+        select target_kind, target_id, since_sim_year
+        from simulation_polity_territory
+        where polity_id = ? and until_sim_year is null
+        order by target_kind, target_id
+        """,
+        (pid,),
+    ).fetchall() if _has_table(con, "simulation_polity_territory") else []
+    seats = con.execute(
+        """
+        select seat_id, title_id, scope_settlement_id, holder_person_id, term_expires_sim_year
+        from simulation_office_seats
+        where polity_id = ? and status = 'active'
+        order by title_id, slot_index
+        """,
+        (pid,),
+    ).fetchall() if _has_table(con, "simulation_office_seats") else []
+    vassals = con.execute(
+        """
+        select polity_id, name, polity_type_id
+        from simulation_polities
+        where parent_polity_id = ? and status = 'active'
+        order by name
+        """,
+        (pid,),
+    ).fetchall() if _has_table(con, "simulation_polities") else []
+    territory_items = []
+    for terr in territories[:16]:
+        target = str(terr["target_id"])
+        if terr["target_kind"] == "settlement":
+            target = _settlement_name(con, world, target)
+        territory_items.append(f"{terr['target_kind']}: {target} since {terr['since_sim_year']}")
+    seat_items = []
+    for seat in seats[:16]:
+        holder = _person_link_text(con, world, seat["holder_person_id"]) if seat["holder_person_id"] else "vacant"
+        scope = f" at {_settlement_name(con, world, seat['scope_settlement_id'])}" if seat["scope_settlement_id"] else ""
+        seat_items.append(f"{seat['title_id']}{scope}: {holder}")
+    vassal_items = [f"{v['name']} ({v['polity_type_id']})" for v in vassals]
+    cards = "".join(
+        [
+            _detail_card("Type", row["polity_type_id"] or ""),
+            _detail_card("Status", row["status"] or ""),
+            _detail_card("Territories", len(territories)),
+            _detail_card("Seats", len(seats)),
+            _detail_card("Held Seats", sum(1 for s in seats if s["holder_person_id"] is not None)),
+            _detail_card("Vassals", len(vassals)),
+            _detail_card("Capital", _settlement_name(con, world, row["capital_settlement_id"]) or "None"),
+            _detail_card("Founded", row["founded_sim_year"] or "Unknown"),
+        ]
+    )
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(str(row["name"] or f"Polity {pid}"))}</h2>'
+        f'<div class="place-subtitle">Polity #{pid}</div>'
+        f'<div class="place-grid">{cards}</div>'
+        '<div class="place-columns">'
+        f'<section><h3>Territory</h3>{_ul(territory_items)}</section>'
+        f'<section><h3>Offices</h3>{_ul(seat_items)}</section>'
+        f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
+        '</div>'
+        '</div>'
+    )
+
+
+def render_place_detail(world: str, view: str, key: object) -> str:
+    selected = (view or "Regions").strip()
+    if not key:
+        return '<div class="place-sheet muted">Click a region, town, or polity row to inspect it.</div>'
+    path_world, key_saved_world, item_id = _decode_place_key(world, key)
+    path = _db_path(path_world, "Save DB")
+    if not path.exists():
+        return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
+    with _connect_readonly(path) as con:
+        saved_world = key_saved_world or _resolve_saved_world(con, path_world)
+        if selected == "Towns":
+            html_out = _render_town_sheet(con, saved_world, item_id)
+        elif selected == "Polities":
+            html_out = _render_polity_sheet(con, saved_world, item_id)
+        else:
+            html_out = _render_region_sheet(con, saved_world, item_id)
+    return html_out
+
+
+def render_world_map_selection_detail(world: str, selection_json: str) -> str:
+    if not selection_json:
+        return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
+    try:
+        selection = json.loads(selection_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
+    view = str(selection.get("view") or "Regions")
+    item_id = str(selection.get("id") or "").strip()
+    if view not in {"Regions", "Towns"} or not item_id:
+        return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
+    return render_place_detail(world, view, _encode_place_key(world, "", item_id))
+
+
+def render_world_map_with_detail_reset(
+    world: str,
+    include_overlays: bool = True,
+    noisy_edges: bool = True,
+    labels: bool = True,
+) -> tuple[str, str]:
+    return (
+        render_world_map_html(world, include_overlays, noisy_edges, labels),
+        '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>',
+    )
+
+
+def _place_detail_from_state(state: object, row_index: int) -> str | None:
+    if isinstance(state, str):
+        try:
+            parsed = json.loads(state)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        keys = parsed.get("keys") if isinstance(parsed, dict) else None
+        details = parsed.get("details") if isinstance(parsed, dict) else None
+        if isinstance(keys, list) and isinstance(details, dict):
+            try:
+                key = str(keys[row_index])
+            except (IndexError, TypeError):
+                return None
+            detail = details.get(key)
+            return str(detail) if detail is not None else None
+    return None
+
+
+def select_place_from_table(keys: object, world: str, view: str, evt: gr.SelectData) -> str:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        index = int(row_index)
+    except Exception:
+        return '<div class="place-sheet muted">Click a region, town, or polity row to inspect it.</div>'
+    detail = _place_detail_from_state(keys, index)
+    if detail is not None:
+        return detail
+    try:
+        key = keys[index]  # type: ignore[index]
+    except Exception:
+        return '<div class="place-sheet muted">Click a region, town, or polity row to inspect it.</div>'
+    return render_place_detail(world, view, key)
+
+
+def _select_place_view(view: str, keys: object, world: str, evt: gr.SelectData) -> str:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        index = int(row_index)
+    except Exception:
+        return '<div class="place-sheet muted">Click a region, town, or polity row to inspect it.</div>'
+    detail = _place_detail_from_state(keys, index)
+    if detail is not None:
+        return detail
+    try:
+        key = keys[index]  # type: ignore[index]
+    except Exception:
+        return '<div class="place-sheet muted">Click a region, town, or polity row to inspect it.</div>'
+    return render_place_detail(world, view, key)
+
+
+def select_region_from_table(keys: object, world: str, evt: gr.SelectData) -> str:
+    return _select_place_view("Regions", keys, world, evt)
+
+
+def select_town_from_table(keys: object, world: str, evt: gr.SelectData) -> str:
+    return _select_place_view("Towns", keys, world, evt)
+
+
+def select_polity_from_table(keys: object, world: str, evt: gr.SelectData) -> str:
+    return _select_place_view("Polities", keys, world, evt)
 
 
 def load_csv_file(filename: str, search: str, limit: object, offset: object) -> tuple[gr.Dataframe, str, str]:
@@ -2141,12 +4030,22 @@ def build_app(default_world: str = "default") -> gr.Blocks:
     csvs = _csv_names()
     initial_world = default_world if default_world in worlds else (worlds[0] if worlds else "")
     initial_tables = _table_names(initial_world, "Config DB") if initial_world else []
+    initial_region_rows, initial_region_headers = [], PLACE_REGION_HEADERS
+    initial_town_rows, initial_town_headers = [], PLACE_TOWN_HEADERS
+    initial_polity_rows, initial_polity_headers = [], PLACE_POLITY_HEADERS
+    initial_region_status = "Click Browse Regions to load a local snapshot."
+    initial_town_status = "Click Browse Towns to load a local snapshot."
+    initial_polity_status = "Click Browse Polities to load a local snapshot."
+    initial_region_state = _empty_place_state_json("Regions")
+    initial_town_state = _empty_place_state_json("Towns")
+    initial_polity_state = _empty_place_state_json("Polities")
+    initial_world_map = render_world_map_html(initial_world, True, True, True) if initial_world else ""
 
     with gr.Blocks(title="History Project Data Browser") as app:
         gr.HTML(f"<style>{APP_CSS}</style>")
-        gr.Markdown("# History Project World Browser")
+        gr.Markdown("# History Project Data Browser")
 
-        with gr.Tab("World Browser"):
+        with gr.Tab("People") as people_tab:
             with gr.Row(elem_classes=["world-browser"]):
                 with gr.Column(scale=5):
                     with gr.Row():
@@ -2207,6 +4106,126 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         max_lines=24,
                         interactive=False,
                         buttons=["copy"],
+                    )
+
+        with gr.Tab("Regions") as regions_tab:
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=5):
+                    with gr.Row():
+                        region_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        region_limit = gr.Number(value=50, label="Limit", precision=0)
+                    region_search = gr.Textbox(
+                        label="Search Regions",
+                        placeholder="Region name or id...",
+                    )
+                    region_load = gr.Button("Browse Regions", variant="primary")
+                    region_status = gr.Textbox(value=initial_region_status, label="Status", interactive=False)
+                    region_table = gr.Dataframe(
+                        value=_table_values(initial_region_rows, initial_region_headers),
+                        headers=initial_region_headers,
+                        datatype=["str"] * len(initial_region_headers),
+                        column_count=len(initial_region_headers),
+                        label="Regions",
+                        interactive=False,
+                        wrap=False,
+                        max_height=520,
+                        elem_id="region-table",
+                        buttons=["fullscreen"],
+                    )
+                    region_keys_state = gr.State(initial_region_state)
+                with gr.Column(scale=6):
+                    region_sheet = gr.HTML(
+                        value='<div class="place-sheet muted">Browse regions, then click a row to inspect it.</div>',
+                        label="Region Sheet",
+                    )
+
+        with gr.Tab("Towns") as towns_tab:
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=5):
+                    with gr.Row():
+                        town_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        town_limit = gr.Number(value=50, label="Limit", precision=0)
+                    town_search = gr.Textbox(
+                        label="Search Towns",
+                        placeholder="Town, region, status, or level...",
+                    )
+                    town_load = gr.Button("Browse Towns", variant="primary")
+                    town_status = gr.Textbox(value=initial_town_status, label="Status", interactive=False)
+                    town_table = gr.Dataframe(
+                        value=_table_values(initial_town_rows, initial_town_headers),
+                        headers=initial_town_headers,
+                        datatype=["str"] * len(initial_town_headers),
+                        column_count=len(initial_town_headers),
+                        label="Towns",
+                        interactive=False,
+                        wrap=False,
+                        max_height=520,
+                        elem_id="town-table",
+                        buttons=["fullscreen"],
+                    )
+                    town_keys_state = gr.State(initial_town_state)
+                with gr.Column(scale=6):
+                    town_sheet = gr.HTML(
+                        value='<div class="place-sheet muted">Browse towns, then click a row to inspect it.</div>',
+                        label="Town Sheet",
+                    )
+
+        with gr.Tab("Polities") as polities_tab:
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=5):
+                    with gr.Row():
+                        polity_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        polity_limit = gr.Number(value=50, label="Limit", precision=0)
+                    polity_search = gr.Textbox(
+                        label="Search Polities",
+                        placeholder="Polity name, type, or status...",
+                    )
+                    polity_load = gr.Button("Browse Polities", variant="primary")
+                    polity_status = gr.Textbox(value=initial_polity_status, label="Status", interactive=False)
+                    polity_table = gr.Dataframe(
+                        value=_table_values(initial_polity_rows, initial_polity_headers),
+                        headers=initial_polity_headers,
+                        datatype=["str"] * len(initial_polity_headers),
+                        column_count=len(initial_polity_headers),
+                        label="Polities",
+                        interactive=False,
+                        wrap=False,
+                        max_height=520,
+                        elem_id="polity-table",
+                        buttons=["fullscreen"],
+                    )
+                    polity_keys_state = gr.State(initial_polity_state)
+                with gr.Column(scale=6):
+                    polity_sheet = gr.HTML(
+                        value='<div class="place-sheet muted">Browse polities, then click a row to inspect it.</div>',
+                        label="Polity Sheet",
+                    )
+
+        with gr.Tab("World Map") as world_map_tab:
+            with gr.Row(elem_classes=["world-browser"]):
+                map_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                map_include_overlays = gr.Checkbox(value=True, label="Settlements and Polities")
+                map_noisy_edges = gr.Checkbox(value=True, label="Noisy Edges")
+                map_labels = gr.Checkbox(value=True, label="Labels")
+                map_refresh = gr.Button("Render Map", variant="primary")
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=7):
+                    world_map_html = gr.HTML(value=initial_world_map, label="Generated World Map")
+                with gr.Column(scale=5):
+                    map_open_selection = gr.Textbox(
+                        value="",
+                        label="Map Selection",
+                        elem_id="map-open-selection",
+                        elem_classes=["world-map-open-controls"],
+                    )
+                    map_open_button = gr.Button(
+                        "Open Map Selection",
+                        elem_id="map-open-button",
+                        elem_classes=["world-map-open-controls"],
+                    )
+                    map_sheet = gr.HTML(
+                        value='<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>',
+                        label="Map Detail Sheet",
                     )
 
         with gr.Tab("Raw Data Browser"):
@@ -2305,11 +4324,43 @@ def build_app(default_world: str = "default") -> gr.Blocks:
         person_table.select(select_person_from_table, [person_ids_state, person_world], [person_sheet, person_share_text])
         person_open_button.click(render_person_outputs, [person_world, person_open_id], [person_sheet, person_share_text])
         person_open_id.submit(render_person_outputs, [person_world, person_open_id], [person_sheet, person_share_text])
+        people_tab.select(
+            load_people_browser,
+            person_browser_inputs,
+            [person_table, person_status, person_ids_state],
+        )
         app.load(
             load_people_browser,
             person_browser_inputs,
             [person_table, person_status, person_ids_state],
         )
+        region_inputs = [region_world, region_search, region_limit]
+        town_inputs = [town_world, town_search, town_limit]
+        polity_inputs = [polity_world, polity_search, polity_limit]
+        region_outputs = [region_table, region_status, region_keys_state, region_sheet]
+        town_outputs = [town_table, town_status, town_keys_state, town_sheet]
+        polity_outputs = [polity_table, polity_status, polity_keys_state, polity_sheet]
+        region_load.click(load_regions_browser_with_detail_reset, region_inputs, region_outputs)
+        town_load.click(load_towns_browser_with_detail_reset, town_inputs, town_outputs)
+        polity_load.click(load_polities_browser_with_detail_reset, polity_inputs, polity_outputs)
+        for region_input in region_inputs:
+            region_input.change(load_regions_browser_with_detail_reset, region_inputs, region_outputs)
+        for town_input in town_inputs:
+            town_input.change(load_towns_browser_with_detail_reset, town_inputs, town_outputs)
+        for polity_input in polity_inputs:
+            polity_input.change(load_polities_browser_with_detail_reset, polity_inputs, polity_outputs)
+        region_search.submit(load_regions_browser_with_detail_reset, region_inputs, region_outputs)
+        town_search.submit(load_towns_browser_with_detail_reset, town_inputs, town_outputs)
+        polity_search.submit(load_polities_browser_with_detail_reset, polity_inputs, polity_outputs)
+        map_inputs = [map_world, map_include_overlays, map_noisy_edges, map_labels]
+        map_outputs = [world_map_html, map_sheet]
+        map_refresh.click(render_world_map_with_detail_reset, map_inputs, map_outputs)
+        for map_input in map_inputs:
+            map_input.change(render_world_map_with_detail_reset, map_inputs, map_outputs)
+        map_open_button.click(render_world_map_selection_detail, [map_world, map_open_selection], map_sheet)
+        region_table.select(select_region_from_table, [region_keys_state, region_world], region_sheet)
+        town_table.select(select_town_from_table, [town_keys_state, town_world], town_sheet)
+        polity_table.select(select_polity_from_table, [polity_keys_state, polity_world], polity_sheet)
         world.change(refresh_sqlite_tables, [world, db_kind], [table, sqlite_status])
         db_kind.change(refresh_sqlite_tables, [world, db_kind], [table, sqlite_status])
         sqlite_load.click(

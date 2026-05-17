@@ -6,9 +6,16 @@ import json
 import math
 import random
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from library.geography import Region
+from library.world_map_geometry import (
+    MAP_GEOMETRY_VERSION,
+    RegionFeature,
+    WorldMapGeometry,
+    build_world_map_geometry,
+)
 
 
 def category_weights_for_region(region: Region) -> dict[str, float]:
@@ -99,6 +106,14 @@ class AbstractFeature:
     kind: str
     x: float
     y: float
+    source_region_feature_id: str | None = None
+
+
+@dataclass
+class AbstractBorder:
+    border_id: str
+    kind: str
+    points: list[tuple[float, float]]
 
 
 @dataclass
@@ -124,14 +139,20 @@ class LocalRegionGraph:
     region_id: str
     world: str
     features: list[AbstractFeature]
+    borders: list[AbstractBorder]
     settlements: list[SettlementPin]
     edges: list[LocalEdge]
+    source_geometry_version: str | None = None
+    region_cell_polygon: list[tuple[float, float]] | None = None
 
     def to_json_obj(self) -> dict[str, Any]:
         return {
             "region_id": self.region_id,
             "world": self.world,
+            "source_geometry_version": self.source_geometry_version,
+            "region_cell_polygon": self.region_cell_polygon or [],
             "features": [asdict(f) for f in self.features],
+            "borders": [asdict(b) for b in self.borders],
             "settlements": [asdict(s) for s in self.settlements],
             "edges": [asdict(e) for e in self.edges],
         }
@@ -157,60 +178,269 @@ def _rng_seed(
     return int(h[:16], 16)
 
 
+def _clamp01(value: float, *, pad: float = 0.04) -> float:
+    return min(1.0 - pad, max(pad, float(value)))
+
+
+def _region_text(region: Region) -> str:
+    return " ".join(
+        str(part or "").lower()
+        for part in (region.biome, region.terrain, region.keywords, region.region_name)
+    )
+
+
+def _terrain_family(region: Region) -> str:
+    text = _region_text(region)
+    if any(token in text for token in ("coast", "shore", "fjord", "harbor", "bay", "delta", "littoral")):
+        return "coast"
+    if any(token in text for token in ("river", "stream", "creek", "brook", "floodplain", "channel")):
+        return "riverland"
+    if any(token in text for token in ("highland", "mountain", "range", "ridge", "alps", "plateau", "cordillera")):
+        return "highlands"
+    if any(token in text for token in ("forest", "taiga", "wood", "boreal")):
+        return "forest"
+    if any(token in text for token in ("arid", "desert", "steppe", "salt", "oasis", "wadi")):
+        return "drylands"
+    return "plains"
+
+
+def _river_y(x: float) -> float:
+    return 0.5 + 0.13 * math.sin((float(x) * 2.6 + 0.15) * math.pi)
+
+
+def _ridge_y(x: float) -> float:
+    return 0.28 + 0.42 * float(x) + 0.06 * math.sin(float(x) * math.pi * 2.0)
+
+
+def _weighted_choice(rng: random.Random, pairs: list[tuple[str, float]]) -> str:
+    usable = [(kind, max(0.0, weight)) for kind, weight in pairs if weight > 0]
+    if not usable:
+        return "landmark"
+    kinds, weights = zip(*usable)
+    return rng.choices(kinds, weights=weights, k=1)[0]
+
+
+def _feature_kind_weights(region: Region) -> list[tuple[str, float]]:
+    text = _region_text(region)
+    family = _terrain_family(region)
+    weights: dict[str, float] = {
+        "landmark": 0.5,
+        "meadow": 0.55,
+        "spring": 0.4,
+        "hill": 0.45,
+        "grove": 0.35,
+    }
+    if family == "coast":
+        weights.update({"coast": 2.2, "bay": 1.4, "harbor": 1.1, "cliff": 0.9, "river": 0.45, "ford": 0.15})
+    elif family == "riverland":
+        weights.update({"river": 2.0, "stream": 1.2, "ford": 1.25, "bridge": 0.75, "marsh": 0.75, "meadow": 0.8, "mill": 0.55})
+    elif family == "highlands":
+        weights.update({"ridge": 1.8, "mountain": 1.15, "pass": 1.0, "spring": 0.9, "quarry": 0.65, "hill": 1.1, "lake": 0.35})
+    elif family == "forest":
+        weights.update({"forest": 2.0, "grove": 1.1, "stream": 0.85, "lake": 0.65, "bog": 0.5, "clearing": 0.75, "hill": 0.45})
+    elif family == "drylands":
+        weights.update({"wadi": 1.3, "oasis": 0.95, "spring": 0.7, "ridge": 0.8, "saltpan": 0.75, "well": 0.75, "mesa": 0.55})
+    else:
+        weights.update({"meadow": 1.35, "stream": 0.8, "ford": 0.55, "pasture": 1.0, "orchard": 0.75, "hill": 0.55, "market": 0.35})
+
+    keyword_boosts = {
+        "peat": "bog",
+        "bog": "bog",
+        "muskeg": "bog",
+        "fjord": "bay",
+        "cliff": "cliff",
+        "quarry": "quarry",
+        "orchard": "orchard",
+        "salt": "saltpan",
+        "lake": "lake",
+        "tarn": "lake",
+        "forest": "forest",
+        "creek": "stream",
+        "stream": "stream",
+        "river": "river",
+        "harbor": "harbor",
+        "flood": "marsh",
+    }
+    for token, kind in keyword_boosts.items():
+        if token in text:
+            weights[kind] = weights.get(kind, 0.0) + 0.9
+    return sorted(weights.items())
+
+
+def _keyword_feature_kinds(region: Region) -> list[str]:
+    text = _region_text(region)
+    hints = (
+        ("peat", "bog"),
+        ("bog", "bog"),
+        ("muskeg", "bog"),
+        ("fjord", "bay"),
+        ("cliff", "cliff"),
+        ("rooker", "cliff"),
+        ("quarry", "quarry"),
+        ("orchard", "orchard"),
+        ("pasture", "pasture"),
+        ("salt", "saltpan"),
+        ("lake", "lake"),
+        ("tarn", "lake"),
+        ("forest", "forest"),
+        ("creek", "stream"),
+        ("stream", "stream"),
+        ("river", "river"),
+        ("harbor", "harbor"),
+        ("mill", "mill"),
+        ("flood", "marsh"),
+        ("delta", "marsh"),
+        ("sturgeon", "fishery"),
+        ("cod", "fishery"),
+        ("fish", "fishery"),
+        ("bridge", "bridge"),
+        ("breakwater", "harbor"),
+        ("caravan", "market"),
+        ("market", "market"),
+        ("well", "well"),
+        ("oasis", "oasis"),
+    )
+    kinds: list[str] = []
+    seen: set[str] = set()
+    for token, kind in hints:
+        if token in text and kind not in seen:
+            kinds.append(kind)
+            seen.add(kind)
+    return kinds[:5]
+
+
+def _natural_feature_point(region: Region, kind: str, rng: random.Random) -> tuple[float, float]:
+    family = _terrain_family(region)
+    if kind in {"river", "stream", "ford", "bridge", "mill", "marsh", "bog", "wadi", "fishery"} or family == "riverland":
+        x = rng.uniform(0.08, 0.92)
+        return _clamp01(x), _clamp01(_river_y(x) + rng.uniform(-0.09, 0.09))
+    if kind in {"coast", "bay", "harbor", "cliff"} or family == "coast":
+        return _clamp01(rng.uniform(0.08, 0.92)), _clamp01(rng.uniform(0.72, 0.9))
+    if kind in {"ridge", "mountain", "pass", "quarry", "mesa"} or family == "highlands":
+        x = rng.uniform(0.08, 0.92)
+        return _clamp01(x), _clamp01(_ridge_y(x) + rng.uniform(-0.08, 0.08))
+    if kind in {"forest", "grove", "clearing", "lake"} or family == "forest":
+        return _clamp01(rng.uniform(0.14, 0.86)), _clamp01(rng.uniform(0.14, 0.86))
+    if kind in {"oasis", "well", "saltpan"} or family == "drylands":
+        return _clamp01(rng.uniform(0.18, 0.82)), _clamp01(rng.uniform(0.2, 0.78))
+    return _clamp01(rng.uniform(0.12, 0.88)), _clamp01(rng.uniform(0.18, 0.82))
+
+
+def _near_pin(pin: SettlementPin, rng: random.Random, radius: float = 0.09) -> tuple[float, float]:
+    angle = rng.uniform(0.0, math.tau)
+    dist = rng.uniform(radius * 0.35, radius)
+    return _clamp01(pin.x + math.cos(angle) * dist), _clamp01(pin.y + math.sin(angle) * dist)
+
+
+def _near_feature(feature: AbstractFeature, rng: random.Random, radius: float = 0.1) -> tuple[float, float]:
+    angle = rng.uniform(0.0, math.tau)
+    dist = rng.uniform(radius * 0.25, radius)
+    return _clamp01(feature.x + math.cos(angle) * dist), _clamp01(feature.y + math.sin(angle) * dist)
+
+
+def _settlement_landmark_kind(region: Region) -> str:
+    family = _terrain_family(region)
+    if family == "coast":
+        return "harbor"
+    if family == "riverland":
+        return "ford"
+    if family == "highlands":
+        return "pass"
+    if family == "forest":
+        return "clearing"
+    if family == "drylands":
+        return "well"
+    return "market"
+
+
+def _feature_kind_for_anchor(primary_kind: str | None, region: Region) -> str:
+    kind = (primary_kind or "").strip().lower()
+    if kind in {"settlement", "landmark"}:
+        return _settlement_landmark_kind(region)
+    return kind or _settlement_landmark_kind(region)
+
+
 def synthesize_features(
     region: Region,
     rng: random.Random,
     *,
     n_features: int | None = None,
+    settlement_pins: list[SettlementPin] | None = None,
+    primary_kind: str | None = None,
+    region_features: list[RegionFeature] | None = None,
+    region_cell_polygon: list[tuple[float, float]] | None = None,
 ) -> list[AbstractFeature]:
-    """Place abstract features in ``[0,1]²`` using jittered grid positions."""
+    """Place terrain-aware features in ``[0,1]²``.
+
+    Region-scale features follow the configured terrain/keywords, while settlement
+    landmarks are generated close to town pins so names like "ford" or "harbor"
+    have a visible local anchor.
+    """
     weights = category_weights_for_region(region)
     topo_bias = weights.get("Topography", 0.5)
-    base_n = 5 + int(round(topo_bias * 6))
+    pins = settlement_pins or []
+    base_n = 9 + int(round(topo_bias * 8)) + max(0, len(pins) - 1)
     n = base_n if n_features is None else max(3, int(n_features))
     feats: list[AbstractFeature] = []
-    side = int(math.ceil(math.sqrt(n)))
-    idx = 0
-    for gy in range(side):
-        for gx in range(side):
-            if idx >= n:
-                break
-            bx = (gx + 0.5) / side
-            by = (gy + 0.5) / side
-            jitter_x = rng.uniform(-0.15, 0.15) / side
-            jitter_y = rng.uniform(-0.15, 0.15) / side
-            x = min(1.0, max(0.0, bx + jitter_x))
-            y = min(1.0, max(0.0, by + jitter_y))
-            kinds = [
-                "forest",
-                "river",
-                "hill",
-                "meadow",
-                "ford",
-                "coast",
-                "landmark",
-            ]
-            if "coast" in (region.terrain or "").lower():
-                kind = rng.choices(
-                    kinds, weights=[1, 1, 1, 1, 1, 3, 1], k=1
-                )[0]
-            elif "river" in (region.terrain or "").lower():
-                kind = rng.choices(
-                    kinds, weights=[1, 3, 1, 1, 2, 0.5, 1], k=1
-                )[0]
-            else:
-                kind = rng.choice(kinds)
-            feats.append(
-                AbstractFeature(
-                    feature_id=f"{region.region_id}:f{idx}",
-                    kind=kind,
-                    x=x,
-                    y=y,
-                )
+
+    def add(kind: str, x: float, y: float, source_region_feature_id: str | None = None) -> None:
+        feats.append(
+            AbstractFeature(
+                feature_id=f"{region.region_id}:f{len(feats)}",
+                kind=kind,
+                x=_clamp01(x),
+                y=_clamp01(y),
+                source_region_feature_id=source_region_feature_id,
             )
-            idx += 1
-        if idx >= n:
-            break
+        )
+
+    if region_features:
+        for feature in region_features:
+            x, y = _region_feature_to_local_point(feature, region_cell_polygon or [])
+            add(feature.kind, x, y, feature.feature_id)
+
+    family = _terrain_family(region)
+    if family == "riverland":
+        for x in (0.14, 0.34, 0.56, 0.78):
+            add("river", x + rng.uniform(-0.025, 0.025), _river_y(x) + rng.uniform(-0.025, 0.025))
+    elif family == "coast":
+        for x, kind in ((0.18, "coast"), (0.42, "bay"), (0.66, "harbor"), (0.84, "cliff")):
+            add(kind, x + rng.uniform(-0.035, 0.035), rng.uniform(0.76, 0.9))
+    elif family == "highlands":
+        for x, kind in ((0.18, "ridge"), (0.38, "mountain"), (0.58, "pass"), (0.78, "spring")):
+            add(kind, x + rng.uniform(-0.03, 0.03), _ridge_y(x) + rng.uniform(-0.04, 0.04))
+    elif family == "forest":
+        for kind in ("forest", "stream", "grove", "clearing"):
+            x, y = _natural_feature_point(region, kind, rng)
+            add(kind, x, y)
+    elif family == "drylands":
+        for kind in ("wadi", "spring", "well", "ridge"):
+            x, y = _natural_feature_point(region, kind, rng)
+            add(kind, x, y)
+    else:
+        for kind in ("meadow", "stream", "pasture", "hill"):
+            x, y = _natural_feature_point(region, kind, rng)
+            add(kind, x, y)
+
+    for kind in _keyword_feature_kinds(region):
+        x, y = _natural_feature_point(region, kind, rng)
+        add(kind, x, y)
+
+    anchor_kind = _feature_kind_for_anchor(primary_kind, region)
+    for pin in pins:
+        x, y = _near_pin(pin, rng, radius=0.065)
+        add(anchor_kind, x, y)
+        x, y = _near_pin(pin, rng, radius=0.09)
+        add(_settlement_landmark_kind(region), x, y)
+
+    kind_weights = _feature_kind_weights(region)
+    while len(feats) < n:
+        kind = _weighted_choice(rng, kind_weights)
+        if pins and rng.random() < 0.58:
+            x, y = _near_pin(rng.choice(pins), rng, radius=0.14)
+        else:
+            x, y = _natural_feature_point(region, kind, rng)
+        add(kind, x, y)
     return feats
 
 
@@ -234,6 +464,40 @@ def _nearest_feature(
     return best
 
 
+def _settlement_base_point(
+    region: Region,
+    rng: random.Random,
+    slot: int,
+    total_slots: int,
+) -> tuple[float, float]:
+    family = _terrain_family(region)
+    total = max(1, int(total_slots))
+    if total == 1:
+        t = 0.5 + rng.uniform(-0.08, 0.08)
+    else:
+        t = (slot + 0.5) / total + rng.uniform(-0.045, 0.045)
+    t = _clamp01(t, pad=0.12)
+
+    if family == "coast":
+        return _clamp01(0.12 + 0.76 * t), _clamp01(rng.uniform(0.68, 0.82))
+    if family == "riverland":
+        x = _clamp01(0.1 + 0.8 * t)
+        return x, _clamp01(_river_y(x) + rng.uniform(-0.065, 0.065))
+    if family == "highlands":
+        x = _clamp01(0.12 + 0.76 * t)
+        # Settlements sit near passes and valley shoulders, not on the peaks.
+        return x, _clamp01(_ridge_y(x) + rng.choice((-1.0, 1.0)) * rng.uniform(0.07, 0.13))
+    if family == "forest":
+        angle = math.tau * t
+        radius = 0.16 + 0.09 * rng.random()
+        return _clamp01(0.5 + math.cos(angle) * radius), _clamp01(0.5 + math.sin(angle) * radius)
+    if family == "drylands":
+        x = _clamp01(0.18 + 0.64 * t)
+        return x, _clamp01(0.45 + rng.uniform(-0.18, 0.18))
+    x = _clamp01(0.18 + 0.64 * t)
+    return x, _clamp01(0.42 + rng.uniform(-0.2, 0.2))
+
+
 def place_settlement_pins(
     *,
     region: Region,
@@ -244,26 +508,138 @@ def place_settlement_pins(
 ) -> list[SettlementPin]:
     """Assign each settlement slot a position relative to the nearest matching feature."""
     pins: list[SettlementPin] = []
+    anchors = list(features)
+    if primary_kind:
+        preferred = [f for f in features if f.kind == primary_kind]
+        if preferred:
+            anchors = preferred
     for slot in range(max(1, settlement_slots)):
-        # Base point in region — deterministic jitter per slot.
-        bx = 0.35 + 0.3 * rng.random()
-        by = 0.35 + 0.3 * rng.random()
-        anchor = _nearest_feature(features, bx, by, primary_kind)
-        ox = (bx - anchor.x) * 0.08
-        oy = (by - anchor.y) * 0.08
-        hint = f"near_{anchor.kind}"
+        if anchors:
+            anchor = anchors[slot % len(anchors)]
+            bx, by = _near_feature(anchor, rng, radius=0.11)
+        else:
+            bx, by = _settlement_base_point(region, rng, slot, max(1, settlement_slots))
+            anchor = _nearest_feature(features, bx, by, primary_kind) if features else None
+        ox = (bx - anchor.x) if anchor is not None else 0.0
+        oy = (by - anchor.y) if anchor is not None else 0.0
+        hint = f"near_{anchor.kind}" if anchor is not None else f"near_{_settlement_landmark_kind(region)}"
         pins.append(
             SettlementPin(
                 settlement_slot=slot,
-                x=min(1.0, max(0.0, bx)),
-                y=min(1.0, max(0.0, by)),
-                anchor_feature_id=anchor.feature_id,
+                x=_clamp01(bx),
+                y=_clamp01(by),
+                anchor_feature_id=anchor.feature_id if anchor is not None else None,
                 offset_dx=ox,
                 offset_dy=oy,
                 narrative_hint=hint,
             )
         )
     return pins
+
+
+def attach_settlement_anchors(
+    pins: list[SettlementPin],
+    features: list[AbstractFeature],
+    *,
+    primary_kind: str | None,
+) -> None:
+    """Mutate pins with their closest visible anchor after features are synthesized."""
+    for pin in pins:
+        anchor = _nearest_feature(features, pin.x, pin.y, primary_kind)
+        pin.anchor_feature_id = anchor.feature_id
+        pin.offset_dx = pin.x - anchor.x
+        pin.offset_dy = pin.y - anchor.y
+        pin.narrative_hint = f"near_{anchor.kind}"
+
+
+def _wiggled_edge(
+    rng: random.Random,
+    side: str,
+    *,
+    steps: int = 7,
+    amplitude: float = 0.035,
+) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    for i in range(steps):
+        t = i / max(1, steps - 1)
+        wiggle = rng.uniform(-amplitude, amplitude)
+        if side == "north":
+            x, y = t, 0.03 + wiggle
+        elif side == "south":
+            x, y = 1.0 - t, 0.97 + wiggle
+        elif side == "east":
+            x, y = 0.97 + wiggle, t
+        else:
+            x, y = 0.03 + wiggle, 1.0 - t
+        points.append((_clamp01(x, pad=0.015), _clamp01(y, pad=0.015)))
+    return points
+
+
+def _region_feature_to_local_point(feature: RegionFeature, region_cell_polygon: list[tuple[float, float]]) -> tuple[float, float]:
+    if not region_cell_polygon:
+        return _clamp01(feature.x), _clamp01(feature.y)
+    xs = [p[0] for p in region_cell_polygon]
+    ys = [p[1] for p in region_cell_polygon]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    w = max(1e-9, max_x - min_x)
+    h = max(1e-9, max_y - min_y)
+    return _clamp01((feature.x - min_x) / w), _clamp01((feature.y - min_y) / h)
+
+
+def _cell_polygon_to_local(region_cell_polygon: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    if not region_cell_polygon:
+        return []
+    xs = [p[0] for p in region_cell_polygon]
+    ys = [p[1] for p in region_cell_polygon]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    w = max(1e-9, max_x - min_x)
+    h = max(1e-9, max_y - min_y)
+    return [(_clamp01((x - min_x) / w, pad=0.015), _clamp01((y - min_y) / h, pad=0.015)) for x, y in region_cell_polygon]
+
+
+def _world_geometry_for_region(
+    *,
+    world: str,
+    region_id: str,
+    db_path: Path | str | None,
+    world_geometry: WorldMapGeometry | None,
+) -> tuple[list[RegionFeature], list[tuple[float, float]], str | None]:
+    geometry = world_geometry
+    if geometry is None:
+        try:
+            geometry = build_world_map_geometry(world=world, db_path=db_path)
+        except Exception:
+            return [], [], None
+    features = geometry.features_by_region_id().get(region_id, [])
+    cell = geometry.cell_by_region_id().get(region_id)
+    return features, list(cell.polygon) if cell is not None else [], geometry.version
+
+
+def synthesize_borders(region: Region, rng: random.Random) -> list[AbstractBorder]:
+    """Create natural-looking soft region boundaries for the local map."""
+    family = _terrain_family(region)
+    if family == "coast":
+        primary_kind = "coastline"
+    elif family == "riverland":
+        primary_kind = "river_boundary"
+    elif family == "highlands":
+        primary_kind = "ridge_boundary"
+    elif family == "forest":
+        primary_kind = "forest_boundary"
+    elif family == "drylands":
+        primary_kind = "dry_boundary"
+    else:
+        primary_kind = "soft_boundary"
+
+    borders = [
+        AbstractBorder(f"{region.region_id}:b0", primary_kind, _wiggled_edge(rng, "north")),
+        AbstractBorder(f"{region.region_id}:b1", "soft_boundary", _wiggled_edge(rng, "east")),
+        AbstractBorder(f"{region.region_id}:b2", "soft_boundary", _wiggled_edge(rng, "south")),
+        AbstractBorder(f"{region.region_id}:b3", "soft_boundary", _wiggled_edge(rng, "west")),
+    ]
+    return borders
 
 
 def intra_region_edges(pins: list[SettlementPin]) -> list[LocalEdge]:
@@ -286,24 +662,45 @@ def build_local_region_graph(
     settlement_slots: int = 1,
     primary_meaning: str | None = None,
     primary_category: str | None = None,
+    db_path: Path | str | None = None,
+    world_geometry: WorldMapGeometry | None = None,
 ) -> LocalRegionGraph:
     """Deterministic layout when ``rng`` is seeded consistently for the region."""
-    feats = synthesize_features(region, rng)
     kind = feature_kind_for_meaning(primary_meaning or "", primary_category or "")
+    anchor_kind = _feature_kind_for_anchor(kind, region)
+    source_features, region_cell_polygon, source_version = _world_geometry_for_region(
+        world=world,
+        region_id=region.region_id,
+        db_path=db_path,
+        world_geometry=world_geometry,
+    )
+    feats = synthesize_features(
+        region,
+        rng,
+        settlement_pins=None,
+        primary_kind=kind,
+        region_features=source_features,
+        region_cell_polygon=region_cell_polygon,
+    )
     pins = place_settlement_pins(
         region=region,
         features=feats,
         rng=rng,
         settlement_slots=settlement_slots,
-        primary_kind=kind,
+        primary_kind=anchor_kind,
     )
+    attach_settlement_anchors(pins, feats, primary_kind=anchor_kind)
+    borders = synthesize_borders(region, rng)
     edges = intra_region_edges(pins)
     return LocalRegionGraph(
         region_id=region.region_id,
         world=world,
         features=feats,
+        borders=borders,
         settlements=pins,
         edges=edges,
+        source_geometry_version=source_version or MAP_GEOMETRY_VERSION,
+        region_cell_polygon=_cell_polygon_to_local(region_cell_polygon),
     )
 
 

@@ -13,6 +13,7 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/last_name.csv` | ~2.7k + header | One row per (`name`, `ethnic`) |
 | `config/species.csv` | 11 species rows + header | One row per (`species`, `ethnic`) |
 | `config/genome.csv` | One row per trait + header | Trait keys + narrative poles + gender sign skew |
+| `config/genome_save_columns.csv` | One row per genome save slot | Compact checkpoint slot → trait mapping |
 | `config/world_start.csv` | Worlds + mortality + header + **`population_scale`** | One row per `world`. `population_scale` (default `0.05`) is the **shared global** modifier applied to region `carrying_capacity` (see [`library/geography.py`](../library/geography.py)) **and** to `government_polity_types.min_population_to_form` / `max_population_before_split` and to settlement-leadership thresholds in `government_titles.csv`. |
 | `config/world_geography_continents.csv` | Small + header | One row per (`world`, `continent_id`) |
 | `config/world_geography_regions.csv` | Small + header | One row per (`world`, `region_id`) |
@@ -119,6 +120,22 @@ Cross-reference: `ethnic` values align across `ethnic.csv`, `first_name.csv`, `l
 | `excess description` | string | Adjective form of the excess pole (same sentence pattern); falls back to `excess deviation`. |
 
 **Design and RNG:** See **`dev_rules/genome.md`** (0 = ideal, magnitude ~ bell on [0,100], sign + skew).
+
+---
+
+## `config/genome_save_columns.csv`
+
+**Purpose:** Configure the compact trait slot order used when checkpointing `Person.genome` and `Person.mind_body` into `save.sqlite`.
+
+Runtime code still uses normal dictionaries keyed by trait name. The compact save payload stores trait values as arrays (`g` for genome, `mb` for mind/body) and expands them through this table on resume and in the data browser.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `slot` | string | Short readable storage slot (`a`..`z`, then `aa`, `ab`, etc.). |
+| `trait` | string | Trait key from `config/genome.csv`. |
+| `sort_order` | integer | Array position; must stay stable for saves written with this config. |
+
+When adding or renaming a genome trait, update both `genome.csv` and this mapping. Because this project is pre-alpha, old saves may be deleted/regenerated instead of migrated.
 
 ---
 

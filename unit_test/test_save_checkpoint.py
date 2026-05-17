@@ -74,14 +74,21 @@ class TestSaveCheckpoint(unittest.TestCase):
                     """
                     INSERT INTO simulation_people (
                         person_id, is_founder, father_id, mother_id,
-                        is_alive, person_json
+                        is_alive, first_name, last_name, gender, ethnic,
+                        species, birthyear, person_json
                     )
-                    VALUES (?, ?, NULL, NULL, ?, ?)
+                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         1,
                         1,
                         1,
+                        "Test",
+                        "Person",
+                        "female",
+                        "human",
+                        "human",
+                        1000,
                         json.dumps(person_payload, separators=(",", ":")),
                     ),
                 )
@@ -124,9 +131,10 @@ class TestSaveCheckpoint(unittest.TestCase):
                     1,
                 )
                 row = conn.execute(
-                    "SELECT person_json FROM simulation_people WHERE person_id = 1"
+                    "SELECT first_name, person_json FROM simulation_people WHERE person_id = 1"
                 ).fetchone()
-                self.assertEqual(json.loads(row[0])["first_name"], "Test")
+                self.assertEqual(row[0], "Test")
+                self.assertEqual(json.loads(row[1])["first_name"], "Test")
 
     def test_checkpoint_roundtrip_one_person(self) -> None:
         random.seed(42)
@@ -149,6 +157,13 @@ class TestSaveCheckpoint(unittest.TestCase):
                 ctx.add_person(person=p, is_founder=True)
                 checkpoint_simulation_to_save(ctx)
                 with sqlite3.connect(sav) as conn:
+                    person_row = conn.execute(
+                        """
+                        SELECT first_name, last_name, birthyear, person_json
+                        FROM simulation_people
+                        WHERE person_id = 1
+                        """
+                    ).fetchone()
                     n = conn.execute(
                         "SELECT COUNT(*) FROM simulation_events",
                     ).fetchone()[0]
@@ -171,6 +186,15 @@ class TestSaveCheckpoint(unittest.TestCase):
                         get_region(birth_rid, world="default", db_path=cfg).region_name or ""
                     ).strip()
                 self.assertGreaterEqual(int(n), 1)
+                self.assertEqual(person_row[0], p.first_name)
+                self.assertEqual(person_row[1], p.last_name)
+                self.assertEqual(int(person_row[2]), p.birthyear)
+                person_ext = json.loads(person_row[3])
+                self.assertNotIn("first_name", person_ext)
+                self.assertNotIn("genome", person_ext)
+                self.assertNotIn("ts", person_ext)
+                self.assertIn("g", person_ext)
+                self.assertIsInstance(person_ext["g"], list)
                 self.assertEqual(int(n_regions), len(ctx.settlement_ids_by_region))
                 self.assertEqual(int(n_settle), len(ctx.settlements_by_id))
                 self.assertIsNotNone(sample_rn)
@@ -188,6 +212,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 self.assertEqual(len(ctx2.people), 1)
                 self.assertEqual(ctx2.people[0].person_id, 1)
                 self.assertEqual(ctx2.people[0].person.full_name, p.full_name)
+                self.assertEqual(ctx2.people[0].person.genome, p.genome)
                 self.assertTrue(ctx2.settlements_by_id)
 
     def test_start_year_clears_checkpoint(self) -> None:

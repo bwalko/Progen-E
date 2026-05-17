@@ -13,7 +13,7 @@ Reference for integrating and testing full simulation runs (`SimulationContext`)
 
 Ensure the world directory and `temp/` exist before a run; [`ensure_world_directories`](../library/world_bootstrap.py) does this (`SimulationContext.create` calls it).
 
-`save.sqlite` schema v2 is single-world: runtime tables do **not** include a `world` column. The folder path (`worlds/<id>/`) is the world identity. The immutable `config.sqlite` tables still keep their `world` column because they are imported from shared CSV config.
+`save.sqlite` schema v3 is single-world and uses compact people checkpoint rows: runtime tables do **not** include a `world` column, common `Person` fields live in typed `simulation_people` columns, and `person_json` keeps compact extension payload such as genome/mind-body arrays keyed through `config/genome_save_columns.csv`. The folder path (`worlds/<id>/`) is the world identity. The immutable `config.sqlite` tables still keep their `world` column because they are imported from shared CSV config.
 
 ## Reset world for tests
 

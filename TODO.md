@@ -29,11 +29,9 @@ Current finding from `worlds/default/save.sqlite`:
 
 Implementation direction:
 
-1. Flatten hot `simulation_people` fields into columns; leave sparse extension data in JSON.
-2. Store genome/mind-body data as a compact versioned representation or fixed trait table/array rather than repeating 30 long JSON trait keys per person.
-3. Normalize settlement/region IDs to integer surrogate keys while retaining readable slugs in lookup tables.
-4. Redesign `simulation_events` around common columns plus `simulation_event_people(event_id, person_id, role)` for timeline queries; reserve JSON for rare detail.
-5. Consider optional verbose event logging for debugging-heavy runs.
+1. Normalize settlement/region IDs to integer surrogate keys while retaining readable slugs in lookup tables.
+2. Redesign `simulation_events` around common columns plus `simulation_event_people(event_id, person_id, role)` for timeline queries; reserve JSON for rare detail.
+3. Consider optional verbose event logging for debugging-heavy runs.
 
 ### Immediate Performance Work
 

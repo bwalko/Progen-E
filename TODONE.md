@@ -1,5 +1,28 @@
 # TODONE
 
+## Better SVG Map Data Plan
+
+### Completed Geometry Foundation Work
+
+- Added a generated world-map geometry layer:
+  - deterministic geometry versioning
+  - route-aware continent and region layout
+  - dependency-light bounded Voronoi-style region polygons
+  - generated region features, route edges, and river paths
+
+- Refactored settlement-local geography to consume pre-existing region geography:
+  - settlement pins now anchor to generated region features
+  - local geography JSON includes `source_geometry_version`
+  - local geography JSON includes normalized `region_cell_polygon`
+  - existing settlement/browser JSON shape remains compatible
+
+- Added focused regression coverage:
+  - byte-stable deterministic world geometry
+  - valid cells and feature anchors for every configured region
+  - renderable route edge points
+  - settlement site slots mapped to generated geography features
+  - existing Gradio place browser rendering remains covered
+
 ## Scale Population Simulation Toward Millions
 
 ### Completed Performance Work
@@ -74,3 +97,14 @@
   - checkpoint/bootstrap logic counts people without a world filter
   - Gradio browser tolerates both old and new save schemas for inspection
   - polity map utility no longer needs `--sim-world`
+
+- Added compact `simulation_people` checkpoint storage in save schema v3:
+  - common `Person` fields are stored as typed columns for cheaper writes, reads, sorting, and filtering
+  - `person_json` now keeps extension payload only, currently compact genome/mind-body arrays and derived trait tags
+  - checkpoint resume reconstructs full `Person` records from columns plus extension JSON
+  - Gradio people browsing reads either compact columns or older JSON-only rows
+
+- Compacted genome and mind/body checkpoint payloads:
+  - added `config/genome_save_columns.csv` as the configurable slot-to-trait mapping
+  - save payloads use short keys (`g` for genome, `mb` for mind/body) with trait values stored as arrays
+  - runtime `Person.genome` / `Person.mind_body` remain named dictionaries so existing simulation logic keeps using trait names

@@ -67,7 +67,7 @@ Created/migrated via `ensure_checkpoint_schema` → `government_checkpoint.ensur
 - `simulation_office_seats`, `simulation_office_holdings` — seat definitions vs time-bounded holdings.
 - `simulation_dynasties`, `simulation_alliances`, `simulation_campaigns`.
 
-These save tables follow save schema v2 and do not store a `world` column; `worlds/<id>/save.sqlite` is the world boundary.
+These save tables follow the single-world save schema and do not store a `world` column; `worlds/<id>/save.sqlite` is the world boundary.
 
 Full snapshots call `checkpoint_government` from `checkpoint_simulation_snapshot`; resume loads via `load_government` inside `try_load_simulation_checkpoint`.
 
