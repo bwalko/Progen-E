@@ -23,10 +23,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "temp" mkdir "temp"
-echo.>>"temp\gradio_data_browser_console.log"
-echo ===== Starting History Project Data Browser %DATE% %TIME% =====>>"temp\gradio_data_browser_console.log"
-start "History Project Data Browser" /min cmd /c ""%PYTHON_EXE%" "utils\gradio_data_browser.py" --world default --host 127.0.0.1 --port 7860 1>>"temp\gradio_data_browser_console.log" 2>>&1"
+start "History Project Data Browser" /min "%PYTHON_EXE%" "utils\gradio_data_browser.py" --world default --host 127.0.0.1 --port 7860
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$url = '%URL%';" ^

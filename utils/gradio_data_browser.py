@@ -63,6 +63,41 @@ LEGACY_SCORE_KEY_TO_LABEL = {
 }
 LEGACY_SCORE_LABEL_TO_KEY = {v: k for k, v in LEGACY_SCORE_KEY_TO_LABEL.items()}
 LOGGER = logging.getLogger("gradio_data_browser")
+REGION_BROWSER_HEADERS = [
+    "Name",
+    "Alive",
+    "Settlements",
+    "Food",
+    "Stability",
+    "Market",
+    "Prosperity",
+    "Treasury",
+    "Top Jobs",
+]
+POLITY_BROWSER_HEADERS = [
+    "Name",
+    "Type",
+    "Status",
+    "Territory",
+    "Seats",
+    "Holders",
+    "Parent",
+    "Capital",
+    "Founded",
+]
+SETTLEMENT_BROWSER_HEADERS = [
+    "Name",
+    "Level",
+    "Alive",
+    "Region",
+    "Status",
+    "Food",
+    "Stability",
+    "Market",
+    "Prosperity",
+    "Founded",
+    "Top Jobs",
+]
 
 from library.world_map_geometry import build_world_map_geometry  # noqa: E402
 from library.world_map_svg import load_world_map_overlays, render_world_map_svg  # noqa: E402
@@ -1233,6 +1268,280 @@ def load_people_browser(
     return _dataframe(values, headers), status, person_ids
 
 
+def _empty_settlements_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=SETTLEMENT_BROWSER_HEADERS)
+
+
+def _empty_regions_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=REGION_BROWSER_HEADERS)
+
+
+def _empty_polities_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=POLITY_BROWSER_HEADERS)
+
+
+def _polity_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> dict[str, object]:
+    pid = int(row["polity_id"])
+    territory = _count_one(
+        con,
+        "select count(*) from simulation_polity_territory where polity_id = ? and until_sim_year is null",
+        (pid,),
+    ) if _has_table(con, "simulation_polity_territory") else 0
+    seats = _count_one(
+        con,
+        "select count(*) from simulation_office_seats where polity_id = ? and status = 'active'",
+        (pid,),
+    ) if _has_table(con, "simulation_office_seats") else 0
+    holders = _count_one(
+        con,
+        "select count(*) from simulation_office_seats where polity_id = ? and status = 'active' and holder_person_id is not null",
+        (pid,),
+    ) if _has_table(con, "simulation_office_seats") else 0
+    return {
+        "Name": row["name"] or f"Polity {pid}",
+        "Type": row["polity_type_id"] or "",
+        "Status": row["status"] or "",
+        "Territory": territory,
+        "Seats": seats,
+        "Holders": holders,
+        "Parent": row["parent_polity_id"] or "",
+        "Capital": _settlement_name(con, world, row["capital_settlement_id"]),
+        "Founded": row["founded_sim_year"] or "",
+    }
+
+
+def load_polities_browser_fresh(
+    world: str,
+    search: str,
+    status_filter: str,
+    limit: object,
+) -> tuple[gr.Dataframe, str, list[int]]:
+    if not world:
+        return _empty_polities_frame(), "Choose a world.", []
+    row_limit = _safe_int(limit, 50, 1, 250)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _empty_polities_frame(), f"{path} is missing. Run a simulation first.", []
+
+    with _connect_readonly(path) as con:
+        if not _has_table(con, "simulation_polities"):
+            return _empty_polities_frame(), "No simulation_polities table found.", []
+        saved_world = _resolve_saved_world(con, world)
+        where_sql, params = _world_where(con, "simulation_polities", saved_world)
+        clauses = [where_sql]
+        filter_bits: list[str] = []
+        if status_filter == "Active":
+            clauses.append("status = 'active'")
+            filter_bits.append("active")
+        elif status_filter == "Inactive":
+            clauses.append("status != 'active'")
+            filter_bits.append("not active")
+        if search:
+            clauses.append("(cast(polity_id as text) like ? or name like ? or polity_type_id like ? or status like ?)")
+            params.extend([f"%{search}%"] * 4)
+            filter_bits.append(f"search={search!r}")
+        where_sql = " and ".join(clauses)
+        rows = con.execute(
+            f"""
+            select *
+            from simulation_polities
+            where {where_sql}
+            order by status = 'active' desc, polity_id
+            limit ?
+            """,
+            (*params, row_limit),
+        ).fetchall()
+        total = _count_one(con, f"select count(*) from simulation_polities where {where_sql}", params)
+        values = [_polity_summary_row(con, saved_world, row) for row in rows]
+        polity_ids = [int(row["polity_id"]) for row in rows]
+
+    filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} of {total} polities{filter_text}{saved_world_note}. "
+        "Click any polity row to open its sheet."
+    )
+    return _dataframe(values, POLITY_BROWSER_HEADERS), status, polity_ids
+
+
+def _region_alive_and_jobs(con: sqlite3.Connection, world: str, region_id: str) -> tuple[int, str]:
+    if not _has_table(con, "simulation_people"):
+        return 0, ""
+    birth_region_sql = _person_birth_region_sql(con)
+    people_where, people_params = _alive_where(con, world)
+    alive = _count_one(
+        con,
+        f"select count(*) from simulation_people where {people_where} and {birth_region_sql} = ?",
+        (*people_params, region_id),
+    )
+    jobs = _top_jobs_for_where(con, world, f"{birth_region_sql} = ?", (region_id,), limit=3)
+    return alive, ", ".join(f"{job} ({count})" for job, count in jobs)
+
+
+def _region_active_settlement_count(con: sqlite3.Connection, world: str, region_id: str) -> int:
+    if not _has_table(con, "simulation_settlements"):
+        return 0
+    settlement_where, settlement_params = _world_where(con, "simulation_settlements", world)
+    return _count_one(
+        con,
+        f"""
+        select count(*)
+        from simulation_settlements
+        where {settlement_where}
+          and region_id = ?
+          and status = 'active'
+        """,
+        (*settlement_params, region_id),
+    )
+
+
+def _region_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> dict[str, object]:
+    region_id = str(row["region_id"])
+    alive, jobs = _region_alive_and_jobs(con, world, region_id)
+    return {
+        "Name": row["region_display_name"] or region_id,
+        "Alive": alive,
+        "Settlements": _region_active_settlement_count(con, world, region_id),
+        "Food": _fmt_number(row["food_pressure"]),
+        "Stability": _fmt_number(row["stability"]),
+        "Market": _fmt_number(row["market_pull"]),
+        "Prosperity": _fmt_number(row["prosperity_pool"]),
+        "Treasury": _fmt_number(row["treasury_balance"]),
+        "Top Jobs": jobs,
+    }
+
+
+def load_regions_browser_fresh(world: str, search: str, limit: object) -> tuple[gr.Dataframe, str, list[str]]:
+    if not world:
+        return _empty_regions_frame(), "Choose a world.", []
+    row_limit = _safe_int(limit, 50, 1, 250)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _empty_regions_frame(), f"{path} is missing. Run a simulation first.", []
+
+    with _connect_readonly(path) as con:
+        if not _has_table(con, "simulation_regions"):
+            return _empty_regions_frame(), "No simulation_regions table found.", []
+        saved_world = _resolve_saved_world(con, world)
+        where_sql, params = _world_where(con, "simulation_regions", saved_world)
+        clauses = [where_sql]
+        filter_bits: list[str] = []
+        if search:
+            clauses.append("(region_id like ? or region_display_name like ?)")
+            params.extend([f"%{search}%"] * 2)
+            filter_bits.append(f"search={search!r}")
+        where_sql = " and ".join(clauses)
+        rows = con.execute(
+            f"""
+            select *
+            from simulation_regions
+            where {where_sql}
+            order by total_population_cap desc, region_display_name collate nocase
+            limit ?
+            """,
+            (*params, row_limit),
+        ).fetchall()
+        total = _count_one(con, f"select count(*) from simulation_regions where {where_sql}", params)
+        values = [_region_summary_row(con, saved_world, row) for row in rows]
+        region_ids = [str(row["region_id"]) for row in rows]
+
+    filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} of {total} regions{filter_text}{saved_world_note}. "
+        "Click any region row to open its sheet."
+    )
+    return _dataframe(values, REGION_BROWSER_HEADERS), status, region_ids
+
+
+def _settlement_alive_and_jobs(con: sqlite3.Connection, world: str, settlement_id: str) -> tuple[int, str]:
+    if not _has_table(con, "simulation_people"):
+        return 0, ""
+    residence_sql = _person_residence_sql(con)
+    people_where, people_params = _alive_where(con, world)
+    alive = _count_one(
+        con,
+        f"select count(*) from simulation_people where {people_where} and {residence_sql} = ?",
+        (*people_params, settlement_id),
+    )
+    jobs = _top_jobs_for_where(con, world, f"{residence_sql} = ?", (settlement_id,), limit=3)
+    return alive, ", ".join(f"{job} ({count})" for job, count in jobs)
+
+
+def _settlement_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> dict[str, object]:
+    settlement_id = str(row["settlement_id"])
+    alive, jobs = _settlement_alive_and_jobs(con, world, settlement_id)
+    return {
+        "Name": row["display_name"] or settlement_id,
+        "Level": row["level"] or "",
+        "Alive": alive,
+        "Region": row["region_id"] or "",
+        "Status": row["status"] or "",
+        "Food": _fmt_number(row["food_pressure"]),
+        "Stability": _fmt_number(row["stability"]),
+        "Market": _fmt_number(row["market_pull"]),
+        "Prosperity": _fmt_number(row["prosperity_pool"]),
+        "Founded": row["founded_sim_year"] or "",
+        "Top Jobs": jobs,
+    }
+
+
+def load_settlements_browser(
+    world: str,
+    search: str,
+    status_filter: str,
+    limit: object,
+) -> tuple[gr.Dataframe, str, list[str]]:
+    if not world:
+        return _empty_settlements_frame(), "Choose a world.", []
+    row_limit = _safe_int(limit, 50, 1, 250)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _empty_settlements_frame(), f"{path} is missing. Run a simulation first.", []
+
+    with _connect_readonly(path) as con:
+        if not _has_table(con, "simulation_settlements"):
+            return _empty_settlements_frame(), "No simulation_settlements table found.", []
+        saved_world = _resolve_saved_world(con, world)
+        where_sql, params = _world_where(con, "simulation_settlements", saved_world)
+        clauses = [where_sql]
+        filter_bits: list[str] = []
+        if status_filter == "Active":
+            clauses.append("status = 'active'")
+            filter_bits.append("active")
+        elif status_filter == "Abandoned":
+            clauses.append("status != 'active'")
+            filter_bits.append("not active")
+        if search:
+            clauses.append(
+                "(settlement_id like ? or region_id like ? or display_name like ? or level like ? or status like ?)"
+            )
+            params.extend([f"%{search}%"] * 5)
+            filter_bits.append(f"search={search!r}")
+        where_sql = " and ".join(clauses)
+        rows = con.execute(
+            f"""
+            select *
+            from simulation_settlements
+            where {where_sql}
+            order by status = 'active' desc, population_cap desc, display_name collate nocase
+            limit ?
+            """,
+            (*params, row_limit),
+        ).fetchall()
+        total = _count_one(con, f"select count(*) from simulation_settlements where {where_sql}", params)
+        values = [_settlement_summary_row(con, saved_world, row) for row in rows]
+        settlement_ids = [str(row["settlement_id"]) for row in rows]
+
+    filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} of {total} settlements{filter_text}{saved_world_note}. "
+        "Click any settlement row to open its sheet."
+    )
+    return _dataframe(values, SETTLEMENT_BROWSER_HEADERS), status, settlement_ids
+
+
 def _lookup_person(con: sqlite3.Connection, world: str, person_id: object) -> tuple[sqlite3.Row | None, dict[str, object]]:
     try:
         pid = int(person_id)
@@ -1265,6 +1574,145 @@ def _settlement_name(con: sqlite3.Connection, world: str, settlement_id: object)
             (str(settlement_id),),
         ).fetchone()
     return str(row["display_name"] or settlement_id) if row else str(settlement_id)
+
+
+def _lookup_settlement(con: sqlite3.Connection, world: str, settlement_id: object) -> sqlite3.Row | None:
+    sid = str(settlement_id or "").strip()
+    if not sid or not _has_table(con, "simulation_settlements"):
+        return None
+    if "world" in _table_columns(con, "simulation_settlements"):
+        return con.execute(
+            "select * from simulation_settlements where world = ? and settlement_id = ?",
+            (world, sid),
+        ).fetchone()
+    return con.execute(
+        "select * from simulation_settlements where settlement_id = ?",
+        (sid,),
+    ).fetchone()
+
+
+def render_settlement_outputs(world: str, settlement_id: object) -> str:
+    sid = str(settlement_id or "").strip()
+    if not world:
+        return '<div class="place-sheet muted">Choose a world.</div>'
+    if not sid:
+        return '<div class="place-sheet muted">Browse settlements, then click a row to inspect it.</div>'
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        row = _lookup_settlement(con, saved_world, sid)
+        if not row:
+            return f'<div class="place-sheet muted">No settlement named {html.escape(sid)} in {html.escape(saved_world)}.</div>'
+        alive, jobs = _settlement_alive_and_jobs(con, saved_world, sid)
+        residents: list[str] = []
+        if _has_table(con, "simulation_people"):
+            residence_sql = _person_residence_sql(con)
+            people_where, people_params = _alive_where(con, saved_world)
+            career_sql = _person_career_fitness_sql(con)
+            rows = con.execute(
+                f"""
+                select *
+                from simulation_people
+                where {people_where}
+                  and {residence_sql} = ?
+                order by coalesce({career_sql}, 0) desc, person_id asc
+                limit 8
+                """,
+                (*people_params, sid),
+            ).fetchall()
+            trait_slots = _trait_slots_for_world(saved_world)
+            for person_row in rows:
+                person = _person_from_row(person_row, trait_slots)
+                residents.append(f"{_person_name(person)} - {person.get('job') or 'unassigned'}")
+        cards = "".join(
+            [
+                _detail_card("Alive", alive),
+                _detail_card("Level", row["level"] or ""),
+                _detail_card("Status", row["status"] or ""),
+                _detail_card("Region", row["region_id"] or ""),
+                _detail_card("Population Cap", row["population_cap"] or ""),
+                _detail_card("Households", row["household_cap"] or ""),
+                _detail_card("Food Pressure", _fmt_number(row["food_pressure"])),
+                _detail_card("Stability", _fmt_number(row["stability"])),
+                _detail_card("Market Pull", _fmt_number(row["market_pull"])),
+                _detail_card("Prosperity", _fmt_number(row["prosperity_pool"])),
+                _detail_card("Founded", row["founded_sim_year"] or "Unknown"),
+            ]
+        )
+        name_bits = [row["etymology"], row["name_category_primary"], row["name_culture_primary"]]
+        name_line = " | ".join(str(x) for x in name_bits if x)
+        return (
+            '<div class="place-sheet">'
+            f'<h2>{html.escape(str(row["display_name"] or sid))}</h2>'
+            f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(str(row["region_id"] or ""))}</div>'
+            f'<div class="place-muted">{html.escape(name_line)}</div>'
+            f'<div class="place-grid">{cards}</div>'
+            '<div class="place-columns">'
+            f'<section><h3>Top Jobs</h3>{_ul(jobs.split(", ") if jobs else [])}</section>'
+            f'<section><h3>Notable Residents</h3>{_ul(residents)}</section>'
+            '</div>'
+            '</div>'
+        )
+
+
+def select_settlement_from_table(settlement_ids: object, world: str, evt: gr.SelectData) -> str:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        index = int(row_index)
+        settlement_id = settlement_ids[index]  # type: ignore[index]
+    except Exception:
+        return '<div class="place-sheet muted">Click a settlement row to inspect it.</div>'
+    return render_settlement_outputs(world, settlement_id)
+
+
+def render_region_outputs(world: str, region_id: object) -> str:
+    rid = str(region_id or "").strip()
+    if not world:
+        return '<div class="place-sheet muted">Choose a world.</div>'
+    if not rid:
+        return '<div class="place-sheet muted">Browse regions, then click a row to inspect it.</div>'
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        return _render_region_sheet(con, saved_world, rid)
+
+
+def select_region_from_fresh_table(region_ids: object, world: str, evt: gr.SelectData) -> str:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        index = int(row_index)
+        region_id = region_ids[index]  # type: ignore[index]
+    except Exception:
+        return '<div class="place-sheet muted">Click a region row to inspect it.</div>'
+    return render_region_outputs(world, region_id)
+
+
+def render_polity_outputs(world: str, polity_id: object) -> str:
+    pid = str(polity_id or "").strip()
+    if not world:
+        return '<div class="place-sheet muted">Choose a world.</div>'
+    if not pid:
+        return '<div class="place-sheet muted">Browse polities, then click a row to inspect it.</div>'
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        return _render_polity_sheet(con, saved_world, pid)
+
+
+def select_polity_from_fresh_table(polity_ids: object, world: str, evt: gr.SelectData) -> str:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        index = int(row_index)
+        polity_id = polity_ids[index]  # type: ignore[index]
+    except Exception:
+        return '<div class="place-sheet muted">Click a polity row to inspect it.</div>'
+    return render_polity_outputs(world, polity_id)
 
 
 def _person_link_text(con: sqlite3.Connection, world: str, person_id: object) -> str:
@@ -4352,6 +4800,83 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         buttons=["copy"],
                     )
 
+        with gr.Tab("Settlements") as settlements_tab:
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=5):
+                    with gr.Row():
+                        settlement_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        settlement_status_filter = gr.Radio(["All", "Active", "Abandoned"], value="Active", label="Settlements")
+                        settlement_limit = gr.Number(value=50, label="Limit", precision=0)
+                    settlement_search = gr.Textbox(
+                        label="Search Settlements",
+                        placeholder="Name, id, region, level, or status...",
+                    )
+                    settlement_load = gr.Button("Browse Settlements", variant="primary")
+                    settlement_status = gr.Textbox(label="Status", interactive=False)
+                    settlement_table = gr.Dataframe(
+                        label="Settlements",
+                        interactive=False,
+                        wrap=False,
+                        elem_id="settlement-table",
+                    )
+                    settlement_ids_state = gr.State([])
+                with gr.Column(scale=6):
+                    settlement_sheet = gr.HTML(
+                        value='<div class="place-sheet muted">Browse settlements, then click a row to inspect it.</div>',
+                        label="Settlement Sheet",
+                    )
+
+        with gr.Tab("Regions") as regions_tab:
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=5):
+                    with gr.Row():
+                        region_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        region_limit = gr.Number(value=50, label="Limit", precision=0)
+                    region_search = gr.Textbox(
+                        label="Search Regions",
+                        placeholder="Name or id...",
+                    )
+                    region_load = gr.Button("Browse Regions", variant="primary")
+                    region_status = gr.Textbox(label="Status", interactive=False)
+                    region_table = gr.Dataframe(
+                        label="Regions",
+                        interactive=False,
+                        wrap=False,
+                        elem_id="region-table",
+                    )
+                    region_ids_state = gr.State([])
+                with gr.Column(scale=6):
+                    region_sheet = gr.HTML(
+                        value='<div class="place-sheet muted">Browse regions, then click a row to inspect it.</div>',
+                        label="Region Sheet",
+                    )
+
+        with gr.Tab("Polities") as polities_tab:
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=5):
+                    with gr.Row():
+                        polity_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        polity_status_filter = gr.Radio(["All", "Active", "Inactive"], value="Active", label="Polities")
+                        polity_limit = gr.Number(value=50, label="Limit", precision=0)
+                    polity_search = gr.Textbox(
+                        label="Search Polities",
+                        placeholder="Name, id, type, or status...",
+                    )
+                    polity_load = gr.Button("Browse Polities", variant="primary")
+                    polity_status = gr.Textbox(label="Status", interactive=False)
+                    polity_table = gr.Dataframe(
+                        label="Polities",
+                        interactive=False,
+                        wrap=False,
+                        elem_id="polity-table",
+                    )
+                    polity_ids_state = gr.State([])
+                with gr.Column(scale=6):
+                    polity_sheet = gr.HTML(
+                        value='<div class="place-sheet muted">Browse polities, then click a row to inspect it.</div>',
+                        label="Polity Sheet",
+                    )
+
         with gr.Tab("World Map") as world_map_tab:
             with gr.Row(elem_classes=["world-browser"]):
                 map_world = gr.Dropdown(worlds, value=initial_world, label="World")
@@ -4485,6 +5010,37 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             person_browser_inputs,
             [person_table, person_status, person_ids_state],
         )
+        settlement_browser_inputs = [
+            settlement_world,
+            settlement_search,
+            settlement_status_filter,
+            settlement_limit,
+        ]
+        settlement_browser_outputs = [settlement_table, settlement_status, settlement_ids_state]
+        settlement_load.click(load_settlements_browser, settlement_browser_inputs, settlement_browser_outputs)
+        for settlement_input in settlement_browser_inputs:
+            settlement_input.change(load_settlements_browser, settlement_browser_inputs, settlement_browser_outputs)
+        settlement_search.submit(load_settlements_browser, settlement_browser_inputs, settlement_browser_outputs)
+        settlement_table.select(select_settlement_from_table, [settlement_ids_state, settlement_world], settlement_sheet)
+        region_browser_inputs = [region_world, region_search, region_limit]
+        region_browser_outputs = [region_table, region_status, region_ids_state]
+        region_load.click(load_regions_browser_fresh, region_browser_inputs, region_browser_outputs)
+        for region_input in region_browser_inputs:
+            region_input.change(load_regions_browser_fresh, region_browser_inputs, region_browser_outputs)
+        region_search.submit(load_regions_browser_fresh, region_browser_inputs, region_browser_outputs)
+        region_table.select(select_region_from_fresh_table, [region_ids_state, region_world], region_sheet)
+        polity_browser_inputs = [
+            polity_world,
+            polity_search,
+            polity_status_filter,
+            polity_limit,
+        ]
+        polity_browser_outputs = [polity_table, polity_status, polity_ids_state]
+        polity_load.click(load_polities_browser_fresh, polity_browser_inputs, polity_browser_outputs)
+        for polity_input in polity_browser_inputs:
+            polity_input.change(load_polities_browser_fresh, polity_browser_inputs, polity_browser_outputs)
+        polity_search.submit(load_polities_browser_fresh, polity_browser_inputs, polity_browser_outputs)
+        polity_table.select(select_polity_from_fresh_table, [polity_ids_state, polity_world], polity_sheet)
         map_inputs = [map_world, map_include_overlays, map_noisy_edges, map_labels]
         map_outputs = [world_map_html, map_sheet]
         map_refresh.click(render_world_map_with_detail_reset, map_inputs, map_outputs)

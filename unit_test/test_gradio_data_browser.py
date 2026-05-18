@@ -818,6 +818,131 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(town_rows[0]["Alive"], 2)
         self.assertIn("miller (1)", town_rows[0]["Top Jobs"])
 
+    def test_settlements_browser_loads_rows_and_opens_sheet(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                table, status, settlement_ids = gdb.load_settlements_browser("test", "", "Active", 50)
+                sheet = gdb.select_settlement_from_table(settlement_ids, "test", types.SimpleNamespace(index=0))
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        self.assertEqual(table["headers"], gdb.SETTLEMENT_BROWSER_HEADERS)
+        self.assertEqual(table["value"][0][0], "Fordham")
+        self.assertEqual(settlement_ids, ["r1:s1"])
+        self.assertIn("showing 1 of 1 settlements", status)
+        self.assertIn("Fordham", sheet)
+        self.assertIn("miller", sheet)
+
+    def test_regions_browser_loads_rows_and_opens_sheet(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                table, status, region_ids = gdb.load_regions_browser_fresh("test", "", 50)
+                sheet = gdb.select_region_from_fresh_table(region_ids, "test", types.SimpleNamespace(index=0))
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        self.assertEqual(table["headers"], gdb.REGION_BROWSER_HEADERS)
+        self.assertEqual(table["value"][0][0], "River Country")
+        self.assertEqual(region_ids, ["r1"])
+        self.assertIn("showing 1 of 1 regions", status)
+        self.assertIn("River Country", sheet)
+        self.assertIn("Fordham", sheet)
+
+    def test_polities_browser_loads_rows_and_opens_sheet(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_place_save()
+            con.execute(
+                """
+                create table simulation_polities (
+                    polity_id integer,
+                    name text,
+                    polity_type_id text,
+                    status text,
+                    parent_polity_id integer,
+                    capital_settlement_id text,
+                    founded_sim_year integer
+                )
+                """
+            )
+            con.execute(
+                """
+                create table simulation_polity_territory (
+                    polity_id integer,
+                    target_kind text,
+                    target_id text,
+                    since_sim_year integer,
+                    until_sim_year integer
+                )
+                """
+            )
+            con.execute(
+                """
+                create table simulation_office_seats (
+                    polity_id integer,
+                    seat_id text,
+                    title_id text,
+                    scope_settlement_id text,
+                    holder_person_id integer,
+                    term_expires_sim_year integer,
+                    status text,
+                    slot_index integer
+                )
+                """
+            )
+            con.execute("insert into simulation_polities values (1, 'River Crown', 'duchy', 'active', null, 'r1:s1', 1)")
+            con.execute("insert into simulation_polity_territory values (1, 'region', 'r1', 1, null)")
+            con.execute("insert into simulation_office_seats values (1, 'seat1', 'duke', 'r1:s1', 1, null, 'active', 0)")
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                table, status, polity_ids = gdb.load_polities_browser_fresh("test", "", "Active", 50)
+                sheet = gdb.select_polity_from_fresh_table(polity_ids, "test", types.SimpleNamespace(index=0))
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        self.assertEqual(table["headers"], gdb.POLITY_BROWSER_HEADERS)
+        self.assertEqual(table["value"][0][0], "River Crown")
+        self.assertEqual(polity_ids, [1])
+        self.assertIn("showing 1 of 1 polities", status)
+        self.assertIn("River Crown", sheet)
+        self.assertIn("duke", sheet)
+
     def test_world_map_html_renders_generated_svg(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
