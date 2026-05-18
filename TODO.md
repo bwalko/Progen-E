@@ -24,7 +24,7 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 - File size: about 2.25GB.
 - `simulation_events`: 3,262,904 rows; `payload_json` is about 1.05GB of text.
 - `simulation_people`: 319,939 rows; `person_json` is about 640MB of text.
-- Save schema v2/v3 already removed save-side `world` columns, flattened common `Person` fields into typed columns, and compacted genome/mind-body payloads. See `TODONE.md`.
+- Save schema v2/v3/v4 already removed save-side `world` columns, flattened common `Person` fields into typed columns, compacted genome/mind-body payloads, and added normalized event-person links. See `TODONE.md`.
 - Remaining bigger wins are likely:
   - normalize repeated settlement/region text IDs into integer keys;
   - continue moving high-volume event detail out of JSON when a specific event family proves hot;
@@ -36,6 +36,18 @@ Implementation direction:
 
 1. Normalize settlement/region IDs to integer surrogate keys while retaining readable slugs in lookup tables.
 2. Consider optional verbose event logging for debugging-heavy runs.
+
+### Gradio Browser Hazards
+
+- **Do not rely on tab-select autoloading for large browser grids yet.** Autoloading grids when switching Gradio tabs appears to have an unresolved issue that can make the browser unstable or confusing. We do not understand the root cause yet.
+- Prefer explicit `Load` buttons for People, Settlements, Regions, Polities, SQLite tables, and similarly heavy views until this is isolated.
+- If revisiting tab autoload, make a minimal reproduction first and verify:
+  - no duplicate loads fire when switching tabs;
+  - active filters/world selectors are preserved;
+  - selected-row state does not go stale;
+  - large grids do not block or race the UI;
+  - failures produce visible status text instead of silent broken tables.
+- Treat any `.select(...)` handler on a Gradio `Tab` that populates a grid as risky until proven otherwise.
 
 ### Immediate Performance Work
 

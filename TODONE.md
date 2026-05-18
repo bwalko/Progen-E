@@ -133,3 +133,15 @@
 - Existing v3 event payloads are backfilled when the save schema is ensured or rebuilt.
 - Gradio person timelines prefer `simulation_event_people` and fall back to JSON scanning for legacy/fixture saves.
 - `payload_json` remains for sparse event detail and human-readable inspection.
+
+## Gradio Data Browser
+
+### Stable Browser Patterns
+
+- Keep heavy data grids behind explicit load actions until the tab-autoload issue is understood.
+- Existing browser helpers support manual loading/filtering for people, settlements, regions, polities, map detail, and raw SQLite tables.
+- Person timeline lookups now use normalized event-person links when available.
+
+### Not Done
+
+- Tab-select autoloading for Gradio grids is intentionally **not** considered solved. See `TODO.md` before adding or keeping `.select(...)` handlers on tabs that populate large tables.
