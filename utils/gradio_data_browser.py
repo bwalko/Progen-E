@@ -760,6 +760,19 @@ def _has_table(con: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
+def _has_relation(con: sqlite3.Connection, name: str) -> bool:
+    row = con.execute(
+        "select 1 from sqlite_master where type in ('table', 'view') and name = ?",
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
+def _place_read_relation(con: sqlite3.Connection, table: str) -> str:
+    readable = f"{table}_readable"
+    return readable if _has_relation(con, readable) else table
+
+
 def _saved_world_names(con: sqlite3.Connection) -> list[str]:
     worlds: list[str] = []
     seen: set[str] = set()
@@ -1365,28 +1378,29 @@ def load_polities_browser_fresh(
 
 
 def _region_alive_and_jobs(con: sqlite3.Connection, world: str, region_id: str) -> tuple[int, str]:
-    if not _has_table(con, "simulation_people"):
-        return 0, ""
     birth_region_sql = _person_birth_region_sql(con)
-    people_where, people_params = _alive_where(con, world)
-    alive = _count_one(
+    alive_counts, top_jobs = _alive_counts_and_top_jobs_by_place(
         con,
-        f"select count(*) from simulation_people where {people_where} and {birth_region_sql} = ?",
-        (*people_params, region_id),
+        world,
+        birth_region_sql,
+        [region_id],
+        limit=3,
     )
-    jobs = _top_jobs_for_where(con, world, f"{birth_region_sql} = ?", (region_id,), limit=3)
+    alive = alive_counts.get(str(region_id), 0)
+    jobs = top_jobs.get(str(region_id), [])
     return alive, ", ".join(f"{job} ({count})" for job, count in jobs)
 
 
 def _region_active_settlement_count(con: sqlite3.Connection, world: str, region_id: str) -> int:
     if not _has_table(con, "simulation_settlements"):
         return 0
-    settlement_where, settlement_params = _world_where(con, "simulation_settlements", world)
+    settlement_table = _place_read_relation(con, "simulation_settlements")
+    settlement_where, settlement_params = _world_where(con, settlement_table, world)
     return _count_one(
         con,
         f"""
         select count(*)
-        from simulation_settlements
+        from {_quote_identifier(settlement_table)}
         where {settlement_where}
           and region_id = ?
           and status = 'active'
@@ -1423,7 +1437,8 @@ def load_regions_browser_fresh(world: str, search: str, limit: object) -> tuple[
         if not _has_table(con, "simulation_regions"):
             return _empty_regions_frame(), "No simulation_regions table found.", []
         saved_world = _resolve_saved_world(con, world)
-        where_sql, params = _world_where(con, "simulation_regions", saved_world)
+        region_table = _place_read_relation(con, "simulation_regions")
+        where_sql, params = _world_where(con, region_table, saved_world)
         clauses = [where_sql]
         filter_bits: list[str] = []
         if search:
@@ -1434,14 +1449,14 @@ def load_regions_browser_fresh(world: str, search: str, limit: object) -> tuple[
         rows = con.execute(
             f"""
             select *
-            from simulation_regions
+            from {_quote_identifier(region_table)}
             where {where_sql}
             order by total_population_cap desc, region_display_name collate nocase
             limit ?
             """,
             (*params, row_limit),
         ).fetchall()
-        total = _count_one(con, f"select count(*) from simulation_regions where {where_sql}", params)
+        total = _count_one(con, f"select count(*) from {_quote_identifier(region_table)} where {where_sql}", params)
         values = [_region_summary_row(con, saved_world, row) for row in rows]
         region_ids = [str(row["region_id"]) for row in rows]
 
@@ -1455,16 +1470,16 @@ def load_regions_browser_fresh(world: str, search: str, limit: object) -> tuple[
 
 
 def _settlement_alive_and_jobs(con: sqlite3.Connection, world: str, settlement_id: str) -> tuple[int, str]:
-    if not _has_table(con, "simulation_people"):
-        return 0, ""
     residence_sql = _person_residence_sql(con)
-    people_where, people_params = _alive_where(con, world)
-    alive = _count_one(
+    alive_counts, top_jobs = _alive_counts_and_top_jobs_by_place(
         con,
-        f"select count(*) from simulation_people where {people_where} and {residence_sql} = ?",
-        (*people_params, settlement_id),
+        world,
+        residence_sql,
+        [settlement_id],
+        limit=3,
     )
-    jobs = _top_jobs_for_where(con, world, f"{residence_sql} = ?", (settlement_id,), limit=3)
+    alive = alive_counts.get(str(settlement_id), 0)
+    jobs = top_jobs.get(str(settlement_id), [])
     return alive, ", ".join(f"{job} ({count})" for job, count in jobs)
 
 
@@ -1503,7 +1518,8 @@ def load_settlements_browser(
         if not _has_table(con, "simulation_settlements"):
             return _empty_settlements_frame(), "No simulation_settlements table found.", []
         saved_world = _resolve_saved_world(con, world)
-        where_sql, params = _world_where(con, "simulation_settlements", saved_world)
+        settlement_table = _place_read_relation(con, "simulation_settlements")
+        where_sql, params = _world_where(con, settlement_table, saved_world)
         clauses = [where_sql]
         filter_bits: list[str] = []
         if status_filter == "Active":
@@ -1522,14 +1538,14 @@ def load_settlements_browser(
         rows = con.execute(
             f"""
             select *
-            from simulation_settlements
+            from {_quote_identifier(settlement_table)}
             where {where_sql}
             order by status = 'active' desc, population_cap desc, display_name collate nocase
             limit ?
             """,
             (*params, row_limit),
         ).fetchall()
-        total = _count_one(con, f"select count(*) from simulation_settlements where {where_sql}", params)
+        total = _count_one(con, f"select count(*) from {_quote_identifier(settlement_table)} where {where_sql}", params)
         values = [_settlement_summary_row(con, saved_world, row) for row in rows]
         settlement_ids = [str(row["settlement_id"]) for row in rows]
 
@@ -1563,14 +1579,15 @@ def _lookup_person(con: sqlite3.Connection, world: str, person_id: object) -> tu
 def _settlement_name(con: sqlite3.Connection, world: str, settlement_id: object) -> str:
     if not settlement_id:
         return ""
-    if "world" in _table_columns(con, "simulation_settlements"):
+    settlement_table = _place_read_relation(con, "simulation_settlements")
+    if "world" in _table_columns(con, settlement_table):
         row = con.execute(
-            "select display_name from simulation_settlements where world = ? and settlement_id = ?",
+            f"select display_name from {_quote_identifier(settlement_table)} where world = ? and settlement_id = ?",
             (world, str(settlement_id)),
         ).fetchone()
     else:
         row = con.execute(
-            "select display_name from simulation_settlements where settlement_id = ?",
+            f"select display_name from {_quote_identifier(settlement_table)} where settlement_id = ?",
             (str(settlement_id),),
         ).fetchone()
     return str(row["display_name"] or settlement_id) if row else str(settlement_id)
@@ -1580,13 +1597,14 @@ def _lookup_settlement(con: sqlite3.Connection, world: str, settlement_id: objec
     sid = str(settlement_id or "").strip()
     if not sid or not _has_table(con, "simulation_settlements"):
         return None
-    if "world" in _table_columns(con, "simulation_settlements"):
+    settlement_table = _place_read_relation(con, "simulation_settlements")
+    if "world" in _table_columns(con, settlement_table):
         return con.execute(
-            "select * from simulation_settlements where world = ? and settlement_id = ?",
+            f"select * from {_quote_identifier(settlement_table)} where world = ? and settlement_id = ?",
             (world, sid),
         ).fetchone()
     return con.execute(
-        "select * from simulation_settlements where settlement_id = ?",
+        f"select * from {_quote_identifier(settlement_table)} where settlement_id = ?",
         (sid,),
     ).fetchone()
 
@@ -2831,6 +2849,20 @@ def _person_residence_sql(con: sqlite3.Connection) -> str:
         return "nullif(current_settlement_id, '')"
     if "birthplace_settlement_id" in columns:
         return "nullif(birthplace_settlement_id, '')"
+    if "current_settlement_key" in columns or "birthplace_settlement_key" in columns:
+        current_sql = (
+            "(select settlement_id from simulation_settlement_lookup "
+            "where settlement_key = simulation_people.current_settlement_key)"
+            if "current_settlement_key" in columns and _has_table(con, "simulation_settlement_lookup")
+            else "null"
+        )
+        birthplace_sql = (
+            "(select settlement_id from simulation_settlement_lookup "
+            "where settlement_key = simulation_people.birthplace_settlement_key)"
+            if "birthplace_settlement_key" in columns and _has_table(con, "simulation_settlement_lookup")
+            else "null"
+        )
+        return f"coalesce(nullif({current_sql}, ''), nullif({birthplace_sql}, ''))"
     return (
         "coalesce("
         "nullif(json_extract(person_json, '$.current_settlement_id'), ''), "
@@ -2840,6 +2872,12 @@ def _person_residence_sql(con: sqlite3.Connection) -> str:
 
 
 def _person_birth_region_sql(con: sqlite3.Connection) -> str:
+    columns = _table_columns(con, "simulation_people")
+    if "birthplace_region_id" not in columns and "birthplace_region_key" in columns and _has_table(con, "simulation_region_lookup"):
+        return (
+            "(select region_id from simulation_region_lookup "
+            "where region_key = simulation_people.birthplace_region_key)"
+        )
     return _person_expr(con, "birthplace_region_id")
 
 
@@ -2856,6 +2894,22 @@ def _count_one(con: sqlite3.Connection, sql: str, params: Iterable[object] = ())
     return int(row[0] or 0) if row else 0
 
 
+def _merge_job_counts(*job_lists: Iterable[tuple[str, int]], limit: int = 5) -> list[tuple[str, int]]:
+    counts: dict[str, int] = {}
+    for jobs in job_lists:
+        for job, count in jobs:
+            label = str(job or "Unassigned")
+            counts[label] = counts.get(label, 0) + int(count or 0)
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
+
+
+def _latest_cohort_year(con: sqlite3.Connection) -> int | None:
+    if not _has_table(con, "simulation_cohorts"):
+        return None
+    row = con.execute("select max(sim_year) as y from simulation_cohorts").fetchone()
+    return int(row["y"]) if row and row["y"] is not None else None
+
+
 def _open_territory_clause() -> str:
     return "until_sim_year is null"
 
@@ -2863,12 +2917,13 @@ def _open_territory_clause() -> str:
 def _polity_names_for_region(con: sqlite3.Connection, region_id: str) -> str:
     if not (_has_table(con, "simulation_polities") and _has_table(con, "simulation_polity_territory")):
         return ""
+    settlement_table = _place_read_relation(con, "simulation_settlements")
     rows = con.execute(
-        """
+        f"""
         select distinct p.name
         from simulation_polities p
         join simulation_polity_territory t on t.polity_id = p.polity_id
-        left join simulation_settlements s
+        left join {_quote_identifier(settlement_table)} s
           on t.target_kind = 'settlement' and s.settlement_id = t.target_id
         where t.until_sim_year is null
           and p.status = 'active'
@@ -2929,33 +2984,31 @@ def _top_jobs_for_where(
     return [(str(r["job_name"]), int(r["n"] or 0)) for r in rows]
 
 
-def _alive_counts_and_top_jobs_by_place(
+def _passive_people_place_stats(
     con: sqlite3.Connection,
-    world: str,
-    place_sql: str,
+    place_kind: str,
     place_ids: Iterable[str],
     *,
     limit: int = 3,
 ) -> tuple[dict[str, int], dict[str, list[tuple[str, int]]]]:
     ids = [str(place_id) for place_id in place_ids if str(place_id).strip()]
-    if not ids or not _has_table(con, "simulation_people"):
+    if not ids or not _has_relation(con, "simulation_people_light_readable"):
         return {}, {}
+    column = "birthplace_region_id" if place_kind == "region" else "coalesce(current_settlement_id, birthplace_settlement_id)"
     placeholders = ", ".join("?" for _ in ids)
-    people_where, people_params = _alive_where(con, world)
-    job_sql = _person_job_sql(con)
     rows = con.execute(
         f"""
         select
-          {place_sql} as place_id,
-          coalesce(nullif({job_sql}, ''), 'Unassigned') as job_name,
+          {column} as place_id,
+          coalesce(nullif(job_family, ''), 'Unassigned') as job_name,
           count(*) as n
-        from simulation_people
-        where {people_where}
-          and {place_sql} in ({placeholders})
+        from simulation_people_light_readable
+        where is_alive = 1
+          and {column} in ({placeholders})
         group by place_id, job_name
         order by place_id, n desc, job_name collate nocase
         """,
-        (*people_params, *ids),
+        tuple(ids),
     ).fetchall()
     alive_counts: dict[str, int] = {place_id: 0 for place_id in ids}
     top_jobs: dict[str, list[tuple[str, int]]] = {place_id: [] for place_id in ids}
@@ -2970,6 +3023,105 @@ def _alive_counts_and_top_jobs_by_place(
     return alive_counts, top_jobs
 
 
+def _cohort_place_stats(
+    con: sqlite3.Connection,
+    place_kind: str,
+    place_ids: Iterable[str],
+    *,
+    limit: int = 3,
+) -> tuple[dict[str, int], dict[str, list[tuple[str, int]]]]:
+    ids = [str(place_id) for place_id in place_ids if str(place_id).strip()]
+    if not ids or not _has_relation(con, "simulation_cohorts_readable"):
+        return {}, {}
+    cohort_year = _latest_cohort_year(con)
+    if cohort_year is None:
+        return {}, {}
+    column = "region_id" if place_kind == "region" else "settlement_id"
+    placeholders = ", ".join("?" for _ in ids)
+    rows = con.execute(
+        f"""
+        select
+          {column} as place_id,
+          coalesce(nullif(job_family, ''), 'Unassigned') as job_name,
+          sum(population_count) as n
+        from simulation_cohorts_readable
+        where sim_year = ?
+          and {column} in ({placeholders})
+        group by place_id, job_name
+        order by place_id, n desc, job_name collate nocase
+        """,
+        (cohort_year, *ids),
+    ).fetchall()
+    alive_counts: dict[str, int] = {place_id: 0 for place_id in ids}
+    top_jobs: dict[str, list[tuple[str, int]]] = {place_id: [] for place_id in ids}
+    for row in rows:
+        place_id = str(row["place_id"] or "")
+        count = int(row["n"] or 0)
+        if not place_id:
+            continue
+        alive_counts[place_id] = alive_counts.get(place_id, 0) + count
+        if len(top_jobs.setdefault(place_id, [])) < limit:
+            top_jobs[place_id].append((str(row["job_name"]), count))
+    return alive_counts, top_jobs
+
+
+def _alive_counts_and_top_jobs_by_place(
+    con: sqlite3.Connection,
+    world: str,
+    place_sql: str,
+    place_ids: Iterable[str],
+    *,
+    limit: int = 3,
+) -> tuple[dict[str, int], dict[str, list[tuple[str, int]]]]:
+    ids = [str(place_id) for place_id in place_ids if str(place_id).strip()]
+    if not ids:
+        return {}, {}
+    alive_counts: dict[str, int] = {place_id: 0 for place_id in ids}
+    top_jobs: dict[str, list[tuple[str, int]]] = {place_id: [] for place_id in ids}
+    if _has_table(con, "simulation_people"):
+        placeholders = ", ".join("?" for _ in ids)
+        people_where, people_params = _alive_where(con, world)
+        job_sql = _person_job_sql(con)
+        rows = con.execute(
+            f"""
+            select
+              {place_sql} as place_id,
+              coalesce(nullif({job_sql}, ''), 'Unassigned') as job_name,
+              count(*) as n
+            from simulation_people
+            where {people_where}
+              and {place_sql} in ({placeholders})
+            group by place_id, job_name
+            order by place_id, n desc, job_name collate nocase
+            """,
+            (*people_params, *ids),
+        ).fetchall()
+        for row in rows:
+            place_id = str(row["place_id"] or "")
+            count = int(row["n"] or 0)
+            if not place_id:
+                continue
+            alive_counts[place_id] = alive_counts.get(place_id, 0) + count
+            if len(top_jobs.setdefault(place_id, [])) < limit:
+                top_jobs[place_id].append((str(row["job_name"]), count))
+    place_kind = "region" if "region" in place_sql else "settlement"
+    passive_counts, passive_jobs = _passive_people_place_stats(con, place_kind, ids, limit=limit)
+    cohort_counts, cohort_jobs = _cohort_place_stats(con, place_kind, ids, limit=limit)
+    for place_id in ids:
+        alive_counts[place_id] = (
+            alive_counts.get(place_id, 0)
+            + passive_counts.get(place_id, 0)
+            + cohort_counts.get(place_id, 0)
+        )
+        top_jobs[place_id] = _merge_job_counts(
+            top_jobs.get(place_id, []),
+            passive_jobs.get(place_id, []),
+            cohort_jobs.get(place_id, []),
+            limit=limit,
+        )
+    return alive_counts, top_jobs
+
+
 def _active_settlement_counts_by_region(
     con: sqlite3.Connection,
     world: str,
@@ -2979,11 +3131,12 @@ def _active_settlement_counts_by_region(
     if not ids or not _has_table(con, "simulation_settlements"):
         return {}
     placeholders = ", ".join("?" for _ in ids)
-    world_where, world_params = _world_where(con, "simulation_settlements", world)
+    settlement_table = _place_read_relation(con, "simulation_settlements")
+    world_where, world_params = _world_where(con, settlement_table, world)
     rows = con.execute(
         f"""
         select region_id, count(*) as n
-        from simulation_settlements
+        from {_quote_identifier(settlement_table)}
         where {world_where}
           and region_id in ({placeholders})
           and status = 'active'
@@ -2999,7 +3152,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, object]:
 
 
 def _snapshot_table_rows(con: sqlite3.Connection, table: str, world: str) -> list[dict[str, object]]:
-    if not _has_table(con, table):
+    if not _has_relation(con, table):
         return []
     where, params = _world_where(con, table, world)
     rows = con.execute(
@@ -3009,20 +3162,47 @@ def _snapshot_table_rows(con: sqlite3.Connection, table: str, world: str) -> lis
     return [_row_to_dict(row) for row in rows]
 
 
+def _snapshot_people_rows(con: sqlite3.Connection, world: str) -> list[dict[str, object]]:
+    if not _has_table(con, "simulation_people"):
+        return []
+    where, params = _alive_where(con, world)
+    columns = _table_columns(con, "simulation_people")
+    if (
+        "birthplace_region_id" not in columns
+        and "birthplace_region_key" in columns
+        and _has_table(con, "simulation_region_lookup")
+    ) or (
+        "current_settlement_id" not in columns
+        and "current_settlement_key" in columns
+        and _has_table(con, "simulation_settlement_lookup")
+    ):
+        rows = con.execute(
+            f"""
+            select p.*,
+                   br.region_id as birthplace_region_id,
+                   bs.settlement_id as birthplace_settlement_id,
+                   cs.settlement_id as current_settlement_id
+            from simulation_people p
+            left join simulation_region_lookup br on br.region_key = p.birthplace_region_key
+            left join simulation_settlement_lookup bs on bs.settlement_key = p.birthplace_settlement_key
+            left join simulation_settlement_lookup cs on cs.settlement_key = p.current_settlement_key
+            where {where.replace('simulation_people.', 'p.')}
+            """,
+            tuple(params),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            f"select * from simulation_people where {where}",
+            tuple(params),
+        ).fetchall()
+    return [_row_to_dict(row) for row in rows]
+
+
 def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, object]:
     started = time.perf_counter()
-    people: list[dict[str, object]] = []
-    if _has_table(con, "simulation_people"):
-        where, params = _alive_where(con, world)
-        people = [
-            _row_to_dict(row)
-            for row in con.execute(
-                f"select * from simulation_people where {where}",
-                tuple(params),
-            ).fetchall()
-        ]
-    regions = _snapshot_table_rows(con, "simulation_regions", world)
-    settlements = _snapshot_table_rows(con, "simulation_settlements", world)
+    people = _snapshot_people_rows(con, world)
+    regions = _snapshot_table_rows(con, _place_read_relation(con, "simulation_regions"), world)
+    settlements = _snapshot_table_rows(con, _place_read_relation(con, "simulation_settlements"), world)
     polities = _snapshot_table_rows(con, "simulation_polities", world)
     snapshot = {
         "world": world,
@@ -3030,6 +3210,8 @@ def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, objec
         "regions": regions,
         "settlements": settlements,
         "polities": polities,
+        "passive_people": _snapshot_table_rows(con, "simulation_people_light_readable", world),
+        "cohorts": _snapshot_table_rows(con, "simulation_cohorts_readable", world),
         "territory": _snapshot_table_rows(con, "simulation_polity_territory", world),
         "seats": _snapshot_table_rows(con, "simulation_office_seats", world),
     }
@@ -3120,6 +3302,58 @@ def _snapshot_people_by_region(snapshot: dict[str, object], region_id: str) -> l
 
 def _snapshot_people_by_settlement(snapshot: dict[str, object], settlement_id: str) -> list[dict[str, object]]:
     return [person for person in _snapshot_alive_people(snapshot) if _person_residence(person) == settlement_id]
+
+
+def _snapshot_latest_cohort_year(snapshot: dict[str, object]) -> int | None:
+    years = [_safe_int(row.get("sim_year"), -1) for row in _snapshot_rows(snapshot, "cohorts")]
+    years = [year for year in years if year >= 0]
+    return max(years) if years else None
+
+
+def _snapshot_population_stats(
+    snapshot: dict[str, object],
+    place_kind: str,
+    place_id: str,
+    *,
+    limit: int = 3,
+) -> tuple[int, list[tuple[str, int]]]:
+    detailed = (
+        _snapshot_people_by_region(snapshot, place_id)
+        if place_kind == "region"
+        else _snapshot_people_by_settlement(snapshot, place_id)
+    )
+    job_counts: dict[str, int] = {}
+    for person in detailed:
+        job = _snapshot_person_job(person)
+        job_counts[job] = job_counts.get(job, 0) + 1
+    alive = len(detailed)
+    for row in _snapshot_rows(snapshot, "passive_people"):
+        if not row.get("is_alive"):
+            continue
+        row_place = (
+            row.get("birthplace_region_id")
+            if place_kind == "region"
+            else row.get("current_settlement_id") or row.get("birthplace_settlement_id")
+        )
+        if str(row_place or "") != place_id:
+            continue
+        alive += 1
+        job = str(row.get("job_family") or "Unassigned")
+        job_counts[job] = job_counts.get(job, 0) + 1
+    cohort_year = _snapshot_latest_cohort_year(snapshot)
+    if cohort_year is not None:
+        for row in _snapshot_rows(snapshot, "cohorts"):
+            if _safe_int(row.get("sim_year"), -1) != cohort_year:
+                continue
+            row_place = row.get("region_id") if place_kind == "region" else row.get("settlement_id")
+            if str(row_place or "") != place_id:
+                continue
+            count = _safe_int(row.get("population_count"), 0)
+            alive += count
+            job = str(row.get("job_family") or "Unassigned")
+            job_counts[job] = job_counts.get(job, 0) + count
+    jobs = sorted(job_counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
+    return alive, jobs
 
 
 def _snapshot_region_settlements(snapshot: dict[str, object], region_id: str) -> list[dict[str, object]]:
@@ -3351,10 +3585,11 @@ def _render_local_map(
 def _region_settlements(con: sqlite3.Connection, region_id: str) -> list[sqlite3.Row]:
     if not _has_table(con, "simulation_settlements"):
         return []
+    settlement_table = _place_read_relation(con, "simulation_settlements")
     return con.execute(
-        """
+        f"""
         select *
-        from simulation_settlements
+        from {_quote_identifier(settlement_table)}
         where region_id = ?
         order by status = 'active' desc, population_cap desc, display_name collate nocase
         """,
@@ -3614,7 +3849,8 @@ def _places_browser_data(
         if selected == "Towns":
             if not _has_table(con, "simulation_settlements"):
                 return [], headers, "No simulation_settlements table found.", [], selected
-            world_where, params = _world_where(con, "simulation_settlements", saved_world)
+            settlement_table = _place_read_relation(con, "simulation_settlements")
+            world_where, params = _world_where(con, settlement_table, saved_world)
             clauses = [world_where]
             if needle:
                 clauses.append(
@@ -3624,7 +3860,7 @@ def _places_browser_data(
             rows = con.execute(
                 f"""
                 select *
-                from simulation_settlements
+                from {_quote_identifier(settlement_table)}
                 where {' and '.join(clauses)}
                 order by status = 'active' desc, population_cap desc, display_name collate nocase
                 limit ?
@@ -3712,7 +3948,8 @@ def _places_browser_data(
         else:
             if not _has_table(con, "simulation_regions"):
                 return [], headers, "No simulation_regions table found.", [], selected
-            world_where, params = _world_where(con, "simulation_regions", saved_world)
+            region_table = _place_read_relation(con, "simulation_regions")
+            world_where, params = _world_where(con, region_table, saved_world)
             clauses = [world_where]
             if needle:
                 clauses.append("(region_id like ? or region_display_name like ?)")
@@ -3720,7 +3957,7 @@ def _places_browser_data(
             rows = con.execute(
                 f"""
                 select *
-                from simulation_regions
+                from {_quote_identifier(region_table)}
                 where {' and '.join(clauses)}
                 order by total_population_cap desc, region_display_name collate nocase
                 limit ?
@@ -3770,10 +4007,17 @@ def _empty_place_state_json(view: str = "Places") -> str:
 def _render_region_sheet_from_snapshot(snapshot: dict[str, object], region_id: str) -> str:
     row = _snapshot_map(snapshot, "regions", "region_id").get(region_id)
     if not row:
+        if not _snapshot_region_settlements(snapshot, region_id):
+            return (
+                '<div class="place-sheet muted">'
+                f'No settlements are recorded for region {html.escape(region_id)} in the current save yet.'
+                '</div>'
+            )
         return f'<div class="place-sheet muted">No region named {html.escape(region_id)}.</div>'
     people = _snapshot_people_by_region(snapshot, region_id)
     settlements = _snapshot_region_settlements(snapshot, region_id)
-    jobs = [f"{job}: {n}" for job, n in _top_jobs_from_people(people, 8)]
+    alive, job_counts = _snapshot_population_stats(snapshot, "region", region_id, limit=8)
+    jobs = [f"{job}: {n}" for job, n in job_counts]
     residents = _snapshot_notable_people(people, 8)
     settlement_items = [
         (
@@ -3784,7 +4028,7 @@ def _render_region_sheet_from_snapshot(snapshot: dict[str, object], region_id: s
     ]
     cards = "".join(
         [
-            _detail_card("Alive", len(people)),
+            _detail_card("Alive", alive),
             _detail_card("Settlements", len(settlements)),
             _detail_card("Food Pressure", _fmt_number(row.get("food_pressure"))),
             _detail_card("Stability", _fmt_number(row.get("stability"))),
@@ -3823,11 +4067,12 @@ def _render_town_sheet_from_snapshot(snapshot: dict[str, object], settlement_id:
     sid = str(row.get("settlement_id") or settlement_id)
     rid = str(row.get("region_id") or "")
     people = _snapshot_people_by_settlement(snapshot, sid)
-    jobs = [f"{job}: {n}" for job, n in _top_jobs_from_people(people, 8)]
+    alive, job_counts = _snapshot_population_stats(snapshot, "settlement", sid, limit=8)
+    jobs = [f"{job}: {n}" for job, n in job_counts]
     residents = _snapshot_notable_people(people, 8)
     cards = "".join(
         [
-            _detail_card("Alive", len(people)),
+            _detail_card("Alive", alive),
             _detail_card("Level", row.get("level") or ""),
             _detail_card("Status", row.get("status") or ""),
             _detail_card("Region", rid),
@@ -3969,13 +4214,13 @@ def _places_rows_from_snapshot(
         for row in rows:
             sid = str(row.get("settlement_id") or "")
             rid = str(row.get("region_id") or "")
-            people = _snapshot_people_by_settlement(snapshot, sid)
-            jobs = ", ".join(f"{job} ({n})" for job, n in _top_jobs_from_people(people, 3))
+            alive, job_counts = _snapshot_population_stats(snapshot, "settlement", sid, limit=3)
+            jobs = ", ".join(f"{job} ({n})" for job, n in job_counts)
             values.append(
                 {
                     "Name": row.get("display_name") or sid,
                     "Level": row.get("level") or "",
-                    "Alive": len(people),
+                    "Alive": alive,
                     "Region": rid,
                     "Status": row.get("status") or "",
                     "Food": _fmt_number(row.get("food_pressure")),
@@ -4030,15 +4275,15 @@ def _places_rows_from_snapshot(
         )[:row_limit]
         for row in rows:
             rid = str(row.get("region_id") or "")
-            people = _snapshot_people_by_region(snapshot, rid)
-            jobs = ", ".join(f"{job} ({n})" for job, n in _top_jobs_from_people(people, 3))
+            alive, job_counts = _snapshot_population_stats(snapshot, "region", rid, limit=3)
+            jobs = ", ".join(f"{job} ({n})" for job, n in job_counts)
             active_settlements = sum(
                 1 for settlement in _snapshot_region_settlements(snapshot, rid) if settlement.get("status") == "active"
             )
             values.append(
                 {
                     "Name": row.get("region_display_name") or rid,
-                    "Alive": len(people),
+                    "Alive": alive,
                     "Settlements": active_settlements,
                     "Food": _fmt_number(row.get("food_pressure")),
                     "Stability": _fmt_number(row.get("stability")),
@@ -4100,24 +4345,48 @@ def _places_browser_data_and_state(
 
 
 def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) -> str:
-    if _saved_table_has_world(con, "simulation_regions"):
+    region_table = _place_read_relation(con, "simulation_regions")
+    if _saved_table_has_world(con, region_table):
         row = con.execute(
-            "select * from simulation_regions where world = ? and region_id = ?",
+            f"select * from {_quote_identifier(region_table)} where world = ? and region_id = ?",
             (world, region_id),
         ).fetchone()
     else:
-        row = con.execute("select * from simulation_regions where region_id = ?", (region_id,)).fetchone()
+        row = con.execute(
+            f"select * from {_quote_identifier(region_table)} where region_id = ?",
+            (region_id,),
+        ).fetchone()
     if not row:
+        if _has_table(con, "simulation_settlements"):
+            settlement_table = _place_read_relation(con, "simulation_settlements")
+            where, params = _world_where(con, settlement_table, world)
+            settlement_count = _count_one(
+                con,
+                f"""
+                select count(*)
+                from {_quote_identifier(settlement_table)}
+                where {where} and region_id = ?
+                """,
+                (*params, region_id),
+            )
+            if settlement_count == 0:
+                return (
+                    '<div class="place-sheet muted">'
+                    f'No settlements are recorded for region {html.escape(region_id)} in the current save yet.'
+                    '</div>'
+                )
         return f'<div class="place-sheet muted">No region named {html.escape(region_id)}.</div>'
-    people_where, people_params = _alive_where(con, world)
     birth_region_sql = _person_birth_region_sql(con)
-    alive = _count_one(
+    alive_counts, top_jobs = _alive_counts_and_top_jobs_by_place(
         con,
-        f"select count(*) from simulation_people where {people_where} and {birth_region_sql} = ?",
-        (*people_params, region_id),
+        world,
+        birth_region_sql,
+        [region_id],
+        limit=8,
     )
+    alive = alive_counts.get(region_id, 0)
     settlements = _region_settlements(con, region_id)
-    jobs = [f"{job}: {n}" for job, n in _top_jobs_for_where(con, world, f"{birth_region_sql} = ?", (region_id,), limit=8)]
+    jobs = [f"{job}: {n}" for job, n in top_jobs.get(region_id, [])]
     people = []
     for p in _top_people_for_where(con, world, f"{birth_region_sql} = ?", (region_id,), limit=8):
         person = _person_from_row(p, _trait_slots_for_world(world))
@@ -4154,17 +4423,21 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
 
 
 def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) -> str:
-    if _saved_table_has_world(con, "simulation_settlements"):
+    settlement_table = _place_read_relation(con, "simulation_settlements")
+    if _saved_table_has_world(con, settlement_table):
         row = con.execute(
-            "select * from simulation_settlements where world = ? and settlement_id = ?",
+            f"select * from {_quote_identifier(settlement_table)} where world = ? and settlement_id = ?",
             (world, settlement_id),
         ).fetchone()
     else:
-        row = con.execute("select * from simulation_settlements where settlement_id = ?", (settlement_id,)).fetchone()
+        row = con.execute(
+            f"select * from {_quote_identifier(settlement_table)} where settlement_id = ?",
+            (settlement_id,),
+        ).fetchone()
     if not row:
         if _has_table(con, "simulation_settlements"):
-            where, params = _world_where(con, "simulation_settlements", world)
-            total = _count_one(con, f"select count(*) from simulation_settlements where {where}", params)
+            where, params = _world_where(con, settlement_table, world)
+            total = _count_one(con, f"select count(*) from {_quote_identifier(settlement_table)} where {where}", params)
             if total == 0:
                 return '<div class="place-sheet muted">No towns are recorded in the current save yet. Browse Towns after the simulation creates one.</div>'
         return (
@@ -4175,14 +4448,16 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
         )
     sid = str(row["settlement_id"])
     rid = str(row["region_id"])
-    people_where, people_params = _alive_where(con, world)
     residence_sql = _person_residence_sql(con)
-    alive = _count_one(
+    alive_counts, top_jobs = _alive_counts_and_top_jobs_by_place(
         con,
-        f"select count(*) from simulation_people where {people_where} and {residence_sql} = ?",
-        (*people_params, sid),
+        world,
+        residence_sql,
+        [sid],
+        limit=8,
     )
-    jobs = [f"{job}: {n}" for job, n in _top_jobs_for_where(con, world, f"{residence_sql} = ?", (sid,), limit=8)]
+    alive = alive_counts.get(sid, 0)
+    jobs = [f"{job}: {n}" for job, n in top_jobs.get(sid, [])]
     residents = []
     for p in _top_people_for_where(con, world, f"{residence_sql} = ?", (sid,), limit=8):
         person = _person_from_row(p, _trait_slots_for_world(world))

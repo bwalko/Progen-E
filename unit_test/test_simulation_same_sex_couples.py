@@ -12,6 +12,8 @@ from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
 from library.simulation_context import SimulationContext
 from library.simulation_social import (
+    SAME_SEX_TRIAL_ABSOLUTE_CAP_PER_POOL,
+    _same_sex_trial_budget,
     _same_sex_acceptance_probability,
     maybe_form_same_sex_couples,
 )
@@ -27,6 +29,15 @@ class TestSimulationSameSexCouples(unittest.TestCase):
         """Social friction keeps same-sex acceptance below romantic * prosperity ceiling."""
         p = _same_sex_acceptance_probability(romantic_01=1.0, prosperity_01=1.0)
         self.assertLess(p, 1.0 * 1.0)
+
+    def test_same_sex_trial_budget_scales_by_candidate_pool_with_safety_cap(self) -> None:
+        self.assertEqual(_same_sex_trial_budget(0), 0)
+        self.assertEqual(_same_sex_trial_budget(2), 1)
+        self.assertGreater(_same_sex_trial_budget(1_000), _same_sex_trial_budget(100))
+        self.assertLessEqual(
+            _same_sex_trial_budget(100_000),
+            SAME_SEX_TRIAL_ABSOLUTE_CAP_PER_POOL,
+        )
 
     def test_same_sex_couple_forms_with_high_acceptance_patch(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

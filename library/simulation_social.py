@@ -27,8 +27,10 @@ PARAMOUR_PROMOTION_MAX_PROB = 0.42
 PARAMOUR_PROMOTION_RNG_STREAM = 811_531
 PARAMOUR_EXHAUSTIVE_PAIR_LIMIT = 4_000
 PARAMOUR_CONTACT_TRIAL_BASE = 64
-PARAMOUR_CONTACT_TRIALS_PER_SQRT_POP = 24
-PARAMOUR_CONTACT_TRIAL_CAP = 5_000
+# Settlement-level yearly detailed contact budget. This is a rate over the
+# detailed candidate sample, not passive/cohort population.
+PARAMOUR_CONTACT_TRIAL_SHARE_OF_ELIGIBLE = 0.75
+PARAMOUR_CONTACT_TRIAL_ABSOLUTE_CAP = 5_000
 # With ``min_fertility_age`` set, paramour age floor is ``min(PARAMOUR_MIN_SIM_AGE, mf)``; if unset,
 # only ``PARAMOUR_MIN_SIM_AGE`` applies.
 PARAMOUR_MIN_SIM_AGE = 18
@@ -40,7 +42,9 @@ PARTNER_BREAKUP_RNG_STREAM = 507_331
 
 # Same-sex official couples: romantic score only, prosperity-scaled, extra social/biological friction.
 SAME_SEX_SOCIAL_FRICTION = 0.18
-SAME_SEX_MAX_TRIALS_PER_SETTLEMENT = 48
+# Per settlement and per same-gender detailed candidate pool, with a hard ceiling.
+SAME_SEX_TRIAL_SHARE_OF_ELIGIBLE = 0.12
+SAME_SEX_TRIAL_ABSOLUTE_CAP_PER_POOL = 1_000
 SAME_SEX_RNG_STREAM = 904_007
 
 
@@ -594,9 +598,9 @@ def _paramour_contact_trial_budget(resident_count: int, pair_count: int | None =
     if pairs <= PARAMOUR_EXHAUSTIVE_PAIR_LIMIT:
         return int(pairs)
     budget = PARAMOUR_CONTACT_TRIAL_BASE + int(
-        PARAMOUR_CONTACT_TRIALS_PER_SQRT_POP * (n ** 0.5)
+        n * PARAMOUR_CONTACT_TRIAL_SHARE_OF_ELIGIBLE
     )
-    return max(1, min(PARAMOUR_CONTACT_TRIAL_CAP, budget, int(pairs)))
+    return max(1, min(PARAMOUR_CONTACT_TRIAL_ABSOLUTE_CAP, budget, int(pairs)))
 
 
 def _sample_paramour_contact_pairs(
@@ -745,6 +749,16 @@ def _sid_hash_for_rng(sid: str) -> int:
     return sum((i + 1) * ord(c) for i, c in enumerate(sid[:64])) % (2**31)
 
 
+def _same_sex_trial_budget(eligible_count: int) -> int:
+    """Yearly pair trials for one same-gender detailed candidate pool."""
+    n = max(0, int(eligible_count))
+    if n < 2:
+        return 0
+    pairs = n * (n - 1) // 2
+    budget = max(1, int(n * SAME_SEX_TRIAL_SHARE_OF_ELIGIBLE))
+    return min(SAME_SEX_TRIAL_ABSOLUTE_CAP_PER_POOL, budget, pairs)
+
+
 def _maybe_form_same_sex_couples_one_gender(
     ctx: SimulationContext,
     year: int,
@@ -760,7 +774,8 @@ def _maybe_form_same_sex_couples_one_gender(
     pick = random.Random(int(year) * 404_011 + salt + len(pool) + _sid_hash_for_rng(sid))
 
     trials = 0
-    while trials < SAME_SEX_MAX_TRIALS_PER_SETTLEMENT and len(pool) >= 2:
+    trial_budget = _same_sex_trial_budget(len(pool))
+    while trials < trial_budget and len(pool) >= 2:
         trials += 1
         ia, ib = pick.sample(pool, 2)
         if ia in paired_ids or ib in paired_ids:

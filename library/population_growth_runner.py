@@ -14,6 +14,7 @@ from typing import Callable
 import numpy as np
 
 from library.generator import generate_person_random
+from library.passive_population import PassiveCohort
 from library.random_names import choose_random_first_last
 from library.settlements import SettlementState
 from library.reproduction import (
@@ -34,6 +35,15 @@ KIN_PAIR_HALF_SIBLING_PROB = 0.00002
 KIN_PAIR_RNG_STREAM = 612_047
 PAIRING_EXHAUSTIVE_PAIR_LIMIT = 25_000
 PAIRING_CANDIDATE_ATTEMPTS_PER_PERSON = 8
+
+_PASSIVE_JOB_FAMILY_SHARES: tuple[tuple[str, float], ...] = (
+    ("farm", 0.46),
+    ("labor", 0.24),
+    ("craft", 0.12),
+    ("trade", 0.08),
+    ("service", 0.06),
+    ("admin", 0.04),
+)
 
 
 def resolve_population_sim_seed() -> int:
@@ -614,6 +624,78 @@ def births_by_settlement(
     return births_count
 
 
+def _partition_count(total: int, shares: tuple[tuple[str, float], ...]) -> list[tuple[str, int]]:
+    n = max(0, int(total))
+    if n <= 0:
+        return []
+    assigned = 0
+    out: list[tuple[str, int]] = []
+    for i, (label, share) in enumerate(shares):
+        if i == len(shares) - 1:
+            count = n - assigned
+        else:
+            count = int(round(n * float(share)))
+            count = max(0, min(n - assigned, count))
+        assigned += count
+        if count > 0:
+            out.append((label, count))
+    return out
+
+
+def refresh_passive_background_cohorts(
+    ctx: SimulationContext,
+    year: int,
+    *,
+    population_scale: float = 1.0,
+) -> int:
+    """Create aggregate background population cohorts for active settlements.
+
+    Cohorts count for demographics and place stats, but they do not enter detailed
+    person event loops. The target is based on configured regional carrying
+    capacity and split across active settlements in that region.
+    """
+    scale = max(0.0, float(population_scale))
+    if scale <= 0.0 or not ctx.settlements_by_id:
+        return 0
+    detailed_by_settlement = ctx.current_people_by_settlement()
+    active_by_region: dict[str, list[str]] = {}
+    for sid, st in ctx.settlements_by_id.items():
+        if (st.status or "").strip().lower() != "active":
+            continue
+        active_by_region.setdefault(st.region_id, []).append(sid)
+    for sids in active_by_region.values():
+        sids.sort()
+
+    next_cohorts = [c for c in ctx.passive_cohorts if int(c.sim_year) != int(year)]
+    total_background = 0
+    for rid, settlement_ids in sorted(active_by_region.items()):
+        if not settlement_ids:
+            continue
+        regional_target = int(round(ctx.effective_regional_population_cap(rid) * scale))
+        per_settlement_target = max(0, int(round(regional_target / len(settlement_ids))))
+        for sid in settlement_ids:
+            detailed_alive = len(detailed_by_settlement.get(sid, ()))
+            background = max(0, per_settlement_target - detailed_alive)
+            total_background += background
+            for job_family, count in _partition_count(background, _PASSIVE_JOB_FAMILY_SHARES):
+                next_cohorts.append(
+                    PassiveCohort(
+                        sim_year=int(year),
+                        region_id=rid,
+                        settlement_id=sid,
+                        age_band="all",
+                        gender="mixed",
+                        species="mixed",
+                        culture="mixed",
+                        job_family=job_family,
+                        status_bucket="background",
+                        population_count=count,
+                    )
+                )
+    ctx.passive_cohorts = next_cohorts
+    return total_background
+
+
 def run_population_growth_simulation(
     ctx: SimulationContext,
     *,
@@ -621,6 +703,7 @@ def run_population_growth_simulation(
     start_year: int,
     duration_years: int,
     starting_couples: int,
+    passive_population_scale: float = 1.0,
     progress_callback: Callable[[int], None] | None = None,
     print_timing_report: bool = True,
 ) -> None:
@@ -681,6 +764,16 @@ def run_population_growth_simulation(
         mortality_rates = apply_annual_mortality(ctx, year)
         if prof:
             simulation_timing.accumulate("runner.mortality", tpc() - t0)
+
+        if prof:
+            t0 = tpc()
+        refresh_passive_background_cohorts(
+            ctx,
+            year,
+            population_scale=passive_population_scale,
+        )
+        if prof:
+            simulation_timing.accumulate("runner.passive_cohorts", tpc() - t0)
 
         persist_to_save = ctx._should_checkpoint_snapshot(year)
         ctx.record_year_summary(

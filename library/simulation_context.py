@@ -16,6 +16,7 @@ import numpy as np
 
 from library import simulation_timing
 from library.config_import import refresh_world_config_from_csv
+from library.passive_population import PassiveCohort, PassivePerson, PassivePersonRecord
 from library.person import Person
 from library.geography import get_region, list_regions, region_connectivity_score
 from library.random_names import preload_name_cache
@@ -148,6 +149,8 @@ class SimulationContext:
     current_year: int | None = None
     next_person_id: int = 1
     people: list[SimulationPersonRecord] = field(default_factory=list)
+    passive_people: dict[int, PassivePersonRecord] = field(default_factory=dict)
+    passive_cohorts: list[PassiveCohort] = field(default_factory=list)
     current_people_ids: set[int] = field(default_factory=set)
     couples: list[tuple[int, int]] = field(default_factory=list)
     paramours: list[tuple[int, int]] = field(default_factory=list)
@@ -163,6 +166,10 @@ class SimulationContext:
     _pending_simulation_events: list[tuple[int | None, str, dict]] = field(
         default_factory=list
     )
+    # Normal save events store common place references in integer columns and omit
+    # duplicate region/settlement slugs from payload_json. Enable for debugging
+    # runs that need the raw, self-contained event payloads.
+    verbose_event_logging: bool = False
     checkpoint_full_snapshot_every_n_years: int | None = 10
     # Per-context override for DEFAULT_DECISION_SAMPLE_SIZE. Keep this on the
     # context so experiments can tune decision-pool cost without changing exact
@@ -244,6 +251,7 @@ class SimulationContext:
         decision_sample_size: int = DEFAULT_DECISION_SAMPLE_SIZE,
         placename_rng_salt: int = 0,
         working_set_dead_retention_years: int = 20,
+        verbose_event_logging: bool = False,
     ) -> "SimulationContext":
         from library.zero_point_colonies import (
             DEFAULT_FOUNDATION_COLONY_COUNT,
@@ -391,6 +399,7 @@ class SimulationContext:
             active_region_ids=active_ids,
             foundation_colony_region_order=colony_region_order,
             working_set_dead_retention_years=int(working_set_dead_retention_years),
+            verbose_event_logging=bool(verbose_event_logging),
         )
         from library.simulation_government import init_government_state
 
@@ -430,6 +439,13 @@ class SimulationContext:
         self, sim_year: int | None, event_type: str, payload: dict[str, Any]
     ) -> None:
         self._pending_simulation_events.append((sim_year, event_type, payload))
+
+    def _record_inferred_simulation_event(
+        self, sim_year: int | None, event_type: str, payload: dict[str, Any]
+    ) -> None:
+        marked = dict(payload)
+        marked["event_origin"] = "inferred"
+        self._pending_simulation_events.append((sim_year, event_type, marked))
 
     def invalidate_alive_census_cache(self) -> None:
         """Drop cached alive residence indexes after population/residence changes."""
@@ -667,6 +683,18 @@ class SimulationContext:
             },
         )
         return rec
+
+    def add_passive_person(self, person: PassivePerson) -> PassivePersonRecord:
+        """Add a real but low-detail person that does not enter annual person logic."""
+        rec = PassivePersonRecord(person_id=self.next_person_id, person=person)
+        self.next_person_id += 1
+        self.passive_people[rec.person_id] = rec
+        return rec
+
+    def add_passive_cohort(self, cohort: PassiveCohort) -> PassiveCohort:
+        """Stage one aggregate cohort bucket for checkpoint persistence."""
+        self.passive_cohorts.append(cohort)
+        return cohort
 
     @staticmethod
     def _relationship_pair_key(person_a_id: int, person_b_id: int) -> tuple[int, int]:

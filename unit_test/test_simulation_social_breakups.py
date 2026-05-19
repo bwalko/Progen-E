@@ -25,7 +25,7 @@ if "numpy" not in sys.modules and importlib.util.find_spec("numpy") is None:
 
 from library.person import Person
 from library.simulation_social import (
-    PARAMOUR_CONTACT_TRIAL_CAP,
+    PARAMOUR_CONTACT_TRIAL_ABSOLUTE_CAP,
     PARAMOUR_EXHAUSTIVE_PAIR_LIMIT,
     _paramour_contact_trial_budget,
     _paramour_end_probability,
@@ -184,8 +184,12 @@ class TestSimulationSocialBreakups(unittest.TestCase):
 
     def test_paramour_contact_budget_caps_large_settlements(self) -> None:
         budget = _paramour_contact_trial_budget(100_000)
-        self.assertLessEqual(budget, PARAMOUR_CONTACT_TRIAL_CAP)
+        self.assertLessEqual(budget, PARAMOUR_CONTACT_TRIAL_ABSOLUTE_CAP)
         self.assertLess(budget, 100_000 * 99_999 // 2)
+
+    def test_paramour_contact_budget_scales_by_detailed_candidate_count(self) -> None:
+        self.assertGreater(_paramour_contact_trial_budget(1_000), _paramour_contact_trial_budget(100))
+        self.assertLess(_paramour_contact_trial_budget(1_000), 1_000 * 999 // 2)
 
     def test_paramour_probability_uses_mating_drive_and_loyalty(self) -> None:
         restrained = _person(1, {"mating drive": -90.0, "loyalty": 0.0})

@@ -13,6 +13,7 @@ from pathlib import Path
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
 from library.geography import _population_scale_cache, get_region
+from library.passive_population import PassiveCohort, PassivePerson
 from library.simulation_context import SimulationContext
 from library.world_save import (
     SAVE_SCHEMA_VERSION,
@@ -226,7 +227,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 event = conn.execute(
                     """
                     SELECT primary_person_id, secondary_person_id, settlement_id
-                    FROM simulation_events
+                    FROM simulation_events_readable
                     WHERE event_type = 'household_childcare_shortfall'
                     """
                 ).fetchone()
@@ -277,7 +278,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                     self.assertTrue(birth_rid)
                     sample_rn = conn.execute(
                         """
-                        SELECT region_display_name FROM simulation_regions
+                        SELECT region_display_name FROM simulation_regions_readable
                         WHERE region_id = ?
                         """,
                         (birth_rid,),
@@ -481,7 +482,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 common = conn.execute(
                     """
                     SELECT primary_person_id
-                    FROM simulation_events
+                    FROM simulation_events_readable
                     WHERE event_type = 'founder_created'
                     ORDER BY id
                     LIMIT 1
@@ -489,6 +490,277 @@ class TestSaveCheckpoint(unittest.TestCase):
                 ).fetchone()
             self.assertGreaterEqual(int(link_count), 1)
             self.assertEqual(int(common[0]), 1)
+
+    def test_place_ids_are_normalized_and_verbose_events_are_opt_in(self) -> None:
+        random.seed(11)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            compact_sav = root / "compact.sqlite"
+            verbose_sav = root / "verbose.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+
+            compact = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=compact_sav,
+                world_id="compact",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            rec = compact.add_person(
+                person=generate_person_random(
+                    simulation_context=compact, simulation_year=1000
+                ),
+                is_founder=True,
+            )
+            rid = str(rec.person.birthplace_region_id or "")
+            sid = str(rec.person.current_settlement_id or rec.person.birthplace_settlement_id or "")
+            compact._record_simulation_event(
+                1000,
+                "place_debug_probe",
+                {
+                    "person_id": rec.person_id,
+                    "region_id": rid,
+                    "settlement_id": sid,
+                    "note": "compact",
+                },
+            )
+            checkpoint_simulation_to_save(compact, full_snapshot=True)
+
+            with sqlite3.connect(compact_sav) as conn:
+                conn.row_factory = sqlite3.Row
+                people_cols = {r["name"] for r in conn.execute("PRAGMA table_info(simulation_people)")}
+                event = conn.execute(
+                    """
+                    SELECT e.region_key, e.settlement_key, e.payload_json,
+                           er.region_id, er.settlement_id, er.event_origin
+                    FROM simulation_events e
+                    JOIN simulation_events_readable er ON er.id = e.id
+                    WHERE e.event_type = 'place_debug_probe'
+                    """
+                ).fetchone()
+                person_place = conn.execute(
+                    """
+                    SELECT birthplace_region_key, current_settlement_key
+                    FROM simulation_people
+                    WHERE person_id = ?
+                    """,
+                    (rec.person_id,),
+                ).fetchone()
+            selfIn = self.assertIn
+            selfNotIn = self.assertNotIn
+            selfIn("birthplace_region_key", people_cols)
+            selfNotIn("birthplace_region_id", people_cols)
+            self.assertIsNotNone(event["region_key"])
+            self.assertIsNotNone(event["settlement_key"])
+            self.assertEqual(str(event["region_id"]), rid)
+            self.assertEqual(str(event["settlement_id"]), sid)
+            self.assertEqual(str(event["event_origin"]), "generated")
+            payload = json.loads(str(event["payload_json"]))
+            selfNotIn("region_id", payload)
+            selfNotIn("settlement_id", payload)
+            selfNotIn("event_origin", payload)
+            self.assertIsNotNone(person_place["birthplace_region_key"])
+            self.assertIsNotNone(person_place["current_settlement_key"])
+
+            verbose = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=verbose_sav,
+                world_id="verbose",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+                verbose_event_logging=True,
+            )
+            rec2 = verbose.add_person(
+                person=generate_person_random(
+                    simulation_context=verbose, simulation_year=1000
+                ),
+                is_founder=True,
+            )
+            rid2 = str(rec2.person.birthplace_region_id or "")
+            sid2 = str(rec2.person.current_settlement_id or rec2.person.birthplace_settlement_id or "")
+            verbose._record_simulation_event(
+                1000,
+                "place_debug_probe",
+                {
+                    "person_id": rec2.person_id,
+                    "region_id": rid2,
+                    "settlement_id": sid2,
+                    "note": "verbose",
+                },
+            )
+            checkpoint_simulation_to_save(verbose, full_snapshot=False)
+            with sqlite3.connect(verbose_sav) as conn:
+                payload_json = conn.execute(
+                    """
+                    SELECT payload_json
+                    FROM simulation_events
+                    WHERE event_type = 'place_debug_probe'
+                    """
+                ).fetchone()[0]
+            verbose_payload = json.loads(str(payload_json))
+            self.assertEqual(verbose_payload["region_id"], rid2)
+            self.assertEqual(verbose_payload["settlement_id"], sid2)
+
+    def test_inferred_event_origin_is_stored_outside_compact_payload(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="inferred",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            ctx._record_inferred_simulation_event(
+                990,
+                "promotion_backfill_birth",
+                {"person_id": 123, "event_origin": "inferred", "details": "anchor"},
+            )
+            checkpoint_simulation_to_save(ctx, full_snapshot=False)
+
+            with sqlite3.connect(sav) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT event_origin, payload_json
+                    FROM simulation_events
+                    WHERE event_type = 'promotion_backfill_birth'
+                    """
+                ).fetchone()
+            self.assertEqual(row["event_origin"], "inferred")
+            payload = json.loads(str(row["payload_json"]))
+            self.assertNotIn("event_origin", payload)
+            self.assertEqual(payload["person_id"], 123)
+
+    def test_passive_people_checkpoint_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="passive",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            detailed = ctx.add_person(
+                person=generate_person_random(
+                    simulation_context=ctx, simulation_year=1000
+                ),
+                is_founder=True,
+            )
+            passive = ctx.add_passive_person(
+                PassivePerson(
+                    name="Mira Lowdetail",
+                    birthyear=1001,
+                    gender="female",
+                    birthplace_region_id=detailed.person.birthplace_region_id,
+                    birthplace_settlement_id=detailed.person.birthplace_settlement_id,
+                    current_settlement_id=detailed.person.current_settlement_id,
+                    job_family="farm",
+                    father_id=detailed.person_id,
+                    child_count=2,
+                    status_bucket="common",
+                    prosperity_bucket="modest",
+                )
+            )
+            ctx.add_passive_cohort(
+                PassiveCohort(
+                    sim_year=1001,
+                    region_id=detailed.person.birthplace_region_id,
+                    settlement_id=detailed.person.current_settlement_id,
+                    age_band="0-4",
+                    gender="female",
+                    species=detailed.person.species,
+                    culture=detailed.person.ethnic,
+                    job_family="farm",
+                    status_bucket="common",
+                    population_count=80,
+                    birth_count=9,
+                    death_count=1,
+                )
+            )
+            self.assertNotIn(passive.person_id, ctx.current_people_ids)
+            self.assertEqual(
+                ctx.count_alive_in_settlement(str(detailed.person.current_settlement_id)),
+                1,
+            )
+            checkpoint_simulation_to_save(ctx, full_snapshot=True)
+
+            with sqlite3.connect(sav) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM simulation_people_light_readable
+                    WHERE person_id = ?
+                    """,
+                    (passive.person_id,),
+                ).fetchone()
+                tables = {
+                    r["name"]
+                    for r in conn.execute(
+                        """
+                        SELECT name
+                        FROM sqlite_master
+                        WHERE type IN ('table', 'view')
+                        """
+                    )
+                }
+                cohort = conn.execute(
+                    """
+                    SELECT *
+                    FROM simulation_cohorts_readable
+                    WHERE sim_year = 1001 AND age_band = '0-4'
+                    """
+                ).fetchone()
+            self.assertIn("simulation_people_light", tables)
+            self.assertIn("simulation_cohorts", tables)
+            self.assertIn("simulation_promotion_log", tables)
+            self.assertEqual(row["name"], "Mira Lowdetail")
+            self.assertEqual(row["job_family"], "farm")
+            self.assertEqual(row["father_id"], detailed.person_id)
+            self.assertEqual(row["child_count"], 2)
+            self.assertEqual(
+                row["current_settlement_id"], detailed.person.current_settlement_id
+            )
+            self.assertEqual(cohort["population_count"], 80)
+            self.assertEqual(cohort["birth_count"], 9)
+            self.assertEqual(cohort["death_count"], 1)
+
+            loaded = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="passive",
+                world="default",
+                start_year=None,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            loaded_passive = loaded.passive_people[passive.person_id].person
+            self.assertEqual(loaded_passive.name, "Mira Lowdetail")
+            self.assertEqual(loaded_passive.job_family, "farm")
+            self.assertEqual(loaded_passive.father_id, detailed.person_id)
+            self.assertNotIn(passive.person_id, loaded.current_people_ids)
+            self.assertEqual(len(loaded.passive_cohorts), 1)
+            self.assertEqual(loaded.passive_cohorts[0].population_count, 80)
+            self.assertGreaterEqual(loaded.next_person_id, passive.person_id + 1)
 
     def test_partial_checkpoint_writes_simulation_meta(self) -> None:
         random.seed(2)

@@ -24,6 +24,8 @@ Environment (optional):
 - ``HISTORY_SIM_PROFILE_LAST_N_YEARS`` — profile only the last N simulation years
 - After each run, appends one TSV row to ``unit_test/population_sim_timing.tsv`` (wall time, seed, flush batch, alive count) for trend tracking. Set ``POPULATION_SIM_SKIP_TIMING_LOG=1`` to disable.
 - When late-year profiling is enabled, appends phase rows to ``unit_test/population_sim_profile.tsv``.
+- ``--verbose-event-logging`` keeps duplicate place slugs in event payload JSON for
+  debugging-heavy runs; normal runs store those through compact integer columns.
 """
 
 from __future__ import annotations
@@ -192,6 +194,18 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help="Set HISTORY_SIM_PROFILE_LAST_N_YEARS for this run.",
     )
+    p.add_argument(
+        "--verbose-event-logging",
+        action="store_true",
+        help="Keep raw, self-contained event payloads instead of compacting place slugs.",
+    )
+    p.add_argument(
+        "--passive-population-scale",
+        type=float,
+        default=1.0,
+        metavar="N",
+        help="Aggregate background population as a multiplier of active regions' carrying capacity (default: 1.0; use 0 to disable).",
+    )
     args = p.parse_args()
     if args.years < 1:
         p.error("--years must be >= 1")
@@ -199,6 +213,8 @@ def _parse_args() -> argparse.Namespace:
         p.error("--starting-couples must be >= 1")
     if args.flush_batch_years is not None and args.flush_batch_years < 1:
         p.error("--flush-batch-years must be >= 1")
+    if args.passive_population_scale < 0:
+        p.error("--passive-population-scale must be >= 0")
     if args.profile_last_years is not None and args.profile_last_years < 1:
         p.error("--profile-last-years must be >= 1")
     return args
@@ -251,6 +267,7 @@ def main() -> None:
         world="default",
         start_year=int(args.start_year),
         placename_rng_salt=sim_seed,
+        verbose_event_logging=bool(args.verbose_event_logging),
     ) as ctx:
         run_population_growth_simulation(
             ctx,
@@ -258,6 +275,7 @@ def main() -> None:
             start_year=int(args.start_year),
             duration_years=int(args.years),
             starting_couples=int(args.starting_couples),
+            passive_population_scale=float(args.passive_population_scale),
             progress_callback=_print_progress,
             print_timing_report=False,
         )
@@ -276,6 +294,12 @@ def main() -> None:
 
     elapsed = time.perf_counter() - t0
     alive_end = len(ctx.current_people_ids)
+    latest_cohort_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+    passive_cohort_alive = sum(
+        int(c.population_count)
+        for c in ctx.passive_cohorts
+        if latest_cohort_year is not None and int(c.sim_year) == latest_cohort_year
+    )
     iso_ts = datetime.now(timezone.utc).isoformat()
     if os.environ.get("POPULATION_SIM_SKIP_TIMING_LOG", "").strip().lower() not in (
         "1",
@@ -316,6 +340,7 @@ def main() -> None:
     print(
         f"store_flush_batch_years={flush} | years={args.years} | "
         f"start_year={args.start_year} | starting_couples={args.starting_couples} | "
+        f"detailed_alive={alive_end} | passive_cohort_alive={passive_cohort_alive} | "
         f"wrote {_OUTPUT_PATH} in {elapsed:.2f}s"
     )
     if yearly is not None:

@@ -13,6 +13,8 @@ if "gradio" not in sys.modules and importlib.util.find_spec("gradio") is None:
 
 import utils.gradio_data_browser as gdb
 from library.config_import import load_all_csvs_into_sqlite
+from library.world_map_geometry import RegionCell, WorldMapGeometry
+from library.world_map_svg import load_world_map_overlays
 from utils.gradio_data_browser import (
     _event_sentence,
     _event_sentence_html,
@@ -210,6 +212,273 @@ def _memory_place_save() -> sqlite3.Connection:
             current_settlement_id = 'r1:s1',
             job = 'guard'
         where person_id = 2
+        """
+    )
+    return con
+
+
+def _memory_keyed_place_save() -> sqlite3.Connection:
+    con = _memory_save()
+    for column_def in (
+        "birthplace_region_key integer",
+        "birthplace_settlement_key integer",
+        "current_settlement_key integer",
+        "job text",
+        "career_fitness_score real",
+    ):
+        con.execute(f"alter table simulation_people add column {column_def}")
+    con.execute(
+        """
+        create table simulation_region_lookup (
+            region_key integer primary key,
+            region_id text not null unique
+        )
+        """
+    )
+    con.execute(
+        """
+        create table simulation_settlement_lookup (
+            settlement_key integer primary key,
+            settlement_id text not null unique,
+            region_key integer not null
+        )
+        """
+    )
+    con.execute(
+        """
+        create table simulation_regions (
+            region_key integer primary key,
+            region_display_name text,
+            total_population_cap integer,
+            total_household_cap integer,
+            food_pressure real,
+            stability real,
+            market_pull real,
+            prosperity_pool real,
+            treasury_balance real
+        )
+        """
+    )
+    con.execute(
+        """
+        create table simulation_settlements (
+            settlement_key integer primary key,
+            region_key integer,
+            level text,
+            population_cap integer,
+            household_cap integer,
+            food_pressure real,
+            stability real,
+            market_pull real,
+            display_name text,
+            etymology text,
+            name_category_primary text,
+            name_category_secondary text,
+            name_culture_primary text,
+            name_culture_secondary text,
+            local_geography_json text,
+            founded_sim_year integer,
+            abandoned_sim_year integer,
+            status text,
+            consecutive_empty_years integer,
+            site_slot integer,
+            prosperity_pool real
+        )
+        """
+    )
+    con.execute(
+        """
+        create view simulation_regions_readable as
+        select rl.region_id,
+               r.region_display_name,
+               r.total_population_cap,
+               r.total_household_cap,
+               r.food_pressure,
+               r.stability,
+               r.market_pull,
+               r.prosperity_pool,
+               r.treasury_balance
+        from simulation_regions r
+        join simulation_region_lookup rl on rl.region_key = r.region_key
+        """
+    )
+    con.execute(
+        """
+        create view simulation_settlements_readable as
+        select sl.settlement_id,
+               rl.region_id,
+               s.level,
+               s.population_cap,
+               s.household_cap,
+               s.food_pressure,
+               s.stability,
+               s.market_pull,
+               s.display_name,
+               s.etymology,
+               s.name_category_primary,
+               s.name_category_secondary,
+               s.name_culture_primary,
+               s.name_culture_secondary,
+               s.local_geography_json,
+               s.founded_sim_year,
+               s.abandoned_sim_year,
+               s.status,
+               s.consecutive_empty_years,
+               s.site_slot,
+               s.prosperity_pool
+        from simulation_settlements s
+        join simulation_settlement_lookup sl on sl.settlement_key = s.settlement_key
+        join simulation_region_lookup rl on rl.region_key = s.region_key
+        """
+    )
+    con.execute(
+        """
+        create table simulation_people_light (
+            person_id integer primary key,
+            name text,
+            birthyear integer,
+            deathyear integer,
+            is_alive integer,
+            gender text,
+            birthplace_region_key integer,
+            birthplace_settlement_key integer,
+            current_settlement_key integer,
+            job_family text,
+            partner_person_id integer,
+            father_id integer,
+            mother_id integer,
+            child_count integer,
+            status_bucket text,
+            prosperity_bucket text
+        )
+        """
+    )
+    con.execute(
+        """
+        create table simulation_cohorts (
+            cohort_id integer primary key autoincrement,
+            sim_year integer,
+            region_key integer,
+            settlement_key integer,
+            age_band text,
+            gender text,
+            species text,
+            culture text,
+            job_family text,
+            status_bucket text,
+            population_count integer,
+            birth_count integer,
+            death_count integer
+        )
+        """
+    )
+    con.execute(
+        """
+        create view simulation_people_light_readable as
+        select p.person_id,
+               p.name,
+               p.birthyear,
+               p.deathyear,
+               p.is_alive,
+               p.gender,
+               br.region_id as birthplace_region_id,
+               bs.settlement_id as birthplace_settlement_id,
+               cs.settlement_id as current_settlement_id,
+               p.job_family,
+               p.partner_person_id,
+               p.father_id,
+               p.mother_id,
+               p.child_count,
+               p.status_bucket,
+               p.prosperity_bucket
+        from simulation_people_light p
+        left join simulation_region_lookup br on br.region_key = p.birthplace_region_key
+        left join simulation_settlement_lookup bs on bs.settlement_key = p.birthplace_settlement_key
+        left join simulation_settlement_lookup cs on cs.settlement_key = p.current_settlement_key
+        """
+    )
+    con.execute(
+        """
+        create view simulation_cohorts_readable as
+        select c.cohort_id,
+               c.sim_year,
+               rl.region_id,
+               sl.settlement_id,
+               c.age_band,
+               c.gender,
+               c.species,
+               c.culture,
+               c.job_family,
+               c.status_bucket,
+               c.population_count,
+               c.birth_count,
+               c.death_count
+        from simulation_cohorts c
+        left join simulation_region_lookup rl on rl.region_key = c.region_key
+        left join simulation_settlement_lookup sl on sl.settlement_key = c.settlement_key
+        """
+    )
+    con.execute("insert into simulation_region_lookup values (1, 'r1')")
+    con.execute("insert into simulation_settlement_lookup values (1, 'r1:s1', 1)")
+    con.execute(
+        """
+        insert into simulation_regions values (
+            1, 'River Country', 12, 3, 0.25, 0.71, 0.08, 1.5, 7.25
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_settlements values (
+            1, 1, 'hamlet', 12, 3, 0.25, 0.71, 0.08,
+            'Fordham', 'Ford - home', 'Engineering', null, 'Middle English', null,
+            ?, 1, null, 'active', 0, 1, 0.8
+        )
+        """,
+        (
+            json.dumps(
+                {
+                    "features": [{"kind": "river", "x": 0.2, "y": 0.3}],
+                    "settlements": [{"settlement_slot": 0, "x": 0.55, "y": 0.45}],
+                }
+            ),
+        ),
+    )
+    con.execute(
+        """
+        update simulation_people
+        set birthplace_region_key = 1,
+            birthplace_settlement_key = 1,
+            current_settlement_key = 1,
+            job = 'miller'
+        where person_id = 1
+        """
+    )
+    con.execute(
+        """
+        update simulation_people
+        set birthplace_region_key = 1,
+            birthplace_settlement_key = 1,
+            current_settlement_key = 1,
+            job = 'guard'
+        where person_id = 2
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_people_light values (
+            100, 'Cora Light', -10, null, 1, 'female', 1, 1, 1,
+            'craft', null, null, null, 0, 'commoner', 'stable'
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_cohorts (
+            sim_year, region_key, settlement_key, age_band, gender, species,
+            culture, job_family, status_bucket, population_count, birth_count, death_count
+        )
+        values (100, 1, 1, '20-39', 'mixed', 'human', 'test', 'labor', 'commoner', 10, 0, 0)
         """
     )
     return con
@@ -846,6 +1115,78 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Fordham", sheet)
         self.assertIn("miller", sheet)
 
+    def test_place_browsers_read_keyed_place_schema_through_readable_views(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_keyed_place_save()
+            con.execute(
+                """
+                create table simulation_polities (
+                    polity_id integer,
+                    name text,
+                    polity_type_id text,
+                    status text,
+                    parent_polity_id integer,
+                    capital_settlement_id text,
+                    founded_sim_year integer
+                )
+                """
+            )
+            con.execute(
+                """
+                create table simulation_polity_territory (
+                    polity_id integer,
+                    target_kind text,
+                    target_id text,
+                    since_sim_year integer,
+                    until_sim_year integer
+                )
+                """
+            )
+            con.execute("insert into simulation_polities values (1, 'River Crown', 'duchy', 'active', null, 'r1:s1', 1)")
+            con.execute("insert into simulation_polity_territory values (1, 'settlement', 'r1:s1', 1, null)")
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                settlement_table, _, settlement_ids = gdb.load_settlements_browser("test", "", "Active", 50)
+                region_table, _, region_ids = gdb.load_regions_browser_fresh("test", "", 50)
+                region_sheet = gdb.render_region_outputs("test", "r1")
+                town_sheet = gdb.render_settlement_outputs("test", "r1:s1")
+                place_rows, _, _, place_state, _ = gdb._places_browser_data_and_state("test", "Regions", "", 50)
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        self.assertEqual(settlement_table["value"][0][0], "Fordham")
+        self.assertEqual(settlement_ids, ["r1:s1"])
+        self.assertEqual(region_table["value"][0][0], "River Country")
+        self.assertEqual(region_ids, ["r1"])
+        self.assertEqual(region_table["value"][0][1], 13)
+        self.assertIn("labor (10)", region_table["value"][0][-1])
+        self.assertEqual(settlement_table["value"][0][2], 13)
+        self.assertIn("labor (10)", settlement_table["value"][0][-1])
+        self.assertIn("River Crown", region_sheet)
+        self.assertIn('<span class="label">Alive</span><span class="value">13</span>', region_sheet)
+        self.assertIn("labor: 10", region_sheet)
+        self.assertIn("miller: 1", region_sheet)
+        self.assertIn("Ada Forge", region_sheet)
+        self.assertIn("Fordham", town_sheet)
+        self.assertIn('<span class="label">Alive</span><span class="value">13</span>', town_sheet)
+        self.assertIn("labor (10)", town_sheet)
+        self.assertIn("Bea Forge", town_sheet)
+        self.assertEqual(place_rows[0]["Name"], "River Country")
+        self.assertEqual(place_rows[0]["Alive"], 13)
+        self.assertIn("labor (10)", place_rows[0]["Top Jobs"])
+        self.assertIn("Fordham", place_state)
+
     def test_regions_browser_loads_rows_and_opens_sheet(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "save.sqlite"
@@ -981,6 +1322,66 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertIn("River Country", region_html)
         self.assertIn("Fordham", town_html)
+
+    def test_world_map_overlays_read_keyed_place_schema_through_readable_views(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_keyed_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+            geometry = WorldMapGeometry(
+                world="test",
+                version="unit",
+                width=1.0,
+                height=1.0,
+                cells=[
+                    RegionCell(
+                        region_id="r1",
+                        continent_id="test",
+                        center_x=0.5,
+                        center_y=0.5,
+                        polygon=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                        elevation=0.0,
+                        moisture=0.0,
+                        ruggedness=0.0,
+                        terrain_family="plains",
+                        is_coastal=False,
+                        feature_ids=[],
+                    )
+                ],
+                features=[],
+                edges=[],
+                rivers=[],
+            )
+
+            overlays = load_world_map_overlays(geometry=geometry, save_db_path=path)
+
+        self.assertEqual([s.settlement_id for s in overlays.settlements], ["r1:s1"])
+        self.assertEqual(overlays.settlements[0].display_name, "Fordham")
+
+    def test_world_map_region_without_save_settlements_explains_empty_region(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_keyed_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            gdb._db_path = lambda world, db_kind: path
+            try:
+                html = render_world_map_selection_detail(
+                    "test",
+                    json.dumps({"view": "Regions", "id": "boreas_clear_river"}),
+                )
+            finally:
+                gdb._db_path = original_db_path
+
+        self.assertIn("No settlements are recorded for region boreas_clear_river", html)
+        self.assertNotIn("No region named", html)
 
     def test_place_row_selection_uses_loaded_key_state(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

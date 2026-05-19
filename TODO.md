@@ -24,18 +24,13 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 - File size: about 2.25GB.
 - `simulation_events`: 3,262,904 rows; `payload_json` is about 1.05GB of text.
 - `simulation_people`: 319,939 rows; `person_json` is about 640MB of text.
-- Save schema v2/v3/v4 already removed save-side `world` columns, flattened common `Person` fields into typed columns, compacted genome/mind-body payloads, and added normalized event-person links. See `TODONE.md`.
+- Save schema v2/v3/v4/v5/v6 already removed save-side `world` columns, flattened common `Person` fields into typed columns, compacted genome/mind-body payloads, added normalized event-person links, normalized common place IDs, and added the first hybrid passive/cohort tables. See `TODONE.md`.
 - Remaining bigger wins are likely:
-  - normalize repeated settlement/region text IDs into integer keys;
   - continue moving high-volume event detail out of JSON when a specific event family proves hot;
+  - use `simulation_people_light` / `simulation_cohorts` for background population instead of creating every background person as a full `Person`;
   - keep JSON only for sparse detail or extension fields.
 - Keep human-readable inspection as a first-class need. Prefer readable views, browser helpers, or a future derived `world.sqlite` over making the canonical save easy to inspect only by storing long JSON keys everywhere.
 - Treat a generated `world.sqlite` / UI projection as a later project stage, not the primary fix. The canonical `save.sqlite` still needs to become compact because it controls write cost, resume cost, and disk growth during long runs.
-
-Implementation direction:
-
-1. Normalize settlement/region IDs to integer surrogate keys while retaining readable slugs in lookup tables.
-2. Consider optional verbose event logging for debugging-heavy runs.
 
 ### Gradio Browser Hazards
 
@@ -85,6 +80,30 @@ Candidate passive-person fields:
 - coarse status/prosperity bucket if needed
 
 Avoid storing genome, full trait maps, detailed annual events, extensive relationship state, and full career/economy state for passive people.
+
+Initial foundation already exists:
+
+- `library.passive_population.PassivePerson`
+- `library.passive_population.PassiveCohort`
+- `SimulationContext.passive_people`
+- `SimulationContext.passive_cohorts`
+- `SimulationContext.add_passive_person(...)`
+- `SimulationContext.add_passive_cohort(...)`
+- save schema v6 tables/views:
+  - `simulation_people_light`
+  - `simulation_people_light_readable`
+  - `simulation_cohorts`
+  - `simulation_cohorts_readable`
+  - `simulation_promotion_log`
+
+First-pass aggregate background cohort generation now exists in the canonical population runner:
+
+- each active settlement receives yearly `simulation_cohorts` rows;
+- cohort totals are based on configured regional carrying capacity minus detailed residents;
+- cohorts count in Gradio place stats through `simulation_cohorts_readable`;
+- cohorts do not enter detailed annual event loops.
+
+Still missing: richer passive births/deaths/aging, passive relationship dynamics, passive-to-detailed promotion, and mixed-mode population reports.
 
 ### Detailed Population Fraction
 
@@ -146,10 +165,10 @@ This is almost a reverse generator:
 
 Keep full historical fidelity without keeping every person expensive in RAM:
 
-- `simulation_people_detailed`: full JSON/person payload for detailed or promoted people.
+- `simulation_people`: current detailed-person checkpoint table; future work may rename/split to `simulation_people_detailed` if that makes promotion semantics clearer.
 - `simulation_people_light`: minimal passive person rows.
 - `simulation_cohorts`: aggregate people by year, settlement/region, age band, gender/sex, culture/species, job family, status bucket.
-- `simulation_events`: append-only; include a flag for generated vs inferred/backfilled events.
+- `simulation_events`: append-only; `event_origin` marks `generated`, `inferred`, or `backfilled`.
 - `simulation_promotion_log`: record why a passive person became detailed and what was synthesized.
 
 Important invariant:
@@ -164,12 +183,23 @@ Important invariant:
 - For simulation, use stratified weighted sampling rather than a simple global random 0.1%.
 - Game/simulation design can use "level of detail" logic: spend computation where the player/history/narrative is looking, keep the rest as aggregate state, and materialize detail when it becomes relevant.
 
+### Event Threshold Guardrails
+
+- Passive people and aggregate cohorts must not automatically enter detailed annual event loops.
+- Existing detailed-person thresholds should remain numerically unchanged unless intentionally retuned:
+  - social contact rates and same-sex couple trial rates;
+  - migration pressure thresholds and outflow shares;
+  - government succession/warfare/usurpation rolls;
+  - job churn and fertility probabilities.
+- For very large worlds, distinguish **narrative sample rates** from **worldwide incidence rates**. Current social formation loops scale by a percentage/rate of the detailed candidate pool and still have absolute safety caps; passive/cohort population should be handled by aggregate demographic deltas or explicit promotion, not by multiplying detailed event rows.
+- Aggregate/passive models should produce cohort-level demographic deltas first; only promotion, user focus, or explicitly sampled narrative events should create detailed event rows.
+
 ### Proposed Milestones
 
 1. Use late-year profiling to confirm the next hot path for ~15K active people.
 2. Get 15K active people / 10 late years under 5 minutes.
-3. Add a minimal passive-person schema and import/export path.
-4. Prototype passive births/deaths/partnerships at settlement or cohort level.
-5. Add passive-to-detailed promotion for one event type, probably office selection or marriage into a detailed family.
-6. Add inferred/backfilled event tagging.
+3. Replace the first-pass static background cohorts with passive births/deaths/aging/partnerships at settlement or cohort level.
+4. Add passive-to-detailed promotion for one event type, probably office selection or marriage into a detailed family.
+5. Generate plausible `Person` state from passive facts without replaying yearly event rolls.
+6. Add mixed-mode reports that separately show detailed, passive, and cohort counts.
 7. Run mixed-mode simulations at 100K, 1M, and 10M historical scale.

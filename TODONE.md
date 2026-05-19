@@ -117,10 +117,6 @@
   - save payloads use short keys (`g` for genome, `mb` for mind/body) with trait values stored as arrays
   - runtime `Person.genome` / `Person.mind_body` remain named dictionaries so existing simulation logic keeps using trait names
 
-### Still Open After Save Schema v4
-
-- Settlement/region ids are still text in the save schema; integer surrogate-key normalization remains TODO.
-
 ### Completed Save Schema v4 Event Normalization
 
 - Added typed `simulation_events` columns for common query keys:
@@ -133,6 +129,58 @@
 - Existing v3 event payloads are backfilled when the save schema is ensured or rebuilt.
 - Gradio person timelines prefer `simulation_event_people` and fall back to JSON scanning for legacy/fixture saves.
 - `payload_json` remains for sparse event detail and human-readable inspection.
+
+### Completed Save Schema v5 Place-Key Normalization
+
+- Normalized high-volume settlement/region references to integer surrogate keys:
+  - `simulation_region_lookup(region_key, region_id)`
+  - `simulation_settlement_lookup(settlement_key, settlement_id, region_key)`
+  - `simulation_people` birthplace/current settlement place columns
+  - `simulation_events` common settlement/region columns
+  - `simulation_regions` and `simulation_settlements` checkpoint rows
+- Added readable inspection views:
+  - `simulation_regions_readable`
+  - `simulation_settlements_readable`
+  - `simulation_events_readable`
+- Rebuild logic can transform v3/v4 text-place saves into the v5 key schema.
+- Normal event writes compact duplicate settlement/region slugs out of `payload_json`; `SimulationContext.create(..., verbose_event_logging=True)` or `run_population_simulation.py --verbose-event-logging` preserves raw self-contained event payloads for debugging-heavy runs.
+
+### Completed Save Schema v6 Hybrid Population Foundation
+
+- Added `library.passive_population`:
+  - `PassivePerson`
+  - `PassivePersonRecord`
+  - `PassiveCohort`
+- Added runtime state and helpers on `SimulationContext`:
+  - `passive_people`
+  - `passive_cohorts`
+  - `add_passive_person(...)`
+  - `add_passive_cohort(...)`
+  - `_record_inferred_simulation_event(...)`
+- Added passive/cohort save tables:
+  - `simulation_people_light`
+  - `simulation_cohorts`
+  - `simulation_promotion_log`
+- Added readable inspection views:
+  - `simulation_people_light_readable`
+  - `simulation_cohorts_readable`
+- Added `simulation_events.event_origin`:
+  - `generated` for ordinary simulation events
+  - `inferred` / `backfilled` for promotion and reverse-generation history
+  - compact event payloads omit `event_origin` just like duplicated place slugs
+- Checkpoint save/load now roundtrips passive people and cohorts.
+- Passive people share the global `person_id` sequence but do **not** enter `current_people_ids`, detailed alive counts, social contact loops, government candidate pools, migration loops, or other detailed-person event thresholds.
+- Added regression tests for passive-person/cohort roundtrips, inferred event provenance, and passive people staying out of detailed alive counts.
+
+### Event Threshold Decision
+
+- Passive/cohort scale does not feed detailed-person event loops automatically.
+- Social formation budgets now scale by the detailed candidate pool, with absolute safety caps:
+  - `PARAMOUR_CONTACT_TRIAL_SHARE_OF_ELIGIBLE = 0.75`
+  - `PARAMOUR_CONTACT_TRIAL_ABSOLUTE_CAP = 5_000`
+  - `SAME_SEX_TRIAL_SHARE_OF_ELIGIBLE = 0.12`
+  - `SAME_SEX_TRIAL_ABSOLUTE_CAP_PER_POOL = 1_000`
+- These are detailed narrative sampling rates, not total incidence rates for passive/cohort populations.
 
 ## Gradio Data Browser
 

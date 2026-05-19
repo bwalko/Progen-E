@@ -12,6 +12,7 @@ the default scenario size.
 from __future__ import annotations
 
 import tempfile
+import sqlite3
 import unittest
 from pathlib import Path
 
@@ -60,6 +61,20 @@ class TestPopulationGrowth100Years(unittest.TestCase):
                     starting_couples=STARTING_COUPLES,
                 )
 
+            with sqlite3.connect(sav) as con:
+                con.row_factory = sqlite3.Row
+                latest_year = con.execute(
+                    "select max(sim_year) as y from simulation_cohorts"
+                ).fetchone()["y"]
+                passive_alive = con.execute(
+                    """
+                    select coalesce(sum(population_count), 0) as n
+                    from simulation_cohorts
+                    where sim_year = ?
+                    """,
+                    (latest_year,),
+                ).fetchone()["n"]
+
             write_population_growth_report_files(
                 ctx,
                 sim_seed=_SIM_SEED,
@@ -74,6 +89,7 @@ class TestPopulationGrowth100Years(unittest.TestCase):
             self.assertTrue(PEOPLE_JSON_PATH.exists())
             total_people_created = int(ctx.next_person_id) - 1
             self.assertGreater(total_people_created, STARTING_COUPLES * 2)
+            self.assertGreater(int(passive_alive), len(ctx.current_people_ids))
 
 
 if __name__ == "__main__":

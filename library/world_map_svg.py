@@ -246,17 +246,22 @@ def load_world_map_overlays(
     polities: dict[str, PolityMapOverlay] = {}
     with closing(sqlite3.connect(path)) as conn:
         conn.row_factory = sqlite3.Row
-        tables = {
+        relations = {
             str(r["name"])
-            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").fetchall()
         }
-        if "simulation_settlements" in tables and settlement_limit > 0 and cells:
+        settlement_source = (
+            "simulation_settlements_readable"
+            if "simulation_settlements_readable" in relations
+            else "simulation_settlements"
+        )
+        if "simulation_settlements" in relations and settlement_limit > 0 and cells:
             region_ids = sorted(cells)
             placeholders = ", ".join("?" for _ in region_ids)
             select_sql = f"""
                 SELECT settlement_id, region_id, display_name, population_cap, status,
                        site_slot, local_geography_json
-                FROM simulation_settlements
+                FROM {settlement_source}
                 WHERE region_id IN ({placeholders})
                   AND {{status_clause}}
                 LIMIT ?
@@ -295,7 +300,7 @@ def load_world_map_overlays(
                         status=str(row["status"] or ""),
                     )
                 )
-        if {"simulation_polity_territory", "simulation_polities"}.issubset(tables):
+        if {"simulation_polity_territory", "simulation_polities"}.issubset(relations):
             rows = conn.execute(
                 """
                 SELECT t.target_id AS region_id, p.polity_id, p.name AS polity_name,

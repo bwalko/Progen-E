@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from library.mind_body import mind_body_from_genome
+from library.passive_population import PassiveCohort, PassivePerson, PassivePersonRecord
 from library.person import Person
 from library.geography import get_region
 from library.settlements import (
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 4
+SAVE_SCHEMA_VERSION = 6
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 
@@ -56,7 +57,12 @@ _CREATE_WORLD_STATE = """
 _SAVE_REBUILD_TABLES = (
     "world_state",
     "simulation_meta",
+    "simulation_region_lookup",
+    "simulation_settlement_lookup",
     "simulation_people",
+    "simulation_people_light",
+    "simulation_cohorts",
+    "simulation_promotion_log",
     "simulation_couples",
     "simulation_paramours",
     "simulation_events",
@@ -82,9 +88,9 @@ _PERSON_CHECKPOINT_COLUMNS: tuple[str, ...] = (
     "birthyear",
     "deathyear",
     "birthplace",
-    "birthplace_region_id",
-    "birthplace_settlement_id",
-    "current_settlement_id",
+    "birthplace_region_key",
+    "birthplace_settlement_key",
+    "current_settlement_key",
     "partner_person_id",
     "paramour_person_id",
     "last_birth_event_year",
@@ -267,7 +273,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
             f"save.sqlite schema version {version} is newer than supported "
             f"version {SAVE_SCHEMA_VERSION}"
         )
-    if version not in (0, 3, SAVE_SCHEMA_VERSION):
+    if version not in (0, 3, 4, 5, SAVE_SCHEMA_VERSION):
         raise RuntimeError(
             f"save.sqlite schema version {version} needs a migration before "
             f"this code can open it"
@@ -317,6 +323,83 @@ def _save_looks_like_legacy_multiworld(conn: sqlite3.Connection) -> bool:
     return False
 
 
+def _ensure_place_lookup_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_region_lookup (
+            region_key INTEGER PRIMARY KEY AUTOINCREMENT,
+            region_id TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE IF NOT EXISTS simulation_settlement_lookup (
+            settlement_key INTEGER PRIMARY KEY AUTOINCREMENT,
+            settlement_id TEXT NOT NULL UNIQUE,
+            region_key INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_settlement_lookup_region
+        ON simulation_settlement_lookup (region_key);
+        """
+    )
+
+
+def _lookup_or_insert_region_key(conn: sqlite3.Connection, region_id: object) -> int | None:
+    rid = str(region_id or "").strip()
+    if not rid:
+        return None
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO simulation_region_lookup (region_id)
+        VALUES (?)
+        """,
+        (rid,),
+    )
+    row = conn.execute(
+        """
+        SELECT region_key FROM simulation_region_lookup
+        WHERE region_id = ?
+        """,
+        (rid,),
+    ).fetchone()
+    return int(row["region_key"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def _lookup_or_insert_settlement_key(
+    conn: sqlite3.Connection, settlement_id: object, region_id: object | None = None
+) -> int | None:
+    sid = str(settlement_id or "").strip()
+    if not sid:
+        return None
+    row = conn.execute(
+        """
+        SELECT settlement_key FROM simulation_settlement_lookup
+        WHERE settlement_id = ?
+        """,
+        (sid,),
+    ).fetchone()
+    if row is not None:
+        return int(row["settlement_key"] if isinstance(row, sqlite3.Row) else row[0])
+    rid = str(region_id or "").strip()
+    if not rid and ":" in sid:
+        rid = sid.split(":", 1)[0].strip()
+    rkey = _lookup_or_insert_region_key(conn, rid)
+    if rkey is None:
+        return None
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO simulation_settlement_lookup (settlement_id, region_key)
+        VALUES (?, ?)
+        """,
+        (sid, rkey),
+    )
+    row = conn.execute(
+        """
+        SELECT settlement_key FROM simulation_settlement_lookup
+        WHERE settlement_id = ?
+        """,
+        (sid,),
+    ).fetchone()
+    return int(row["settlement_key"] if isinstance(row, sqlite3.Row) else row[0])
+
+
 def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -334,9 +417,9 @@ def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
             birthyear INTEGER NOT NULL DEFAULT 0,
             deathyear INTEGER,
             birthplace TEXT NOT NULL DEFAULT 'Placeholder',
-            birthplace_region_id TEXT,
-            birthplace_settlement_id TEXT,
-            current_settlement_id TEXT,
+            birthplace_region_key INTEGER,
+            birthplace_settlement_key INTEGER,
+            current_settlement_key INTEGER,
             partner_person_id INTEGER,
             paramour_person_id INTEGER,
             last_birth_event_year INTEGER,
@@ -376,16 +459,96 @@ def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_simulation_people_birthyear
         ON simulation_people (birthyear);
         CREATE INDEX IF NOT EXISTS idx_simulation_people_current_settlement
-        ON simulation_people (current_settlement_id);
+        ON simulation_people (current_settlement_key);
         """
     )
     cols = set(_table_columns(conn, "simulation_people"))
     missing = [c for c in _PERSON_CHECKPOINT_COLUMNS if c not in cols]
     if missing:
+        if {
+            "birthplace_region_id",
+            "birthplace_settlement_id",
+            "current_settlement_id",
+        } & cols:
+            raise RuntimeError(
+                "simulation_people uses a pre-v5 text-place schema. Delete or "
+                "rebuild save.sqlite before opening it with the surrogate "
+                "place-key schema."
+            )
         raise RuntimeError(
             "simulation_people uses a pre-v3 schema. Delete or rebuild save.sqlite "
             "before opening it with the compact people checkpoint schema."
         )
+
+
+def _ensure_hybrid_population_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_people_light (
+            person_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            birthyear INTEGER NOT NULL,
+            deathyear INTEGER,
+            is_alive INTEGER NOT NULL,
+            gender TEXT NOT NULL DEFAULT '',
+            birthplace_region_key INTEGER,
+            birthplace_settlement_key INTEGER,
+            current_settlement_key INTEGER,
+            job_family TEXT,
+            partner_person_id INTEGER,
+            father_id INTEGER,
+            mother_id INTEGER,
+            child_count INTEGER NOT NULL DEFAULT 0,
+            status_bucket TEXT,
+            prosperity_bucket TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_light_alive
+        ON simulation_people_light (is_alive);
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_light_birthyear
+        ON simulation_people_light (birthyear);
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_light_current_settlement
+        ON simulation_people_light (current_settlement_key);
+
+        CREATE TABLE IF NOT EXISTS simulation_cohorts (
+            cohort_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sim_year INTEGER NOT NULL,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            age_band TEXT NOT NULL DEFAULT '',
+            gender TEXT NOT NULL DEFAULT '',
+            species TEXT NOT NULL DEFAULT '',
+            culture TEXT NOT NULL DEFAULT '',
+            job_family TEXT NOT NULL DEFAULT '',
+            status_bucket TEXT NOT NULL DEFAULT '',
+            population_count INTEGER NOT NULL DEFAULT 0,
+            birth_count INTEGER NOT NULL DEFAULT 0,
+            death_count INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (
+                sim_year, region_key, settlement_key, age_band, gender,
+                species, culture, job_family, status_bucket
+            )
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_cohorts_place_year
+        ON simulation_cohorts (sim_year, region_key, settlement_key);
+
+        CREATE TABLE IF NOT EXISTS simulation_promotion_log (
+            promotion_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            person_id INTEGER NOT NULL,
+            sim_year INTEGER,
+            reason TEXT NOT NULL,
+            source_event_id INTEGER,
+            synthesized_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_promotion_log_person
+        ON simulation_promotion_log (person_id, sim_year);
+        """
+    )
+
+
+def _event_origin_from_payload(payload: dict) -> str:
+    raw = str(payload.get("event_origin") or "generated").strip().lower()
+    return raw if raw in _EVENT_ORIGINS else "generated"
 
 
 _EVENT_PERSON_SCALAR_ROLES: dict[str, str] = {
@@ -425,6 +588,12 @@ _EVENT_REGION_KEYS: tuple[str, ...] = (
     "current_region_id",
     "birthplace_region_id",
 )
+
+_EVENT_PAYLOAD_META_KEYS: tuple[str, ...] = (
+    "event_origin",
+)
+
+_EVENT_ORIGINS: frozenset[str] = frozenset({"generated", "inferred", "backfilled"})
 
 
 def _coerce_event_person_id(value: object) -> int | None:
@@ -539,8 +708,9 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
             event_type TEXT NOT NULL,
             primary_person_id INTEGER,
             secondary_person_id INTEGER,
-            settlement_id TEXT,
-            region_id TEXT,
+            settlement_key INTEGER,
+            region_key INTEGER,
+            event_origin TEXT NOT NULL DEFAULT 'generated',
             payload_json TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
@@ -556,8 +726,9 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
     for column_sql in (
         "primary_person_id INTEGER",
         "secondary_person_id INTEGER",
-        "settlement_id TEXT",
-        "region_id TEXT",
+        "settlement_key INTEGER",
+        "region_key INTEGER",
+        "event_origin TEXT NOT NULL DEFAULT 'generated'",
     ):
         col = column_sql.split()[0]
         if col not in event_cols:
@@ -571,9 +742,9 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_simulation_events_primary_person
         ON simulation_events (primary_person_id);
         CREATE INDEX IF NOT EXISTS idx_simulation_events_settlement
-        ON simulation_events (settlement_id);
+        ON simulation_events (settlement_key);
         CREATE INDEX IF NOT EXISTS idx_simulation_events_region
-        ON simulation_events (region_id);
+        ON simulation_events (region_key);
         CREATE INDEX IF NOT EXISTS idx_simulation_event_people_person
         ON simulation_event_people (person_id, event_id);
         """
@@ -595,7 +766,7 @@ def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         """
         SELECT id, payload_json, primary_person_id, secondary_person_id,
-               settlement_id, region_id
+               settlement_key, region_key, event_origin
         FROM simulation_events
         """
     ).fetchall()
@@ -612,10 +783,15 @@ def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
             updates["primary_person_id"] = primary
         if row["secondary_person_id"] is None and secondary is not None:
             updates["secondary_person_id"] = secondary
-        if row["settlement_id"] is None and settlement_id is not None:
-            updates["settlement_id"] = settlement_id
-        if row["region_id"] is None and region_id is not None:
-            updates["region_id"] = region_id
+        settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+        region_key = _lookup_or_insert_region_key(conn, region_id)
+        if row["settlement_key"] is None and settlement_key is not None:
+            updates["settlement_key"] = settlement_key
+        if row["region_key"] is None and region_key is not None:
+            updates["region_key"] = region_key
+        origin = _event_origin_from_payload(payload)
+        if str(row["event_origin"] or "").strip().lower() != origin:
+            updates["event_origin"] = origin
         if updates:
             assignments = ", ".join(f"{_quote_identifier(k)} = ?" for k in updates)
             conn.execute(
@@ -671,6 +847,271 @@ def _copy_common_table_columns_from_attached_source(
     return int(cur.rowcount if cur.rowcount is not None else 0)
 
 
+def _copy_place_lookups_from_attached_source(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "simulation_region_lookup", schema=_SAVE_REBUILD_SOURCE_SCHEMA):
+        _copy_common_table_columns_from_attached_source(conn, "simulation_region_lookup")
+    if _table_exists(conn, "simulation_settlement_lookup", schema=_SAVE_REBUILD_SOURCE_SCHEMA):
+        _copy_common_table_columns_from_attached_source(conn, "simulation_settlement_lookup")
+    for table in ("simulation_regions", "simulation_settlements", "simulation_people", "simulation_events"):
+        if not _table_exists(conn, table, schema=_SAVE_REBUILD_SOURCE_SCHEMA):
+            continue
+        source_cols = set(_table_columns(conn, table, schema=_SAVE_REBUILD_SOURCE_SCHEMA))
+        if "region_id" in source_cols:
+            for row in conn.execute(
+                f"""
+                SELECT DISTINCT region_id
+                FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.{_quote_identifier(table)}
+                WHERE region_id IS NOT NULL AND trim(region_id) <> ''
+                """
+            ):
+                _lookup_or_insert_region_key(conn, row[0])
+        for col in ("birthplace_region_id", "current_region_id", "from_region_id", "to_region_id"):
+            if col not in source_cols:
+                continue
+            for row in conn.execute(
+                f"""
+                SELECT DISTINCT {_quote_identifier(col)}
+                FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.{_quote_identifier(table)}
+                WHERE {_quote_identifier(col)} IS NOT NULL
+                  AND trim({_quote_identifier(col)}) <> ''
+                """
+            ):
+                _lookup_or_insert_region_key(conn, row[0])
+        if "settlement_id" in source_cols:
+            region_col = "region_id" if "region_id" in source_cols else "NULL"
+            for row in conn.execute(
+                f"""
+                SELECT DISTINCT settlement_id, {region_col}
+                FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.{_quote_identifier(table)}
+                WHERE settlement_id IS NOT NULL AND trim(settlement_id) <> ''
+                """
+            ):
+                _lookup_or_insert_settlement_key(conn, row[0], row[1])
+        for col in ("birthplace_settlement_id", "current_settlement_id", "from_settlement_id", "to_settlement_id"):
+            if col not in source_cols:
+                continue
+            for row in conn.execute(
+                f"""
+                SELECT DISTINCT {_quote_identifier(col)}
+                FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.{_quote_identifier(table)}
+                WHERE {_quote_identifier(col)} IS NOT NULL
+                  AND trim({_quote_identifier(col)}) <> ''
+                """
+            ):
+                _lookup_or_insert_settlement_key(conn, row[0], None)
+
+
+def _copy_regions_from_attached_source(conn: sqlite3.Connection) -> int:
+    if not _table_exists(conn, "simulation_regions", schema=_SAVE_REBUILD_SOURCE_SCHEMA):
+        return 0
+    source_cols = set(_table_columns(conn, "simulation_regions", schema=_SAVE_REBUILD_SOURCE_SCHEMA))
+    if "region_key" in source_cols:
+        return _copy_common_table_columns_from_attached_source(conn, "simulation_regions")
+    if "region_id" not in source_cols:
+        return 0
+    copied = 0
+    for row in conn.execute(
+        f"""
+        SELECT *
+        FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.simulation_regions
+        """
+    ):
+        rkey = _lookup_or_insert_region_key(conn, row["region_id"])
+        if rkey is None:
+            continue
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO simulation_regions (
+                region_key, region_display_name, total_population_cap,
+                total_household_cap, food_pressure, stability, market_pull,
+                prosperity_pool, treasury_balance
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rkey,
+                row["region_display_name"] if "region_display_name" in source_cols else "",
+                int(row["total_population_cap"] or 0),
+                int(row["total_household_cap"] or 0),
+                float(row["food_pressure"] or 0.0),
+                float(row["stability"] or 0.0),
+                float(row["market_pull"] or 0.0),
+                float(row["prosperity_pool"] if "prosperity_pool" in source_cols and row["prosperity_pool"] is not None else 1.0),
+                float(row["treasury_balance"] if "treasury_balance" in source_cols and row["treasury_balance"] is not None else 0.0),
+            ),
+        )
+        copied += 1
+    return copied
+
+
+def _copy_settlements_from_attached_source(conn: sqlite3.Connection) -> int:
+    if not _table_exists(conn, "simulation_settlements", schema=_SAVE_REBUILD_SOURCE_SCHEMA):
+        return 0
+    source_cols = set(_table_columns(conn, "simulation_settlements", schema=_SAVE_REBUILD_SOURCE_SCHEMA))
+    if "settlement_key" in source_cols:
+        return _copy_common_table_columns_from_attached_source(conn, "simulation_settlements")
+    if "settlement_id" not in source_cols:
+        return 0
+    copied = 0
+    for row in conn.execute(
+        f"""
+        SELECT *
+        FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.simulation_settlements
+        """
+    ):
+        skey = _lookup_or_insert_settlement_key(conn, row["settlement_id"], row["region_id"])
+        rkey = _lookup_or_insert_region_key(conn, row["region_id"])
+        if skey is None or rkey is None:
+            continue
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO simulation_settlements (
+                settlement_key, region_key, level, population_cap, household_cap,
+                food_pressure, prosperity_pool, stability, market_pull,
+                display_name, etymology, name_category_primary, name_category_secondary,
+                name_culture_primary, name_culture_secondary, local_geography_json,
+                founded_sim_year, abandoned_sim_year, status, consecutive_empty_years, site_slot
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                skey,
+                rkey,
+                row["level"],
+                int(row["population_cap"] or 0),
+                int(row["household_cap"] or 0),
+                float(row["food_pressure"] or 0.0),
+                float(row["prosperity_pool"] if "prosperity_pool" in source_cols and row["prosperity_pool"] is not None else 1.0),
+                float(row["stability"] or 0.0),
+                float(row["market_pull"] or 0.0),
+                row["display_name"] if "display_name" in source_cols else None,
+                row["etymology"] if "etymology" in source_cols else None,
+                row["name_category_primary"] if "name_category_primary" in source_cols else None,
+                row["name_category_secondary"] if "name_category_secondary" in source_cols else None,
+                row["name_culture_primary"] if "name_culture_primary" in source_cols else None,
+                row["name_culture_secondary"] if "name_culture_secondary" in source_cols else None,
+                row["local_geography_json"] if "local_geography_json" in source_cols else None,
+                row["founded_sim_year"] if "founded_sim_year" in source_cols else None,
+                row["abandoned_sim_year"] if "abandoned_sim_year" in source_cols else None,
+                row["status"] if "status" in source_cols else "active",
+                int(row["consecutive_empty_years"] if "consecutive_empty_years" in source_cols and row["consecutive_empty_years"] is not None else 0),
+                int(row["site_slot"] if "site_slot" in source_cols and row["site_slot"] is not None else 1),
+            ),
+        )
+        copied += 1
+    return copied
+
+
+def _copy_people_from_attached_source(conn: sqlite3.Connection) -> int:
+    if not _table_exists(conn, "simulation_people", schema=_SAVE_REBUILD_SOURCE_SCHEMA):
+        return 0
+    source_cols = set(_table_columns(conn, "simulation_people", schema=_SAVE_REBUILD_SOURCE_SCHEMA))
+    if "first_name" not in source_cols:
+        raise RuntimeError(
+            "source simulation_people is older than compact schema v3; "
+            "delete and regenerate the pre-alpha save.sqlite"
+        )
+    if "birthplace_region_key" in source_cols:
+        return _copy_common_table_columns_from_attached_source(conn, "simulation_people")
+    target_cols = _table_columns(conn, "simulation_people")
+    direct_cols = [
+        c
+        for c in target_cols
+        if c in source_cols
+        and c
+        not in {
+            "birthplace_region_key",
+            "birthplace_settlement_key",
+            "current_settlement_key",
+        }
+    ]
+    copied = 0
+    for row in conn.execute(
+        f"""
+        SELECT *
+        FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.simulation_people
+        """
+    ):
+        values = {c: row[c] for c in direct_cols}
+        values["birthplace_region_key"] = _lookup_or_insert_region_key(
+            conn, row["birthplace_region_id"] if "birthplace_region_id" in source_cols else None
+        )
+        values["birthplace_settlement_key"] = _lookup_or_insert_settlement_key(
+            conn,
+            row["birthplace_settlement_id"] if "birthplace_settlement_id" in source_cols else None,
+            row["birthplace_region_id"] if "birthplace_region_id" in source_cols else None,
+        )
+        values["current_settlement_key"] = _lookup_or_insert_settlement_key(
+            conn,
+            row["current_settlement_id"] if "current_settlement_id" in source_cols else None,
+            row["birthplace_region_id"] if "birthplace_region_id" in source_cols else None,
+        )
+        cols = [c for c in target_cols if c in values]
+        conn.execute(
+            f"""
+            INSERT OR REPLACE INTO simulation_people (
+                {", ".join(_quote_identifier(c) for c in cols)}
+            )
+            VALUES ({", ".join("?" for _ in cols)})
+            """,
+            tuple(values[c] for c in cols),
+        )
+        copied += 1
+    return copied
+
+
+def _copy_events_from_attached_source(conn: sqlite3.Connection) -> int:
+    if not _table_exists(conn, "simulation_events", schema=_SAVE_REBUILD_SOURCE_SCHEMA):
+        return 0
+    source_cols = set(_table_columns(conn, "simulation_events", schema=_SAVE_REBUILD_SOURCE_SCHEMA))
+    if "settlement_key" in source_cols:
+        return _copy_common_table_columns_from_attached_source(conn, "simulation_events")
+    direct_cols = [
+        c
+        for c in ("id", "sim_year", "event_type", "primary_person_id", "secondary_person_id", "payload_json", "created_at")
+        if c in source_cols
+    ]
+    copied = 0
+    for row in conn.execute(
+        f"""
+        SELECT *
+        FROM {_quote_identifier(_SAVE_REBUILD_SOURCE_SCHEMA)}.simulation_events
+        """
+    ):
+        payload: dict = {}
+        try:
+            loaded = json.loads(row["payload_json"] or "{}")
+            if isinstance(loaded, dict):
+                payload = loaded
+        except (KeyError, json.JSONDecodeError, TypeError):
+            payload = {}
+        _primary, _secondary, settlement_id, region_id = _event_common_columns(payload)
+        if "settlement_id" in source_cols and row["settlement_id"] is not None:
+            settlement_id = row["settlement_id"]
+        if "region_id" in source_cols and row["region_id"] is not None:
+            region_id = row["region_id"]
+        values = {c: row[c] for c in direct_cols}
+        values["settlement_key"] = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+        values["region_key"] = _lookup_or_insert_region_key(conn, region_id)
+        values["event_origin"] = (
+            row["event_origin"]
+            if "event_origin" in source_cols and row["event_origin"] is not None
+            else _event_origin_from_payload(payload)
+        )
+        cols = [c for c in ("id", "sim_year", "event_type", "primary_person_id", "secondary_person_id", "settlement_key", "region_key", "event_origin", "payload_json", "created_at") if c in values]
+        conn.execute(
+            f"""
+            INSERT OR REPLACE INTO simulation_events (
+                {", ".join(_quote_identifier(c) for c in cols)}
+            )
+            VALUES ({", ".join("?" for _ in cols)})
+            """,
+            tuple(values[c] for c in cols),
+        )
+        copied += 1
+    return copied
+
+
 def _write_rebuilt_save_sqlite(
     source_db_path: Path,
     rebuilt_db_path: Path,
@@ -690,18 +1131,23 @@ def _write_rebuilt_save_sqlite(
             (str(source_db_path),),
         )
         try:
+            _copy_place_lookups_from_attached_source(conn)
             for table in _SAVE_REBUILD_TABLES:
-                if (
-                    table == "simulation_people"
-                    and _table_exists(conn, table, schema=_SAVE_REBUILD_SOURCE_SCHEMA)
-                    and "first_name"
-                    not in _table_columns(conn, table, schema=_SAVE_REBUILD_SOURCE_SCHEMA)
-                ):
-                    raise RuntimeError(
-                        "source simulation_people is older than compact schema v3; "
-                        "delete and regenerate the pre-alpha save.sqlite"
-                    )
-                _copy_common_table_columns_from_attached_source(conn, table)
+                if table in {
+                    "simulation_region_lookup",
+                    "simulation_settlement_lookup",
+                }:
+                    continue
+                if table == "simulation_people":
+                    _copy_people_from_attached_source(conn)
+                elif table == "simulation_events":
+                    _copy_events_from_attached_source(conn)
+                elif table == "simulation_regions":
+                    _copy_regions_from_attached_source(conn)
+                elif table == "simulation_settlements":
+                    _copy_settlements_from_attached_source(conn)
+                else:
+                    _copy_common_table_columns_from_attached_source(conn, table)
             _backfill_simulation_event_people(conn)
             _stamp_save_schema_version(conn, int(target_schema_version))
             conn.commit()
@@ -774,7 +1220,7 @@ def rebuild_save_sqlite_for_schema_upgrade(
 
 _CREATE_SIMULATION_REGIONS = """
     CREATE TABLE IF NOT EXISTS simulation_regions (
-        region_id TEXT PRIMARY KEY,
+        region_key INTEGER PRIMARY KEY,
         region_display_name TEXT NOT NULL DEFAULT '',
         total_population_cap INTEGER NOT NULL,
         total_household_cap INTEGER NOT NULL,
@@ -786,8 +1232,8 @@ _CREATE_SIMULATION_REGIONS = """
 
 _CREATE_SIMULATION_SETTLEMENTS_V2 = """
     CREATE TABLE simulation_settlements (
-        settlement_id TEXT PRIMARY KEY,
-        region_id TEXT NOT NULL,
+        settlement_key INTEGER PRIMARY KEY,
+        region_key INTEGER NOT NULL,
         level TEXT NOT NULL,
         population_cap INTEGER NOT NULL,
         household_cap INTEGER NOT NULL,
@@ -803,7 +1249,7 @@ _CREATE_SIMULATION_SETTLEMENTS_V2 = """
         local_geography_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_simulation_settlements_region
-    ON simulation_settlements (region_id);
+    ON simulation_settlements (region_key);
 """
 
 
@@ -828,8 +1274,10 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_place_lookup_schema(conn)
     _ensure_simulation_events_tables(conn)
     _ensure_simulation_people_table(conn)
+    _ensure_hybrid_population_tables(conn)
     conn.executescript(_CREATE_SIMULATION_REGIONS)
     _ensure_simulation_settlements_table(conn)
     _migrate_cap_named_columns(conn)
@@ -842,6 +1290,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     from library import government_checkpoint as _gov_ckpt
 
     _gov_ckpt.ensure_government_schema(conn)
+    _ensure_readable_place_views(conn)
     _ensure_supported_save_schema(conn)
     conn.commit()
 
@@ -862,10 +1311,10 @@ def _ensure_simulation_settlements_table(conn: sqlite3.Connection) -> None:
         str(r[1])
         for r in conn.execute("PRAGMA table_info(simulation_settlements)").fetchall()
     }
-    if "settlement_id" not in cols:
+    if "settlement_key" not in cols:
         raise RuntimeError(
-            "simulation_settlements uses a pre-v2 schema. Delete or rebuild save.sqlite "
-            "before opening it with the single-world schema."
+            "simulation_settlements uses a pre-v5 text-id schema. Delete or rebuild "
+            "save.sqlite before opening it with the surrogate place-key schema."
         )
 
     if "display_name" not in cols:
@@ -1096,6 +1545,115 @@ def _migrate_simulation_regions_region_display_name(conn: sqlite3.Connection) ->
         )
 
 
+def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
+    """Inspection views that expose normalized place keys as readable slugs."""
+    conn.executescript(
+        """
+        CREATE VIEW IF NOT EXISTS simulation_regions_readable AS
+        SELECT
+            rl.region_id,
+            r.region_key,
+            r.region_display_name,
+            r.total_population_cap,
+            r.total_household_cap,
+            r.food_pressure,
+            r.stability,
+            r.market_pull,
+            r.prosperity_pool,
+            r.treasury_balance
+        FROM simulation_regions r
+        JOIN simulation_region_lookup rl ON rl.region_key = r.region_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_settlements_readable AS
+        SELECT
+            sl.settlement_id,
+            rl.region_id,
+            s.settlement_key,
+            s.region_key,
+            s.level,
+            s.population_cap,
+            s.household_cap,
+            s.food_pressure,
+            s.prosperity_pool,
+            s.stability,
+            s.market_pull,
+            s.display_name,
+            s.etymology,
+            s.name_category_primary,
+            s.name_category_secondary,
+            s.name_culture_primary,
+            s.name_culture_secondary,
+            s.local_geography_json,
+            s.founded_sim_year,
+            s.abandoned_sim_year,
+            s.status,
+            s.consecutive_empty_years,
+            s.site_slot
+        FROM simulation_settlements s
+        JOIN simulation_settlement_lookup sl ON sl.settlement_key = s.settlement_key
+        JOIN simulation_region_lookup rl ON rl.region_key = s.region_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_events_readable AS
+        SELECT
+            e.id,
+            e.sim_year,
+            e.event_type,
+            e.primary_person_id,
+            e.secondary_person_id,
+            sl.settlement_id,
+            rl.region_id,
+            e.event_origin,
+            e.payload_json,
+            e.created_at
+        FROM simulation_events e
+        LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = e.settlement_key
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = e.region_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_people_light_readable AS
+        SELECT
+            p.person_id,
+            p.name,
+            p.birthyear,
+            p.deathyear,
+            p.is_alive,
+            p.gender,
+            br.region_id AS birthplace_region_id,
+            bs.settlement_id AS birthplace_settlement_id,
+            cs.settlement_id AS current_settlement_id,
+            p.job_family,
+            p.partner_person_id,
+            p.father_id,
+            p.mother_id,
+            p.child_count,
+            p.status_bucket,
+            p.prosperity_bucket
+        FROM simulation_people_light p
+        LEFT JOIN simulation_region_lookup br ON br.region_key = p.birthplace_region_key
+        LEFT JOIN simulation_settlement_lookup bs ON bs.settlement_key = p.birthplace_settlement_key
+        LEFT JOIN simulation_settlement_lookup cs ON cs.settlement_key = p.current_settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_cohorts_readable AS
+        SELECT
+            c.cohort_id,
+            c.sim_year,
+            rl.region_id,
+            sl.settlement_id,
+            c.age_band,
+            c.gender,
+            c.species,
+            c.culture,
+            c.job_family,
+            c.status_bucket,
+            c.population_count,
+            c.birth_count,
+            c.death_count
+        FROM simulation_cohorts c
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = c.region_key
+        LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = c.settlement_key;
+        """
+    )
+
+
 def _resolve_region_display_name_for_checkpoint(
     ctx: "SimulationContext", region_id: str, st: SettlementState
 ) -> str:
@@ -1239,6 +1797,9 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
     with _open_save(save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         conn.execute("DELETE FROM simulation_people")
+        conn.execute("DELETE FROM simulation_people_light")
+        conn.execute("DELETE FROM simulation_cohorts")
+        conn.execute("DELETE FROM simulation_promotion_log")
         conn.execute("DELETE FROM simulation_settlements")
         conn.execute("DELETE FROM simulation_regions")
         conn.execute("DELETE FROM simulation_couples")
@@ -1500,28 +2061,34 @@ def append_simulation_event_rows(
     rows: list[tuple[int | None, str, dict]],
     *,
     created_at: str | None = None,
+    verbose_payloads: bool = False,
 ) -> None:
     """Insert append-only simulation event rows. Each row is (sim_year, event_type, payload_dict)."""
     ts = created_at or _utc_now_iso()
     cur = conn.cursor()
     for sim_year, event_type, payload in rows:
         primary, secondary, settlement_id, region_id = _event_common_columns(payload)
+        settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+        region_key = _lookup_or_insert_region_key(conn, region_id)
+        event_origin = _event_origin_from_payload(payload)
+        stored_payload = dict(payload) if verbose_payloads else _compact_event_payload(payload)
         cur.execute(
             """
             INSERT INTO simulation_events (
                 sim_year, event_type, primary_person_id, secondary_person_id,
-                settlement_id, region_id, payload_json, created_at
+                settlement_key, region_key, event_origin, payload_json, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sim_year,
                 event_type,
                 primary,
                 secondary,
-                settlement_id,
-                region_id,
-                json.dumps(payload, separators=(",", ":")),
+                settlement_key,
+                region_key,
+                event_origin,
+                json.dumps(stored_payload, separators=(",", ":")),
                 ts,
             ),
         )
@@ -1536,6 +2103,17 @@ def append_simulation_event_rows(
             )
 
 
+def _compact_event_payload(payload: dict) -> dict:
+    """Drop place slugs duplicated by normalized event columns for normal runs."""
+    return {
+        str(k): v
+        for k, v in payload.items()
+        if str(k) not in _EVENT_SETTLEMENT_KEYS
+        and str(k) not in _EVENT_REGION_KEYS
+        and str(k) not in _EVENT_PAYLOAD_META_KEYS
+    }
+
+
 def flush_pending_simulation_events(ctx: "SimulationContext") -> None:
     """Persist buffered domain events from ``ctx`` to ``save.sqlite``."""
     pending = ctx._pending_simulation_events
@@ -1543,7 +2121,12 @@ def flush_pending_simulation_events(ctx: "SimulationContext") -> None:
         return
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
-        append_simulation_event_rows(conn, ctx.world.strip(), pending)
+        append_simulation_event_rows(
+            conn,
+            ctx.world.strip(),
+            pending,
+            verbose_payloads=bool(getattr(ctx, "verbose_event_logging", False)),
+        )
         conn.commit()
     pending.clear()
 
@@ -1781,10 +2364,23 @@ def _person_checkpoint_payload(
     trait_slots: tuple[str, ...],
     *,
     include_trait_slots: bool,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[dict[str, object], str]:
     """Split a person into scalar columns plus compact extension JSON."""
     raw = asdict(person)
     cols = {k: raw.get(k) for k in _PERSON_CHECKPOINT_COLUMNS}
+    if conn is not None:
+        cols["birthplace_region_key"] = _lookup_or_insert_region_key(
+            conn, raw.get("birthplace_region_id")
+        )
+        cols["birthplace_settlement_key"] = _lookup_or_insert_settlement_key(
+            conn, raw.get("birthplace_settlement_id"), raw.get("birthplace_region_id")
+        )
+        current_sid = raw.get("current_settlement_id")
+        current_rid = raw.get("birthplace_region_id")
+        cols["current_settlement_key"] = _lookup_or_insert_settlement_key(
+            conn, current_sid, current_rid
+        )
     ext = {k: raw.get(k) for k in _PERSON_EXTENSION_KEYS if raw.get(k) not in (None, {}, (), [])}
     ext["v"] = 2
     if include_trait_slots:
@@ -1801,6 +2397,9 @@ def _person_checkpoint_payload(
 def _person_dict_from_checkpoint_row(
     row: sqlite3.Row,
     trait_slots: tuple[str, ...],
+    *,
+    region_ids_by_key: dict[int, str] | None = None,
+    settlement_ids_by_key: dict[int, str] | None = None,
 ) -> dict[str, object]:
     d: dict[str, object] = {}
     raw_payload = row["person_json"] if "person_json" in row.keys() else None
@@ -1817,6 +2416,23 @@ def _person_dict_from_checkpoint_row(
     for key in _PERSON_CHECKPOINT_COLUMNS:
         if key in row.keys():
             d[key] = row[key]
+    region_map = region_ids_by_key or {}
+    settlement_map = settlement_ids_by_key or {}
+    if "birthplace_region_key" in d:
+        key = d.pop("birthplace_region_key")
+        d["birthplace_region_id"] = (
+            region_map.get(int(key)) if key is not None else None
+        )
+    if "birthplace_settlement_key" in d:
+        key = d.pop("birthplace_settlement_key")
+        d["birthplace_settlement_id"] = (
+            settlement_map.get(int(key)) if key is not None else None
+        )
+    if "current_settlement_key" in d:
+        key = d.pop("current_settlement_key")
+        d["current_settlement_id"] = (
+            settlement_map.get(int(key)) if key is not None else None
+        )
     return d
 
 
@@ -1996,6 +2612,126 @@ def _person_from_dict(d: dict) -> Person:
     return p
 
 
+def _passive_person_values(
+    conn: sqlite3.Connection,
+    rec: PassivePersonRecord,
+) -> tuple[object, ...]:
+    p = rec.person
+    birthplace_region_key = _lookup_or_insert_region_key(conn, p.birthplace_region_id)
+    birthplace_settlement_key = _lookup_or_insert_settlement_key(
+        conn, p.birthplace_settlement_id, p.birthplace_region_id
+    )
+    current_settlement_key = _lookup_or_insert_settlement_key(
+        conn, p.current_settlement_id, p.birthplace_region_id
+    )
+    return (
+        int(rec.person_id),
+        p.name,
+        int(p.birthyear),
+        p.deathyear,
+        1 if p.deathyear is None else 0,
+        p.gender,
+        birthplace_region_key,
+        birthplace_settlement_key,
+        current_settlement_key,
+        p.job_family,
+        p.partner_person_id,
+        p.father_id,
+        p.mother_id,
+        int(p.child_count),
+        p.status_bucket,
+        p.prosperity_bucket,
+    )
+
+
+def _passive_person_from_checkpoint_row(
+    row: sqlite3.Row,
+    *,
+    region_ids_by_key: dict[int, str],
+    settlement_ids_by_key: dict[int, str],
+) -> PassivePerson:
+    def region_id(key: object) -> str | None:
+        return region_ids_by_key.get(int(key)) if key is not None else None
+
+    def settlement_id(key: object) -> str | None:
+        return settlement_ids_by_key.get(int(key)) if key is not None else None
+
+    return PassivePerson(
+        name=str(row["name"] or ""),
+        birthyear=int(row["birthyear"] or 0),
+        deathyear=int(row["deathyear"]) if row["deathyear"] is not None else None,
+        gender=str(row["gender"] or ""),
+        birthplace_region_id=region_id(row["birthplace_region_key"]),
+        birthplace_settlement_id=settlement_id(row["birthplace_settlement_key"]),
+        current_settlement_id=settlement_id(row["current_settlement_key"]),
+        job_family=str(row["job_family"]) if row["job_family"] is not None else None,
+        partner_person_id=(
+            int(row["partner_person_id"])
+            if row["partner_person_id"] is not None
+            else None
+        ),
+        father_id=int(row["father_id"]) if row["father_id"] is not None else None,
+        mother_id=int(row["mother_id"]) if row["mother_id"] is not None else None,
+        child_count=int(row["child_count"] or 0),
+        status_bucket=(
+            str(row["status_bucket"]) if row["status_bucket"] is not None else None
+        ),
+        prosperity_bucket=(
+            str(row["prosperity_bucket"])
+            if row["prosperity_bucket"] is not None
+            else None
+        ),
+    )
+
+
+def _passive_cohort_values(
+    conn: sqlite3.Connection,
+    cohort: PassiveCohort,
+) -> tuple[object, ...]:
+    region_key = _lookup_or_insert_region_key(conn, cohort.region_id)
+    settlement_key = _lookup_or_insert_settlement_key(
+        conn, cohort.settlement_id, cohort.region_id
+    )
+    return (
+        int(cohort.sim_year),
+        region_key,
+        settlement_key,
+        cohort.age_band,
+        cohort.gender,
+        cohort.species,
+        cohort.culture,
+        cohort.job_family,
+        cohort.status_bucket,
+        int(cohort.population_count),
+        int(cohort.birth_count),
+        int(cohort.death_count),
+    )
+
+
+def _passive_cohort_from_checkpoint_row(
+    row: sqlite3.Row,
+    *,
+    region_ids_by_key: dict[int, str],
+    settlement_ids_by_key: dict[int, str],
+) -> PassiveCohort:
+    rkey = row["region_key"]
+    skey = row["settlement_key"]
+    return PassiveCohort(
+        sim_year=int(row["sim_year"]),
+        region_id=region_ids_by_key.get(int(rkey)) if rkey is not None else None,
+        settlement_id=settlement_ids_by_key.get(int(skey)) if skey is not None else None,
+        age_band=str(row["age_band"] or ""),
+        gender=str(row["gender"] or ""),
+        species=str(row["species"] or ""),
+        culture=str(row["culture"] or ""),
+        job_family=str(row["job_family"] or ""),
+        status_bucket=str(row["status_bucket"] or ""),
+        population_count=int(row["population_count"] or 0),
+        birth_count=int(row["birth_count"] or 0),
+        death_count=int(row["death_count"] or 0),
+    )
+
+
 def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
     """Upsert archival rows for people and settlements; rewrite derived snapshot slices.
 
@@ -2014,11 +2750,14 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         alive = ctx.current_people_ids
         trait_slots = _trait_slots_for_checkpoint(ctx)
         include_trait_slots = not bool(_trait_slots_from_config(ctx.db_path))
+        for st in ctx.settlements_by_id.values():
+            _lookup_or_insert_settlement_key(conn, st.settlement_id, st.region_id)
         for rec in ctx.people:
             person_cols, payload = _person_checkpoint_payload(
                 rec.person,
                 trait_slots,
                 include_trait_slots=include_trait_slots,
+                conn=conn,
             )
             column_names = (
                 "person_id",
@@ -2048,13 +2787,73 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 values,
             )
 
+        passive_column_names = (
+            "person_id",
+            "name",
+            "birthyear",
+            "deathyear",
+            "is_alive",
+            "gender",
+            "birthplace_region_key",
+            "birthplace_settlement_key",
+            "current_settlement_key",
+            "job_family",
+            "partner_person_id",
+            "father_id",
+            "mother_id",
+            "child_count",
+            "status_bucket",
+            "prosperity_bucket",
+        )
+        passive_cols_sql = ", ".join(passive_column_names)
+        passive_placeholders = ", ".join("?" for _ in passive_column_names)
+        for rec in getattr(ctx, "passive_people", {}).values():
+            cur.execute(
+                f"""
+                INSERT OR REPLACE INTO simulation_people_light ({passive_cols_sql})
+                VALUES ({passive_placeholders})
+                """,
+                _passive_person_values(conn, rec),
+            )
+
+        cohort_column_names = (
+            "sim_year",
+            "region_key",
+            "settlement_key",
+            "age_band",
+            "gender",
+            "species",
+            "culture",
+            "job_family",
+            "status_bucket",
+            "population_count",
+            "birth_count",
+            "death_count",
+        )
+        cohort_cols_sql = ", ".join(cohort_column_names)
+        cohort_placeholders = ", ".join("?" for _ in cohort_column_names)
+        for cohort in getattr(ctx, "passive_cohorts", []):
+            cur.execute(
+                f"""
+                INSERT OR REPLACE INTO simulation_cohorts ({cohort_cols_sql})
+                VALUES ({cohort_placeholders})
+                """,
+                _passive_cohort_values(conn, cohort),
+            )
+
         by_region: dict[str, list[SettlementState]] = defaultdict(list)
         for settlement_id, st in ctx.settlements_by_id.items():
             by_region[st.region_id].append(st)
+            settlement_key = _lookup_or_insert_settlement_key(
+                conn, st.settlement_id, st.region_id
+            )
+            region_key = _lookup_or_insert_region_key(conn, st.region_id)
+            if settlement_key is None or region_key is None:
+                continue
             cur.execute(
                 """
                 INSERT OR REPLACE INTO simulation_settlements (
-                    settlement_id, region_id, level, population_cap, household_cap,
+                    settlement_key, region_key, level, population_cap, household_cap,
                     food_pressure, prosperity_pool, stability, market_pull,
                     display_name, etymology,
                     name_category_primary, name_category_secondary,
@@ -2066,8 +2865,8 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    st.settlement_id,
-                    st.region_id,
+                    settlement_key,
+                    region_key,
                     st.level,
                     st.resident_count,
                     st.household_cap,
@@ -2093,10 +2892,13 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         for region_id, bucket in by_region.items():
             tot_pop, tot_hh, fp, stb, mp = _aggregate_region_metrics(bucket)
             r_label = _resolve_region_display_name_for_checkpoint(ctx, region_id, bucket[0])
+            region_key = _lookup_or_insert_region_key(conn, region_id)
+            if region_key is None:
+                continue
             cur.execute(
                 """
                 INSERT INTO simulation_regions (
-                    region_id, region_display_name,
+                    region_key, region_display_name,
                     total_population_cap, total_household_cap,
                     food_pressure, stability, market_pull,
                     prosperity_pool, treasury_balance
@@ -2104,7 +2906,7 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    region_id,
+                    region_key,
                     r_label,
                     tot_pop,
                     tot_hh,
@@ -2239,7 +3041,12 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         row = conn.execute(
             "SELECT COUNT(*) AS c FROM simulation_people",
         ).fetchone()
-        if row is None or int(row["c"] or 0) == 0:
+        light_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM simulation_people_light",
+        ).fetchone()
+        detailed_count = int(row["c"] or 0) if row is not None else 0
+        passive_count = int(light_row["c"] or 0) if light_row is not None else 0
+        if detailed_count == 0 and passive_count == 0:
             return False
 
         world_state_cols = _table_columns(conn, "world_state") if _table_exists(conn, "world_state") else []
@@ -2266,13 +3073,34 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         people_rows = conn.execute(
             "SELECT * FROM simulation_people ORDER BY person_id",
         ).fetchall()
+        region_ids_by_key = {
+            int(r["region_key"]): str(r["region_id"])
+            for r in conn.execute(
+                "SELECT region_key, region_id FROM simulation_region_lookup"
+            ).fetchall()
+        }
+        settlement_ids_by_key = {
+            int(r["settlement_key"]): str(r["settlement_id"])
+            for r in conn.execute(
+                "SELECT settlement_key, settlement_id FROM simulation_settlement_lookup"
+            ).fetchall()
+        }
         trait_slots = _trait_slots_from_config(ctx.db_path)
         loaded: list[SimulationPersonRecord] = []
         alive: set[int] = set()
         id_to: dict[int, SimulationPersonRecord] = {}
+        passive_people: dict[int, PassivePersonRecord] = {}
+        passive_cohorts: list[PassiveCohort] = []
         for row in people_rows:
             pid = int(row["person_id"])
-            person = _person_from_dict(_person_dict_from_checkpoint_row(row, trait_slots))
+            person = _person_from_dict(
+                _person_dict_from_checkpoint_row(
+                    row,
+                    trait_slots,
+                    region_ids_by_key=region_ids_by_key,
+                    settlement_ids_by_key=settlement_ids_by_key,
+                )
+            )
             if not person_belongs_in_working_ram(
                 person,
                 reference_year=reference_year,
@@ -2299,8 +3127,36 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             if int(row["is_alive"]):
                 alive.add(pid)
 
+        for row in conn.execute(
+            "SELECT * FROM simulation_people_light ORDER BY person_id"
+        ).fetchall():
+            pid = int(row["person_id"])
+            passive_people[pid] = PassivePersonRecord(
+                person_id=pid,
+                person=_passive_person_from_checkpoint_row(
+                    row,
+                    region_ids_by_key=region_ids_by_key,
+                    settlement_ids_by_key=settlement_ids_by_key,
+                ),
+            )
+
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM simulation_cohorts
+            ORDER BY sim_year, region_key, settlement_key, age_band, gender
+            """
+        ).fetchall():
+            passive_cohorts.append(
+                _passive_cohort_from_checkpoint_row(
+                    row,
+                    region_ids_by_key=region_ids_by_key,
+                    settlement_ids_by_key=settlement_ids_by_key,
+                )
+            )
+
         settle_rows = conn.execute(
-            "SELECT * FROM simulation_settlements",
+            "SELECT * FROM simulation_settlements_readable",
         ).fetchall()
         settlements_by_id: dict[str, SettlementState] = {}
         settlement_ids_by_region: dict[str, list[str]] = defaultdict(list)
@@ -2315,7 +3171,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         region_prosperity_loaded: dict[str, float] = {}
         region_treasury_loaded: dict[str, float] = {}
         region_rows = conn.execute(
-            "SELECT * FROM simulation_regions",
+            "SELECT * FROM simulation_regions_readable",
         ).fetchall()
         for r in region_rows:
             rid = str(r["region_id"] or "").strip()
@@ -2384,6 +3240,8 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         max_any = max_loaded
         if mx_row is not None and mx_row["m"] is not None:
             max_any = max(max_any, int(mx_row["m"]))
+        max_passive = max(passive_people.keys(), default=0)
+        max_any = max(max_any, max_passive)
         next_id = max_any + 1
         if meta_row is not None and str(meta_row["meta_value"] or "").strip():
             next_id = max(next_id, int(meta_row["meta_value"]))
@@ -2463,6 +3321,8 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                 rec.person = np
 
     ctx.people = loaded
+    ctx.passive_people = passive_people
+    ctx.passive_cohorts = passive_cohorts
     ctx.id_to_record = id_to
     ctx.current_people_ids = alive
     if hasattr(ctx, "invalidate_alive_census_cache"):

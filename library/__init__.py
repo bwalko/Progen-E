@@ -7,6 +7,7 @@ from library.generator import (
     generate_person_random,
 )
 from library.person import Person
+from library.passive_population import PassiveCohort, PassivePerson, PassivePersonRecord
 from library.geography import (
     LOCAL_GEOGRAPHY_ENABLED,
     Region,
@@ -87,6 +88,9 @@ __all__ = [
     "GENDERS",
     "LIFE_STAGES",
     "Person",
+    "PassiveCohort",
+    "PassivePerson",
+    "PassivePersonRecord",
     "LOCAL_GEOGRAPHY_ENABLED",
     "Region",
     "Route",
