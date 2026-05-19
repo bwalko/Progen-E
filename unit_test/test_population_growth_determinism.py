@@ -36,6 +36,7 @@ from library.population_growth_runner import (
     KIN_PAIR_PARENT_CHILD_PROB,
     generate_population_founder,
     pair_people_by_settlement_then_region,
+    refresh_passive_background_cohorts,
     run_population_growth_simulation,
 )
 from library.simulation_context import SimulationContext
@@ -117,6 +118,41 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
             fingerprints[1],
             "population growth should be deterministic for a fixed sim seed",
         )
+
+    def test_passive_cohort_allocation_varies_between_sibling_settlements(self) -> None:
+        def build_allocations() -> dict[str, int]:
+            ctx = SimulationContext(
+                db_path=Path("unused-config.sqlite"),
+                save_db_path=Path("unused-save.sqlite"),
+                world="default",
+                simulation_start_year=START_YEAR,
+                current_year=START_YEAR + 100,
+                settlements_by_id={
+                    f"region:s{i}": SettlementState(
+                        region_id="region",
+                        settlement_id=f"region:s{i}",
+                        site_slot=i,
+                        founded_sim_year=START_YEAR + i,
+                        status="active",
+                    )
+                    for i in range(1, 11)
+                },
+            )
+            ctx.effective_regional_population_cap = lambda region_id: 600
+            refresh_passive_background_cohorts(ctx, START_YEAR + 100)
+            out: dict[str, int] = {}
+            for cohort in ctx.passive_cohorts:
+                sid = str(cohort.settlement_id)
+                out[sid] = out.get(sid, 0) + int(cohort.population_count)
+            return out
+
+        first = build_allocations()
+        second = build_allocations()
+
+        self.assertEqual(first, second)
+        self.assertEqual(sum(first.values()), 600)
+        self.assertGreater(len(set(first.values())), 1)
+        self.assertNotEqual(sorted(first.values()), [60] * 10)
 
     def test_pairing_prefers_same_settlement_before_same_region_fallback(self) -> None:
         ctx = SimulationContext(

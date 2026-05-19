@@ -10,6 +10,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
+from zlib import crc32
 
 import numpy as np
 
@@ -642,6 +643,65 @@ def _partition_count(total: int, shares: tuple[tuple[str, float], ...]) -> list[
     return out
 
 
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, float(value)))
+
+
+def _stable_unit_interval(text: str) -> float:
+    return crc32(text.encode("utf-8")) / 0xFFFFFFFF
+
+
+def _passive_settlement_weight(st: SettlementState, *, year: int) -> float:
+    founded = st.founded_sim_year if st.founded_sim_year is not None else year
+    age = max(0, int(year) - int(founded))
+    age_factor = 1.0 + min(0.45, age / 200.0)
+    site_factor = 1.0 / (max(1, int(st.site_slot)) ** 0.18)
+    stability_factor = 0.82 + 0.36 * _clamp(float(st.stability or 0.0), 0.0, 1.0)
+    market_factor = 0.94 + 0.20 * _clamp(float(st.market_pull or 0.0), 0.0, 1.0)
+    prosperity_factor = 0.84 + 0.28 * _clamp(
+        float(getattr(st, "prosperity_pool", 1.0) or 0.0), 0.0, 2.0
+    ) / 2.0
+    resident_factor = 1.0 + min(0.35, (max(0, int(st.resident_count)) ** 0.5) / 35.0)
+    jitter = 0.82 + 0.36 * _stable_unit_interval(
+        f"{st.region_id}|{st.settlement_id}|{st.site_slot}"
+    )
+    return max(
+        0.01,
+        age_factor
+        * site_factor
+        * stability_factor
+        * market_factor
+        * prosperity_factor
+        * resident_factor
+        * jitter,
+    )
+
+
+def _allocate_counts_by_weight(total: int, weighted_ids: list[tuple[str, float]]) -> dict[str, int]:
+    n = max(0, int(total))
+    if n <= 0 or not weighted_ids:
+        return {sid: 0 for sid, _ in weighted_ids}
+    positive = [(sid, max(0.0, float(weight))) for sid, weight in weighted_ids]
+    weight_total = sum(weight for _, weight in positive)
+    if weight_total <= 0.0:
+        positive = [(sid, 1.0) for sid, _ in positive]
+        weight_total = float(len(positive))
+
+    allocations: dict[str, int] = {}
+    remainders: list[tuple[float, str]] = []
+    assigned = 0
+    for sid, weight in positive:
+        exact = n * weight / weight_total
+        base = int(exact)
+        allocations[sid] = base
+        assigned += base
+        remainders.append((exact - base, sid))
+
+    for _, sid in sorted(remainders, key=lambda item: (-item[0], item[1]))[: n - assigned]:
+        allocations[sid] = allocations.get(sid, 0) + 1
+    return allocations
+
+
 def refresh_passive_background_cohorts(
     ctx: SimulationContext,
     year: int,
@@ -657,6 +717,7 @@ def refresh_passive_background_cohorts(
     scale = max(0.0, float(population_scale))
     if scale <= 0.0 or not ctx.settlements_by_id:
         return 0
+    ctx.sync_settlement_resident_counts()
     detailed_by_settlement = ctx.current_people_by_settlement()
     active_by_region: dict[str, list[str]] = {}
     for sid, st in ctx.settlements_by_id.items():
@@ -672,10 +733,15 @@ def refresh_passive_background_cohorts(
         if not settlement_ids:
             continue
         regional_target = int(round(ctx.effective_regional_population_cap(rid) * scale))
-        per_settlement_target = max(0, int(round(regional_target / len(settlement_ids))))
+        detailed_alive = sum(len(detailed_by_settlement.get(sid, ())) for sid in settlement_ids)
+        background_target = max(0, regional_target - detailed_alive)
+        weights = [
+            (sid, _passive_settlement_weight(ctx.settlements_by_id[sid], year=year))
+            for sid in settlement_ids
+        ]
+        background_by_settlement = _allocate_counts_by_weight(background_target, weights)
         for sid in settlement_ids:
-            detailed_alive = len(detailed_by_settlement.get(sid, ()))
-            background = max(0, per_settlement_target - detailed_alive)
+            background = background_by_settlement.get(sid, 0)
             total_background += background
             for job_family, count in _partition_count(background, _PASSIVE_JOB_FAMILY_SHARES):
                 next_cohorts.append(
