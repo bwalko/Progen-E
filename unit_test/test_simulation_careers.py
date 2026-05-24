@@ -514,6 +514,98 @@ class TestSimulationCareers(unittest.TestCase):
             self.assertEqual(assignment.job_sex_restriction, "female")
             self.assertTrue(assignment.cross_gender_job_exception)
 
+    def test_non_masculine_mother_with_childcare_duty_prefers_home_role(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            cfg = Path(td) / "config.sqlite"
+            _create_config_db(cfg)
+            conn = sqlite3.connect(cfg)
+            conn.execute(
+                "UPDATE genome_jobs SET modern_jobs = ?, modern_premium_jobs = NULL WHERE trait = 'focus'",
+                ("software engineer; child watcher",),
+            )
+            conn.commit()
+            conn.close()
+            person = replace(
+                _person(birthyear=1980, genome={"focus": 0.0}),
+                gender="Female",
+                gender_mind="feminine",
+            )
+
+            no_children = choose_career_assignment(
+                person,
+                person_id=1,
+                db_path=cfg,
+                era="modern",
+                year=2000,
+                historical_year=2000,
+                salt=0,
+                top_n=1,
+                childcare_duty_factor=0.0,
+            )
+            with_children = choose_career_assignment(
+                person,
+                person_id=1,
+                db_path=cfg,
+                era="modern",
+                year=2000,
+                historical_year=2000,
+                salt=0,
+                top_n=1,
+                childcare_duty_factor=0.55,
+            )
+
+        self.assertIsNotNone(no_children)
+        self.assertIsNotNone(with_children)
+        assert no_children is not None and with_children is not None
+        self.assertEqual(no_children.job, "software engineer")
+        self.assertEqual(with_children.job, "child watcher")
+
+    def test_non_masculine_mother_with_childcare_duty_blocks_out_of_home_role(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            cfg = Path(td) / "config.sqlite"
+            _create_config_db(cfg)
+            person = replace(
+                _person(birthyear=1980, genome={"focus": 0.0}),
+                gender="Female",
+                gender_mind="feminine",
+            )
+            assignment = choose_career_assignment(
+                person,
+                person_id=1,
+                db_path=cfg,
+                era="modern",
+                year=2000,
+                historical_year=2000,
+                salt=0,
+                childcare_duty_factor=0.55,
+            )
+
+        self.assertIsNone(assignment)
+
+    def test_masculine_mother_with_childcare_duty_can_take_out_of_home_role(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            cfg = Path(td) / "config.sqlite"
+            _create_config_db(cfg)
+            person = replace(
+                _person(birthyear=1980, genome={"focus": 0.0}),
+                gender="Female",
+                gender_mind="masculine",
+            )
+            assignment = choose_career_assignment(
+                person,
+                person_id=1,
+                db_path=cfg,
+                era="modern",
+                year=2000,
+                historical_year=2000,
+                salt=0,
+                childcare_duty_factor=0.55,
+            )
+
+        self.assertIsNotNone(assignment)
+        assert assignment is not None
+        self.assertIn(assignment.job, {"software engineer", "analyst"})
+
     def test_scoring_matches_genome_band_semantics(self) -> None:
         self.assertGreater(score_genome_job_row(0, "optimal"), score_genome_job_row(80, "optimal"))
         self.assertGreater(score_genome_job_row(-80, "deficient"), score_genome_job_row(80, "deficient"))

@@ -5,16 +5,22 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from collections import Counter
 from contextlib import closing
 from pathlib import Path
 
 from library.config_import import load_all_csvs_into_sqlite
-from library.geography import list_regions, list_routes_from
+from library.geography import list_continents, list_regions, list_routes_from
 from library.settlement_local_geography import (
     build_local_region_graph,
     make_region_geography_rng,
 )
-from library.world_map_geometry import MAP_GEOMETRY_VERSION, build_world_map_geometry
+from library.world_map_geometry import (
+    MAP_GEOMETRY_VERSION,
+    _continent_hulls,
+    _polygon_bounds,
+    build_world_map_geometry,
+)
 from library.world_map_svg import (
     SettlementMapOverlay,
     WorldMapOverlays,
@@ -37,14 +43,35 @@ class TestWorldMapGeometry(unittest.TestCase):
 
         self.assertEqual(json.dumps(first, sort_keys=True), json.dumps(second, sort_keys=True))
         self.assertEqual(first["version"], MAP_GEOMETRY_VERSION)
+        self.assertTrue(first["micro_cells"])
+
+    def test_continent_footprints_are_not_rectangular_boxes(self) -> None:
+        continents = list_continents(world="default", db_path=self.cfg)
+        hulls = _continent_hulls(continents)
+
+        self.assertEqual(set(hulls), {c.continent_id for c in continents})
+        for hull in hulls.values():
+            self.assertGreaterEqual(len(hull), 12)
+            x0, y0, x1, y1 = _polygon_bounds(hull)
+            bbox_corners = {(x0, y0), (x1, y0), (x1, y1), (x0, y1)}
+            hull_points = {(round(x, 6), round(y, 6)) for x, y in hull}
+
+            self.assertNotEqual(hull_points, bbox_corners)
+            self.assertGreater(len({round(x, 3) for x, _ in hull}), 4)
+            self.assertGreater(len({round(y, 3) for _, y in hull}), 4)
 
     def test_every_region_has_valid_cell_and_features(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
         regions = list_regions(world="default", db_path=self.cfg)
         cells = geometry.cell_by_region_id()
         features = geometry.features_by_region_id()
+        micro_region_ids = {c.region_id for c in geometry.micro_cells}
+        micro_counts = Counter(c.region_id for c in geometry.micro_cells)
 
         self.assertEqual(set(cells), {r.region_id for r in regions})
+        self.assertEqual(micro_region_ids, {r.region_id for r in regions})
+        self.assertGreaterEqual(min(micro_counts.values()), 12)
+        self.assertGreaterEqual(len(geometry.micro_cells), len(regions) * 20)
         for region in regions:
             cell = cells[region.region_id]
             self.assertGreaterEqual(len(cell.polygon), 3)
@@ -58,6 +85,19 @@ class TestWorldMapGeometry(unittest.TestCase):
                 cell.terrain_family,
                 {"coast", "riverland", "highlands", "forest", "drylands", "plains"},
             )
+        for cell in geometry.micro_cells:
+            self.assertGreaterEqual(len(cell.polygon), 3)
+            self.assertTrue(0.0 <= cell.center_x <= 1.0)
+            self.assertTrue(0.0 <= cell.center_y <= 1.0)
+            self.assertTrue(0.0 <= cell.elevation <= 1.0)
+            self.assertTrue(0.0 <= cell.moisture <= 1.0)
+        for region in regions:
+            text = f"{region.region_id} {region.region_name} {region.terrain} {region.keywords}".lower()
+            region_micro = [c for c in geometry.micro_cells if c.region_id == region.region_id]
+            if any(t in text for t in ("port", "coast", "shore", "littoral", "delta")):
+                self.assertTrue(any(c.is_coastal for c in region_micro), region.region_id)
+            if "river" in text or "channel" in text or "fork" in text:
+                self.assertTrue(any(c.moisture >= 0.78 for c in region_micro), region.region_id)
 
     def test_routes_have_renderable_edge_points(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -109,6 +149,9 @@ class TestWorldMapGeometry(unittest.TestCase):
         )
         self.assertTrue(all(f.label for f in geometry.features))
         self.assertTrue(all(r.river_class in {"major_river", "minor_river"} for r in geometry.rivers))
+        self.assertTrue(any(r.points for r in geometry.rivers))
+        self.assertTrue(any(c.elevation >= 0.6 for c in geometry.micro_cells))
+        self.assertTrue(any(c.moisture >= 0.8 for c in geometry.micro_cells))
 
     def test_debug_svg_renderer_outputs_noisy_map_layers(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -116,14 +159,15 @@ class TestWorldMapGeometry(unittest.TestCase):
         svg = render_world_map_svg(geometry, width=640, height=420)
 
         self.assertIn("<svg", svg)
-        self.assertIn('class="cell terrain-', svg)
+        self.assertIn('class="micro-cell terrain-', svg)
+        self.assertIn('class="region-boundary"', svg)
         self.assertIn('class="route ', svg)
         self.assertIn('class="feature ', svg)
         self.assertIn("data-region-label=", svg)
-        first_cell = geometry.cells[0]
+        first_cell = geometry.micro_cells[0]
         first_path = next(
             line for line in svg.splitlines()
-            if f'data-region-id="{first_cell.region_id}"' in line
+            if f'data-micro-id="{first_cell.micro_id}"' in line
         )
         self.assertGreater(first_path.count(" L "), len(first_cell.polygon))
 

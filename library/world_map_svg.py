@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from library.world_map_geometry import (
+    MicroRegionCell,
     Point,
     RegionCell,
     RegionFeature,
@@ -47,12 +48,12 @@ class WorldMapOverlays:
 
 
 _CELL_COLORS = {
-    "coast": "#d6c08d",
-    "riverland": "#c3d3a0",
-    "highlands": "#b9ad9a",
-    "forest": "#94b37d",
-    "drylands": "#d9c184",
-    "plains": "#ccca98",
+    "coast": "#b6a58a",
+    "riverland": "#76a766",
+    "highlands": "#d8d9cf",
+    "forest": "#2d7c61",
+    "drylands": "#a99c80",
+    "plains": "#86ad67",
 }
 
 _FEATURE_COLORS = {
@@ -160,6 +161,22 @@ def _cell_fill(cell: RegionCell, overlays: WorldMapOverlays | None) -> str:
     return _CELL_COLORS.get(cell.terrain_family, _CELL_COLORS["plains"])
 
 
+def _micro_cell_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None) -> str:
+    if overlays is not None and cell.region_id in overlays.polities_by_region_id:
+        return overlays.polities_by_region_id[cell.region_id].color
+    if cell.elevation >= 0.72:
+        return "#f0f1ea" if cell.moisture >= 0.52 else "#c5c2ad"
+    if cell.is_coastal:
+        return "#a99b83"
+    if cell.moisture >= 0.78:
+        return "#1f7660"
+    if cell.moisture >= 0.58:
+        return "#3d8d62"
+    if cell.moisture <= 0.28:
+        return "#9f957b"
+    return _CELL_COLORS.get(cell.terrain_family, _CELL_COLORS["plains"])
+
+
 def _feature_radius(feature: RegionFeature) -> float:
     if feature.feature_class in {"coast", "water"}:
         return 3.7
@@ -198,6 +215,26 @@ def _cell_bbox(cell: RegionCell) -> tuple[float, float, float, float]:
     xs = [p[0] for p in cell.polygon]
     ys = [p[1] for p in cell.polygon]
     return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _micro_edge_segments(
+    micro_cells: list[MicroRegionCell],
+) -> tuple[list[tuple[Point, Point]], list[tuple[Point, Point]]]:
+    edge_owner: dict[tuple[Point, Point], MicroRegionCell] = {}
+    region_edges: list[tuple[Point, Point]] = []
+    coast_edges: list[tuple[Point, Point]] = []
+    for cell in micro_cells:
+        pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
+        for i, a in enumerate(pts):
+            b = pts[(i + 1) % len(pts)]
+            key = tuple(sorted((a, b)))  # type: ignore[assignment]
+            other = edge_owner.pop(key, None)
+            if other is None:
+                edge_owner[key] = cell
+            elif other.region_id != cell.region_id:
+                region_edges.append((a, b))
+    coast_edges.extend(edge_owner.keys())
+    return region_edges, coast_edges
 
 
 def _site_xy(local_geography_json: object, site_slot: object) -> tuple[float, float] | None:
@@ -344,27 +381,61 @@ def render_world_map_svg(
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="Generated world map">',
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2f82ad;stroke-linecap:round;stroke-linejoin:round}.settlement{stroke:#f3ead4;stroke-width:1.4}.settlement.abandoned{opacity:.35}.feature-label,.region-label,.settlement-label{font-family:Georgia,serif;paint-order:stroke;stroke:#f3ead4;stroke-width:3px;stroke-linejoin:round}.feature-label{font-size:9px;fill:#3d3427}.region-label{font-size:11px;fill:#2f281f;font-weight:600}.settlement-label{font-size:10px;fill:#2c2118}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:#485173;stroke-width:.34;stroke-linejoin:round}.region-boundary{stroke:#28304a;stroke-width:.62;stroke-linecap:round}.coast-line{stroke:#2b2f48;stroke-width:1.75;stroke-linecap:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round}.settlement{stroke:#f3ead4;stroke-width:1.4}.settlement.abandoned{opacity:.35}.feature-label,.region-label,.settlement-label{font-family:Georgia,serif;paint-order:stroke;stroke:#f3ead4;stroke-width:3px;stroke-linejoin:round}.feature-label{font-size:9px;fill:#3d3427}.region-label{font-size:11px;fill:#1f2332;font-weight:600}.settlement-label{font-size:10px;fill:#2c2118}",
         "</style>",
-        '<rect width="100%" height="100%" fill="#efe3c5" />',
+        '<rect width="100%" height="100%" fill="#454a78" />',
     ]
     occupied_labels: list[_LabelBox] = []
     deferred_labels: list[str] = []
 
-    for cell in geometry.cells:
-        scaled = [_scale(p, width, height, pad) for p in cell.polygon]
-        if noisy_edges:
-            scaled = _noisy_closed_points(scaled, _stable_seed(geometry.version, cell.region_id, "noisy-cell"))
-        polity = overlays.polities_by_region_id.get(cell.region_id) if overlays else None
-        polity_attrs = (
-            f' data-polity-id="{html.escape(polity.polity_id)}" data-polity-name="{html.escape(polity.polity_name)}"'
-            if polity is not None
-            else ""
-        )
-        parts.append(
-            f'<path class="cell terrain-{html.escape(cell.terrain_family)}" data-region-id="{html.escape(cell.region_id)}"{polity_attrs} '
-            f'd="{_poly_path(scaled)}" fill="{_cell_fill(cell, overlays)}" opacity="0.82" />'
-        )
+    if geometry.micro_cells:
+        for cell in geometry.micro_cells:
+            scaled = [_scale(p, width, height, pad) for p in cell.polygon]
+            if noisy_edges:
+                scaled = _noisy_closed_points(
+                    scaled,
+                    _stable_seed(geometry.version, cell.micro_id, "noisy-micro-cell"),
+                    levels=1,
+                    amplitude=0.018,
+                )
+            polity = overlays.polities_by_region_id.get(cell.region_id) if overlays else None
+            polity_attrs = (
+                f' data-polity-id="{html.escape(polity.polity_id)}" data-polity-name="{html.escape(polity.polity_name)}"'
+                if polity is not None
+                else ""
+            )
+            parts.append(
+                f'<path class="micro-cell terrain-{html.escape(cell.terrain_family)}" '
+                f'data-micro-id="{html.escape(cell.micro_id)}" data-region-id="{html.escape(cell.region_id)}"{polity_attrs} '
+                f'data-elevation="{cell.elevation:.4f}" data-moisture="{cell.moisture:.4f}" '
+                f'd="{_poly_path(scaled)}" fill="{_micro_cell_fill(cell, overlays)}" opacity="0.94" />'
+            )
+        region_edges, coast_edges = _micro_edge_segments(geometry.micro_cells)
+        for a, b in coast_edges:
+            pts = [_scale(a, width, height, pad), _scale(b, width, height, pad)]
+            parts.append(
+                f'<path class="coast-line" d="{_line_path(pts)}" fill="none" opacity="0.78" />'
+            )
+        for a, b in region_edges:
+            pts = [_scale(a, width, height, pad), _scale(b, width, height, pad)]
+            parts.append(
+                f'<path class="region-boundary" d="{_line_path(pts)}" fill="none" opacity="0.22" />'
+            )
+    else:
+        for cell in geometry.cells:
+            scaled = [_scale(p, width, height, pad) for p in cell.polygon]
+            if noisy_edges:
+                scaled = _noisy_closed_points(scaled, _stable_seed(geometry.version, cell.region_id, "noisy-cell"))
+            polity = overlays.polities_by_region_id.get(cell.region_id) if overlays else None
+            polity_attrs = (
+                f' data-polity-id="{html.escape(polity.polity_id)}" data-polity-name="{html.escape(polity.polity_name)}"'
+                if polity is not None
+                else ""
+            )
+            parts.append(
+                f'<path class="cell terrain-{html.escape(cell.terrain_family)}" data-region-id="{html.escape(cell.region_id)}"{polity_attrs} '
+                f'd="{_poly_path(scaled)}" fill="{_cell_fill(cell, overlays)}" opacity="0.82" />'
+            )
 
     for edge in geometry.edges:
         pts = [_scale(p, width, height, pad) for p in edge.points]

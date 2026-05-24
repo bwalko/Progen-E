@@ -221,6 +221,9 @@ When adding or renaming a genome trait, update both `genome.csv` and this mappin
 | `world` | string | World key (joins to `world_start.world`). |
 | `continent_id` | string | Stable continent identifier. |
 | `continent_name` | string | Display label. |
+| `map_size` | string | World-map generation hint such as `huge`, `large`, `medium`, `small`, or `island`. Controls relative landmass footprint only; simulation capacity still comes from regions. |
+| `map_placement` | string | Coarse placement hint (`northwest`, `northeast`, `southwest`, `southeast`, `central`, etc.). Used as a soft anchor for deterministic map layout, not an exact coordinate. |
+| `map_shape` | string | Landmass style hint for procedural map generation (`ragged_maritime`, `shield_fjord`, `arid_rift`, etc.). |
 | `keywords` | string | Plain-English hints (comma/semicolon-separated phrases). The simulation derives continent-wide physics (base elevation, precipitation band, resource bias, etc.) via `library.geography_inference` — see also `set_geography_inference_backend` for optional plug-in interpreters. |
 
 ---
@@ -238,6 +241,8 @@ When adding or renaming a genome trait, update both `genome.csv` and this mappin
 | `biome` | string | Broad climate/ecology marker (used by placename / local geography hooks and inference). |
 | `terrain` | string | Broad terrain marker (same). |
 | `carrying_capacity` | integer | Soft population capacity for settlement growth pressure. |
+| `map_features` | string | Semicolon-separated generation flags for region carving and landmarks, e.g. `coast`, `port`, `river`, `basin`, `mountains`, `forest`, `dry`, `wetland`, `delta`, `harbor`. |
+| `map_placement` | string | Coarse placement preference within the generated continent, e.g. `north`, `south`, `west`, `east`, `coast`, `river`, `interior_high`, `interior_low`, `river_coast`. |
 | `keywords` | string | Plain-English hints for soils, hydrology, relief, human land-use cues, etc. Combined with `biome`/`terrain` for deterministic inference. |
 
 ---

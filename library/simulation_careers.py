@@ -85,6 +85,10 @@ REHIRE_MAX_PROB = 0.95
 # See ``library.simulation_household_care.childcare_duty_factor`` for the source.
 JOB_CHILD_DUTY_REHIRE_WEIGHT = 0.65
 JOB_CHILD_DUTY_LOSS_WEIGHT = 0.30
+CAREER_CHILD_DUTY_FACTOR_CAP = 0.85
+PRIMARY_CHILDCARE_DUTY_THRESHOLD = 0.25
+PRIMARY_CHILDCARE_HOME_JOB_WEIGHT = 2.8
+PRIMARY_CHILDCARE_OUT_OF_HOME_LOSS_FLOOR = 0.72
 
 JOB_SEEKER_MIGRATION_MAX_PROB = 0.35
 
@@ -617,6 +621,46 @@ def _filter_job_entries_for_person(
     return tuple(out)
 
 
+def _primary_childcare_pull(person: "Person", childcare_duty_factor: float) -> float:
+    """How strongly this person should stay in the implicit home-childcare role."""
+    duty = _clamp(float(childcare_duty_factor or 0.0), 0.0, 1.0)
+    if duty < PRIMARY_CHILDCARE_DUTY_THRESHOLD:
+        return 0.0
+    if (person.gender or "").strip().lower() != "female":
+        return 0.0
+    if (person.gender_mind or "").strip().lower() == "masculine":
+        return 0.0
+    return _clamp(duty / CAREER_CHILD_DUTY_FACTOR_CAP, 0.0, 1.0)
+
+
+def _job_home_childcare_compatible(job_title: str | None, job_family: str | None = None) -> bool:
+    """True for roles plausibly done in or around one's own household."""
+    jk = normalize_job_catalog_key(job_title or "")
+    if not jk:
+        return False
+    fam = (job_family or "").strip().lower()
+    if fam == "domestic":
+        return True
+    home_parts = (
+        "parent",
+        "child watcher",
+        "caretaker",
+        "caregiver",
+        "household",
+        "hearth",
+        "camp cook",
+        "gatherer near camp",
+        "stores keeper",
+        "spinner",
+        "weaver",
+        "seamstress",
+        "tailor",
+        "basket maker",
+        "bead stringer",
+    )
+    return any(part in jk for part in home_parts)
+
+
 def _cross_gender_job_exception(person: "Person", restriction: str | None) -> bool:
     if restriction is None:
         return False
@@ -1077,6 +1121,7 @@ def choose_career_assignment(
     current_family_counts: dict[str, int] | None = None,
     unemployment_years: int = 0,
     household_prosperity: float | None = None,
+    childcare_duty_factor: float = 0.0,
 ) -> CareerAssignment | None:
     """Pick the best available job for the person's skill, market, and desperation."""
     path = Path(db_path)
@@ -1153,6 +1198,7 @@ def choose_career_assignment(
         unemployment_years=unemployment_years,
         household_prosperity=household_prosperity,
     )
+    primary_care_pull = _primary_childcare_pull(person, childcare_duty_factor)
     for row, trait_score, common_entries, premium_entries in candidates:
         society_need = _row_float(row, "society_need", 0.5)
         selfish_desperate = _row_float(row, "selfish_desperate", 0.0)
@@ -1165,6 +1211,9 @@ def choose_career_assignment(
             for job_title, job_restriction in entries:
                 je = catalog.lookup(job_title, era_key, tier=tier)
                 jm = market_catalog.lookup(job_title)
+                home_compatible = _job_home_childcare_compatible(job_title, jm.job_family)
+                if primary_care_pull > 0.0 and not home_compatible:
+                    continue
                 job_key = normalize_job_catalog_key(job_title)
                 job_count = int((current_job_counts or {}).get(job_key, 0))
                 family_count = int((current_family_counts or {}).get(jm.job_family, 0))
@@ -1193,6 +1242,8 @@ def choose_career_assignment(
                     selfish_desperate=selfish_desperate,
                     desperation=desperation,
                 )
+                if primary_care_pull > 0.0 and home_compatible:
+                    weight *= 1.0 + PRIMARY_CHILDCARE_HOME_JOB_WEIGHT * primary_care_pull
                 scored_jobs.append(
                     (
                         row,
@@ -1269,6 +1320,7 @@ def assign_career_if_eligible(
     market_snapshots: YearJobMarketSnapshots | None = None,
     pressure: float | None = None,
     fitness: CareerFitness | None = None,
+    childcare_duty_factor: float | None = None,
 ) -> CareerAssignment | None:
     """Assign or rehire an eligible person, returning details if changed."""
     if rec.person.job:
@@ -1285,6 +1337,11 @@ def assign_career_if_eligible(
         refresh_career_fitness(ctx, rec, year, pressure=pressure)
         if fitness is None
         else fitness
+    )
+    duty = (
+        _childcare_duty_factor_safe(ctx, rec, year)
+        if childcare_duty_factor is None
+        else float(childcare_duty_factor)
     )
     sid = _residence_settlement_id(rec)
     (
@@ -1311,6 +1368,7 @@ def assign_career_if_eligible(
         current_family_counts=current_family_counts,
         unemployment_years=_unemployment_years(rec.person, year),
         household_prosperity=rec.person.household_prosperity,
+        childcare_duty_factor=duty,
     )
     if assignment is None:
         return None
@@ -1373,6 +1431,7 @@ def assign_career_if_eligible(
             "selfish_desperate": assignment.selfish_desperate,
             "desperation_score": assignment.desperation_score,
             "resource_pressure": pressure,
+            "childcare_duty_factor": round(_clamp(duty, 0.0, 1.0), 4),
             "genome_composite_names": list(comp_labels),
             "genome_trait_phrases": list(trait_phrases),
         },
@@ -1546,6 +1605,17 @@ def maybe_lose_job(
             0.0,
             JOB_LOSS_MAX_PROB,
         )
+    primary_care_pull = _primary_childcare_pull(rec.person, duty)
+    out_of_home_primary_care_conflict = False
+    if primary_care_pull > 0.0:
+        market_catalog = JobMarketCatalog.load(ctx.db_path)
+        job_family = market_catalog.lookup(rec.person.job).job_family
+        if not _job_home_childcare_compatible(rec.person.job, job_family):
+            out_of_home_primary_care_conflict = True
+            p = max(
+                p,
+                PRIMARY_CHILDCARE_OUT_OF_HOME_LOSS_FLOOR * primary_care_pull,
+            )
     rng = random.Random(
         _event_seed(
             year=year,
@@ -1562,7 +1632,11 @@ def maybe_lose_job(
         ctx,
         rec,
         year,
-        reason=_job_loss_reason(fitness.score, pressure),
+        reason=(
+            "primary_childcare"
+            if out_of_home_primary_care_conflict
+            else _job_loss_reason(fitness.score, pressure)
+        ),
         pressure=pressure,
         fitness=fitness,
     )
@@ -1607,6 +1681,11 @@ def maybe_assign_or_rehire(
             REHIRE_MIN_PROB,
             REHIRE_MAX_PROB,
         )
+    placement_failure_reason = (
+        "primary_childcare"
+        if _primary_childcare_pull(rec.person, duty) > 0.0
+        else "placement_failed"
+    )
     rng = random.Random(
         _event_seed(
             year=year,
@@ -1616,22 +1695,31 @@ def maybe_assign_or_rehire(
         )
     )
     if rng.random() < p:
-        return (
-            assign_career_if_eligible(
-                ctx,
-                rec,
-                year,
-                market_snapshots=market_snapshots,
-                pressure=pressure,
-                fitness=fitness,
-            )
-            is not None
+        assigned = assign_career_if_eligible(
+            ctx,
+            rec,
+            year,
+            market_snapshots=market_snapshots,
+            pressure=pressure,
+            fitness=fitness,
+            childcare_duty_factor=duty,
         )
+        if assigned is not None:
+            return True
+        mark_unemployed(
+            ctx,
+            rec,
+            year,
+            reason=placement_failure_reason,
+            pressure=pressure,
+            fitness=fitness,
+        )
+        return False
     mark_unemployed(
         ctx,
         rec,
         year,
-        reason="placement_failed",
+        reason=placement_failure_reason,
         pressure=pressure,
         fitness=fitness,
     )

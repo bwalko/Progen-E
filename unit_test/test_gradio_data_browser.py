@@ -1299,7 +1299,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertIn("Generated polygon geography", shown)
         self.assertIn("<svg", shown)
-        self.assertIn('class="cell terrain-', shown)
+        self.assertIn('class="micro-cell terrain-', shown)
         self.assertIn('onclick="', shown)
         self.assertIn("map-open-selection", shown)
 
@@ -1351,6 +1351,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                         feature_ids=[],
                     )
                 ],
+                micro_cells=[],
                 features=[],
                 edges=[],
                 rivers=[],

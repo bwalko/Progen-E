@@ -1,5 +1,20 @@
 # TODO
 
+## Polygonal World Map Generation
+
+Reference model: Amit Patel's polygonal map generator uses many Voronoi polygons as the physical map, with named/gameplay regions layered over contiguous groups of those micro-polygons. Rivers flow along polygon-corner/border paths from high inland terrain to the coast; moisture and biomes derive from fresh water, elevation, and terrain.
+
+Implementation plan:
+
+1. Add deterministic micro-region cells per continent in `library.world_map_geometry`, clipped to the continent hull.
+2. Group contiguous micro-cells under existing authored `world_geography_regions` so saves, settlements, births, and routes keep their current region IDs.
+3. Compute micro-cell elevation from distance inland plus configured region terrain cues; favor highlands/mountains as river headwaters.
+4. Build micro-cell adjacency from shared Voronoi borders and route rivers downhill along shared border midpoints toward coastal cells.
+5. Compute moisture from fresh water and coast distance, then assign render biomes/terrain colors from elevation + moisture + authored region biome/terrain.
+6. Render micro-cells as the visible land layer while keeping named region overlays, labels, settlements, and polity coloring at the authored-region level.
+7. Persist or export enough debug JSON/SVG data to inspect micro-cell regions, river flow, elevation, and moisture when tuning.
+8. Later: replace convex named-region summary polygons with true dissolved boundaries, add lakes/ocean water cells, and consider a reusable Delaunay/corner graph if dependencies allow.
+
 ## Scale Population Simulation Toward Millions
 
 ### Current Baseline And Targets
