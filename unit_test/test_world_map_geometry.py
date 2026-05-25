@@ -130,6 +130,12 @@ class TestWorldMapGeometry(unittest.TestCase):
                     (aid, bounds[aid], bid, bounds[bid]),
                 )
 
+    def test_point_in_polygon_preserves_edge_direction(self) -> None:
+        poly = [(0.68, 0.36), (0.70, 0.36), (0.69, 0.35)]
+
+        self.assertFalse(_point_in_polygon((0.64, 0.359), poly))
+        self.assertTrue(_point_in_polygon((0.69, 0.357), poly))
+
     def test_every_region_has_valid_cell_and_features(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
         regions = list_regions(world="default", db_path=self.cfg)
@@ -271,10 +277,8 @@ class TestWorldMapGeometry(unittest.TestCase):
             self.assertTrue(owned, cell.region_id)
             for local in ((0.04, 0.04), (0.5, 0.5), (0.96, 0.96)):
                 point = project_local_point_to_region_footprint(geometry, cell.region_id, local)
-                self.assertTrue(
-                    any(_point_in_polygon(point, micro.polygon) for micro in owned),
-                    (cell.region_id, local, point),
-                )
+                containing = [micro for micro in owned if _point_in_polygon(point, micro.polygon)]
+                self.assertTrue(containing, (cell.region_id, local, point))
 
     def test_debug_svg_renderer_outputs_noisy_map_layers(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)

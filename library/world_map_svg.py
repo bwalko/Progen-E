@@ -91,6 +91,43 @@ def _stable_color(value: object) -> str:
     return _POLITY_COLORS[_stable_seed(value) % len(_POLITY_COLORS)]
 
 
+def _hex_to_rgb(color: str) -> tuple[int, int, int]:
+    raw = color.strip().lstrip("#")
+    if len(raw) != 6:
+        return (128, 128, 128)
+    return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#" + "".join(f"{max(0, min(255, c)):02x}" for c in rgb)
+
+
+def _mix_color(color: str, target: str, amount: float) -> str:
+    amount = max(0.0, min(1.0, amount))
+    r, g, b = _hex_to_rgb(color)
+    tr, tg, tb = _hex_to_rgb(target)
+    return _rgb_to_hex(
+        (
+            round(r + (tr - r) * amount),
+            round(g + (tg - g) * amount),
+            round(b + (tb - b) * amount),
+        )
+    )
+
+
+def _terrain_tint(color: str, cell: MicroRegionCell) -> str:
+    grain = ((_stable_seed("micro-fill", cell.micro_id) % 1000) / 999.0) - 0.5
+    if grain >= 0.0:
+        color = _mix_color(color, "#f4efd2", grain * 0.13)
+    else:
+        color = _mix_color(color, "#314436", abs(grain) * 0.10)
+    if cell.elevation >= 0.62:
+        color = _mix_color(color, "#ddd9c4", min(0.18, (cell.elevation - 0.62) * 0.36))
+    if cell.moisture >= 0.66 and not cell.is_coastal:
+        color = _mix_color(color, "#1f6f52", min(0.16, (cell.moisture - 0.66) * 0.28))
+    return color
+
+
 def _scale(point: Point, width: int, height: int, pad: int) -> tuple[float, float]:
     x, y = point
     return (pad + x * (width - pad * 2), pad + y * (height - pad * 2))
@@ -166,16 +203,18 @@ def _micro_cell_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None) -
     if overlays is not None and cell.region_id in overlays.polities_by_region_id:
         return overlays.polities_by_region_id[cell.region_id].color
     if cell.elevation >= 0.72:
-        return "#f0f1ea" if cell.moisture >= 0.52 else "#c5c2ad"
-    if cell.is_coastal:
-        return "#a99b83"
-    if cell.moisture >= 0.78:
-        return "#1f7660"
-    if cell.moisture >= 0.58:
-        return "#3d8d62"
-    if cell.moisture <= 0.28:
-        return "#9f957b"
-    return _CELL_COLORS.get(cell.terrain_family, _CELL_COLORS["plains"])
+        base = "#f0f1ea" if cell.moisture >= 0.52 else "#c5c2ad"
+    elif cell.is_coastal:
+        base = "#a99b83"
+    elif cell.moisture >= 0.78:
+        base = "#1f7660"
+    elif cell.moisture >= 0.58:
+        base = "#3d8d62"
+    elif cell.moisture <= 0.28:
+        base = "#9f957b"
+    else:
+        base = _CELL_COLORS.get(cell.terrain_family, _CELL_COLORS["plains"])
+    return _terrain_tint(base, cell)
 
 
 def _feature_radius(feature: RegionFeature) -> float:

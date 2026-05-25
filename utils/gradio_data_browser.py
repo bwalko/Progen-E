@@ -3673,13 +3673,13 @@ def _render_generated_region_map(
         sid = str(row["settlement_id"] or "")
         label = str(row["display_name"] or sid)
         focused = sid == (focus_settlement_id or "")
-        radius = 2.6 if focused else 2.1
+        radius = 1.8 if focused else 1.35
         parts.append(
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" fill="var(--place-map-town)" '
             f'stroke="var(--place-text)" stroke-width="{1.0 if focused else .45}" />'
         )
         parts.append(
-            f'<text x="{x + 2.8:.1f}" y="{y + 1.0:.1f}" font-size="2.8" '
+            f'<text x="{x + radius + 1.0:.1f}" y="{y + 1.0:.1f}" font-size="2.8" '
             f'fill="var(--place-text)">{html.escape(label[:18])}</text>'
         )
     parts.append("</svg>")

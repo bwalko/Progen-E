@@ -25,7 +25,7 @@ from library.geography import (
 )
 
 
-MAP_GEOMETRY_VERSION = "polygonal-v5"
+MAP_GEOMETRY_VERSION = "polygonal-v8"
 Point = tuple[float, float]
 
 
@@ -282,6 +282,68 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def _smoothstep(t: float) -> float:
+    t = _clamp(t, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _noise_seed(*parts: object) -> int:
+    return _stable_seed(MAP_GEOMETRY_VERSION, "noise", *parts) & 0xFFFFFFFF
+
+
+def _mixed_unit_float(seed: int, x: int, y: int) -> float:
+    n = (seed + x * 0x9E3779B1 + y * 0x85EBCA77) & 0xFFFFFFFF
+    n ^= n >> 16
+    n = (n * 0x7FEB352D) & 0xFFFFFFFF
+    n ^= n >> 15
+    n = (n * 0x846CA68B) & 0xFFFFFFFF
+    n ^= n >> 16
+    return n / 0xFFFFFFFF
+
+
+def _value_noise_2d(seed: object, x: float, y: float) -> float:
+    """Stable grid value noise in [0, 1], smoothed between integer lattice points."""
+    base_seed = seed if isinstance(seed, int) else _noise_seed(seed)
+    x0 = math.floor(x)
+    y0 = math.floor(y)
+    tx = _smoothstep(x - x0)
+    ty = _smoothstep(y - y0)
+
+    def lattice(ix: int, iy: int) -> float:
+        return _mixed_unit_float(base_seed, ix, iy)
+
+    a = _lerp(lattice(x0, y0), lattice(x0 + 1, y0), tx)
+    b = _lerp(lattice(x0, y0 + 1), lattice(x0 + 1, y0 + 1), tx)
+    return _lerp(a, b, ty)
+
+
+def _fbm_noise_2d(
+    seed: object,
+    x: float,
+    y: float,
+    *,
+    octaves: int = 4,
+    lacunarity: float = 2.0,
+    gain: float = 0.52,
+) -> float:
+    base_seed = seed if isinstance(seed, int) else _noise_seed(seed)
+    value = 0.0
+    amplitude = 1.0
+    total = 0.0
+    freq = 1.0
+    for octave in range(max(1, octaves)):
+        octave_seed = (base_seed + octave * 0x9E3779B9) & 0xFFFFFFFF
+        value += _value_noise_2d(octave_seed, x * freq, y * freq) * amplitude
+        total += amplitude
+        amplitude *= gain
+        freq *= lacunarity
+    return value / max(1e-9, total)
+
+
 def _centroid(poly: list[Point]) -> Point:
     if not poly:
         return (0.5, 0.5)
@@ -344,10 +406,10 @@ def _point_in_polygon(point: Point, poly: list[Point]) -> bool:
     j = len(poly) - 1
     for i, (xi, yi) in enumerate(poly):
         xj, yj = poly[j]
-        if ((yi > y) != (yj > y)) and (
-            x < (xj - xi) * (y - yi) / max(1e-12, yj - yi) + xi
-        ):
-            inside = not inside
+        if (yi > y) != (yj > y):
+            denom = yj - yi
+            if abs(denom) > 1e-12 and x < (xj - xi) * (y - yi) / denom + xi:
+                inside = not inside
         j = i
     return inside
 
@@ -449,6 +511,60 @@ def _pull_inside(point: Point, poly: list[Point], center: Point | None = None) -
         if _point_in_polygon((x, y), poly):
             return (x, y)
     return (cx, cy)
+
+
+def _nudge_inside_polygon(point: Point, poly: list[Point], *, min_edge_distance: float = 0.004) -> Point:
+    if not poly or not _point_in_polygon(point, poly):
+        return point
+    if _distance_to_polygon_edge(point, poly) >= min_edge_distance:
+        return point
+    anchor = _representative_point_in_polygon(poly)
+    x, y = point
+    best = point
+    best_distance = _distance_to_polygon_edge(point, poly)
+    for _ in range(12):
+        x = x * 0.68 + anchor[0] * 0.32
+        y = y * 0.68 + anchor[1] * 0.32
+        candidate = (x, y)
+        if not _point_in_polygon(candidate, poly):
+            continue
+        distance = _distance_to_polygon_edge(candidate, poly)
+        if distance > best_distance:
+            best = candidate
+            best_distance = distance
+        if distance >= min_edge_distance:
+            return candidate
+    return best
+
+
+def _interior_point_near_polygon(point: Point, poly: list[Point]) -> Point:
+    if not poly:
+        return point
+    anchor = _representative_point_in_polygon(poly)
+    if _point_in_polygon(point, poly):
+        return _nudge_inside_polygon(point, poly)
+    edge_point = _nearest_point_on_polygon_edge(point, poly)
+    interior = (edge_point[0] * 0.62 + anchor[0] * 0.38, edge_point[1] * 0.62 + anchor[1] * 0.38)
+    if _point_in_polygon(interior, poly):
+        return _nudge_inside_polygon(interior, poly)
+    if _point_in_polygon(anchor, poly):
+        return _nudge_inside_polygon(anchor, poly)
+    return _nudge_inside_polygon(_pull_inside(interior, poly, anchor), poly)
+
+
+def _best_region_interior_point(point: Point, cells: list[MicroRegionCell]) -> Point:
+    candidates: list[tuple[float, float, Point]] = []
+    for cell in cells:
+        candidate = _interior_point_near_polygon(point, cell.polygon)
+        if not _point_in_polygon(candidate, cell.polygon):
+            continue
+        edge_distance = _distance_to_polygon_edge(candidate, cell.polygon)
+        travel_distance = (candidate[0] - point[0]) ** 2 + (candidate[1] - point[1]) ** 2
+        safety_penalty = max(0.0, 0.004 - edge_distance) ** 2 * 96.0
+        candidates.append((travel_distance + safety_penalty, -edge_distance, candidate))
+    if not candidates:
+        return point
+    return min(candidates, key=lambda c: (c[0], c[1], c[2][0], c[2][1]))[2]
 
 
 def _sample_point_in_polygon(
@@ -647,27 +763,118 @@ def _continent_layout_boxes(
     return _separate_continent_boxes(boxes)
 
 
+def _mask_continent_hull(
+    *,
+    world: str,
+    continent_id: str,
+    box: tuple[float, float, float, float],
+    map_seed: str,
+    hint: _ContinentMapHint,
+) -> list[Point]:
+    """Build a Red Blob-style land/water mask contour instead of perturbing a radius."""
+    from shapely.geometry import MultiPolygon, box as shapely_box
+    from shapely.ops import unary_union
+
+    x0, y0, x1, y1 = box
+    bw = x1 - x0
+    bh = y1 - y0
+    grid = 58
+    dx = bw / grid
+    dy = bh / grid
+    seed = _noise_seed(map_seed, world, continent_id, "land-water-mask")
+    text = f"{hint.shape} {hint.size} {hint.placement}".lower()
+    target_area = 0.44
+    if "island" in text:
+        target_area = 0.36
+    elif "huge" in text or "large" in text:
+        target_area = 0.48
+
+    def score_at(qx: float, qy: float) -> float:
+        warp_x = _fbm_noise_2d((seed + 0xA511E9B3) & 0xFFFFFFFF, qx * 1.35 + 8.0, qy * 1.35 - 5.0, octaves=3)
+        warp_y = _fbm_noise_2d((seed + 0x63D83595) & 0xFFFFFFFF, qx * 1.35 - 6.0, qy * 1.35 + 9.0, octaves=3)
+        wx = qx + (warp_x - 0.5) * 0.42
+        wy = qy + (warp_y - 0.5) * 0.42
+        return _fbm_noise_2d(seed, wx * 1.55 + 12.0, wy * 1.55 - 14.0, octaves=5)
+
+    def build_polygon(threshold_bias: float) -> tuple[float, list[Point]]:
+        cells = []
+        for gy in range(grid):
+            qy = -1.0 + 2.0 * (gy + 0.5) / grid
+            for gx in range(grid):
+                qx = -1.0 + 2.0 * (gx + 0.5) / grid
+                if max(abs(qx), abs(qy)) > 0.985:
+                    continue
+                dist2 = qx * qx + qy * qy
+                threshold = 0.30 + 0.31 * dist2 + threshold_bias
+                if score_at(qx, qy) <= threshold:
+                    continue
+                cells.append(shapely_box(x0 + gx * dx, y0 + gy * dy, x0 + (gx + 1) * dx, y0 + (gy + 1) * dy))
+        if not cells:
+            return (float("inf"), [])
+        land = unary_union(cells)
+        if isinstance(land, MultiPolygon):
+            land = max(land.geoms, key=lambda p: p.area)
+        if land.is_empty or land.area <= bw * bh * 0.12:
+            return (float("inf"), [])
+        soften = min(dx, dy) * 0.72
+        land = land.buffer(soften, join_style=1).buffer(-soften, join_style=1)
+        if isinstance(land, MultiPolygon):
+            land = max(land.geoms, key=lambda p: p.area)
+        if land.is_empty:
+            return (float("inf"), [])
+        land = land.simplify(min(dx, dy) * 0.32, preserve_topology=True)
+        coords = [(float(x), float(y)) for x, y in list(land.exterior.coords)[:-1]]
+        if len(coords) < 12:
+            return (float("inf"), [])
+        px0, py0, px1, py1 = _polygon_bounds(coords)
+        area_ratio = land.area / max(1e-9, bw * bh)
+        width_ratio = (px1 - px0) / max(1e-9, bw)
+        height_ratio = (py1 - py0) / max(1e-9, bh)
+        quality = (
+            abs(area_ratio - target_area)
+            + max(0.0, 0.66 - width_ratio) * 0.7
+            + max(0.0, 0.62 - height_ratio) * 0.7
+        )
+        poly = _fit_polygon_to_box(_smooth_closed_polygon(coords, iterations=1), box)
+        return (quality, [(round(x, 6), round(y, 6)) for x, y in poly])
+
+    candidates = [
+        build_polygon(bias)
+        for bias in (0.00, -0.04, 0.04, -0.08, 0.08, -0.12, 0.12)
+    ]
+    return min(candidates, key=lambda item: item[0])[1]
+
+
 def _continent_hull(
     continent: object,
     box: tuple[float, float, float, float],
     map_seed: str,
     hint: _ContinentMapHint | None = None,
 ) -> list[Point]:
-    """Return a stable, non-rectangular land silhouette inside a layout box."""
+    """Return a stable, noise-shaped land silhouette inside a layout box."""
     cid = str(getattr(continent, "continent_id", ""))
     world = str(getattr(continent, "world", ""))
     name = str(getattr(continent, "continent_name", ""))
     keywords = str(getattr(continent, "keywords", ""))
     hint = hint or _ContinentMapHint()
     text = f"{name} {keywords} {hint.shape}".lower()
+    mask_hull = _mask_continent_hull(
+        world=world,
+        continent_id=cid,
+        box=box,
+        map_seed=map_seed,
+        hint=hint,
+    )
+    if mask_hull:
+        return mask_hull
     rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, map_seed, world, cid, "continent-hull"))
     x0, y0, x1, y1 = box
     bw = x1 - x0
     bh = y1 - y0
     cx = (x0 + x1) / 2.0 + rng.uniform(-0.05, 0.05) * bw
     cy = (y0 + y1) / 2.0 + rng.uniform(-0.05, 0.05) * bh
-    rx = bw * rng.uniform(0.30, 0.38)
-    ry = bh * rng.uniform(0.30, 0.38)
+    rx = bw * rng.uniform(0.34, 0.42)
+    ry = bh * rng.uniform(0.33, 0.41)
     if "maritime" in text or "coastal" in text or "atlantic" in text:
         rx *= 1.12
         ry *= 0.92
@@ -680,28 +887,36 @@ def _continent_hull(
     angle = rng.uniform(-0.58, 0.58)
     if "rift" in text:
         angle += rng.choice([-0.42, 0.42])
-    vertices = 54
+    vertices = 96
     pts: list[Point] = []
     phase1 = rng.uniform(0.0, math.tau)
     phase2 = rng.uniform(0.0, math.tau)
     phase3 = rng.uniform(0.0, math.tau)
+    coast_seed = _noise_seed(map_seed, world, cid, "continent-coast-noise")
     for i in range(vertices):
-        theta = (math.tau * i / vertices) + rng.uniform(-0.035, 0.035)
+        theta = math.tau * i / vertices
+        nx = math.cos(theta + phase1)
+        ny = math.sin(theta + phase1)
+        broad = _fbm_noise_2d(coast_seed, nx * 0.92 + 7.0, ny * 0.92 - 3.0, octaves=3)
+        detail = _fbm_noise_2d((coast_seed + 0xA511E9B3) & 0xFFFFFFFF, nx * 1.85 - 11.0, ny * 1.85 + 5.0, octaves=2)
+        inlet = _fbm_noise_2d((coast_seed + 0x63D83595) & 0xFFFFFFFF, nx * 2.7 + 17.0, ny * 2.7 - 13.0, octaves=2)
+        inlet_cut = max(0.0, inlet - 0.70) * 0.12
         lump = (
             1.0
-            + 0.14 * math.sin(theta * 2.0 + phase1)
-            + 0.10 * math.sin(theta * 3.0 + phase2)
-            + 0.05 * math.sin(theta * 7.0 + phase3)
-            + rng.uniform(-0.045, 0.045)
+            + 0.18 * math.sin(theta * 2.0 + phase1)
+            + 0.08 * math.sin(theta * 3.0 + phase2)
+            + 0.012 * math.sin(theta * 5.0 + phase3)
+            + (broad - 0.5) * 0.25
+            + (detail - 0.5) * 0.055
+            - inlet_cut
         )
         if "fjord" in text and i % 5 == 2:
-            lump *= rng.uniform(0.58, 0.78)
+            lump *= rng.uniform(0.84, 0.94)
         elif "maritime" in text and i % 8 in {2, 5}:
-            lump *= rng.uniform(0.66, 0.86)
+            lump *= rng.uniform(0.88, 0.97)
         elif "rift" in text and math.sin(theta + phase1) > 0.72:
-            lump *= rng.uniform(0.68, 0.84)
-        elif i % 11 == 4:
-            lump *= rng.uniform(0.70, 0.88)
+            lump *= rng.uniform(0.86, 0.96)
+        lump = _clamp(lump, 0.78, 1.24)
         px = math.cos(theta) * rx * lump
         py = math.sin(theta) * ry * lump
         ca = math.cos(angle)
@@ -711,7 +926,7 @@ def _continent_hull(
         pts.append((x, y))
     return [
         (round(x, 6), round(y, 6))
-        for x, y in _fit_polygon_to_box(_smooth_closed_polygon(pts, iterations=2), box)
+        for x, y in _fit_polygon_to_box(_smooth_closed_polygon(pts, iterations=3), box)
     ]
 
 
@@ -1075,6 +1290,31 @@ def _build_voronoi_polys_in_hull(
     return out
 
 
+def _relax_voronoi_points_in_hull(
+    *,
+    points: list[Point],
+    hull: list[Point],
+    iterations: int = 1,
+) -> list[Point]:
+    """Move sample points toward clipped Voronoi centroids for less grid-like cells."""
+    relaxed = list(points)
+    for _ in range(max(0, iterations)):
+        if len(relaxed) < 4:
+            break
+        polys = _build_voronoi_polys_in_hull(points=relaxed, hull=hull)
+        if len(polys) < len(relaxed) * 0.85:
+            break
+        next_points = [
+            _pull_inside(_centroid(poly), hull, center=_centroid(hull))
+            for poly in polys
+            if len(poly) >= 3
+        ]
+        if len(next_points) < len(relaxed) * 0.85:
+            break
+        relaxed = [(round(x, 6), round(y, 6)) for x, y in next_points]
+    return relaxed
+
+
 def _build_physical_micro_cells_for_continent(
     *,
     world: str,
@@ -1115,6 +1355,7 @@ def _build_physical_micro_cells_for_continent(
             sample_points,
             key=lambda p: _stable_seed(MAP_GEOMETRY_VERSION, map_seed, continent_id, p[0], p[1]),
         )[:target_count]
+    sample_points = _relax_voronoi_points_in_hull(points=sample_points, hull=hull, iterations=1)
     polys_list = _build_voronoi_polys_in_hull(points=sample_points, hull=hull)
     polys: dict[str, list[Point]] = {
         f"{continent_id}:m{i:04d}": poly
@@ -1125,6 +1366,7 @@ def _build_physical_micro_cells_for_continent(
         1e-6,
         max(_distance_to_polygon_edge(p, hull) for p in points.values()),
     )
+    terrain_seed = _noise_seed(map_seed, world, continent_id, "terrain-field")
     out: list[MicroRegionCell] = []
     for mid in sorted(polys):
         poly = polys.get(mid, [])
@@ -1135,13 +1377,34 @@ def _build_physical_micro_cells_for_continent(
         boundary_dist = min(_distance_to_polygon_edge(p, hull) for p in poly)
         inland = _clamp(edge_dist / max_inland, 0.0, 1.0)
         boundary_inland = _clamp(boundary_dist / max_inland, 0.0, 1.0)
-        noise = rng.uniform(-0.055, 0.055)
-        elev = _clamp(0.04 + inland * 0.88 + noise, 0.0, 1.0)
+        nx = (cx - x0) / max(1e-6, bw)
+        ny = (cy - y0) / max(1e-6, bh)
+        broad = _fbm_noise_2d(terrain_seed, nx * 2.15, ny * 2.15, octaves=5)
+        detail = _fbm_noise_2d((terrain_seed + 0xA511E9B3) & 0xFFFFFFFF, nx * 7.5 + 19.0, ny * 7.5 - 11.0, octaves=3)
+        ridge_noise = _fbm_noise_2d((terrain_seed + 0x63D83595) & 0xFFFFFFFF, nx * 4.4 - 3.0, ny * 4.4 + 13.0, octaves=4)
+        ridge = (1.0 - abs(ridge_noise * 2.0 - 1.0)) ** 1.75
+        interior = inland ** 1.32
+        elev = _clamp(
+            0.035
+            + interior * 0.46
+            + broad * 0.30
+            + ridge * 0.25
+            + detail * 0.06
+            - (1.0 - inland) ** 2.0 * 0.10,
+            0.0,
+            1.0,
+        )
         coastal = inland < 0.22 or (boundary_inland < 0.002 and inland < 0.48)
+        if coastal:
+            elev = min(elev, 0.24 + inland * 0.34)
+        wet_noise = _fbm_noise_2d((terrain_seed + 0xB7E15162) & 0xFFFFFFFF, nx * 3.0 + 5.0, ny * 3.0 - 17.0, octaves=4)
+        rain_shadow = max(0.0, elev - 0.58) * 0.22
         moisture = _clamp(
-            (0.82 if coastal else 0.42)
-            - inland * 0.18
-            + rng.uniform(-0.05, 0.05),
+            (0.80 if coastal else 0.36)
+            - inland * 0.32
+            + wet_noise * 0.31
+            - rain_shadow
+            + (detail - 0.5) * 0.06,
             0.02,
             1.0,
         )
@@ -1525,6 +1788,32 @@ def _repair_disconnected_region_footprints(
             keep = components[0]
             for fragment in components[1:]:
                 if counts.get(rid, 0) - len(fragment) < min_target:
+                    queue = [(mid, [mid]) for mid in sorted(fragment)]
+                    seen = set(fragment)
+                    bridge_path: list[str] = []
+                    while queue and not bridge_path:
+                        current, path = queue.pop(0)
+                        for nid in sorted(adjacency.get(current, set())):
+                            if nid in seen:
+                                continue
+                            next_path = path + [nid]
+                            if nid in keep:
+                                bridge_path = next_path
+                                break
+                            seen.add(nid)
+                            queue.append((nid, next_path))
+                    bridged = False
+                    for mid in bridge_path[1:-1]:
+                        donor_rid = by_id[mid].region_id
+                        if donor_rid == rid or counts.get(donor_rid, 0) <= min_target + 1:
+                            continue
+                        out[idx_by_id[mid]] = _replace_micro_cell_region(by_id[mid], rid)
+                        counts[donor_rid] = counts.get(donor_rid, 0) - 1
+                        counts[rid] = counts.get(rid, 0) + 1
+                        changed = True
+                        bridged = True
+                    if bridged:
+                        continue
                     continue
                 for mid in sorted(fragment):
                     neighbor_regions = [
@@ -1790,13 +2079,45 @@ def _moisten_micro_cells(
     micro_cells: list[MicroRegionCell],
     river_cell_ids: set[str],
 ) -> list[MicroRegionCell]:
-    if not river_cell_ids:
+    if not micro_cells:
         return micro_cells
+    by_id = {c.micro_id: c for c in micro_cells}
+    adjacency, _ = _micro_adjacency(micro_cells)
+    best_moisture: dict[str, float] = {}
+    queue: list[tuple[float, str]] = []
+    for cell in micro_cells:
+        strength = 0.0
+        if cell.is_coastal:
+            strength = max(strength, 0.68)
+        if cell.micro_id in river_cell_ids:
+            strength = max(strength, 0.90)
+        if strength > 0.0:
+            best_moisture[cell.micro_id] = strength
+            heapq.heappush(queue, (-strength, cell.micro_id))
+    while queue:
+        neg_strength, micro_id = heapq.heappop(queue)
+        strength = -neg_strength
+        if strength + 1e-9 < best_moisture.get(micro_id, 0.0):
+            continue
+        cell = by_id[micro_id]
+        for neighbor_id in adjacency.get(micro_id, set()):
+            neighbor = by_id[neighbor_id]
+            uphill = max(0.0, neighbor.elevation - cell.elevation)
+            decay = 0.070 + uphill * 0.22 + max(0.0, neighbor.elevation - 0.68) * 0.050
+            next_strength = strength - decay
+            if next_strength < 0.48:
+                continue
+            if next_strength > best_moisture.get(neighbor_id, 0.0) + 0.01:
+                best_moisture[neighbor_id] = next_strength
+                heapq.heappush(queue, (-next_strength, neighbor_id))
     out: list[MicroRegionCell] = []
     for cell in micro_cells:
-        moisture = cell.moisture
-        if cell.micro_id in river_cell_ids:
-            moisture = max(moisture, 0.86)
+        moisture = max(cell.moisture, best_moisture.get(cell.micro_id, 0.0))
+        family = _generated_terrain_family(
+            elevation=cell.elevation,
+            moisture=moisture,
+            coastal=cell.is_coastal,
+        )
         out.append(
             MicroRegionCell(
                 micro_id=cell.micro_id,
@@ -1807,7 +2128,7 @@ def _moisten_micro_cells(
                 polygon=cell.polygon,
                 elevation=cell.elevation,
                 moisture=round(_clamp(moisture, 0.0, 1.0), 4),
-                terrain_family=cell.terrain_family,
+                terrain_family=family,
                 is_coastal=cell.is_coastal,
             )
         )
@@ -2018,23 +2339,11 @@ def project_local_point_to_region_footprint(
     )
     for cell in cells:
         if _point_in_polygon(candidate, cell.polygon):
-            return candidate
-    nearest_cell = min(
-        cells,
-        key=lambda c: (
-            _distance_to_polygon_edge(candidate, c.polygon),
-            (c.center_x - candidate[0]) ** 2 + (c.center_y - candidate[1]) ** 2,
-            c.micro_id,
-        ),
-    )
-    edge_point = _nearest_point_on_polygon_edge(candidate, nearest_cell.polygon)
-    anchor = _representative_point_in_polygon(nearest_cell.polygon)
-    interior = (edge_point[0] * 0.72 + anchor[0] * 0.28, edge_point[1] * 0.72 + anchor[1] * 0.28)
-    if _point_in_polygon(interior, nearest_cell.polygon):
-        return interior
-    if _point_in_polygon(anchor, nearest_cell.polygon):
-        return anchor
-    return _pull_inside(interior, nearest_cell.polygon, anchor)
+            point = _nudge_inside_polygon(candidate, cell.polygon)
+            if _distance_to_polygon_edge(point, cell.polygon) >= 0.003:
+                return point
+            return _best_region_interior_point(candidate, cells)
+    return _best_region_interior_point(candidate, cells)
 
 
 def _build_region_edges(
