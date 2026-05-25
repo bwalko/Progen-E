@@ -15,12 +15,17 @@ from library.settlement_local_geography import (
     build_local_region_graph,
     make_region_geography_rng,
 )
+from library.simulation_context import SimulationContext
 from library.world_map_geometry import (
     MAP_GEOMETRY_VERSION,
     _continent_hulls,
+    _micro_adjacency,
+    _point_in_polygon,
     _polygon_bounds,
     build_world_map_geometry,
+    project_local_point_to_region_footprint,
 )
+from library.world_save import read_world_map_seed, write_world_map_seed
 from library.world_map_svg import (
     SettlementMapOverlay,
     WorldMapOverlays,
@@ -45,20 +50,85 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertEqual(first["version"], MAP_GEOMETRY_VERSION)
         self.assertTrue(first["micro_cells"])
 
+    def test_world_geometry_varies_by_save_map_seed(self) -> None:
+        save_a = Path(self._td.name) / "save-a.sqlite"
+        save_b = Path(self._td.name) / "save-b.sqlite"
+        write_world_map_seed(save_a, "campaign-a")
+        write_world_map_seed(save_b, "campaign-b")
+
+        first = build_world_map_geometry(
+            world="default",
+            db_path=self.cfg,
+            save_db_path=save_a,
+        ).to_json_obj()
+        second = build_world_map_geometry(
+            world="default",
+            db_path=self.cfg,
+            save_db_path=save_a,
+        ).to_json_obj()
+        other = build_world_map_geometry(
+            world="default",
+            db_path=self.cfg,
+            save_db_path=save_b,
+        ).to_json_obj()
+
+        self.assertEqual(read_world_map_seed(save_a), "campaign-a")
+        self.assertEqual(json.dumps(first, sort_keys=True), json.dumps(second, sort_keys=True))
+        self.assertNotEqual(
+            [c["polygon"] for c in first["cells"]],
+            [c["polygon"] for c in other["cells"]],
+        )
+
+    def test_new_simulation_context_persists_save_map_seed(self) -> None:
+        save_path = Path(self._td.name) / "context-save.sqlite"
+        with SimulationContext.create(
+            db_path=self.cfg,
+            save_db_path=save_path,
+            world_id="default",
+            world="default",
+            start_year=1000,
+            refresh_config=False,
+            flush_run_store=False,
+            placename_rng_salt=123456,
+        ) as ctx:
+            self.assertEqual(ctx.world_map_seed, "123456")
+
+        self.assertEqual(read_world_map_seed(save_path), "123456")
+
     def test_continent_footprints_are_not_rectangular_boxes(self) -> None:
         continents = list_continents(world="default", db_path=self.cfg)
         hulls = _continent_hulls(continents)
 
         self.assertEqual(set(hulls), {c.continent_id for c in continents})
         for hull in hulls.values():
-            self.assertGreaterEqual(len(hull), 12)
+            self.assertGreaterEqual(len(hull), 80)
             x0, y0, x1, y1 = _polygon_bounds(hull)
             bbox_corners = {(x0, y0), (x1, y0), (x1, y1), (x0, y1)}
             hull_points = {(round(x, 6), round(y, 6)) for x, y in hull}
+            axis_aligned_edges = sum(
+                1
+                for a, b in zip(hull, hull[1:] + hull[:1])
+                if abs(a[0] - b[0]) < 1e-6 or abs(a[1] - b[1]) < 1e-6
+            )
 
             self.assertNotEqual(hull_points, bbox_corners)
             self.assertGreater(len({round(x, 3) for x, _ in hull}), 4)
             self.assertGreater(len({round(y, 3) for _, y in hull}), 4)
+            self.assertLess(axis_aligned_edges, len(hull) * 0.08)
+
+    def test_continent_footprints_do_not_overlap(self) -> None:
+        continents = list_continents(world="default", db_path=self.cfg)
+        hulls = _continent_hulls(continents)
+        bounds = {cid: _polygon_bounds(hull) for cid, hull in hulls.items()}
+
+        for i, aid in enumerate(sorted(bounds)):
+            ax0, ay0, ax1, ay1 = bounds[aid]
+            for bid in sorted(bounds)[i + 1:]:
+                bx0, by0, bx1, by1 = bounds[bid]
+                self.assertTrue(
+                    ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0,
+                    (aid, bounds[aid], bid, bounds[bid]),
+                )
 
     def test_every_region_has_valid_cell_and_features(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -85,6 +155,21 @@ class TestWorldMapGeometry(unittest.TestCase):
                 cell.terrain_family,
                 {"coast", "riverland", "highlands", "forest", "drylands", "plains"},
             )
+        adjacency, _ = _micro_adjacency(geometry.micro_cells)
+        for region in regions:
+            owned = {c.micro_id for c in geometry.micro_cells if c.region_id == region.region_id}
+            self.assertTrue(owned, region.region_id)
+            remaining = set(owned)
+            start = next(iter(remaining))
+            stack = [start]
+            remaining.remove(start)
+            while stack:
+                mid = stack.pop()
+                for nid in adjacency.get(mid, set()):
+                    if nid in remaining:
+                        remaining.remove(nid)
+                        stack.append(nid)
+            self.assertFalse(remaining, region.region_id)
         for cell in geometry.micro_cells:
             self.assertGreaterEqual(len(cell.polygon), 3)
             self.assertTrue(0.0 <= cell.center_x <= 1.0)
@@ -115,8 +200,13 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertTrue(expected_pairs)
         self.assertTrue(expected_pairs.issubset(actual_pairs))
         for edge in geometry.edges:
-            self.assertEqual(len(edge.points), 2)
+            self.assertGreaterEqual(len(edge.points), 2)
             self.assertIn(edge.edge_class, {"land_route", "sea_route"})
+            for x, y in edge.points:
+                self.assertTrue(0.0 <= x <= 1.0)
+                self.assertTrue(0.0 <= y <= 1.0)
+        self.assertTrue(any(edge.edge_class == "land_route" and len(edge.points) > 2 for edge in geometry.edges))
+        self.assertTrue(any(edge.edge_class == "sea_route" and len(edge.points) > 2 for edge in geometry.edges))
 
     def test_local_geography_consumes_world_region_features(self) -> None:
         region = next(
@@ -153,6 +243,39 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertTrue(any(c.elevation >= 0.6 for c in geometry.micro_cells))
         self.assertTrue(any(c.moisture >= 0.8 for c in geometry.micro_cells))
 
+    def test_river_segments_keep_local_region_ownership(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        micro_by_id = {c.micro_id: c for c in geometry.micro_cells}
+
+        self.assertTrue(any(len({rid for s in r.segments for rid in s.region_ids}) > 1 for r in geometry.rivers))
+        for river in geometry.rivers:
+            self.assertEqual(len(river.segments), len(river.points) - 1)
+            self.assertTrue(river.segments)
+            for segment in river.segments:
+                self.assertEqual(len(segment.points), 2)
+                expected_region_ids = sorted(
+                    {
+                        micro_by_id[micro_id].region_id
+                        for micro_id in segment.micro_ids
+                        if micro_id in micro_by_id
+                    }
+                )
+                if expected_region_ids:
+                    self.assertEqual(segment.region_ids, expected_region_ids)
+
+    def test_local_settlement_projection_stays_inside_region_footprint(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+
+        for cell in geometry.cells:
+            owned = [c for c in geometry.micro_cells if c.region_id == cell.region_id]
+            self.assertTrue(owned, cell.region_id)
+            for local in ((0.04, 0.04), (0.5, 0.5), (0.96, 0.96)):
+                point = project_local_point_to_region_footprint(geometry, cell.region_id, local)
+                self.assertTrue(
+                    any(_point_in_polygon(point, micro.polygon) for micro in owned),
+                    (cell.region_id, local, point),
+                )
+
     def test_debug_svg_renderer_outputs_noisy_map_layers(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
 
@@ -160,7 +283,11 @@ class TestWorldMapGeometry(unittest.TestCase):
 
         self.assertIn("<svg", svg)
         self.assertIn('class="micro-cell terrain-', svg)
+        self.assertIn(".micro-cell{stroke:none}", svg)
         self.assertIn('class="region-boundary"', svg)
+        self.assertIn(".region-boundary{stroke:#151b2d", svg)
+        self.assertIn(".coast-line{stroke:#20263d", svg)
+        self.assertIn(".river{stroke:#2a8bc8", svg)
         self.assertIn('class="route ', svg)
         self.assertIn('class="feature ', svg)
         self.assertIn("data-region-label=", svg)
@@ -169,7 +296,7 @@ class TestWorldMapGeometry(unittest.TestCase):
             line for line in svg.splitlines()
             if f'data-micro-id="{first_cell.micro_id}"' in line
         )
-        self.assertGreater(first_path.count(" L "), len(first_cell.polygon))
+        self.assertEqual(first_path.count(" L "), len(first_cell.polygon) - 1)
 
     def test_debug_svg_renderer_outputs_settlement_and_polity_overlays(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)

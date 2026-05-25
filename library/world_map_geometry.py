@@ -8,6 +8,7 @@ placement can share one geography layer.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import math
 import random
 import sqlite3
@@ -24,7 +25,7 @@ from library.geography import (
 )
 
 
-MAP_GEOMETRY_VERSION = "polygonal-v4"
+MAP_GEOMETRY_VERSION = "polygonal-v5"
 Point = tuple[float, float]
 
 
@@ -69,11 +70,19 @@ class RegionEdge:
 
 
 @dataclass(frozen=True)
+class RiverSegment:
+    points: list[Point]
+    micro_ids: list[str]
+    region_ids: list[str]
+
+
+@dataclass(frozen=True)
 class RiverPath:
     river_id: str
     from_region_id: str
     to_region_id: str
     points: list[Point]
+    segments: list[RiverSegment]
     flow: float
     river_class: str
 
@@ -225,6 +234,50 @@ def _load_map_hints(
     return continent_hints, region_hints
 
 
+def _world_map_seed(
+    *,
+    world: str,
+    db_path: Path | str | None,
+    save_db_path: Path | str | None = None,
+    map_seed: object | None = None,
+) -> str:
+    if map_seed is not None and str(map_seed).strip():
+        return str(map_seed).strip()
+    if save_db_path is not None:
+        save_path = Path(save_db_path)
+        if save_path.exists():
+            try:
+                with sqlite3.connect(save_path) as conn:
+                    row = conn.execute(
+                        """
+                        SELECT meta_value FROM simulation_meta
+                        WHERE meta_key = 'world_map_seed'
+                        """
+                    ).fetchone()
+                    if row is not None and row[0] is not None and str(row[0]).strip():
+                        return str(row[0]).strip()
+            except sqlite3.Error:
+                pass
+    if db_path is None:
+        return world
+    path = Path(db_path)
+    if not path.exists():
+        return world
+    try:
+        with sqlite3.connect(path) as conn:
+            conn.row_factory = sqlite3.Row
+            cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(world_start)").fetchall()
+            }
+            row = conn.execute("SELECT * FROM world_start WHERE world = ? LIMIT 1", (world,)).fetchone()
+            if row is not None and "map_seed" in cols and row["map_seed"]:
+                return str(row["map_seed"])
+    except sqlite3.Error:
+        pass
+    return world
+
+
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
@@ -299,6 +352,25 @@ def _point_in_polygon(point: Point, poly: list[Point]) -> bool:
     return inside
 
 
+def _representative_point_in_polygon(poly: list[Point]) -> Point:
+    center = _centroid(poly)
+    if not poly or _point_in_polygon(center, poly):
+        return center
+    x0, y0, x1, y1 = _polygon_bounds(poly)
+    candidates: list[Point] = []
+    for ix in range(1, 8):
+        for iy in range(1, 8):
+            candidates.append((x0 + (x1 - x0) * ix / 8.0, y0 + (y1 - y0) * iy / 8.0))
+    candidates.extend(((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0) for a, b in zip(poly, poly[1:] + poly[:1]))
+    for point in sorted(
+        candidates,
+        key=lambda p: ((p[0] - center[0]) ** 2 + (p[1] - center[1]) ** 2, p[0], p[1]),
+    ):
+        if _point_in_polygon(point, poly):
+            return point
+    return center
+
+
 def _point_segment_distance(p: Point, a: Point, b: Point) -> float:
     px, py = p
     ax, ay = a
@@ -312,6 +384,28 @@ def _point_segment_distance(p: Point, a: Point, b: Point) -> float:
     qx = ax + vx * t
     qy = ay + vy * t
     return math.hypot(px - qx, py - qy)
+
+
+def _nearest_point_on_segment(p: Point, a: Point, b: Point) -> Point:
+    px, py = p
+    ax, ay = a
+    bx, by = b
+    vx = bx - ax
+    vy = by - ay
+    denom = vx * vx + vy * vy
+    if denom <= 1e-12:
+        return a
+    t = _clamp(((px - ax) * vx + (py - ay) * vy) / denom, 0.0, 1.0)
+    return (ax + vx * t, ay + vy * t)
+
+
+def _nearest_point_on_polygon_edge(point: Point, poly: list[Point]) -> Point:
+    if len(poly) < 2:
+        return point
+    return min(
+        (_nearest_point_on_segment(point, poly[i], poly[(i + 1) % len(poly)]) for i in range(len(poly))),
+        key=lambda p: ((p[0] - point[0]) ** 2 + (p[1] - point[1]) ** 2, p[0], p[1]),
+    )
 
 
 def _distance_to_polygon_edge(point: Point, poly: list[Point]) -> float:
@@ -391,9 +485,116 @@ def _continent_boxes(continent_ids: list[str]) -> dict[str, tuple[float, float, 
     return boxes
 
 
+def _box_center(box: tuple[float, float, float, float]) -> Point:
+    return ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+
+
+def _move_box(
+    box: tuple[float, float, float, float],
+    dx: float,
+    dy: float,
+    *,
+    lo: float = 0.04,
+    hi: float = 0.96,
+) -> tuple[float, float, float, float]:
+    x0, y0, x1, y1 = box
+    w = x1 - x0
+    h = y1 - y0
+    nx0 = _clamp(x0 + dx, lo, hi - w)
+    ny0 = _clamp(y0 + dy, lo, hi - h)
+    return (nx0, ny0, nx0 + w, ny0 + h)
+
+
+def _smooth_closed_polygon(poly: list[Point], *, iterations: int = 1) -> list[Point]:
+    """Round off a closed polygon with Chaikin corner cutting."""
+    out = list(poly)
+    for _ in range(max(0, iterations)):
+        if len(out) < 3:
+            return out
+        smoothed: list[Point] = []
+        for a, b in zip(out, out[1:] + out[:1]):
+            smoothed.append((a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25))
+            smoothed.append((a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75))
+        out = smoothed
+    return out
+
+
+def _fit_polygon_to_box(
+    poly: list[Point],
+    box: tuple[float, float, float, float],
+    *,
+    margin_ratio: float = 0.035,
+) -> list[Point]:
+    if not poly:
+        return poly
+    x0, y0, x1, y1 = box
+    bw = x1 - x0
+    bh = y1 - y0
+    lo_x = x0 + bw * margin_ratio
+    hi_x = x1 - bw * margin_ratio
+    lo_y = y0 + bh * margin_ratio
+    hi_y = y1 - bh * margin_ratio
+    px0, py0, px1, py1 = _polygon_bounds(poly)
+    scale = min(
+        1.0,
+        (hi_x - lo_x) / max(1e-9, px1 - px0),
+        (hi_y - lo_y) / max(1e-9, py1 - py0),
+    )
+    cx, cy = _centroid(poly)
+    fit = [(cx + (x - cx) * scale, cy + (y - cy) * scale) for x, y in poly]
+    fx0, fy0, fx1, fy1 = _polygon_bounds(fit)
+    dx = 0.0
+    dy = 0.0
+    if fx0 < lo_x:
+        dx = lo_x - fx0
+    elif fx1 > hi_x:
+        dx = hi_x - fx1
+    if fy0 < lo_y:
+        dy = lo_y - fy0
+    elif fy1 > hi_y:
+        dy = hi_y - fy1
+    return [(x + dx, y + dy) for x, y in fit]
+
+
+def _separate_continent_boxes(
+    boxes: dict[str, tuple[float, float, float, float]],
+    *,
+    gap: float = 0.035,
+) -> dict[str, tuple[float, float, float, float]]:
+    out = dict(boxes)
+    ids = sorted(out)
+    for _ in range(80):
+        moved = False
+        for i, aid in enumerate(ids):
+            for bid in ids[i + 1:]:
+                ax0, ay0, ax1, ay1 = out[aid]
+                bx0, by0, bx1, by1 = out[bid]
+                overlap_x = min(ax1, bx1) - max(ax0, bx0) + gap
+                overlap_y = min(ay1, by1) - max(ay0, by0) + gap
+                if overlap_x <= 0.0 or overlap_y <= 0.0:
+                    continue
+                acx, acy = _box_center(out[aid])
+                bcx, bcy = _box_center(out[bid])
+                if overlap_x < overlap_y:
+                    direction = -1.0 if acx <= bcx else 1.0
+                    shift = overlap_x / 2.0 + 0.001
+                    out[aid] = _move_box(out[aid], direction * shift, 0.0)
+                    out[bid] = _move_box(out[bid], -direction * shift, 0.0)
+                else:
+                    direction = -1.0 if acy <= bcy else 1.0
+                    shift = overlap_y / 2.0 + 0.001
+                    out[aid] = _move_box(out[aid], 0.0, direction * shift)
+                    out[bid] = _move_box(out[bid], 0.0, -direction * shift)
+                moved = True
+        if not moved:
+            break
+    return out
+
+
 def _continent_layout_boxes(
     continents: list[object],
     hints: dict[str, _ContinentMapHint],
+    map_seed: str,
 ) -> dict[str, tuple[float, float, float, float]]:
     size_scale = {
         "huge": 0.56,
@@ -418,7 +619,7 @@ def _continent_layout_boxes(
     for i, continent in enumerate(continents):
         cid = str(getattr(continent, "continent_id", ""))
         hint = hints.get(cid, _ContinentMapHint())
-        rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, cid, "layout"))
+        rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, map_seed, cid, "layout"))
         cx, cy = anchors.get(hint.placement, (0.24 + 0.52 * rng.random(), 0.22 + 0.56 * rng.random()))
         cx += rng.uniform(-0.055, 0.055)
         cy += rng.uniform(-0.055, 0.055)
@@ -443,12 +644,13 @@ def _continent_layout_boxes(
         used_centers.append((cx, cy))
         boxes[cid] = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
         _ = i
-    return boxes
+    return _separate_continent_boxes(boxes)
 
 
 def _continent_hull(
     continent: object,
     box: tuple[float, float, float, float],
+    map_seed: str,
     hint: _ContinentMapHint | None = None,
 ) -> list[Point]:
     """Return a stable, non-rectangular land silhouette inside a layout box."""
@@ -458,14 +660,14 @@ def _continent_hull(
     keywords = str(getattr(continent, "keywords", ""))
     hint = hint or _ContinentMapHint()
     text = f"{name} {keywords} {hint.shape}".lower()
-    rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, world, cid, "continent-hull"))
+    rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, map_seed, world, cid, "continent-hull"))
     x0, y0, x1, y1 = box
     bw = x1 - x0
     bh = y1 - y0
     cx = (x0 + x1) / 2.0 + rng.uniform(-0.05, 0.05) * bw
     cy = (y0 + y1) / 2.0 + rng.uniform(-0.05, 0.05) * bh
-    rx = bw * rng.uniform(0.37, 0.48)
-    ry = bh * rng.uniform(0.36, 0.48)
+    rx = bw * rng.uniform(0.30, 0.38)
+    ry = bh * rng.uniform(0.30, 0.38)
     if "maritime" in text or "coastal" in text or "atlantic" in text:
         rx *= 1.12
         ry *= 0.92
@@ -478,7 +680,7 @@ def _continent_hull(
     angle = rng.uniform(-0.58, 0.58)
     if "rift" in text:
         angle += rng.choice([-0.42, 0.42])
-    vertices = 42
+    vertices = 54
     pts: list[Point] = []
     phase1 = rng.uniform(0.0, math.tau)
     phase2 = rng.uniform(0.0, math.tau)
@@ -487,10 +689,10 @@ def _continent_hull(
         theta = (math.tau * i / vertices) + rng.uniform(-0.035, 0.035)
         lump = (
             1.0
-            + 0.20 * math.sin(theta * 2.0 + phase1)
-            + 0.15 * math.sin(theta * 3.0 + phase2)
-            + 0.09 * math.sin(theta * 7.0 + phase3)
-            + rng.uniform(-0.10, 0.10)
+            + 0.14 * math.sin(theta * 2.0 + phase1)
+            + 0.10 * math.sin(theta * 3.0 + phase2)
+            + 0.05 * math.sin(theta * 7.0 + phase3)
+            + rng.uniform(-0.045, 0.045)
         )
         if "fjord" in text and i % 5 == 2:
             lump *= rng.uniform(0.58, 0.78)
@@ -506,25 +708,25 @@ def _continent_hull(
         sa = math.sin(angle)
         x = cx + px * ca - py * sa
         y = cy + px * sa + py * ca
-        pts.append(
-            (
-                _clamp(x, x0 + bw * 0.035, x1 - bw * 0.035),
-                _clamp(y, y0 + bh * 0.035, y1 - bh * 0.035),
-            )
-        )
-    return pts
+        pts.append((x, y))
+    return [
+        (round(x, 6), round(y, 6))
+        for x, y in _fit_polygon_to_box(_smooth_closed_polygon(pts, iterations=2), box)
+    ]
 
 
 def _continent_hulls(
     continents: list[object],
     hints: dict[str, _ContinentMapHint] | None = None,
+    map_seed: str = "default",
 ) -> dict[str, list[Point]]:
     hints = hints or {}
-    boxes = _continent_layout_boxes(continents, hints)
+    boxes = _continent_layout_boxes(continents, hints, map_seed)
     return {
         str(getattr(c, "continent_id", "")): _continent_hull(
             c,
             boxes[str(getattr(c, "continent_id", ""))],
+            map_seed,
             hints.get(str(getattr(c, "continent_id", ""))),
         )
         for c in continents
@@ -571,14 +773,14 @@ def _feature_class(kind: str) -> str:
     return "landform"
 
 
-def _initial_region_point(region: Region, hull: list[Point]) -> Point:
+def _initial_region_point(region: Region, hull: list[Point], *, map_seed: str) -> Point:
     x0, y0, x1, y1 = _polygon_bounds(hull)
     center = _centroid(hull)
-    rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, region.world, region.region_id, "seed-point"))
+    rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, map_seed, region.world, region.region_id, "seed-point"))
     x, y = _sample_point_in_polygon(rng, hull, center=center)
     text = _region_text(region)
     if "coast" in text or "port" in text or "shore" in text or "littoral" in text:
-        vertex = hull[_stable_seed(region.region_id, "coast-vertex") % len(hull)]
+        vertex = hull[_stable_seed(MAP_GEOMETRY_VERSION, map_seed, region.region_id, "coast-vertex") % len(hull)]
         x = center[0] + (vertex[0] - center[0]) * rng.uniform(0.72, 0.92)
         y = center[1] + (vertex[1] - center[1]) * rng.uniform(0.72, 0.92)
     if "highland" in text or "mountain" in text or "range" in text or "ridge" in text:
@@ -750,8 +952,10 @@ def _features_for_region(
     poly: list[Point],
     center: Point,
     micro_cells: list[MicroRegionCell] | None = None,
+    *,
+    map_seed: str,
 ) -> list[RegionFeature]:
-    rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, region.world, region.region_id, "features"))
+    rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, map_seed, region.world, region.region_id, "features"))
     vertices = poly or [center]
     features: list[RegionFeature] = []
     used_micro_ids: set[str] = set()
@@ -763,7 +967,7 @@ def _features_for_region(
             x += rng.uniform(-0.006, 0.006)
             y += rng.uniform(-0.006, 0.006)
         else:
-            target = vertices[(i * 2 + _stable_seed(region.region_id, kind) % len(vertices)) % len(vertices)]
+            target = vertices[(i * 2 + _stable_seed(MAP_GEOMETRY_VERSION, map_seed, region.region_id, kind) % len(vertices)) % len(vertices)]
             amount = 0.34 + 0.28 * rng.random()
             x, y = _point_toward(poly, center, target[0], target[1], amount)
             x += rng.uniform(-0.015, 0.015)
@@ -877,10 +1081,11 @@ def _build_physical_micro_cells_for_continent(
     continent_id: str,
     hull: list[Point],
     region_count: int,
+    map_seed: str,
 ) -> list[MicroRegionCell]:
     if region_count <= 0:
         return []
-    rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, world, continent_id, "micro-cells"))
+    rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, map_seed, world, continent_id, "micro-cells"))
     center = _centroid(hull)
     x0, y0, x1, y1 = _polygon_bounds(hull)
     bw = x1 - x0
@@ -908,7 +1113,7 @@ def _build_physical_micro_cells_for_continent(
     if len(sample_points) > target_count:
         sample_points = sorted(
             sample_points,
-            key=lambda p: _stable_seed(MAP_GEOMETRY_VERSION, continent_id, p[0], p[1]),
+            key=lambda p: _stable_seed(MAP_GEOMETRY_VERSION, map_seed, continent_id, p[0], p[1]),
         )[:target_count]
     polys_list = _build_voronoi_polys_in_hull(points=sample_points, hull=hull)
     polys: dict[str, list[Point]] = {
@@ -1106,7 +1311,7 @@ def _assign_regions_to_micro_cells(
     for rid, mid in seed_for_region.items():
         assigned[mid] = rid
         owned[rid].add(mid)
-    adjacency = _center_adjacency(micro_cells)
+    adjacency, _ = _micro_adjacency(micro_cells)
     region_by_id = {r.region_id: r for r in regions}
     unassigned = {c.micro_id for c in micro_cells if c.micro_id not in assigned}
     for _ in range(len(micro_cells) * 2):
@@ -1190,6 +1395,21 @@ def _assign_regions_to_micro_cells(
         micro_cells=assigned_cells,
         min_target=min_target,
     )
+    assigned_cells = _repair_disconnected_region_footprints(
+        regions=regions,
+        micro_cells=assigned_cells,
+        min_target=min_target,
+    )
+    assigned_cells = _repair_small_region_footprints(
+        regions=regions,
+        micro_cells=assigned_cells,
+        min_target=min_target,
+    )
+    assigned_cells = _repair_disconnected_region_footprints(
+        regions=regions,
+        micro_cells=assigned_cells,
+        min_target=min_target,
+    )
     return assigned_cells
 
 
@@ -1213,7 +1433,7 @@ def _repair_small_region_footprints(
 ) -> list[MicroRegionCell]:
     out = list(micro_cells)
     region_ids = {r.region_id for r in regions}
-    adjacency = _center_adjacency(out)
+    adjacency, _ = _micro_adjacency(out)
     for _ in range(min_target * max(1, len(regions))):
         counts: dict[str, int] = {rid: 0 for rid in region_ids}
         by_id = {c.micro_id: c for c in out}
@@ -1256,6 +1476,100 @@ def _repair_small_region_footprints(
     return out
 
 
+def _region_components(
+    region_id: str,
+    owned_ids: set[str],
+    adjacency: dict[str, set[str]],
+) -> list[set[str]]:
+    remaining = set(owned_ids)
+    components: list[set[str]] = []
+    while remaining:
+        start = min(remaining)
+        stack = [start]
+        remaining.remove(start)
+        component = {start}
+        while stack:
+            current = stack.pop()
+            for nid in adjacency.get(current, set()):
+                if nid in remaining:
+                    remaining.remove(nid)
+                    component.add(nid)
+                    stack.append(nid)
+        components.append(component)
+    return sorted(components, key=lambda c: (-len(c), min(c) if c else ""))
+
+
+def _repair_disconnected_region_footprints(
+    *,
+    regions: list[Region],
+    micro_cells: list[MicroRegionCell],
+    min_target: int,
+) -> list[MicroRegionCell]:
+    out = list(micro_cells)
+    region_ids = {r.region_id for r in regions}
+    for _ in range(max(1, len(regions)) * 3):
+        by_id = {c.micro_id: c for c in out}
+        idx_by_id = {c.micro_id: i for i, c in enumerate(out)}
+        adjacency, _ = _micro_adjacency(out)
+        owned: dict[str, set[str]] = {rid: set() for rid in region_ids}
+        counts: dict[str, int] = {rid: 0 for rid in region_ids}
+        for cell in out:
+            if cell.region_id in region_ids:
+                owned[cell.region_id].add(cell.micro_id)
+                counts[cell.region_id] = counts.get(cell.region_id, 0) + 1
+        changed = False
+        for rid in sorted(region_ids):
+            components = _region_components(rid, owned.get(rid, set()), adjacency)
+            if len(components) <= 1:
+                continue
+            keep = components[0]
+            for fragment in components[1:]:
+                if counts.get(rid, 0) - len(fragment) < min_target:
+                    continue
+                for mid in sorted(fragment):
+                    neighbor_regions = [
+                        by_id[nid].region_id
+                        for nid in adjacency.get(mid, set())
+                        if by_id[nid].region_id != rid and by_id[nid].region_id in region_ids
+                    ]
+                    if neighbor_regions:
+                        new_rid = max(
+                            sorted(set(neighbor_regions)),
+                            key=lambda candidate: (
+                                neighbor_regions.count(candidate),
+                                counts.get(candidate, 0),
+                            ),
+                        )
+                    else:
+                        cell = by_id[mid]
+                        candidates = [
+                            other for other in region_ids
+                            if other != rid and owned.get(other)
+                        ]
+                        if not candidates:
+                            continue
+                        new_rid = min(
+                            candidates,
+                            key=lambda other: (
+                                min(
+                                    (
+                                        (by_id[oid].center_x - cell.center_x) ** 2
+                                        + (by_id[oid].center_y - cell.center_y) ** 2
+                                    )
+                                    for oid in owned.get(other, set())
+                                ),
+                                other,
+                            ),
+                        )
+                    out[idx_by_id[mid]] = _replace_micro_cell_region(by_id[mid], new_rid)
+                    counts[rid] = counts.get(rid, 0) - 1
+                    counts[new_rid] = counts.get(new_rid, 0) + 1
+                    changed = True
+        if not changed:
+            break
+    return out
+
+
 def _repair_region_feature_constraints(
     *,
     regions: list[Region],
@@ -1280,6 +1594,8 @@ def _repair_region_feature_constraints(
             if owned
             else min(out, key=lambda c: _region_seed_score(region, c, river_cell_ids=river_cell_ids, hint=hint))
         )
+        adjacency, _ = _micro_adjacency(out)
+        owned_ids = {c.micro_id for c in owned}
         candidates = out
         if needs_coast and not has_coast:
             candidates = [c for c in candidates if c.is_coastal]
@@ -1318,6 +1634,11 @@ def _repair_region_feature_constraints(
         candidates = [
             c for c in candidates if can_donate(c)
         ] or [c for c in out if c.region_id != region.region_id and donor_counts.get(c.region_id, 0) > min_target]
+        adjacent_candidates = [
+            c for c in candidates
+            if not owned_ids or any(nid in owned_ids for nid in adjacency.get(c.micro_id, set()))
+        ]
+        candidates = adjacent_candidates or candidates
         if not candidates:
             continue
         donor = min(
@@ -1402,6 +1723,7 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
         for source in candidates[:river_count]:
             current = source.micro_id
             visited = {current}
+            path_micro_ids = [source.micro_id]
             path_points: list[Point] = [(source.center_x, source.center_y)]
             for _ in range(36):
                 cell = by_id[current]
@@ -1430,6 +1752,7 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
                 path_points.append(midpoint)
                 current = nxt.micro_id
                 visited.add(current)
+                path_micro_ids.append(current)
                 if nxt.is_coastal:
                     path_points.append((nxt.center_x, nxt.center_y))
                     break
@@ -1437,12 +1760,25 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
                 continue
             river_cells.update(visited)
             sink = by_id[current]
+            rounded_points = [(round(x, 6), round(y, 6)) for x, y in path_points]
+            segments: list[RiverSegment] = []
+            for i, micro_id in enumerate(path_micro_ids):
+                if i + 1 >= len(rounded_points):
+                    break
+                segments.append(
+                    RiverSegment(
+                        points=[rounded_points[i], rounded_points[i + 1]],
+                        micro_ids=[micro_id],
+                        region_ids=[by_id[micro_id].region_id] if by_id[micro_id].region_id else [],
+                    )
+                )
             rivers.append(
                 RiverPath(
                     river_id=f"{continent_id}:micro_river:{len(rivers)}",
                     from_region_id=source.region_id,
                     to_region_id=sink.region_id,
-                    points=[(round(x, 6), round(y, 6)) for x, y in path_points],
+                    points=rounded_points,
+                    segments=segments,
                     flow=max(0.25, min(1.0, len(visited) / 12.0)),
                     river_class="major_river" if len(visited) >= 8 else "minor_river",
                 )
@@ -1497,9 +1833,214 @@ def _edge_key(a: str, b: str) -> tuple[str, str]:
     return tuple(sorted((a, b)))  # type: ignore[return-value]
 
 
+def _dedupe_path_points(points: list[Point]) -> list[Point]:
+    out: list[Point] = []
+    for x, y in points:
+        p = (round(x, 6), round(y, 6))
+        if out and abs(out[-1][0] - p[0]) < 1e-7 and abs(out[-1][1] - p[1]) < 1e-7:
+            continue
+        out.append(p)
+    return out
+
+
+def _micro_route_weight(a: MicroRegionCell, b: MicroRegionCell) -> float:
+    distance = math.hypot(a.center_x - b.center_x, a.center_y - b.center_y)
+    elevation_penalty = max(0.0, (a.elevation + b.elevation) / 2.0 - 0.58) * 0.95
+    wet_penalty = max(0.0, (a.moisture + b.moisture) / 2.0 - 0.82) * 0.28
+    coast_bonus = -0.10 if a.is_coastal and b.is_coastal else 0.0
+    return max(0.0001, distance * (1.0 + elevation_penalty + wet_penalty + coast_bonus))
+
+
+def _route_through_micro_cells(
+    micro_cells: list[MicroRegionCell],
+    from_region_id: str,
+    to_region_id: str,
+) -> list[Point] | None:
+    by_id = {c.micro_id: c for c in micro_cells}
+    source_cells = [c for c in micro_cells if c.region_id == from_region_id]
+    target_cells = [c for c in micro_cells if c.region_id == to_region_id]
+    if not source_cells or not target_cells:
+        return None
+    source_center = _centroid([(c.center_x, c.center_y) for c in source_cells])
+    target_center = _centroid([(c.center_x, c.center_y) for c in target_cells])
+    target_ids = {c.micro_id for c in target_cells}
+    same_continent = source_cells[0].continent_id == target_cells[0].continent_id
+    if not same_continent:
+        return None
+
+    adjacency, shared_midpoints = _micro_adjacency(micro_cells)
+    start = min(
+        source_cells,
+        key=lambda c: (
+            (c.center_x - target_center[0]) ** 2 + (c.center_y - target_center[1]) ** 2,
+            (c.center_x - source_center[0]) ** 2 + (c.center_y - source_center[1]) ** 2,
+            c.micro_id,
+        ),
+    )
+    queue: list[tuple[float, str]] = [(0.0, start.micro_id)]
+    distances: dict[str, float] = {start.micro_id: 0.0}
+    previous: dict[str, str] = {}
+    end_id: str | None = None
+    while queue:
+        distance, micro_id = heapq.heappop(queue)
+        if distance > distances.get(micro_id, float("inf")):
+            continue
+        if micro_id in target_ids:
+            end_id = micro_id
+            break
+        cell = by_id[micro_id]
+        for neighbor_id in adjacency.get(micro_id, set()):
+            neighbor = by_id[neighbor_id]
+            if neighbor.continent_id != cell.continent_id:
+                continue
+            nd = distance + _micro_route_weight(cell, neighbor)
+            if nd < distances.get(neighbor_id, float("inf")):
+                distances[neighbor_id] = nd
+                previous[neighbor_id] = micro_id
+                heapq.heappush(queue, (nd, neighbor_id))
+    if end_id is None:
+        return None
+
+    micro_path = [end_id]
+    while micro_path[-1] != start.micro_id:
+        prior = previous.get(micro_path[-1])
+        if prior is None:
+            return None
+        micro_path.append(prior)
+    micro_path.reverse()
+    if len(micro_path) == 1:
+        return [(start.center_x, start.center_y)]
+
+    points: list[Point] = [(by_id[micro_path[0]].center_x, by_id[micro_path[0]].center_y)]
+    for a, b in zip(micro_path, micro_path[1:]):
+        pair = tuple(sorted((a, b)))  # type: ignore[assignment]
+        points.append(
+            shared_midpoints.get(
+                pair,
+                (
+                    (by_id[a].center_x + by_id[b].center_x) / 2.0,
+                    (by_id[a].center_y + by_id[b].center_y) / 2.0,
+                ),
+            )
+        )
+    end = by_id[micro_path[-1]]
+    points.append((end.center_x, end.center_y))
+    return _dedupe_path_points(points)
+
+
+def _coastal_route_anchor(
+    micro_cells: list[MicroRegionCell],
+    region_id: str,
+    toward: Point,
+    fallback: Point,
+) -> Point:
+    owned = [c for c in micro_cells if c.region_id == region_id]
+    if not owned:
+        return fallback
+    candidates = [c for c in owned if c.is_coastal] or owned
+    cell = min(
+        candidates,
+        key=lambda c: (
+            (c.center_x - toward[0]) ** 2 + (c.center_y - toward[1]) ** 2,
+            0 if c.is_coastal else 1,
+            c.micro_id,
+        ),
+    )
+    edge = _nearest_point_on_polygon_edge(toward, cell.polygon)
+    return (
+        edge[0] * 0.68 + cell.center_x * 0.32,
+        edge[1] * 0.68 + cell.center_y * 0.32,
+    )
+
+
+def _sea_lane_points(
+    micro_cells: list[MicroRegionCell],
+    from_region_id: str,
+    to_region_id: str,
+    a: Point,
+    b: Point,
+) -> list[Point]:
+    start = _coastal_route_anchor(micro_cells, from_region_id, b, a)
+    end = _coastal_route_anchor(micro_cells, to_region_id, start, b)
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    length = max(1e-6, math.hypot(dx, dy))
+    nx = -dy / length
+    ny = dx / length
+    midpoint = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    map_center = (0.5, 0.5)
+    sign = 1.0 if nx * (midpoint[0] - map_center[0]) + ny * (midpoint[1] - map_center[1]) >= 0.0 else -1.0
+    bow = min(0.18, max(0.055, length * 0.28))
+    first = (start[0] + dx * 0.32 + nx * sign * bow * 0.70, start[1] + dy * 0.32 + ny * sign * bow * 0.70)
+    second = (start[0] + dx * 0.68 + nx * sign * bow, start[1] + dy * 0.68 + ny * sign * bow)
+    return _dedupe_path_points([
+        start,
+        (_clamp(first[0], 0.015, 0.985), _clamp(first[1], 0.015, 0.985)),
+        (_clamp(second[0], 0.015, 0.985), _clamp(second[1], 0.015, 0.985)),
+        end,
+    ])
+
+
+def project_local_point_to_region_footprint(
+    geometry: WorldMapGeometry,
+    region_id: str,
+    local: Point,
+) -> Point:
+    """Project a local [0, 1] point onto land actually owned by ``region_id``."""
+    cells = [c for c in geometry.micro_cells if c.region_id == region_id]
+    if not cells:
+        cell = geometry.cell_by_region_id().get(region_id)
+        if cell is None:
+            return (_clamp(local[0], 0.0, 1.0), _clamp(local[1], 0.0, 1.0))
+        cells = [
+            MicroRegionCell(
+                micro_id=f"{region_id}:region-cell",
+                region_id=region_id,
+                continent_id=cell.continent_id,
+                center_x=cell.center_x,
+                center_y=cell.center_y,
+                polygon=cell.polygon,
+                elevation=cell.elevation,
+                moisture=cell.moisture,
+                terrain_family=cell.terrain_family,
+                is_coastal=cell.is_coastal,
+            )
+        ]
+    xs = [x for c in cells for x, _ in c.polygon]
+    ys = [y for c in cells for _, y in c.polygon]
+    if not xs or not ys:
+        return (_clamp(local[0], 0.0, 1.0), _clamp(local[1], 0.0, 1.0))
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    candidate = (
+        x0 + (x1 - x0) * _clamp(local[0], 0.0, 1.0),
+        y0 + (y1 - y0) * _clamp(local[1], 0.0, 1.0),
+    )
+    for cell in cells:
+        if _point_in_polygon(candidate, cell.polygon):
+            return candidate
+    nearest_cell = min(
+        cells,
+        key=lambda c: (
+            _distance_to_polygon_edge(candidate, c.polygon),
+            (c.center_x - candidate[0]) ** 2 + (c.center_y - candidate[1]) ** 2,
+            c.micro_id,
+        ),
+    )
+    edge_point = _nearest_point_on_polygon_edge(candidate, nearest_cell.polygon)
+    anchor = _representative_point_in_polygon(nearest_cell.polygon)
+    interior = (edge_point[0] * 0.72 + anchor[0] * 0.28, edge_point[1] * 0.72 + anchor[1] * 0.28)
+    if _point_in_polygon(interior, nearest_cell.polygon):
+        return interior
+    if _point_in_polygon(anchor, nearest_cell.polygon):
+        return anchor
+    return _pull_inside(interior, nearest_cell.polygon, anchor)
+
+
 def _build_region_edges(
     regions: Iterable[Region],
     points: dict[str, Point],
+    micro_cells: list[MicroRegionCell],
     *,
     world: str,
     db_path: Path | str | None,
@@ -1519,14 +2060,19 @@ def _build_region_edges(
             b = points.get(route.to_region_id)
             if a is None or b is None:
                 continue
+            route_type = route.route_type.strip().lower()
+            if route_type == "sea":
+                edge_points = _sea_lane_points(micro_cells, key[0], key[1], a, b)
+            else:
+                edge_points = _route_through_micro_cells(micro_cells, key[0], key[1]) or [a, b]
             out.append(
                 RegionEdge(
                     from_region_id=key[0],
                     to_region_id=key[1],
                     route_type=route.route_type,
                     friction=route.friction,
-                    points=[a, b],
-                    edge_class="sea_route" if route.route_type.strip().lower() == "sea" else "land_route",
+                    points=edge_points,
+                    edge_class="sea_route" if route_type == "sea" else "land_route",
                 )
             )
     return out
@@ -1560,6 +2106,10 @@ def _build_rivers(
                 from_region_id=rid,
                 to_region_id=to,
                 points=[src, mid, dst],
+                segments=[
+                    RiverSegment(points=[src, mid], micro_ids=[], region_ids=[rid]),
+                    RiverSegment(points=[mid, dst], micro_ids=[], region_ids=[to]),
+                ],
                 flow=flow,
                 river_class="major_river" if flow >= 0.7 else "minor_river",
             )
@@ -1571,13 +2121,21 @@ def build_world_map_geometry(
     *,
     world: str = "default",
     db_path: Path | str | None = None,
+    save_db_path: Path | str | None = None,
+    map_seed: object | None = None,
 ) -> WorldMapGeometry:
     """Derive stable polygon-map geometry from configured regions and routes."""
     world_id = (world or "").strip() or "default"
     continents = list_continents(world=world_id, db_path=db_path)
     all_regions = list_regions(world=world_id, db_path=db_path)
     continent_hints, region_hints = _load_map_hints(world=world_id, db_path=db_path)
-    hulls = _continent_hulls(list(continents), continent_hints)
+    resolved_map_seed = _world_map_seed(
+        world=world_id,
+        db_path=db_path,
+        save_db_path=save_db_path,
+        map_seed=map_seed,
+    )
+    hulls = _continent_hulls(list(continents), continent_hints, map_seed=resolved_map_seed)
     points: dict[str, Point] = {}
     polys: dict[str, list[Point]] = {}
     micro_cells: list[MicroRegionCell] = []
@@ -1588,7 +2146,7 @@ def build_world_map_geometry(
         if not regs:
             continue
         hull = hulls[continent.continent_id]
-        c_points = {r.region_id: _initial_region_point(r, hull) for r in regs}
+        c_points = {r.region_id: _initial_region_point(r, hull, map_seed=resolved_map_seed) for r in regs}
         c_edges = _undirected_intra_edges(regs, world=world_id, db_path=db_path)
         c_points = _relax_points(regs, c_points, c_edges, hull)
         c_polys = _voronoi_cells(regs, c_points, hull)
@@ -1597,6 +2155,7 @@ def build_world_map_geometry(
             continent_id=continent.continent_id,
             hull=hull,
             region_count=len(regs),
+            map_seed=resolved_map_seed,
         )
         _, river_cell_ids = _build_micro_rivers(continent_micro)
         continent_micro = _moisten_micro_cells(continent_micro, river_cell_ids)
@@ -1638,6 +2197,7 @@ def build_world_map_geometry(
             poly,
             (cx, cy),
             micro_by_region.get(region.region_id, []),
+            map_seed=resolved_map_seed,
         )
         features.extend(r_features)
         cells.append(
@@ -1665,7 +2225,7 @@ def build_world_map_geometry(
         cells=sorted(cells, key=lambda c: (c.continent_id, c.region_id)),
         micro_cells=sorted(micro_cells, key=lambda c: (c.continent_id, c.micro_id)),
         features=sorted(features, key=lambda f: (f.region_id, f.feature_id)),
-        edges=_build_region_edges(all_regions, points, world=world_id, db_path=db_path),
+        edges=_build_region_edges(all_regions, points, micro_cells, world=world_id, db_path=db_path),
         rivers=micro_rivers or _build_rivers(cell_map, world=world_id, db_path=db_path),
     )
 

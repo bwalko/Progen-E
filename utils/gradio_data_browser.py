@@ -99,7 +99,11 @@ SETTLEMENT_BROWSER_HEADERS = [
     "Top Jobs",
 ]
 
-from library.world_map_geometry import build_world_map_geometry  # noqa: E402
+from library.world_map_geometry import (  # noqa: E402
+    WorldMapGeometry,
+    build_world_map_geometry,
+    project_local_point_to_region_footprint,
+)
 from library.world_map_svg import load_world_map_overlays, render_world_map_svg  # noqa: E402
 
 
@@ -355,6 +359,24 @@ body.dark .place-sheet,
     border: 1px solid var(--place-card-border);
     border-radius: 6px;
     background: var(--place-map-bg);
+    touch-action: none;
+    cursor: grab;
+}
+.world-map-card svg:active {
+    cursor: grabbing;
+}
+.map-controls {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0 10px;
+}
+.map-controls button {
+    border: 1px solid var(--place-card-border);
+    background: var(--place-card-bg);
+    color: var(--place-text);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
 }
 .world-map-card [data-region-id],
 .world-map-card [data-region-label],
@@ -601,11 +623,31 @@ def _db_path(world: str, db_kind: str) -> Path:
     return WORLDS_DIR / (world or "").strip() / filename
 
 
-def _file_mtime_ns(path: Path) -> int:
-    try:
-        return path.stat().st_mtime_ns
-    except OSError:
-        return 0
+def _sqlite_file_fingerprint(path: Path) -> str:
+    pieces: list[str] = []
+    for candidate in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+        try:
+            stat = candidate.stat()
+        except OSError:
+            pieces.append("0:0")
+        else:
+            pieces.append(f"{stat.st_mtime_ns}:{stat.st_size}")
+    return "|".join(pieces)
+
+
+@lru_cache(maxsize=16)
+def _cached_world_map_geometry(
+    world_id: str,
+    cfg_path: str,
+    _cfg_fingerprint: str,
+    save_path: str,
+    _save_fingerprint: str,
+) -> WorldMapGeometry:
+    return build_world_map_geometry(
+        world=world_id,
+        db_path=Path(cfg_path),
+        save_db_path=Path(save_path),
+    )
 
 
 def render_world_map_html(
@@ -629,9 +671,9 @@ def render_world_map_html(
         bool(noisy_edges),
         bool(labels),
         str(cfg),
-        _file_mtime_ns(cfg),
+        _sqlite_file_fingerprint(cfg),
         str(save),
-        _file_mtime_ns(save),
+        _sqlite_file_fingerprint(save),
     )
 
 
@@ -642,14 +684,20 @@ def _render_world_map_html_cached(
     noisy_edges: bool,
     labels: bool,
     cfg_path: str,
-    _cfg_mtime_ns: int,
+    cfg_fingerprint: str,
     save_path: str,
-    _save_mtime_ns: int,
+    _save_fingerprint: str,
 ) -> str:
     cfg = Path(cfg_path)
     save = Path(save_path)
     try:
-        geometry = build_world_map_geometry(world=world_id, db_path=cfg)
+        geometry = _cached_world_map_geometry(
+            world_id,
+            str(cfg),
+            cfg_fingerprint,
+            str(save),
+            _save_fingerprint,
+        )
         overlays = (
             load_world_map_overlays(geometry=geometry, save_db_path=save)
             if include_overlays
@@ -670,11 +718,32 @@ def _render_world_map_html_cached(
             "</div>"
         )
     overlay_text = "settlements and polities" if include_overlays else "base geography only"
+    zoom_sync = (
+        "const z=Math.max(.001,1200/s.viewBox.baseVal.width);"
+        "const m=Math.max(.82,Math.min(1.55,Math.pow(z,.28)));"
+        "s.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
+        "s.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
+        "s.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(10*m/z)+'px');"
+        "s.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||3;e.setAttribute('r',Math.max(1.6,Math.min(5.6,b*m/z)));});"
+        "s.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||4;e.setAttribute('r',Math.max(2.2,Math.min(7.4,b*m/z)));});"
+    )
+    controls = (
+        '<div class="map-controls">'
+        '<button type="button" onclick="const s=this.closest(\'.world-map-card\').querySelector(\'svg\');'
+        f'const v=s.viewBox.baseVal;v.x+=v.width*.1;v.y+=v.height*.1;v.width*=.8;v.height*=.8;{zoom_sync}event.stopPropagation();">Zoom In</button>'
+        '<button type="button" onclick="const s=this.closest(\'.world-map-card\').querySelector(\'svg\');'
+        f'const v=s.viewBox.baseVal;v.x-=v.width*.125;v.y-=v.height*.125;v.width*=1.25;v.height*=1.25;{zoom_sync}event.stopPropagation();">Zoom Out</button>'
+        '<button type="button" onclick="const s=this.closest(\'.world-map-card\').querySelector(\'svg\');'
+        'const b=(s.dataset.originalViewbox||\'0 0 1200 800\').split(\' \').map(Number);'
+        f's.setAttribute(\'viewBox\',b.join(\' \'));{zoom_sync}event.stopPropagation();">Reset</button>'
+        '</div>'
+    )
     return (
         f'<div class="place-sheet world-map-card" onclick="{_world_map_click_onclick()}">'
         f"<h2>{html.escape(world_id)} World Map</h2>"
         f'<p class="place-muted">Generated polygon geography; showing {html.escape(overlay_text)}. '
-        "Click a region or settlement to open its detail sheet.</p>"
+        "Click a region or settlement to open its detail sheet. Use the mouse wheel or drag to zoom and pan.</p>"
+        f"{controls}"
         f"{svg}"
         "</div>"
     )
@@ -684,6 +753,8 @@ def _world_map_click_onclick() -> str:
     return html.escape(
         (
             "const target=event.target;"
+            "const svg=target&&target.closest?target.closest('svg'):null;"
+            "if(svg&&svg.dataset.dragged==='1'){svg.dataset.dragged='0';return true;}"
             "if(!target||!target.closest){return true;}"
             "const town=target.closest('[data-settlement-id]');"
             "const region=town||target.closest('[data-region-id],[data-region-label]');"
@@ -3489,6 +3560,132 @@ def _feature_color(kind: str) -> str:
     return "var(--place-map-feature)"
 
 
+def _region_micro_fill(cell: object) -> str:
+    elev = float(getattr(cell, "elevation", 0.0))
+    moist = float(getattr(cell, "moisture", 0.0))
+    if getattr(cell, "is_coastal", False):
+        return "#918a74"
+    if elev >= 0.72:
+        return "#d9dad2" if moist >= 0.52 else "#b9b39c"
+    if moist >= 0.78:
+        return "#246f5e"
+    if moist >= 0.58:
+        return "#3f875e"
+    if moist <= 0.28:
+        return "#9a9079"
+    return "#7fa45f"
+
+
+def _render_generated_region_map(
+    world: str,
+    region_id: str,
+    settlements: Iterable[sqlite3.Row],
+    *,
+    focus_settlement_id: str | None = None,
+) -> str:
+    cfg = _db_path(world, "Config DB")
+    if not cfg.exists():
+        return ""
+    save = _db_path(world, "Save DB")
+    try:
+        geometry = _cached_world_map_geometry(
+            world,
+            str(cfg),
+            _sqlite_file_fingerprint(cfg),
+            str(save),
+            _sqlite_file_fingerprint(save),
+        )
+    except Exception:
+        return ""
+    cells = [c for c in geometry.micro_cells if c.region_id == region_id]
+    if not cells:
+        return ""
+    xs = [x for c in cells for x, _ in c.polygon]
+    ys = [y for c in cells for _, y in c.polygon]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    w = max(1e-6, x1 - x0)
+    h = max(1e-6, y1 - y0)
+    pad = 5.0
+
+    def sx(x: float) -> float:
+        return pad + ((x - x0) / w) * (100.0 - pad * 2.0)
+
+    def sy(y: float) -> float:
+        return pad + ((y - y0) / h) * (100.0 - pad * 2.0)
+
+    def poly_points(poly: list[tuple[float, float]]) -> str:
+        return " ".join(f"{sx(x):.2f},{sy(y):.2f}" for x, y in poly)
+
+    parts = [
+        '<svg class="place-map generated-region-map" viewBox="0 0 100 100" role="img" aria-label="Generated region map">',
+        '<rect x="0" y="0" width="100" height="100" fill="#454a78" />',
+    ]
+    for cell in cells:
+        parts.append(
+            f'<polygon points="{poly_points(cell.polygon)}" fill="{_region_micro_fill(cell)}" '
+            'stroke="#26304f" stroke-width=".09" stroke-opacity=".16" />'
+        )
+    for river in geometry.rivers:
+        for segment in river.segments:
+            if region_id not in segment.region_ids:
+                continue
+            pts = [(sx(x), sy(y)) for x, y in segment.points]
+            if len(pts) < 2:
+                continue
+            parts.append(
+                f'<polyline points="{" ".join(f"{x:.2f},{y:.2f}" for x, y in pts)}" '
+                'fill="none" stroke="#2a8bc8" stroke-width=".85" opacity=".86" stroke-linecap="round" />'
+            )
+    geo: dict[str, object] = {}
+    settlement_rows = list(settlements)
+    for row in settlement_rows:
+        geo = _load_local_geography(row["local_geography_json"] if "local_geography_json" in row.keys() else None)
+        if geo:
+            break
+    sites = geo.get("settlements") if isinstance(geo, dict) else None
+    site_by_slot: dict[int, dict[str, object]] = {}
+    if isinstance(sites, list):
+        for site in sites:
+            if isinstance(site, dict):
+                try:
+                    site_by_slot[int(site.get("settlement_slot", 0)) + 1] = site
+                except (TypeError, ValueError):
+                    continue
+    for row in settlement_rows:
+        slot = int(row["site_slot"] or 1) if "site_slot" in row.keys() else 1
+        site = site_by_slot.get(slot)
+        if site:
+            try:
+                lx = float(site.get("x", 0.5))
+                ly = float(site.get("y", 0.5))
+            except (TypeError, ValueError):
+                lx = ly = 0.5
+        else:
+            lx = ly = 0.5
+        wx, wy = project_local_point_to_region_footprint(
+            geometry,
+            region_id,
+            (max(0.04, min(0.96, lx)), max(0.04, min(0.96, ly))),
+        )
+        x = sx(wx)
+        y = sy(wy)
+        sid = str(row["settlement_id"] or "")
+        label = str(row["display_name"] or sid)
+        focused = sid == (focus_settlement_id or "")
+        radius = 2.6 if focused else 2.1
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" fill="var(--place-map-town)" '
+            f'stroke="var(--place-text)" stroke-width="{1.0 if focused else .45}" />'
+        )
+        parts.append(
+            f'<text x="{x + 2.8:.1f}" y="{y + 1.0:.1f}" font-size="2.8" '
+            f'fill="var(--place-text)">{html.escape(label[:18])}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 def _render_local_map(
     geography: dict[str, object],
     settlements: Iterable[sqlite3.Row],
@@ -3597,8 +3794,22 @@ def _region_settlements(con: sqlite3.Connection, region_id: str) -> list[sqlite3
     ).fetchall()
 
 
-def _region_map_html(con: sqlite3.Connection, region_id: str, *, focus_settlement_id: str | None = None) -> str:
+def _region_map_html(
+    con: sqlite3.Connection,
+    world: str,
+    region_id: str,
+    *,
+    focus_settlement_id: str | None = None,
+) -> str:
     settlements = _region_settlements(con, region_id)
+    generated = _render_generated_region_map(
+        world,
+        region_id,
+        settlements,
+        focus_settlement_id=focus_settlement_id,
+    )
+    if generated:
+        return generated
     geo: dict[str, object] = {}
     for row in settlements:
         geo = _load_local_geography(row["local_geography_json"] if "local_geography_json" in row.keys() else None)
@@ -4019,13 +4230,16 @@ def _render_region_sheet_from_snapshot(snapshot: dict[str, object], region_id: s
     alive, job_counts = _snapshot_population_stats(snapshot, "region", region_id, limit=8)
     jobs = [f"{job}: {n}" for job, n in job_counts]
     residents = _snapshot_notable_people(people, 8)
-    settlement_items = [
-        (
-            f"{s.get('display_name') or s.get('settlement_id')} "
-            f"({s.get('level')}, {s.get('status')}, pop {s.get('population_cap')})"
+    settlement_items = []
+    for s in settlements[:12]:
+        sid = str(s.get("settlement_id") or "")
+        settlement_alive, _ = _snapshot_population_stats(snapshot, "settlement", sid, limit=1)
+        settlement_items.append(
+            (
+                f"{s.get('display_name') or sid} "
+                f"({s.get('level')}, {s.get('status')}, alive {settlement_alive})"
+            )
         )
-        for s in settlements[:12]
-    ]
     cards = "".join(
         [
             _detail_card("Alive", alive),
@@ -4391,8 +4605,19 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
     for p in _top_people_for_where(con, world, f"{birth_region_sql} = ?", (region_id,), limit=8):
         person = _person_from_row(p, _trait_slots_for_world(world))
         people.append(f"{_person_name(person)} — {person.get('job') or 'unassigned'}")
+    settlement_ids = [str(s["settlement_id"]) for s in settlements[:12]]
+    settlement_alive_counts, _ = _alive_counts_and_top_jobs_by_place(
+        con,
+        world,
+        _person_residence_sql(con),
+        settlement_ids,
+        limit=1,
+    )
     settlement_items = [
-        f"{s['display_name'] or s['settlement_id']} ({s['level']}, {s['status']}, pop {s['population_cap']})"
+        (
+            f"{s['display_name'] or s['settlement_id']} "
+            f"({s['level']}, {s['status']}, alive {settlement_alive_counts.get(str(s['settlement_id']), 0)})"
+        )
         for s in settlements[:12]
     ]
     cards = "".join(
@@ -4412,7 +4637,7 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
         f'<h2>{html.escape(str(row["region_display_name"] or region_id))}</h2>'
         f'<div class="place-subtitle">Region {html.escape(region_id)}</div>'
         f'<div class="place-grid">{cards}</div>'
-        f'{_region_map_html(con, region_id)}'
+        f'{_region_map_html(con, world, region_id)}'
         '<div class="place-columns">'
         f'<section><h3>Settlements</h3>{_ul(settlement_items)}</section>'
         f'<section><h3>Top Jobs</h3>{_ul(jobs)}</section>'
@@ -4484,7 +4709,7 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
         f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(rid)}</div>'
         f'<div class="place-muted">{html.escape(name_line)}</div>'
         f'<div class="place-grid">{cards}</div>'
-        f'{_region_map_html(con, rid, focus_settlement_id=sid)}'
+        f'{_region_map_html(con, world, rid, focus_settlement_id=sid)}'
         '<div class="place-columns">'
         f'<section><h3>Top Jobs</h3>{_ul(jobs)}</section>'
         f'<section><h3>Notable Residents</h3>{_ul(residents)}</section>'

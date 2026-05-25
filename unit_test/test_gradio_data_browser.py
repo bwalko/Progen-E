@@ -1177,6 +1177,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn('<span class="label">Alive</span><span class="value">13</span>', region_sheet)
         self.assertIn("labor: 10", region_sheet)
         self.assertIn("miller: 1", region_sheet)
+        self.assertIn("Fordham (hamlet, active, alive 13)", region_sheet)
         self.assertIn("Ada Forge", region_sheet)
         self.assertIn("Fordham", town_sheet)
         self.assertIn('<span class="label">Alive</span><span class="value">13</span>', town_sheet)
@@ -1185,6 +1186,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(place_rows[0]["Name"], "River Country")
         self.assertEqual(place_rows[0]["Alive"], 13)
         self.assertIn("labor (10)", place_rows[0]["Top Jobs"])
+        self.assertIn("Fordham (hamlet, active, alive 13)", place_state)
         self.assertIn("Fordham", place_state)
 
     def test_regions_browser_loads_rows_and_opens_sheet(self) -> None:

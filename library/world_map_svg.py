@@ -18,6 +18,7 @@ from library.world_map_geometry import (
     RegionCell,
     RegionFeature,
     WorldMapGeometry,
+    project_local_point_to_region_footprint,
 )
 
 
@@ -323,16 +324,16 @@ def load_world_map_overlays(
                 if local is None:
                     rng = random.Random(_stable_seed(geometry.version, row["settlement_id"], "overlay"))
                     local = (0.5 + rng.uniform(-0.16, 0.16), 0.5 + rng.uniform(-0.16, 0.16))
-                x0, y0, x1, y1 = _cell_bbox(cell)
                 lx = max(0.04, min(0.96, local[0]))
                 ly = max(0.04, min(0.96, local[1]))
+                world_x, world_y = project_local_point_to_region_footprint(geometry, rid, (lx, ly))
                 settlements.append(
                     SettlementMapOverlay(
                         settlement_id=str(row["settlement_id"] or ""),
                         region_id=rid,
                         display_name=str(row["display_name"] or row["settlement_id"] or ""),
-                        x=x0 + (x1 - x0) * lx,
-                        y=y0 + (y1 - y0) * ly,
+                        x=world_x,
+                        y=world_y,
                         population=max(0, int(row["population_cap"] or 0)),
                         status=str(row["status"] or ""),
                     )
@@ -378,12 +379,37 @@ def render_world_map_svg(
 ) -> str:
     """Render generated world geometry to a self-contained SVG string."""
     pad = 36
+    zoom_script = (
+        f"const zf=(svg)=>{{const s=svg.viewBox.baseVal;const z=Math.max(.001,{width}/s.width);"
+        "const m=Math.max(.82,Math.min(1.55,Math.pow(z,.28)));"
+        "svg.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
+        "svg.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
+        "svg.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(10*m/z)+'px');"
+        "svg.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||3;e.setAttribute('r',Math.max(1.6,Math.min(5.6,b*m/z)));});"
+        "svg.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||4;e.setAttribute('r',Math.max(2.2,Math.min(7.4,b*m/z)));});};"
+    )
+    zoom_handlers = (
+        f"data-original-viewbox='0 0 {width} {height}' "
+        f"onwheel=\"{zoom_script}const s=this.viewBox.baseVal;const k=event.deltaY>0?1.16:.86;"
+        "const r=this.getBoundingClientRect();const px=(event.clientX-r.left)/r.width;"
+        "const py=(event.clientY-r.top)/r.height;const nx=s.width*k,ny=s.height*k;"
+        "s.x+=s.width*px-nx*px;s.y+=s.height*py-ny*py;s.width=nx;s.height=ny;"
+        "zf(this);event.preventDefault();event.stopPropagation();\" "
+        "onpointerdown=\"if(event.target.closest('[data-settlement-id],[data-region-id],[data-region-label]')){this.dataset.pan='0';this.dataset.dragged='0';return;}this.dataset.pan='1';this.dataset.dragged='0';this.dataset.px=event.clientX;this.dataset.py=event.clientY;"
+        "this.dataset.vx=this.viewBox.baseVal.x;this.dataset.vy=this.viewBox.baseVal.y;"
+        "this.setPointerCapture(event.pointerId);\" "
+        f"onpointermove=\"{zoom_script}if(this.dataset.pan!=='1')return;const dx=event.clientX-this.dataset.px;const dy=event.clientY-this.dataset.py;"
+        "if(Math.hypot(dx,dy)>3)this.dataset.dragged='1';const s=this.viewBox.baseVal;"
+        "const r=this.getBoundingClientRect();s.x=+this.dataset.vx-(event.clientX-this.dataset.px)*s.width/r.width;"
+        "s.y=+this.dataset.vy-(event.clientY-this.dataset.py)*s.height/r.height;zf(this);\" "
+        "onpointerup=\"this.dataset.pan='0';\" onpointerleave=\"this.dataset.pan='0';\""
+    )
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="Generated world map">',
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="Generated world map" {zoom_handlers}>',
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:#485173;stroke-width:.34;stroke-linejoin:round}.region-boundary{stroke:#28304a;stroke-width:.62;stroke-linecap:round}.coast-line{stroke:#2b2f48;stroke-width:1.75;stroke-linecap:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round}.settlement{stroke:#f3ead4;stroke-width:1.4}.settlement.abandoned{opacity:.35}.feature-label,.region-label,.settlement-label{font-family:Georgia,serif;paint-order:stroke;stroke:#f3ead4;stroke-width:3px;stroke-linejoin:round}.feature-label{font-size:9px;fill:#3d3427}.region-label{font-size:11px;fill:#1f2332;font-weight:600}.settlement-label{font-size:10px;fill:#2c2118}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.region-boundary{stroke:#151b2d;stroke-width:.72;stroke-linecap:round}.coast-line{stroke:#20263d;stroke-width:1.45;stroke-linecap:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round}.feature,.settlement{vector-effect:non-scaling-stroke}.settlement{stroke:#f3ead4;stroke-width:1.4}.settlement.abandoned{opacity:.35}.feature-label,.region-label,.settlement-label{font-family:Georgia,serif;paint-order:stroke;stroke:#f3ead4;stroke-width:3px;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427}.region-label{font-size:11px;fill:#1f2332;font-weight:600}.settlement-label{font-size:10px;fill:#2c2118}",
         "</style>",
-        '<rect width="100%" height="100%" fill="#454a78" />',
+        f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="#454a78" />',
     ]
     occupied_labels: list[_LabelBox] = []
     deferred_labels: list[str] = []
@@ -391,13 +417,6 @@ def render_world_map_svg(
     if geometry.micro_cells:
         for cell in geometry.micro_cells:
             scaled = [_scale(p, width, height, pad) for p in cell.polygon]
-            if noisy_edges:
-                scaled = _noisy_closed_points(
-                    scaled,
-                    _stable_seed(geometry.version, cell.micro_id, "noisy-micro-cell"),
-                    levels=1,
-                    amplitude=0.018,
-                )
             polity = overlays.polities_by_region_id.get(cell.region_id) if overlays else None
             polity_attrs = (
                 f' data-polity-id="{html.escape(polity.polity_id)}" data-polity-name="{html.escape(polity.polity_name)}"'
@@ -471,7 +490,7 @@ def render_world_map_svg(
         color = _FEATURE_COLORS.get(feature.feature_class, _FEATURE_COLORS["landform"])
         parts.append(
             f'<circle class="feature {html.escape(feature.feature_class)}" data-feature-id="{html.escape(feature.feature_id)}" '
-            f'cx="{x:.1f}" cy="{y:.1f}" r="{_feature_radius(feature):.1f}" fill="{color}" opacity="0.9" />'
+            f'cx="{x:.1f}" cy="{y:.1f}" r="{_feature_radius(feature):.1f}" data-base-r="{_feature_radius(feature):.1f}" fill="{color}" opacity="0.9" />'
         )
         if labels and feature.importance >= 0.76 and feature_labels < max_feature_labels:
             box = _label_box(x + 5.0, y - 4.0, feature.label, 9.0)
@@ -495,7 +514,7 @@ def render_world_map_svg(
             parts.append(
                 f'<circle class="settlement {status_class}" data-settlement-id="{html.escape(settlement.settlement_id)}" '
                 f'data-region-id="{html.escape(settlement.region_id)}" cx="{x:.1f}" cy="{y:.1f}" '
-                f'r="{radius:.1f}" fill="#5a3824" />'
+                f'r="{radius:.1f}" data-base-r="{radius:.1f}" fill="#5a3824" />'
             )
             if labels and settlement.status.strip().lower() != "abandoned" and settlement_labels < max_settlement_labels:
                 shown = settlement.display_name[:24]

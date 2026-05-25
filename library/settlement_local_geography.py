@@ -604,12 +604,13 @@ def _world_geometry_for_region(
     world: str,
     region_id: str,
     db_path: Path | str | None,
+    map_seed: object | None = None,
     world_geometry: WorldMapGeometry | None,
 ) -> tuple[list[RegionFeature], list[tuple[float, float]], str | None]:
     geometry = world_geometry
     if geometry is None:
         try:
-            geometry = build_world_map_geometry(world=world, db_path=db_path)
+            geometry = build_world_map_geometry(world=world, db_path=db_path, map_seed=map_seed)
         except Exception:
             return [], [], None
     features = geometry.features_by_region_id().get(region_id, [])
@@ -663,6 +664,7 @@ def build_local_region_graph(
     primary_meaning: str | None = None,
     primary_category: str | None = None,
     db_path: Path | str | None = None,
+    map_seed: object | None = None,
     world_geometry: WorldMapGeometry | None = None,
 ) -> LocalRegionGraph:
     """Deterministic layout when ``rng`` is seeded consistently for the region."""
@@ -672,6 +674,7 @@ def build_local_region_graph(
         world=world,
         region_id=region.region_id,
         db_path=db_path,
+        map_seed=map_seed,
         world_geometry=world_geometry,
     )
     feats = synthesize_features(

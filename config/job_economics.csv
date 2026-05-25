@@ -11,7 +11,6 @@ architect,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
 astronomer-priest,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
 authoritarian leader,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 bad midwife assistant,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-bankrupt courtier,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
 bizarre architect,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
 blunt scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 boastful officer,bronze_age,deviation,0.7800,4.1000,4.0000,1.3800
@@ -170,7 +169,6 @@ physician advocate,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 physician in crisis,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 physician retainer,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 pirate,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
-popularity-seeking magistrate,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
 porter,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 quarry laborer,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 remote healer,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
@@ -219,7 +217,6 @@ constable,medieval,deviation,0.7800,4.1000,4.0000,1.3800
 controlling abbess/abbot-equivalent leader,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 copyist assistant,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 crusader-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
-debt-ridden guild master,medieval,deviation,0.7800,4.1000,4.0000,1.3800
 duelist,medieval,deviation,0.7216,4.9680,4.4880,1.4030
 eccentric inventor,medieval,deviation,0.9200,2.7500,2.9000,1.1800
 estate steward,medieval,deviation,0.7800,4.1000,4.0000,1.3800
@@ -277,7 +274,6 @@ robber baron-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 scribe,medieval,deviation,0.9800,1.8500,1.9500,1.0800
 scullion,medieval,deviation,1.0800,0.3800,0.4000,0.8200
 siege engineer,medieval,deviation,0.9200,2.7500,2.9000,1.1800
-suspicious magistrate,medieval,deviation,0.7800,4.1000,4.0000,1.3800
 teacher,medieval,deviation,0.9800,1.8500,1.9500,1.0800
 tournament fighter,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 town crier assistant,medieval,deviation,1.1000,0.5500,0.5800,0.9200

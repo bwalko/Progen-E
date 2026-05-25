@@ -56,10 +56,14 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     cfg = args.config if args.config is not None else config_db_path(args.world_id)
-    geometry = build_world_map_geometry(world=args.world_id, db_path=cfg)
     save_path = args.save
     if save_path is None and not args.no_overlays:
         save_path = derive_save_db_path_from_config(cfg)
+    geometry = build_world_map_geometry(
+        world=args.world_id,
+        db_path=cfg,
+        save_db_path=save_path,
+    )
     overlays = None if args.no_overlays else load_world_map_overlays(geometry=geometry, save_db_path=save_path)
     svg = render_world_map_svg(
         geometry,

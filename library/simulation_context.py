@@ -56,6 +56,8 @@ from library.world_save import (
     ensure_checkpoint_schema_for_file,
     maybe_import_run_store_events_csv,
     try_load_simulation_checkpoint,
+    read_world_map_seed,
+    write_world_map_seed,
 )
 
 # Default cap for person-level samples that drive settlement/regional behavior.
@@ -176,6 +178,7 @@ class SimulationContext:
     # population accounting or save/load behavior.
     decision_sample_size: int = DEFAULT_DECISION_SAMPLE_SIZE
     placename_rng_salt: int = 0
+    world_map_seed: str = ""
     active_region_ids: frozenset[str] | None = None
     foundation_colony_region_order: tuple[str, ...] | None = None
     _run_finalized: bool = field(default=False, repr=False)
@@ -385,6 +388,14 @@ class SimulationContext:
             else int(configured_checkpoint_full_every_n)
         )
 
+        existing_map_seed = read_world_map_seed(resolved_save)
+        if existing_map_seed:
+            initial_map_seed = existing_map_seed
+        elif int(placename_rng_salt):
+            initial_map_seed = str(int(placename_rng_salt))
+        else:
+            initial_map_seed = uuid4().hex
+
         ctx = cls(
             db_path=resolved_config,
             save_db_path=resolved_save,
@@ -396,6 +407,7 @@ class SimulationContext:
             checkpoint_full_snapshot_every_n_years=resolved_checkpoint_every,
             decision_sample_size=int(decision_sample_size),
             placename_rng_salt=int(placename_rng_salt),
+            world_map_seed=initial_map_seed,
             active_region_ids=active_ids,
             foundation_colony_region_order=colony_region_order,
             working_set_dead_retention_years=int(working_set_dead_retention_years),
@@ -407,6 +419,8 @@ class SimulationContext:
         resume_loaded = False
         if start_year is None:
             resume_loaded = try_load_simulation_checkpoint(ctx)
+        if not resume_loaded:
+            ctx.world_map_seed = write_world_map_seed(resolved_save, ctx.world_map_seed)
         ctx.preload(skip_settlement_seed=resume_loaded)
 
         if (
@@ -1554,6 +1568,7 @@ class SimulationContext:
             primary_meaning="",
             primary_category=first.name_category_primary if first is not None else None,
             db_path=self.db_path,
+            map_seed=self.world_map_seed,
         )
         geo_json = graph.to_json()
         self._set_region_local_geography(rid, geo_json)

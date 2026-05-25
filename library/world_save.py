@@ -1830,6 +1830,57 @@ SETTLEMENT_SPINOFF_STATE_META_KEY = "settlement_spinoff_state_json"
 # JSON list of deferred year-boundary residence moves.
 PENDING_SETTLEMENT_MOVES_META_KEY = "pending_settlement_moves_json"
 
+# Save-scoped seed for generated physical world-map geometry.
+WORLD_MAP_SEED_META_KEY = "world_map_seed"
+
+
+def read_world_map_seed(save_db_path: Path | str) -> str | None:
+    """Return the persisted physical-map seed for a save, if present."""
+    p = Path(save_db_path)
+    if not p.exists():
+        return None
+    with _open_save(p) as conn:
+        ensure_checkpoint_schema(conn)
+        row = conn.execute(
+            """
+            SELECT meta_value FROM simulation_meta
+            WHERE meta_key = ?
+            """,
+            (WORLD_MAP_SEED_META_KEY,),
+        ).fetchone()
+    if row is None or row["meta_value"] is None:
+        return None
+    seed = str(row["meta_value"]).strip()
+    return seed or None
+
+
+def write_world_map_seed(save_db_path: Path | str, map_seed: object) -> str:
+    """Persist the physical-map seed for this save and return its string form."""
+    seed = str(map_seed).strip()
+    if not seed:
+        raise ValueError("world map seed must not be blank")
+    with _open_save(save_db_path) as conn:
+        ensure_checkpoint_schema(conn)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
+            """,
+            (WORLD_MAP_SEED_META_KEY, seed),
+        )
+        conn.commit()
+    return seed
+
+
+def _ctx_world_map_seed(ctx: "SimulationContext") -> str:
+    seed = str(getattr(ctx, "world_map_seed", "") or "").strip()
+    if seed:
+        return seed
+    salt = str(getattr(ctx, "placename_rng_salt", "") or "").strip()
+    if salt and salt != "0":
+        return salt
+    return str(getattr(ctx, "world", "") or "default")
+
 
 def serialize_region_display_label_overrides(ctx: "SimulationContext") -> str:
     d = {
@@ -2190,6 +2241,13 @@ def flush_simulation_meta_checkpoint(ctx: "SimulationContext") -> None:
                 PENDING_SETTLEMENT_MOVES_META_KEY,
                 serialize_pending_settlement_moves(ctx),
             ),
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
+            """,
+            (WORLD_MAP_SEED_META_KEY, _ctx_world_map_seed(ctx)),
         )
         conn.commit()
 
@@ -3005,6 +3063,13 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 serialize_pending_settlement_moves(ctx),
             ),
         )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO simulation_meta (meta_key, meta_value)
+            VALUES (?, ?)
+            """,
+            (WORLD_MAP_SEED_META_KEY, _ctx_world_map_seed(ctx)),
+        )
         conn.commit()
     prune_ancient_dead_from_ram(ctx)
 
@@ -3306,6 +3371,19 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             str(moves_raw) if moves_raw is not None else None
         )
 
+        map_seed_m_row = conn.execute(
+            """
+            SELECT meta_value FROM simulation_meta
+            WHERE meta_key = ?
+            """,
+            (WORLD_MAP_SEED_META_KEY,),
+        ).fetchone()
+        map_seed_raw = (
+            str(map_seed_m_row["meta_value"]).strip()
+            if map_seed_m_row is not None and map_seed_m_row["meta_value"] is not None
+            else ""
+        )
+
         merged_region_labels = {**region_labels}
         for rk, rv in display_overrides.items():
             merged_region_labels[rk] = rv
@@ -3363,6 +3441,8 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
     ctx.spinoff_pending_families_by_region = spin_pending
     ctx.last_spinoff_sim_year_by_region = spin_last
     ctx.pending_settlement_moves = pending_moves
+    if map_seed_raw:
+        ctx.world_map_seed = map_seed_raw
     try:
         from library.government_checkpoint import load_government as _load_gov
         from library.world_save import _open_save as _open_save_gov
