@@ -13,7 +13,7 @@ if "gradio" not in sys.modules and importlib.util.find_spec("gradio") is None:
 
 import utils.gradio_data_browser as gdb
 from library.config_import import load_all_csvs_into_sqlite
-from library.world_map_geometry import RegionCell, WorldMapGeometry
+from library.world_map_geometry import MicroRegionCell, RegionCell, WorldMapGeometry
 from library.world_map_svg import load_world_map_overlays
 from utils.gradio_data_browser import (
     _event_sentence,
@@ -928,6 +928,52 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Fordham", html)
         self.assertIn("miller: 1", html)
         self.assertIn("<svg", html)
+
+    def test_generated_region_map_preserves_region_aspect_ratio(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            cfg.touch()
+            save.touch()
+            geometry = WorldMapGeometry(
+                world="test",
+                version="test",
+                width=500,
+                height=500,
+                cells=[],
+                micro_cells=[
+                    MicroRegionCell(
+                        micro_id="m1",
+                        region_id="r1",
+                        continent_id="c1",
+                        center_x=200,
+                        center_y=50,
+                        polygon=[(0, 0), (400, 0), (400, 100), (0, 100)],
+                        elevation=0.4,
+                        moisture=0.5,
+                        terrain_family="plains",
+                        is_coastal=False,
+                    )
+                ],
+                features=[],
+                edges=[],
+                rivers=[],
+            )
+
+            original_db_path = gdb._db_path
+            original_geometry = gdb._cached_world_map_geometry
+            gdb._db_path = lambda world, db_kind: cfg if db_kind == "Config DB" else save
+            gdb._cached_world_map_geometry = lambda *args: geometry
+            try:
+                html = gdb._render_generated_region_map("test", "r1", [])
+            finally:
+                gdb._db_path = original_db_path
+                gdb._cached_world_map_geometry = original_geometry
+
+        self.assertIn('viewBox="0 0 100.00 32.50"', html)
+        self.assertIn('width="100.00" height="32.50"', html)
+        self.assertNotIn('viewBox="0 0 100 100"', html)
 
     def test_places_browser_batches_counts_and_filters_saved_world(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

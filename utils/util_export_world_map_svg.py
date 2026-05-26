@@ -50,6 +50,11 @@ def _parse_args() -> argparse.Namespace:
         help="Optional save.sqlite for settlement and polity overlays.",
     )
     p.add_argument("--no-overlays", action="store_true", help="Do not load save.sqlite overlays.")
+    p.add_argument(
+        "--include-inactive-settlements",
+        action="store_true",
+        help="Include inactive settlement markers when rendering overlays.",
+    )
     return p.parse_args()
 
 
@@ -64,7 +69,15 @@ def main() -> None:
         db_path=cfg,
         save_db_path=save_path,
     )
-    overlays = None if args.no_overlays else load_world_map_overlays(geometry=geometry, save_db_path=save_path)
+    overlays = (
+        None
+        if args.no_overlays
+        else load_world_map_overlays(
+            geometry=geometry,
+            save_db_path=save_path,
+            include_inactive_settlements=args.include_inactive_settlements,
+        )
+    )
     svg = render_world_map_svg(
         geometry,
         width=max(200, int(args.width)),

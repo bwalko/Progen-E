@@ -288,9 +288,16 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn("<svg", svg)
         self.assertIn('class="micro-cell terrain-', svg)
         self.assertIn(".micro-cell{stroke:none}", svg)
+        self.assertIn('id="terrain-warp"', svg)
+        self.assertIn('class="terrain-blend"', svg)
+        self.assertIn('class="terrain-mottle"', svg)
+        self.assertIn('class="terrain-texture"', svg)
         self.assertIn('class="region-boundary"', svg)
         self.assertIn(".region-boundary{stroke:#151b2d", svg)
         self.assertIn(".coast-line{stroke:#20263d", svg)
+        self.assertIn('class="coast-beach"', svg)
+        self.assertIn('class="coast-shadow"', svg)
+        self.assertLess(svg.count('class="coast-beach"'), 50)
         self.assertIn(".river{stroke:#2a8bc8", svg)
         self.assertIn('class="route ', svg)
         self.assertIn('class="feature ', svg)
@@ -300,7 +307,7 @@ class TestWorldMapGeometry(unittest.TestCase):
             line for line in svg.splitlines()
             if f'data-micro-id="{first_cell.micro_id}"' in line
         )
-        self.assertEqual(first_path.count(" L "), len(first_cell.polygon) - 1)
+        self.assertGreaterEqual(first_path.count(" L "), len(first_cell.polygon) - 1)
 
     def test_debug_svg_renderer_outputs_settlement_and_polity_overlays(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -416,6 +423,50 @@ class TestWorldMapGeometry(unittest.TestCase):
         )
 
         self.assertEqual([s.display_name for s in overlays.settlements], ["Town 0", "Town 1", "Town 2"])
+
+    def test_load_world_map_overlays_excludes_inactive_settlements_by_default(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        cell = geometry.cells[0]
+        save_path = Path(self._td.name) / "save.sqlite"
+        import sqlite3
+
+        with closing(sqlite3.connect(save_path)) as con:
+            con.execute(
+                """
+                create table simulation_settlements (
+                    settlement_id text, region_id text, display_name text,
+                    population_cap integer, status text, site_slot integer,
+                    local_geography_json text
+                )
+                """
+            )
+            for suffix, status in (("active", "active"), ("old", "abandoned")):
+                con.execute(
+                    "insert into simulation_settlements values (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        f"{cell.region_id}:{suffix}",
+                        cell.region_id,
+                        f"{suffix.title()} Town",
+                        42,
+                        status,
+                        1,
+                        json.dumps({"settlements": [{"settlement_slot": 0, "x": 0.5, "y": 0.5}]}),
+                    ),
+                )
+            con.commit()
+
+        overlays = load_world_map_overlays(geometry=geometry, save_db_path=save_path)
+        overlays_with_inactive = load_world_map_overlays(
+            geometry=geometry,
+            save_db_path=save_path,
+            include_inactive_settlements=True,
+        )
+
+        self.assertEqual([s.display_name for s in overlays.settlements], ["Active Town"])
+        self.assertEqual(
+            [s.display_name for s in overlays_with_inactive.settlements],
+            ["Active Town", "Old Town"],
+        )
 
 
 if __name__ == "__main__":

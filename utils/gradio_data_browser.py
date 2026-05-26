@@ -655,6 +655,7 @@ def render_world_map_html(
     include_overlays: bool = True,
     noisy_edges: bool = True,
     labels: bool = True,
+    include_inactive_settlements: bool = False,
 ) -> str:
     world_id = (world or "").strip() or "default"
     cfg = _db_path(world_id, "Config DB")
@@ -668,6 +669,7 @@ def render_world_map_html(
     return _render_world_map_html_cached(
         world_id,
         bool(include_overlays),
+        bool(include_inactive_settlements),
         bool(noisy_edges),
         bool(labels),
         str(cfg),
@@ -681,6 +683,7 @@ def render_world_map_html(
 def _render_world_map_html_cached(
     world_id: str,
     include_overlays: bool,
+    include_inactive_settlements: bool,
     noisy_edges: bool,
     labels: bool,
     cfg_path: str,
@@ -699,7 +702,11 @@ def _render_world_map_html_cached(
             _save_fingerprint,
         )
         overlays = (
-            load_world_map_overlays(geometry=geometry, save_db_path=save)
+            load_world_map_overlays(
+                geometry=geometry,
+                save_db_path=save,
+                include_inactive_settlements=include_inactive_settlements,
+            )
             if include_overlays
             else None
         )
@@ -717,15 +724,18 @@ def _render_world_map_html_cached(
             f'<p class="place-muted">Could not render world map: {html.escape(str(exc))}</p>'
             "</div>"
         )
-    overlay_text = "settlements and polities" if include_overlays else "base geography only"
+    if include_overlays and include_inactive_settlements:
+        overlay_text = "active and inactive settlements plus polities"
+    else:
+        overlay_text = "active settlements and polities" if include_overlays else "base geography only"
     zoom_sync = (
         "const z=Math.max(.001,1200/s.viewBox.baseVal.width);"
-        "const m=Math.max(.82,Math.min(1.55,Math.pow(z,.28)));"
+        "const m=Math.max(.88,Math.min(2.05,Math.pow(z,.35)));"
         "s.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
         "s.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
-        "s.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(10*m/z)+'px');"
-        "s.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||3;e.setAttribute('r',Math.max(1.6,Math.min(5.6,b*m/z)));});"
-        "s.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||4;e.setAttribute('r',Math.max(2.2,Math.min(7.4,b*m/z)));});"
+        "s.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(9.5*m/z)+'px');"
+        "s.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.35,Math.min(3.8,b*m/z)));});"
+        "s.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.38,Math.min(3.2,b*m/z)));});"
     )
     controls = (
         '<div class="map-controls">'
@@ -3607,19 +3617,27 @@ def _render_generated_region_map(
     w = max(1e-6, x1 - x0)
     h = max(1e-6, y1 - y0)
     pad = 5.0
+    inner_long = 100.0 - pad * 2.0
+    scale = inner_long / max(w, h)
+    view_w = w * scale + pad * 2.0
+    view_h = h * scale + pad * 2.0
 
     def sx(x: float) -> float:
-        return pad + ((x - x0) / w) * (100.0 - pad * 2.0)
+        return pad + (x - x0) * scale
 
     def sy(y: float) -> float:
-        return pad + ((y - y0) / h) * (100.0 - pad * 2.0)
+        return pad + (y - y0) * scale
 
     def poly_points(poly: list[tuple[float, float]]) -> str:
         return " ".join(f"{sx(x):.2f},{sy(y):.2f}" for x, y in poly)
 
     parts = [
-        '<svg class="place-map generated-region-map" viewBox="0 0 100 100" role="img" aria-label="Generated region map">',
-        '<rect x="0" y="0" width="100" height="100" fill="#454a78" />',
+        (
+            '<svg class="place-map generated-region-map" '
+            f'viewBox="0 0 {view_w:.2f} {view_h:.2f}" '
+            'role="img" aria-label="Generated region map">'
+        ),
+        f'<rect x="0" y="0" width="{view_w:.2f}" height="{view_h:.2f}" fill="#454a78" />',
     ]
     for cell in cells:
         parts.append(
@@ -3673,15 +3691,18 @@ def _render_generated_region_map(
         sid = str(row["settlement_id"] or "")
         label = str(row["display_name"] or sid)
         focused = sid == (focus_settlement_id or "")
-        radius = 1.8 if focused else 1.35
+        radius = 0.95 if focused else 0.68
         parts.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" fill="var(--place-map-town)" '
-            f'stroke="var(--place-text)" stroke-width="{1.0 if focused else .45}" />'
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" fill="#111111" '
+            f'stroke="#ffffff" stroke-width="{0.45 if focused else .25}" />'
         )
-        parts.append(
-            f'<text x="{x + radius + 1.0:.1f}" y="{y + 1.0:.1f}" font-size="2.8" '
-            f'fill="var(--place-text)">{html.escape(label[:18])}</text>'
-        )
+        if focused or str(row["status"] or "").strip().lower() == "active":
+            parts.append(
+                f'<text x="{x + radius + .7:.1f}" y="{y + .55:.1f}" font-size="1.55" '
+                'font-family="Arial,Helvetica,sans-serif" font-weight="600" paint-order="stroke" '
+                f'stroke="#ffffff" stroke-width=".42" stroke-linejoin="round" fill="#111111">'
+                f'{html.escape(label[:18])}</text>'
+            )
     parts.append("</svg>")
     return "".join(parts)
 
@@ -3745,11 +3766,11 @@ def _render_local_map(
         kind = str(feat.get("kind") or "feature")
         color = _feature_color(kind)
         if kind.lower() in {"river", "stream", "coast", "bay", "harbor", "wadi", "fishery"}:
-            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="{color}" opacity=".75" />')
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.9" fill="{color}" opacity=".75" />')
         else:
-            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.6" fill="{color}" opacity=".8" />')
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.4" fill="{color}" opacity=".8" />')
         parts.append(
-            f'<text x="{x + 2.5:.1f}" y="{y - 2.5:.1f}" font-size="3" fill="var(--place-muted)">'
+            f'<text x="{x + 1.6:.1f}" y="{y - 1.6:.1f}" font-size="1.9" fill="var(--place-muted)">'
             f'{html.escape(kind[:12])}</text>'
         )
     for row in settlements:
@@ -3765,25 +3786,36 @@ def _render_local_map(
         sid = str(row["settlement_id"] or "")
         label = str(row["display_name"] or sid)
         focused = sid == (focus_settlement_id or "")
-        radius = 4.4 if focused else 3.4
-        stroke = "var(--place-text)" if focused else "var(--place-map-bg)"
+        radius = 2.0 if focused else 1.35
         parts.append(
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" '
-            f'fill="var(--place-map-town)" stroke="{stroke}" stroke-width="1.1" />'
+            f'fill="#111111" stroke="#ffffff" stroke-width="{.85 if focused else .65}" />'
         )
         parts.append(
-            f'<text x="{x + 3.6:.1f}" y="{y + 1.2:.1f}" font-size="3.4" '
-            f'fill="var(--place-text)">{html.escape(label[:18])}</text>'
+            f'<text x="{x + radius + 1.0:.1f}" y="{y + .7:.1f}" font-size="2.0" '
+            'font-family="Arial,Helvetica,sans-serif" font-weight="600" paint-order="stroke" '
+            f'stroke="#ffffff" stroke-width=".55" stroke-linejoin="round" fill="#111111">'
+            f'{html.escape(label[:18])}</text>'
         )
     parts.append("</svg>")
     return "".join(parts)
 
 
-def _region_settlements(con: sqlite3.Connection, region_id: str) -> list[sqlite3.Row]:
+def _settlement_is_active(row: sqlite3.Row) -> bool:
+    return str(row["status"] or "").strip().lower() == "active"
+
+
+def _region_settlements(
+    con: sqlite3.Connection,
+    region_id: str,
+    *,
+    include_inactive_settlements: bool = False,
+    focus_settlement_id: str | None = None,
+) -> list[sqlite3.Row]:
     if not _has_table(con, "simulation_settlements"):
         return []
     settlement_table = _place_read_relation(con, "simulation_settlements")
-    return con.execute(
+    rows = con.execute(
         f"""
         select *
         from {_quote_identifier(settlement_table)}
@@ -3792,6 +3824,10 @@ def _region_settlements(con: sqlite3.Connection, region_id: str) -> list[sqlite3
         """,
         (region_id,),
     ).fetchall()
+    if include_inactive_settlements:
+        return rows
+    focus = (focus_settlement_id or "").strip()
+    return [row for row in rows if _settlement_is_active(row) or str(row["settlement_id"] or "").strip() == focus]
 
 
 def _region_map_html(
@@ -3800,8 +3836,14 @@ def _region_map_html(
     region_id: str,
     *,
     focus_settlement_id: str | None = None,
+    include_inactive_settlements: bool = False,
 ) -> str:
-    settlements = _region_settlements(con, region_id)
+    settlements = _region_settlements(
+        con,
+        region_id,
+        include_inactive_settlements=include_inactive_settlements,
+        focus_settlement_id=focus_settlement_id,
+    )
     generated = _render_generated_region_map(
         world,
         region_id,
@@ -4856,11 +4898,18 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
 def render_world_map_with_detail_reset(
     world: str,
     include_overlays: bool = True,
+    include_inactive_settlements: bool = False,
     noisy_edges: bool = True,
     labels: bool = True,
 ) -> tuple[str, str]:
     return (
-        render_world_map_html(world, include_overlays, noisy_edges, labels),
+        render_world_map_html(
+            world,
+            include_overlays=include_overlays,
+            noisy_edges=noisy_edges,
+            labels=labels,
+            include_inactive_settlements=include_inactive_settlements,
+        ),
         '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>',
     )
 
@@ -5381,6 +5430,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             with gr.Row(elem_classes=["world-browser"]):
                 map_world = gr.Dropdown(worlds, value=initial_world, label="World")
                 map_include_overlays = gr.Checkbox(value=True, label="Settlements and Polities")
+                map_include_inactive_settlements = gr.Checkbox(value=False, label="Inactive Settlements")
                 map_noisy_edges = gr.Checkbox(value=True, label="Noisy Edges")
                 map_labels = gr.Checkbox(value=True, label="Labels")
                 map_refresh = gr.Button("Render Map", variant="primary")
@@ -5541,7 +5591,13 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             polity_input.change(load_polities_browser_fresh, polity_browser_inputs, polity_browser_outputs)
         polity_search.submit(load_polities_browser_fresh, polity_browser_inputs, polity_browser_outputs)
         polity_table.select(select_polity_from_fresh_table, [polity_ids_state, polity_world], polity_sheet)
-        map_inputs = [map_world, map_include_overlays, map_noisy_edges, map_labels]
+        map_inputs = [
+            map_world,
+            map_include_overlays,
+            map_include_inactive_settlements,
+            map_noisy_edges,
+            map_labels,
+        ]
         map_outputs = [world_map_html, map_sheet]
         map_refresh.click(render_world_map_with_detail_reset, map_inputs, map_outputs)
         for map_input in map_inputs:

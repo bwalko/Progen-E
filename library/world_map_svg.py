@@ -177,6 +177,45 @@ def _noisy_closed_points(
     return out
 
 
+def _lerp_point(a: tuple[float, float], b: tuple[float, float], t: float) -> tuple[float, float]:
+    return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+
+
+def _edge_key(a: Point, b: Point) -> tuple[Point, Point]:
+    return tuple(sorted(((round(a[0], 5), round(a[1], 5)), (round(b[0], 5), round(b[1], 5)))))  # type: ignore[return-value]
+
+
+def _constrained_noisy_segment(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    p: tuple[float, float],
+    q: tuple[float, float],
+    rng: random.Random,
+    *,
+    min_length: float,
+    amplitude: float,
+) -> list[tuple[float, float]]:
+    """Build a mapgen2-style noisy edge constrained inside the quad a-p-b-q."""
+
+    def recur(
+        start: tuple[float, float],
+        end: tuple[float, float],
+        left: tuple[float, float],
+        right: tuple[float, float],
+    ) -> list[tuple[float, float]]:
+        if math.dist(start, end) < min_length:
+            return [end]
+        start_left = _lerp_point(start, left, 0.5)
+        end_left = _lerp_point(end, left, 0.5)
+        start_right = _lerp_point(start, right, 0.5)
+        end_right = _lerp_point(end, right, 0.5)
+        division = 0.5 * (1.0 - amplitude) + rng.random() * amplitude
+        center = _lerp_point(left, right, division)
+        return recur(start, center, start_left, start_right) + recur(center, end, end_left, end_right)
+
+    return [a] + recur(a, b, p, q)
+
+
 def _poly_path(points: list[tuple[float, float]]) -> str:
     if not points:
         return ""
@@ -215,6 +254,24 @@ def _micro_cell_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None) -
     else:
         base = _CELL_COLORS.get(cell.terrain_family, _CELL_COLORS["plains"])
     return _terrain_tint(base, cell)
+
+
+def _micro_blend_fill(
+    first: MicroRegionCell,
+    second: MicroRegionCell,
+    overlays: WorldMapOverlays | None,
+) -> str:
+    return _mix_color(_micro_cell_fill(first, overlays), _micro_cell_fill(second, overlays), 0.5)
+
+
+def _micro_mottle_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None) -> str:
+    base = _micro_cell_fill(cell, overlays)
+    grain = (_stable_seed("terrain-mottle", cell.micro_id) % 1000) / 999.0
+    if grain < 0.42:
+        return _mix_color(base, "#223f35", 0.18 + grain * 0.12)
+    if grain > 0.72:
+        return _mix_color(base, "#d8d5b9", 0.10 + (grain - 0.72) * 0.18)
+    return _mix_color(base, "#6b8558", 0.10)
 
 
 def _feature_radius(feature: RegionFeature) -> float:
@@ -259,10 +316,15 @@ def _cell_bbox(cell: RegionCell) -> tuple[float, float, float, float]:
 
 def _micro_edge_segments(
     micro_cells: list[MicroRegionCell],
-) -> tuple[list[tuple[Point, Point]], list[tuple[Point, Point]]]:
+) -> tuple[
+    list[tuple[Point, Point]],
+    list[tuple[Point, Point]],
+    list[tuple[Point, Point, MicroRegionCell, MicroRegionCell]],
+]:
     edge_owner: dict[tuple[Point, Point], MicroRegionCell] = {}
     region_edges: list[tuple[Point, Point]] = []
     coast_edges: list[tuple[Point, Point]] = []
+    blend_edges: list[tuple[Point, Point, MicroRegionCell, MicroRegionCell]] = []
     for cell in micro_cells:
         pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
         for i, a in enumerate(pts):
@@ -273,8 +335,186 @@ def _micro_edge_segments(
                 edge_owner[key] = cell
             elif other.region_id != cell.region_id:
                 region_edges.append((a, b))
+                blend_edges.append((a, b, other, cell))
+            else:
+                blend_edges.append((a, b, other, cell))
     coast_edges.extend(edge_owner.keys())
-    return region_edges, coast_edges
+    return region_edges, coast_edges, blend_edges
+
+
+def _build_micro_noisy_edge_paths(
+    micro_cells: list[MicroRegionCell],
+    *,
+    width: int,
+    height: int,
+    pad: int,
+    seed: object,
+) -> dict[tuple[Point, Point], list[tuple[float, float]]]:
+    edge_owner: dict[tuple[Point, Point], MicroRegionCell] = {}
+    edge_pairs: dict[tuple[Point, Point], tuple[MicroRegionCell, MicroRegionCell | None]] = {}
+    for cell in micro_cells:
+        pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
+        for i, a in enumerate(pts):
+            b = pts[(i + 1) % len(pts)]
+            key = _edge_key(a, b)
+            other = edge_owner.pop(key, None)
+            if other is None:
+                edge_owner[key] = cell
+            else:
+                edge_pairs[key] = (other, cell)
+    for key, cell in edge_owner.items():
+        edge_pairs[key] = (cell, None)
+
+    paths: dict[tuple[Point, Point], list[tuple[float, float]]] = {}
+    for key, (first, second) in edge_pairs.items():
+        a, b = key
+        scaled_a = _scale(a, width, height, pad)
+        scaled_b = _scale(b, width, height, pad)
+        first_center = _scale((first.center_x, first.center_y), width, height, pad)
+        if second is None:
+            mx = (scaled_a[0] + scaled_b[0]) / 2.0
+            my = (scaled_a[1] + scaled_b[1]) / 2.0
+            second_center = (mx + (mx - first_center[0]) * 1.25, my + (my - first_center[1]) * 1.25)
+            min_length = 3.8
+            amplitude = 0.78
+        else:
+            second_center = _scale((second.center_x, second.center_y), width, height, pad)
+            if first.region_id != second.region_id:
+                min_length = 5.0
+                amplitude = 0.58
+            else:
+                min_length = 7.5
+                amplitude = 0.34
+        paths[key] = _constrained_noisy_segment(
+            scaled_a,
+            scaled_b,
+            first_center,
+            second_center,
+            random.Random(_stable_seed(seed, "micro-noisy-edge", key)),
+            min_length=min_length,
+            amplitude=amplitude,
+        )
+    return paths
+
+
+def _oriented_noisy_edge_path(
+    paths: dict[tuple[Point, Point], list[tuple[float, float]]],
+    a: Point,
+    b: Point,
+    *,
+    width: int,
+    height: int,
+    pad: int,
+) -> list[tuple[float, float]]:
+    rounded_a = (round(a[0], 5), round(a[1], 5))
+    rounded_b = (round(b[0], 5), round(b[1], 5))
+    key = _edge_key(rounded_a, rounded_b)
+    path = paths.get(key)
+    if path is None:
+        return [_scale(rounded_a, width, height, pad), _scale(rounded_b, width, height, pad)]
+    return path if key[0] == rounded_a else list(reversed(path))
+
+
+def _micro_noisy_polygon_points(
+    cell: MicroRegionCell,
+    paths: dict[tuple[Point, Point], list[tuple[float, float]]],
+    *,
+    width: int,
+    height: int,
+    pad: int,
+) -> list[tuple[float, float]]:
+    pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
+    out: list[tuple[float, float]] = []
+    for i, a in enumerate(pts):
+        b = pts[(i + 1) % len(pts)]
+        segment = _oriented_noisy_edge_path(paths, a, b, width=width, height=height, pad=pad)
+        if not out:
+            out.extend(segment)
+        else:
+            out.extend(segment[1:])
+    return out
+
+
+def _stitch_edge_chains(edges: list[tuple[Point, Point]]) -> list[list[Point]]:
+    normalized = {_edge_key(a, b) for a, b in edges}
+    adjacency: dict[Point, set[Point]] = {}
+    for a, b in normalized:
+        adjacency.setdefault(a, set()).add(b)
+        adjacency.setdefault(b, set()).add(a)
+
+    remaining = set(normalized)
+    chains: list[list[Point]] = []
+
+    def walk(start: Point, next_point: Point) -> list[Point]:
+        chain = [start, next_point]
+        remaining.remove(_edge_key(start, next_point))
+        previous = start
+        current = next_point
+        while True:
+            candidates = [
+                p
+                for p in sorted(adjacency.get(current, ()))
+                if p != previous and _edge_key(current, p) in remaining
+            ]
+            if not candidates:
+                candidates = [
+                    p for p in sorted(adjacency.get(current, ())) if _edge_key(current, p) in remaining
+                ]
+            if not candidates:
+                break
+            next_candidate = candidates[0]
+            remaining.remove(_edge_key(current, next_candidate))
+            chain.append(next_candidate)
+            previous, current = current, next_candidate
+            if current == start or len(adjacency.get(current, ())) != 2:
+                break
+        return chain
+
+    for start in sorted(adjacency):
+        if len(adjacency[start]) == 2:
+            continue
+        for next_point in sorted(adjacency[start]):
+            if _edge_key(start, next_point) in remaining:
+                chains.append(walk(start, next_point))
+
+    while remaining:
+        start, next_point = min(remaining)
+        chains.append(walk(start, next_point))
+
+    return chains
+
+
+def _stroke_path(points: list[tuple[float, float]]) -> str:
+    if len(points) > 2 and math.dist(points[0], points[-1]) < 0.75:
+        return _poly_path(points[:-1])
+    return _line_path(points)
+
+
+def _stitched_noisy_paths(
+    edge_chains: list[list[Point]],
+    noisy_edge_paths: dict[tuple[Point, Point], list[tuple[float, float]]],
+    *,
+    width: int,
+    height: int,
+    pad: int,
+    noisy_edges: bool,
+) -> list[str]:
+    paths: list[str] = []
+    for chain in edge_chains:
+        stitched: list[tuple[float, float]] = []
+        for a, b in zip(chain, chain[1:]):
+            segment = (
+                _oriented_noisy_edge_path(noisy_edge_paths, a, b, width=width, height=height, pad=pad)
+                if noisy_edges
+                else [_scale(a, width, height, pad), _scale(b, width, height, pad)]
+            )
+            if not stitched:
+                stitched.extend(segment)
+            else:
+                stitched.extend(segment[1:])
+        if stitched:
+            paths.append(_stroke_path(stitched))
+    return paths
 
 
 def _site_xy(local_geography_json: object, site_slot: object) -> tuple[float, float] | None:
@@ -310,6 +550,7 @@ def load_world_map_overlays(
     geometry: WorldMapGeometry,
     save_db_path: Path | str | None,
     max_settlements: int = DEFAULT_MAX_SETTLEMENT_OVERLAYS,
+    include_inactive_settlements: bool = False,
 ) -> WorldMapOverlays:
     """Load optional settlement and polity overlays from ``save.sqlite``."""
     if save_db_path is None:
@@ -347,7 +588,7 @@ def load_world_map_overlays(
                 select_sql.format(status_clause="status = 'active'"),
                 (*region_ids, settlement_limit),
             ).fetchall()
-            if len(rows) < settlement_limit:
+            if include_inactive_settlements and len(rows) < settlement_limit:
                 rows.extend(
                     conn.execute(
                         select_sql.format(status_clause="(status IS NULL OR status != 'active')"),
@@ -420,12 +661,12 @@ def render_world_map_svg(
     pad = 36
     zoom_script = (
         f"const zf=(svg)=>{{const s=svg.viewBox.baseVal;const z=Math.max(.001,{width}/s.width);"
-        "const m=Math.max(.82,Math.min(1.55,Math.pow(z,.28)));"
+        "const m=Math.max(.88,Math.min(2.05,Math.pow(z,.35)));"
         "svg.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
         "svg.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
-        "svg.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(10*m/z)+'px');"
-        "svg.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||3;e.setAttribute('r',Math.max(1.6,Math.min(5.6,b*m/z)));});"
-        "svg.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||4;e.setAttribute('r',Math.max(2.2,Math.min(7.4,b*m/z)));});};"
+        "svg.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(9.5*m/z)+'px');"
+        "svg.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.35,Math.min(3.8,b*m/z)));});"
+        "svg.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.38,Math.min(3.2,b*m/z)));});};"
     )
     zoom_handlers = (
         f"data-original-viewbox='0 0 {width} {height}' "
@@ -445,8 +686,24 @@ def render_world_map_svg(
     )
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="Generated world map" {zoom_handlers}>',
+        "<defs>",
+        '<filter id="terrain-warp" x="-8%" y="-8%" width="116%" height="116%">',
+        f'<feTurbulence type="fractalNoise" baseFrequency="0.014 0.022" numOctaves="4" seed="{_stable_seed(geometry.version, "terrain-warp") % 997}" result="warpNoise" />',
+        '<feDisplacementMap in="SourceGraphic" in2="warpNoise" scale="7" xChannelSelector="R" yChannelSelector="G" />',
+        "</filter>",
+        '<filter id="terrain-soften" x="-14%" y="-14%" width="128%" height="128%">',
+        '<feGaussianBlur stdDeviation="2.6" />',
+        "</filter>",
+        '<filter id="terrain-mottle-soften" x="-20%" y="-20%" width="140%" height="140%">',
+        '<feGaussianBlur stdDeviation="5.0" />',
+        "</filter>",
+        '<filter id="terrain-grain" x="0" y="0" width="100%" height="100%">',
+        f'<feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="{_stable_seed(geometry.version, "terrain-grain") % 997}" result="grain" />',
+        '<feColorMatrix in="grain" type="matrix" values="0 0 0 0 0.50 0 0 0 0 0.47 0 0 0 0 0.38 0 0 0 .30 0" />',
+        "</filter>",
+        "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.region-boundary{stroke:#151b2d;stroke-width:.72;stroke-linecap:round}.coast-line{stroke:#20263d;stroke-width:1.45;stroke-linecap:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round}.feature,.settlement{vector-effect:non-scaling-stroke}.settlement{stroke:#f3ead4;stroke-width:1.4}.settlement.abandoned{opacity:.35}.feature-label,.region-label,.settlement-label{font-family:Georgia,serif;paint-order:stroke;stroke:#f3ead4;stroke-width:3px;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427}.region-label{font-size:11px;fill:#1f2332;font-weight:600}.settlement-label{font-size:10px;fill:#2c2118}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round}.coast-beach{stroke:#b8aa8d;stroke-width:3.2}.coast-shadow{stroke:#2d3557;stroke-width:2.6}.coast-line{stroke:#20263d;stroke-width:1.55;stroke-linecap:butt;stroke-linejoin:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round}.feature,.settlement{vector-effect:non-scaling-stroke}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#ffffff;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="#454a78" />',
     ]
@@ -454,8 +711,26 @@ def render_world_map_svg(
     deferred_labels: list[str] = []
 
     if geometry.micro_cells:
+        region_edges, coast_edges, blend_edges = _micro_edge_segments(geometry.micro_cells)
+        noisy_edge_paths = (
+            _build_micro_noisy_edge_paths(
+                geometry.micro_cells,
+                width=width,
+                height=height,
+                pad=pad,
+                seed=geometry.version,
+            )
+            if noisy_edges
+            else {}
+        )
+        terrain_filter = ""
+        parts.append(f'<g class="terrain-layer"{terrain_filter}>')
         for cell in geometry.micro_cells:
-            scaled = [_scale(p, width, height, pad) for p in cell.polygon]
+            scaled = (
+                _micro_noisy_polygon_points(cell, noisy_edge_paths, width=width, height=height, pad=pad)
+                if noisy_edges
+                else [_scale(p, width, height, pad) for p in cell.polygon]
+            )
             polity = overlays.polities_by_region_id.get(cell.region_id) if overlays else None
             polity_attrs = (
                 f' data-polity-id="{html.escape(polity.polity_id)}" data-polity-name="{html.escape(polity.polity_name)}"'
@@ -468,16 +743,75 @@ def render_world_map_svg(
                 f'data-elevation="{cell.elevation:.4f}" data-moisture="{cell.moisture:.4f}" '
                 f'd="{_poly_path(scaled)}" fill="{_micro_cell_fill(cell, overlays)}" opacity="0.94" />'
             )
-        region_edges, coast_edges = _micro_edge_segments(geometry.micro_cells)
-        for a, b in coast_edges:
-            pts = [_scale(a, width, height, pad), _scale(b, width, height, pad)]
+        parts.append("</g>")
+        if noisy_edges and blend_edges:
+            parts.append('<g class="terrain-mottle-layer" filter="url(#terrain-mottle-soften)" opacity="0.36">')
+            for cell in geometry.micro_cells:
+                if cell.is_coastal:
+                    continue
+                seed = _stable_seed("terrain-mottle", geometry.version, cell.micro_id)
+                if seed % 3 == 0:
+                    continue
+                rng = random.Random(seed)
+                cx, cy = _scale((cell.center_x, cell.center_y), width, height, pad)
+                rx = rng.uniform(8.0, 20.0)
+                ry = rng.uniform(5.0, 15.0)
+                angle = rng.uniform(-35.0, 35.0)
+                parts.append(
+                    f'<ellipse class="terrain-mottle" cx="{cx:.1f}" cy="{cy:.1f}" '
+                    f'rx="{rx:.1f}" ry="{ry:.1f}" transform="rotate({angle:.1f} {cx:.1f} {cy:.1f})" '
+                    f'fill="{_micro_mottle_fill(cell, overlays)}" opacity="{rng.uniform(0.20, 0.38):.2f}" />'
+                )
+            parts.append("</g>")
+            parts.append('<g class="terrain-blend-layer" opacity="0.34">')
+            parts.append('<g filter="url(#terrain-soften)">')
+            for a, b, first, second in blend_edges:
+                pts = _oriented_noisy_edge_path(
+                    noisy_edge_paths,
+                    a,
+                    b,
+                    width=width,
+                    height=height,
+                    pad=pad,
+                )
+                parts.append(
+                    f'<path class="terrain-blend" d="{_line_path(pts)}" fill="none" '
+                    f'stroke="{_micro_blend_fill(first, second, overlays)}" stroke-width="6.0" />'
+                )
+            parts.append("</g>")
+            parts.append("</g>")
             parts.append(
-                f'<path class="coast-line" d="{_line_path(pts)}" fill="none" opacity="0.78" />'
+                f'<rect class="terrain-texture" x="{pad}" y="{pad}" width="{width - pad * 2}" '
+                f'height="{height - pad * 2}" fill="#88806a" filter="url(#terrain-grain)" opacity="0.22" />'
+            )
+        coast_paths = _stitched_noisy_paths(
+            _stitch_edge_chains(coast_edges),
+            noisy_edge_paths,
+            width=width,
+            height=height,
+            pad=pad,
+            noisy_edges=noisy_edges,
+        )
+        for path in coast_paths:
+            parts.append(
+                f'<path class="coast-shadow" d="{path}" fill="none" opacity="0.42" />'
+            )
+        for path in coast_paths:
+            parts.append(
+                f'<path class="coast-beach" d="{path}" fill="none" opacity="0.70" />'
+            )
+        for path in coast_paths:
+            parts.append(
+                f'<path class="coast-line" d="{path}" fill="none" opacity="0.82" />'
             )
         for a, b in region_edges:
-            pts = [_scale(a, width, height, pad), _scale(b, width, height, pad)]
+            pts = (
+                _oriented_noisy_edge_path(noisy_edge_paths, a, b, width=width, height=height, pad=pad)
+                if noisy_edges
+                else [_scale(a, width, height, pad), _scale(b, width, height, pad)]
+            )
             parts.append(
-                f'<path class="region-boundary" d="{_line_path(pts)}" fill="none" opacity="0.22" />'
+                f'<path class="region-boundary" d="{_line_path(pts)}" fill="none" opacity="0.10" />'
             )
     else:
         for cell in geometry.cells:
@@ -549,21 +883,23 @@ def render_world_map_svg(
         for settlement in settlements:
             x, y = _scale((settlement.x, settlement.y), width, height, pad)
             status_class = "abandoned" if settlement.status.strip().lower() == "abandoned" else "active"
-            radius = max(3.4, min(8.0, 3.4 + math.sqrt(max(0, settlement.population)) * 0.12))
+            radius = max(1.25, min(3.2, 1.25 + math.sqrt(max(0, settlement.population)) * 0.036))
             parts.append(
                 f'<circle class="settlement {status_class}" data-settlement-id="{html.escape(settlement.settlement_id)}" '
                 f'data-region-id="{html.escape(settlement.region_id)}" cx="{x:.1f}" cy="{y:.1f}" '
-                f'r="{radius:.1f}" data-base-r="{radius:.1f}" fill="#5a3824" />'
+                f'r="{radius:.1f}" data-base-r="{radius:.1f}" fill="#111111" />'
             )
             if labels and settlement.status.strip().lower() != "abandoned" and settlement_labels < max_settlement_labels:
                 shown = settlement.display_name[:24]
-                box = _label_box(x + radius + 2.0, y + 3.0, shown, 10.0)
+                label_x = x + radius + 1.4
+                label_y = y + 3.0
+                box = _label_box(label_x, label_y, shown, 9.5)
                 if not _claim_label(occupied_labels, box, bounds=(width, height)):
                     continue
                 parts.append(
                     f'<text class="settlement-label" data-settlement-id="{html.escape(settlement.settlement_id)}" '
                     f'data-region-id="{html.escape(settlement.region_id)}" '
-                    f'x="{x + radius + 2.0:.1f}" y="{y + 3.0:.1f}">{html.escape(shown)}</text>'
+                    f'x="{label_x:.1f}" y="{label_y:.1f}">{html.escape(shown)}</text>'
                 )
                 settlement_labels += 1
 
