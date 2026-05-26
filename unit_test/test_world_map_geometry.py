@@ -20,7 +20,9 @@ from library.world_map_geometry import (
     MAP_GEOMETRY_VERSION,
     _continent_hulls,
     _micro_adjacency,
+    _micro_boundary_edges,
     _point_in_polygon,
+    _point_segment_distance,
     _polygon_bounds,
     build_world_map_geometry,
     project_local_point_to_region_footprint,
@@ -268,6 +270,41 @@ class TestWorldMapGeometry(unittest.TestCase):
                 )
                 if expected_region_ids:
                     self.assertEqual(segment.region_ids, expected_region_ids)
+
+    def test_coastal_rivers_reach_coastline_boundary(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        micro_by_id = {c.micro_id: c for c in geometry.micro_cells}
+        boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+        coastal_rivers = 0
+
+        for river in geometry.rivers:
+            if not river.segments or not river.segments[-1].micro_ids:
+                continue
+            sink = micro_by_id[river.segments[-1].micro_ids[0]]
+            if not sink.is_coastal:
+                continue
+            coastal_rivers += 1
+            mouth = river.points[-1]
+            distance_to_coast = min(
+                _point_segment_distance(mouth, a, b)
+                for a, b in boundary_edges.get(sink.micro_id, [])
+            )
+            self.assertLessEqual(distance_to_coast, 1e-5, river.river_id)
+
+        self.assertGreater(coastal_rivers, 0)
+
+    def test_rivers_do_not_stack_on_same_channel(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        channel_sets = [
+            {mid for segment in river.segments for mid in segment.micro_ids}
+            for river in geometry.rivers
+        ]
+
+        for i, first in enumerate(channel_sets):
+            for second in channel_sets[i + 1:]:
+                shared = len(first & second)
+                smaller = max(1, min(len(first), len(second)))
+                self.assertLess(shared / smaller, 0.45)
 
     def test_local_settlement_projection_stays_inside_region_footprint(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)

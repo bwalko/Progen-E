@@ -232,6 +232,71 @@ def _line_path(points: list[tuple[float, float]]) -> str:
     return f"M {first[0]:.1f} {first[1]:.1f} {rest}"
 
 
+def _smooth_line_path(points: list[tuple[float, float]]) -> str:
+    if not points:
+        return ""
+    if len(points) < 3:
+        return _line_path(points)
+    parts = [f"M {points[0][0]:.1f} {points[0][1]:.1f}"]
+    for i in range(1, len(points)):
+        current = points[i]
+        if i < len(points) - 1:
+            mid = ((current[0] + points[i + 1][0]) / 2.0, (current[1] + points[i + 1][1]) / 2.0)
+            parts.append(f"Q {current[0]:.1f} {current[1]:.1f} {mid[0]:.1f} {mid[1]:.1f}")
+        else:
+            parts.append(f"T {current[0]:.1f} {current[1]:.1f}")
+    return " ".join(parts)
+
+
+def _dedupe_render_points(points: list[tuple[float, float]], *, min_distance: float = 0.55) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for point in points:
+        if out and math.dist(out[-1], point) < min_distance:
+            continue
+        out.append(point)
+    return out
+
+
+def _river_render_points(
+    points: list[tuple[float, float]],
+    river_id: str,
+    *,
+    flow: float,
+) -> list[tuple[float, float]]:
+    points = _dedupe_render_points(points, min_distance=0.8)
+    if len(points) < 2:
+        return points
+    rng = random.Random(_stable_seed("river-meander", river_id))
+    out: list[tuple[float, float]] = [points[0]]
+    amplitude = 1.2 + flow * 2.8
+    for i, (a, b) in enumerate(zip(points, points[1:])):
+        ax, ay = a
+        bx, by = b
+        dx = bx - ax
+        dy = by - ay
+        length = math.hypot(dx, dy)
+        if length <= 1e-6:
+            continue
+        nx = -dy / length
+        ny = dx / length
+        steps = max(1, min(5, int(length / 22.0) + 1))
+        for step in range(1, steps + 1):
+            t = step / steps
+            x = ax + dx * t
+            y = ay + dy * t
+            if step < steps:
+                fade = math.sin(math.pi * t)
+                wiggle = rng.uniform(-amplitude, amplitude) * fade
+                x += nx * wiggle
+                y += ny * wiggle
+            elif i < len(points) - 2:
+                bend = rng.uniform(-amplitude * 0.55, amplitude * 0.55)
+                x += nx * bend
+                y += ny * bend
+            out.append((x, y))
+    return _dedupe_render_points(out, min_distance=0.7)
+
+
 def _cell_fill(cell: RegionCell, overlays: WorldMapOverlays | None) -> str:
     if overlays is not None and cell.region_id in overlays.polities_by_region_id:
         return overlays.polities_by_region_id[cell.region_id].color
@@ -703,7 +768,7 @@ def render_world_map_svg(
         "</filter>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round}.coast-beach{stroke:#b8aa8d;stroke-width:3.2}.coast-shadow{stroke:#2d3557;stroke-width:2.6}.coast-line{stroke:#20263d;stroke-width:1.55;stroke-linecap:butt;stroke-linejoin:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round}.feature,.settlement{vector-effect:non-scaling-stroke}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#ffffff;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-beach{stroke:#b8aa8d;stroke-width:3.2}.coast-shadow{stroke:#2d3557;stroke-width:2.6}.coast-line{stroke:#20263d;stroke-width:1.55;stroke-linecap:butt;stroke-linejoin:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round;fill:none}.river-bank{stroke:#175f83;opacity:.42}.river-water{stroke:#2787bd;opacity:.98}.river-highlight{stroke:#7cc6e7;opacity:.22}.river-mouth{fill:#2a8bc8;stroke:#174f72;stroke-width:.55;opacity:.42}.feature,.settlement{vector-effect:non-scaling-stroke}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#ffffff;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="#454a78" />',
     ]
@@ -838,11 +903,35 @@ def render_world_map_svg(
         )
 
     for river in geometry.rivers:
-        pts = [_scale(p, width, height, pad) for p in river.points]
-        parts.append(
-            f'<path class="river {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-            f'd="{_line_path(pts)}" fill="none" stroke-width="{1.1 + river.flow * 2.35:.2f}" opacity="0.82" />'
+        pts = _river_render_points(
+            [_scale(p, width, height, pad) for p in river.points],
+            river.river_id,
+            flow=river.flow,
         )
+        if len(pts) < 2:
+            continue
+        water_width = 1.15 + math.sqrt(max(0.0, river.flow)) * 3.15
+        d = _smooth_line_path(pts)
+        parts.append(
+            f'<path class="river river-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+            f'd="{d}" stroke-width="{water_width + 2.15:.2f}" />'
+        )
+        parts.append(
+            f'<path class="river river-water {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+            f'd="{d}" stroke-width="{water_width:.2f}" />'
+        )
+        if len(pts) >= 3:
+            highlight_width = max(0.45, water_width * 0.28)
+            parts.append(
+                f'<path class="river river-highlight {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                f'd="{d}" stroke-width="{highlight_width:.2f}" />'
+            )
+        if len(river.points) >= 2 and river.points[-1] != river.points[-2]:
+            mouth_x, mouth_y = pts[-1]
+            parts.append(
+                f'<ellipse class="river-mouth {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                f'cx="{mouth_x:.1f}" cy="{mouth_y:.1f}" rx="{water_width * 0.58:.2f}" ry="{water_width * 0.34:.2f}" />'
+            )
 
     if labels:
         for cell in geometry.cells:

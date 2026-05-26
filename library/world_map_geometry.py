@@ -1968,6 +1968,63 @@ def _micro_adjacency(
     return adjacency, shared_midpoints
 
 
+def _micro_boundary_edges(micro_cells: list[MicroRegionCell]) -> dict[str, list[tuple[Point, Point]]]:
+    edge_owner: dict[tuple[Point, Point], tuple[str, Point, Point]] = {}
+    shared_edges: set[tuple[Point, Point]] = set()
+    for cell in micro_cells:
+        pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
+        for i, a in enumerate(pts):
+            b = pts[(i + 1) % len(pts)]
+            key = tuple(sorted((a, b)))  # type: ignore[assignment]
+            if key in edge_owner:
+                shared_edges.add(key)
+            else:
+                edge_owner[key] = (cell.micro_id, a, b)
+
+    out: dict[str, list[tuple[Point, Point]]] = {}
+    for key, (micro_id, a, b) in edge_owner.items():
+        if key in shared_edges:
+            continue
+        out.setdefault(micro_id, []).append((a, b))
+    return out
+
+
+def _coastal_river_mouth_point(
+    cell: MicroRegionCell,
+    previous: Point,
+    boundary_edges: dict[str, list[tuple[Point, Point]]],
+) -> Point | None:
+    edges = boundary_edges.get(cell.micro_id, [])
+    if not edges:
+        return None
+    center = (cell.center_x, cell.center_y)
+    flow_dx = center[0] - previous[0]
+    flow_dy = center[1] - previous[1]
+    flow_len = math.hypot(flow_dx, flow_dy)
+    if flow_len <= 1e-9:
+        flow_dx = flow_dy = 0.0
+    else:
+        flow_dx /= flow_len
+        flow_dy /= flow_len
+
+    candidates: list[tuple[float, float, float, Point]] = []
+    for a, b in edges:
+        point = _nearest_point_on_segment(center, a, b)
+        out_dx = point[0] - center[0]
+        out_dy = point[1] - center[1]
+        out_len = math.hypot(out_dx, out_dy)
+        alignment = 0.0 if out_len <= 1e-9 else (out_dx / out_len) * flow_dx + (out_dy / out_len) * flow_dy
+        candidates.append((-alignment, out_len, point[0], point))
+    return min(candidates, key=lambda c: (c[0], c[1], c[2], c[3][1]))[3]
+
+
+def _nearest_used_outlet_distance(cell: MicroRegionCell, used_outlets: list[Point]) -> float:
+    if not used_outlets:
+        return 1.0
+    center = (cell.center_x, cell.center_y)
+    return min(math.hypot(center[0] - x, center[1] - y) for x, y in used_outlets)
+
+
 def _center_adjacency(micro_cells: list[MicroRegionCell], *, neighbors: int = 7) -> dict[str, set[str]]:
     by_continent: dict[str, list[MicroRegionCell]] = {}
     for cell in micro_cells:
@@ -1995,13 +2052,14 @@ def _center_adjacency(micro_cells: list[MicroRegionCell], *, neighbors: int = 7)
 def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverPath], set[str]]:
     by_id = {c.micro_id: c for c in micro_cells}
     adjacency, shared_midpoints = _micro_adjacency(micro_cells)
+    boundary_edges = _micro_boundary_edges(micro_cells)
     river_cells: set[str] = set()
     rivers: list[RiverPath] = []
     by_continent: dict[str, list[MicroRegionCell]] = {}
     for cell in micro_cells:
         by_continent.setdefault(cell.continent_id, []).append(cell)
     for continent_id, cells in sorted(by_continent.items()):
-        candidates = sorted(
+        source_pool = sorted(
             (
                 c for c in cells
                 if c.elevation >= 0.58 and not c.is_coastal
@@ -2009,14 +2067,40 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
             key=lambda c: (-c.elevation, c.micro_id),
         )
         river_count = max(1, min(5, len(cells) // 24))
-        for source in candidates[:river_count]:
+        used_channels: set[str] = set()
+        used_outlets: list[Point] = []
+        selected_sources: list[MicroRegionCell] = []
+        min_source_spacing = 0.10
+        for _ in range(river_count):
+            available_sources = [
+                c for c in source_pool
+                if c.micro_id not in used_channels
+                and all(
+                    math.hypot(c.center_x - s.center_x, c.center_y - s.center_y) >= min_source_spacing
+                    for s in selected_sources
+                )
+            ]
+            if not available_sources:
+                available_sources = [c for c in source_pool if c.micro_id not in used_channels]
+            if not available_sources:
+                break
+            source = max(
+                available_sources,
+                key=lambda c: (
+                    c.elevation
+                    + _nearest_used_outlet_distance(c, used_outlets) * 0.08
+                    - (0.12 if c.micro_id in river_cells else 0.0),
+                    c.micro_id,
+                ),
+            )
+            selected_sources.append(source)
             current = source.micro_id
             visited = {current}
             path_micro_ids = [source.micro_id]
             path_points: list[Point] = [(source.center_x, source.center_y)]
             for _ in range(36):
                 cell = by_id[current]
-                if cell.is_coastal:
+                if cell.is_coastal and boundary_edges.get(current):
                     break
                 neighbors = [by_id[nid] for nid in adjacency.get(current, set()) if nid not in visited]
                 if not neighbors:
@@ -2027,8 +2111,14 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
                 nxt = min(
                     downhill,
                     key=lambda n: (
-                        n.elevation,
+                        n.elevation + (0.32 if n.micro_id in used_channels else 0.0),
+                        0 if n.is_coastal and boundary_edges.get(n.micro_id) else 1,
                         0 if n.is_coastal else 1,
+                        (
+                            0.0
+                            if not (n.is_coastal and boundary_edges.get(n.micro_id))
+                            else max(0.0, 0.16 - _nearest_used_outlet_distance(n, used_outlets)) * 4.0
+                        ),
                         abs(n.center_x - cell.center_x) + abs(n.center_y - cell.center_y),
                         n.micro_id,
                     ),
@@ -2042,16 +2132,23 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
                 current = nxt.micro_id
                 visited.add(current)
                 path_micro_ids.append(current)
-                if nxt.is_coastal:
+                if nxt.is_coastal and boundary_edges.get(nxt.micro_id):
                     path_points.append((nxt.center_x, nxt.center_y))
+                    mouth = _coastal_river_mouth_point(nxt, midpoint, boundary_edges)
+                    if mouth is not None:
+                        path_points.append(mouth)
                     break
             if len(path_points) < 3:
                 continue
             river_cells.update(visited)
+            used_channels.update(visited)
             sink = by_id[current]
             rounded_points = [(round(x, 6), round(y, 6)) for x, y in path_points]
+            if sink.is_coastal:
+                used_outlets.append(rounded_points[-1])
             segments: list[RiverSegment] = []
-            for i, micro_id in enumerate(path_micro_ids):
+            for i in range(len(rounded_points) - 1):
+                micro_id = path_micro_ids[min(i, len(path_micro_ids) - 1)]
                 if i + 1 >= len(rounded_points):
                     break
                 segments.append(
