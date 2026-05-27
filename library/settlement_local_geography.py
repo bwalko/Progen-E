@@ -9,7 +9,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from library.ethnic_proto_placewords import (
+    EthnicProtoPlacewordLexicon,
+    generate_feature_name,
+)
 from library.geography import Region
+from library.placenames_lexicon import PlacenameLexicon
 from library.world_map_geometry import (
     MAP_GEOMETRY_VERSION,
     RegionFeature,
@@ -110,6 +115,14 @@ class AbstractFeature:
     source_region_feature_id: str | None = None
     source_world_x: float | None = None
     source_world_y: float | None = None
+    display_name: str | None = None
+    etymology: str | None = None
+    name_ethnic: str | None = None
+    name_feature_type: str | None = None
+    name_core_concept: str | None = None
+    name_normalized_form: str | None = None
+    name_placename_category: str | None = None
+    name_placename_meaning: str | None = None
 
 
 @dataclass
@@ -534,6 +547,56 @@ def synthesize_features(
     return feats
 
 
+def assign_feature_names(
+    features: list[AbstractFeature],
+    *,
+    rng: random.Random,
+    ethnic_weights: dict[str, float] | None,
+    db_path: Path | str | None,
+    placename_lexicon: PlacenameLexicon | None = None,
+    proto_lexicon: EthnicProtoPlacewordLexicon | None = None,
+) -> list[AbstractFeature]:
+    """Attach stable proto-derived names to local features.
+
+    This is intentionally called when the regional local-geography JSON is created
+    or refreshed. Because that JSON is then shared by all settlements in the
+    region, a river/mountain/harbor is named once by the inhabitants present at
+    first contact rather than renamed by each later settlement.
+    """
+    weights = ethnic_weights or {}
+    if not weights:
+        return features
+    try:
+        placenames = placename_lexicon or PlacenameLexicon.from_db(db_path=db_path)
+        proto = proto_lexicon or EthnicProtoPlacewordLexicon.from_db(db_path=db_path)
+    except Exception:
+        return features
+    if not proto.rows or not placenames.rows:
+        return features
+
+    for feature in features:
+        if (feature.display_name or "").strip():
+            continue
+        generated = generate_feature_name(
+            rng=rng,
+            proto=proto,
+            placenames=placenames,
+            ethnic_weights=weights,
+            local_kind=feature.kind,
+        )
+        if generated is None:
+            continue
+        feature.display_name = generated.display_name
+        feature.etymology = generated.etymology
+        feature.name_ethnic = generated.ethnic
+        feature.name_feature_type = generated.feature_type
+        feature.name_core_concept = generated.core_concept
+        feature.name_normalized_form = generated.normalized_form
+        feature.name_placename_category = generated.placename_category
+        feature.name_placename_meaning = generated.placename_meaning
+    return features
+
+
 def _nearest_feature(
     features: list[AbstractFeature], px: float, py: float, prefer_kind: str | None
 ) -> AbstractFeature:
@@ -798,6 +861,9 @@ def build_local_region_graph(
     db_path: Path | str | None = None,
     map_seed: object | None = None,
     world_geometry: WorldMapGeometry | None = None,
+    ethnic_weights: dict[str, float] | None = None,
+    placename_lexicon: PlacenameLexicon | None = None,
+    proto_placeword_lexicon: EthnicProtoPlacewordLexicon | None = None,
 ) -> LocalRegionGraph:
     """Deterministic layout when ``rng`` is seeded consistently for the region."""
     kind = feature_kind_for_meaning(primary_meaning or "", primary_category or "")
@@ -816,6 +882,14 @@ def build_local_region_graph(
         primary_kind=kind,
         region_features=source_features,
         region_cell_polygon=region_cell_polygon,
+    )
+    assign_feature_names(
+        feats,
+        rng=rng,
+        ethnic_weights=ethnic_weights,
+        db_path=db_path,
+        placename_lexicon=placename_lexicon,
+        proto_lexicon=proto_placeword_lexicon,
     )
     pins = place_settlement_pins(
         region=region,

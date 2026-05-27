@@ -441,6 +441,8 @@ def seed_settlement_naming_for_region(
         primary_category=gen.primary_category,
         db_path=ctx.db_path,
         map_seed=getattr(ctx, "world_map_seed", None),
+        ethnic_weights=weights,
+        placename_lexicon=lex,
         world_geometry=(
             ctx.world_map_geometry_for_settlements()
             if hasattr(ctx, "world_map_geometry_for_settlements")

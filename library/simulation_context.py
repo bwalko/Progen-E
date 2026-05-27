@@ -22,7 +22,7 @@ from library.person import Person
 from library.geography import get_region, list_regions, region_connectivity_score
 from library.random_names import preload_name_cache
 from library.placenames_lexicon import PlacenameLexicon, preload_placename_cache
-from library.placenames_generation import seed_settlement_naming_for_region
+from library.placenames_generation import region_ethnic_weights, seed_settlement_naming_for_region
 from library.settlement_local_geography import (
     build_local_region_graph,
     make_region_geography_rng,
@@ -1583,6 +1583,8 @@ class SimulationContext:
             primary_category=first.name_category_primary if first is not None else None,
             db_path=self.db_path,
             map_seed=self.world_map_seed,
+            ethnic_weights=region_ethnic_weights(self, rid, db_path=self.db_path),
+            placename_lexicon=PlacenameLexicon.from_db(db_path=self.db_path),
             world_geometry=self.world_map_geometry_for_settlements(),
         )
         geo_json = graph.to_json()

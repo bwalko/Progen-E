@@ -24,6 +24,7 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/genome_jobs.csv` | One row per (`trait`, `deviation_band`) | Career/status/leadership tendencies and era-specific job examples derived from genome traits |
 | `config/job_economics.csv` | ~450 rows + header | Per-era **base** (`*`) plus **deviation** multiplier rows for non-typical jobs (from `genome_jobs` + tier heuristics) |
 | `config/job_market.csv` | Small + header, human-editable | Per-job market semantics: family, essential/luxury/urban demand, saturation, scarcity resilience, and settlement effect deltas |
+| `config/ethnic_proto_placewords.csv` | Proto/toponym stems by ethnicity and feature | One row per ethnic + feature type + concept |
 | `config/government_eras.csv` | Small + header | Historical-year bands per `world` → allowed polity type ids + default succession style |
 | `config/government_polity_types.csv` | Small + header | One row per `polity_type_id` (era, jurisdiction grain, head title, **min_population_to_form** = minimum **real-world** count to *bootstrap*/*promote* to that tier — multiplied by `world_start.population_scale` before comparison against alive in region; **max_population_before_split** = vassal split threshold, also scaled) |
 | `config/government_titles.csv` | Small + header | One row per `title_id` (selection rule, term, male weight, usurp params, linked `polity_type_id` — `*` means "applies to all polity types" for universal per-settlement seats; **min_population_for_first_holder** + **pop_per_holder** = real-world settlement-population thresholds for population-scaled holder counts, also scaled by `world_start.population_scale`; **merit_takeover_chance** = per death-succession probability that an ambitious local leader replaces the hereditary heir, see `dev_rules/government.md` for the per-tier defaults) |
@@ -209,6 +210,24 @@ When adding or renaming a genome trait, update both `genome.csv` and this mappin
 **Job event fitness:** Job lifecycle events (`job_assigned`, `job_lost`, `unemployment_started`, `unemployment_ended`) use `fitness_score` for the job-category fit shown in readers: broad `career_fitness_score` blended with the selected / existing job row's trait-band score. The same payload keeps `career_fitness_score` for the general work-fitness value and `job_trait_match_score` for the trait-only component.
 
 **Sex-restricted job tokens:** A job token may end with `` [M]`` (defaults to male assignees only) or `` [F]`` (female only). Other `Person.gender` values only receive untagged jobs. Cross-gender assignment is allowed when all of: `gender_mind` is the cross pole (`masculine` for a female assignee taking an `[M]` job, `feminine` for a male assignee taking an `[F]` job), genome `mating drive` is sufficiently on the deficient side (low sex drive; threshold `CROSS_GENDER_MATING_DRIVE_THRESHOLD`), and `physical` passes a sex-specific band (`CROSS_GENDER_FEMALE_PHYS_MIN` / `CROSS_GENDER_MALE_PHYS_MAX` in `library.simulation_careers`). `job_assigned` events may include `job_sex_restriction` and `cross_gender_job_exception`.
+
+---
+
+## `config/ethnic_proto_placewords.csv`
+
+**Purpose:** Proto-form semantic stems for named local geography features. `library.ethnic_proto_placewords` uses the resident ethnic mix at first regional local-geography creation, maps local feature kinds (river, mountain, harbor, etc.) to this table's `feature_type`, picks a `core_concept`, then uses `normalized_form` as the seed stem. The seed is combined with `placenames.csv` rows from `Topography`, `Sacred`, and `Status` categories; `rewind_constructed_toponym_placeholder` now applies the initial IE modulo-4 sound law for Germanic vs Italic/Celtic-style toponyms while keeping the function name as the future tuning hook.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `ethnic` | string | Culture/ethnicity; matched against living residents' `Person.ethnic` with case/substring fallback. |
+| `concept_order` | integer-ish string | Authoring order only; ignored by runtime selection. |
+| `tag` | string | Toponym class label, for example hydronym/potamonym; currently annotation. |
+| `feature_type` | string | Feature grain used for lookup, e.g. `river`, `mountain`, `natural harbor`, `ocean`, `fords`. |
+| `core_concept` | string | Semantic bucket. Runtime first chooses a core concept from rows matching `ethnic + feature_type`, then chooses a row in that bucket. |
+| `concept` / `concept_key` | strings | Human-readable / key-level concept annotation. |
+| `normalized_form` | string | Proto/toponym stem used in generated landmark names; spaces are removed during placeholder composition. |
+| `component_tokens` | string | Component glosses for compositional rows; annotation for now. |
+| `confidence`, `source_intermediate_proto_from_reduction`, `lexicon_stage_used`, `lexicon_family_bucket`, `note` | strings | Source/provenance metadata; loaded to SQLite but not used in runtime composition yet. |
 
 ---
 

@@ -10,6 +10,11 @@ import unittest
 from pathlib import Path
 
 from library.config_import import load_all_csvs_into_sqlite
+from library.ethnic_proto_placewords import (
+    EthnicProtoPlacewordLexicon,
+    generate_feature_name,
+    rewind_constructed_toponym_placeholder,
+)
 from library.geography import get_region
 from library.placenames_generation import (
     _compose_dual_affix,
@@ -216,6 +221,52 @@ class TestPlacenameGeneration(unittest.TestCase):
                 if g.secondary_category:
                     self.assertNotIn(g.secondary_category.casefold(), d)
 
+    def test_proto_placeword_feature_name_uses_ethnic_feature_type(self) -> None:
+        rng = random.Random(31001)
+        proto = EthnicProtoPlacewordLexicon.from_db(db_path=self.cfg)
+        g = generate_feature_name(
+            rng=rng,
+            proto=proto,
+            placenames=self.lex,
+            ethnic_weights={"Middle English": 1.0},
+            local_kind="river",
+        )
+        self.assertIsNotNone(g)
+        assert g is not None
+        self.assertEqual(g.ethnic, "Middle English")
+        self.assertEqual(g.feature_type, "river")
+        self.assertTrue(g.normalized_form)
+        self.assertNotIn(" ", g.display_name)
+        self.assertIn(g.core_concept, g.etymology)
+
+    def test_ie_modulo_sound_law_examples(self) -> None:
+        self.assertEqual(
+            rewind_constructed_toponym_placeholder(
+                "Akwā-bheorg",
+                branch="germanic",
+            ),
+            "ahwaberk",
+        )
+        self.assertEqual(
+            rewind_constructed_toponym_placeholder(
+                "Akwā-bheorg",
+                branch="italic_celtic",
+            ),
+            "aquaborg",
+        )
+        self.assertEqual(
+            rewind_constructed_toponym_placeholder("dhūn", branch="italic_celtic"),
+            "dun",
+        )
+        self.assertEqual(
+            rewind_constructed_toponym_placeholder(
+                "Ahwaberk",
+                branch="germanic",
+                reverse=True,
+            ),
+            "akwabheorg",
+        )
+
 
 class TestLocalGeography(unittest.TestCase):
     def setUp(self) -> None:
@@ -298,6 +349,39 @@ class TestLocalGeography(unittest.TestCase):
 
         self.assertTrue(coast_features & {"coast", "bay", "harbor", "cliff"})
         self.assertTrue(river_features & {"river", "stream", "ford", "bridge", "marsh", "bog"})
+
+    def test_local_graph_features_get_stable_proto_names(self) -> None:
+        region = get_region("boreas_peat_river", world="default", db_path=self.cfg)
+        lex = PlacenameLexicon.from_db(db_path=self.cfg)
+        rng1 = make_region_geography_rng("default", "boreas_peat_river", slot=0)
+        rng2 = make_region_geography_rng("default", "boreas_peat_river", slot=0)
+        g1 = build_local_region_graph(
+            world="default",
+            region=region,
+            rng=rng1,
+            settlement_slots=1,
+            primary_meaning="river",
+            primary_category="Topography",
+            db_path=self.cfg,
+            ethnic_weights={"Middle English": 1.0},
+            placename_lexicon=lex,
+        )
+        g2 = build_local_region_graph(
+            world="default",
+            region=region,
+            rng=rng2,
+            settlement_slots=1,
+            primary_meaning="river",
+            primary_category="Topography",
+            db_path=self.cfg,
+            ethnic_weights={"Middle English": 1.0},
+            placename_lexicon=lex,
+        )
+        named1 = [(f.kind, f.display_name, f.name_ethnic) for f in g1.features if f.display_name]
+        named2 = [(f.kind, f.display_name, f.name_ethnic) for f in g2.features if f.display_name]
+        self.assertTrue(named1)
+        self.assertEqual(named1, named2)
+        self.assertTrue(all(item[2] == "Middle English" for item in named1))
 
 
 class TestRegionEthnicWeights(unittest.TestCase):
