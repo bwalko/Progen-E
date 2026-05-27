@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import sqlite3
 import time
+import json
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -49,6 +50,7 @@ from library.world_bootstrap import save_has_simulation_people
 from library.world_bootstrap import should_refresh_world_config_auto
 from library.world_paths import config_db_path as world_folder_config_db_path
 from library.world_paths import derive_save_db_path_from_config
+from library.world_map_geometry import WorldMapGeometry, build_world_map_geometry
 from library.world_time import ensure_world_state, reset_world_time, set_world_current_year
 from library.world_save import (
     checkpoint_simulation_to_save,
@@ -218,6 +220,7 @@ class SimulationContext:
     _alive_columns_cache: tuple[int, AlivePersonColumns] | None = field(default=None, repr=False)
     _annual_care_indexes_cache: tuple[int, Any] | None = field(default=None, repr=False)
     _annual_resource_facts_cache: tuple[int, Any] | None = field(default=None, repr=False)
+    _world_map_geometry_cache: WorldMapGeometry | None = field(default=None, repr=False)
     _species_life_stage_rows_cache: tuple[
         str, dict[tuple[str, str], Mapping[str, Any]]
     ] | None = field(default=None, repr=False)
@@ -443,6 +446,7 @@ class SimulationContext:
         self.mortality_milestones = _load_mortality_milestones(db_path=self.db_path)
         if not skip_settlement_seed:
             self._seed_settlements_from_geography()
+        self.refresh_outdated_region_local_geographies()
         if not self.mortality_milestones:
             raise LookupError("historical_mortality_milestones table is empty.")
         self._mortality_index = 0
@@ -1543,6 +1547,16 @@ class SimulationContext:
             if st.region_id == rid:
                 st.local_geography_json = local_geography_json
 
+    def world_map_geometry_for_settlements(self) -> WorldMapGeometry:
+        if self._world_map_geometry_cache is None:
+            self._world_map_geometry_cache = build_world_map_geometry(
+                world=self.world,
+                db_path=self.db_path,
+                save_db_path=self.save_db_path,
+                map_seed=self.world_map_seed,
+            )
+        return self._world_map_geometry_cache
+
     def refresh_region_local_geography(self, region_id: str) -> str | None:
         rid = (region_id or "").strip()
         slots = self.max_site_slot_in_region(rid)
@@ -1569,6 +1583,7 @@ class SimulationContext:
             primary_category=first.name_category_primary if first is not None else None,
             db_path=self.db_path,
             map_seed=self.world_map_seed,
+            world_geometry=self.world_map_geometry_for_settlements(),
         )
         geo_json = graph.to_json()
         self._set_region_local_geography(rid, geo_json)
@@ -1576,6 +1591,32 @@ class SimulationContext:
 
     def refresh_all_region_local_geographies(self) -> None:
         for rid in sorted({st.region_id for st in self.settlements_by_id.values()}):
+            self.refresh_region_local_geography(rid)
+
+    def refresh_outdated_region_local_geographies(self) -> None:
+        outdated: set[str] = set()
+        for st in self.settlements_by_id.values():
+            raw = st.local_geography_json
+            if not raw:
+                outdated.add(st.region_id)
+                continue
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                outdated.add(st.region_id)
+                continue
+            sites = data.get("settlements") if isinstance(data, dict) else None
+            if not isinstance(sites, list) or not sites:
+                outdated.add(st.region_id)
+                continue
+            for site in sites:
+                if not isinstance(site, dict):
+                    outdated.add(st.region_id)
+                    break
+                if site.get("world_x") is None or site.get("world_y") is None:
+                    outdated.add(st.region_id)
+                    break
+        for rid in sorted(outdated):
             self.refresh_region_local_geography(rid)
 
     def reestablish_from_abandoned(self, abandoned: SettlementState) -> SettlementState:

@@ -26,6 +26,8 @@ from library.world_map_geometry import (
     _polygon_bounds,
     build_world_map_geometry,
     project_local_point_to_region_footprint,
+    project_world_point_to_region_footprint,
+    region_id_for_world_point,
 )
 from library.world_save import read_world_map_seed, write_world_map_seed
 from library.world_map_svg import (
@@ -238,6 +240,55 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertTrue(data["region_cell_polygon"])
         self.assertTrue(any(f.source_region_feature_id for f in graph.features))
         self.assertEqual(len(graph.settlements), 3)
+        self.assertEqual(graph.edges, [])
+
+        feature_by_id = {f.feature_id: f for f in graph.features}
+        anchored = [
+            feature_by_id.get(pin.anchor_feature_id or "")
+            for pin in graph.settlements
+        ]
+        self.assertTrue(any(f is not None and f.source_region_feature_id for f in anchored))
+        self.assertTrue(
+            any(
+                f is not None and f.kind in {"harbor", "bay", "coast", "river", "ford", "stream"}
+                for f in anchored
+            )
+        )
+
+    def test_many_local_settlements_keep_distinct_world_sites(self) -> None:
+        region = next(
+            r for r in list_regions(world="default", db_path=self.cfg)
+            if r.region_id == "aeria_eastwater_river"
+        )
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        rng = make_region_geography_rng("default", region.region_id, slot=0)
+
+        graph = build_local_region_graph(
+            world="default",
+            region=region,
+            rng=rng,
+            settlement_slots=17,
+            primary_meaning="ford",
+            primary_category="Topography",
+            db_path=self.cfg,
+            world_geometry=geometry,
+        )
+
+        world_sites = [
+            (pin.world_x, pin.world_y)
+            for pin in graph.settlements
+            if pin.world_x is not None and pin.world_y is not None
+        ]
+        self.assertGreaterEqual(len(world_sites), 12)
+        for site in world_sites:
+            self.assertEqual(region_id_for_world_point(geometry, site), region.region_id)
+
+        close_pairs = 0
+        for i, first in enumerate(world_sites):
+            for second in world_sites[i + 1:]:
+                if ((first[0] - second[0]) ** 2 + (first[1] - second[1]) ** 2) ** 0.5 < 0.004:
+                    close_pairs += 1
+        self.assertLess(close_pairs, 8)
 
     def test_features_have_svg_style_semantics(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -317,6 +368,20 @@ class TestWorldMapGeometry(unittest.TestCase):
                 containing = [micro for micro in owned if _point_in_polygon(point, micro.polygon)]
                 self.assertTrue(containing, (cell.region_id, local, point))
 
+    def test_world_point_projection_stays_inside_declared_region(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        target = next(c for c in geometry.cells if c.region_id == "boreas_boreal_deep")
+        outside = next(c for c in geometry.cells if c.region_id != target.region_id)
+        point = (outside.center_x, outside.center_y)
+
+        projected = project_world_point_to_region_footprint(
+            geometry,
+            target.region_id,
+            point,
+        )
+
+        self.assertEqual(region_id_for_world_point(geometry, projected), target.region_id)
+
     def test_debug_svg_renderer_outputs_noisy_map_layers(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
 
@@ -336,7 +401,7 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn('class="coast-shadow"', svg)
         self.assertLess(svg.count('class="coast-beach"'), 50)
         self.assertIn(".river{stroke:#2a8bc8", svg)
-        self.assertIn('class="route ', svg)
+        self.assertNotIn('class="route ', svg)
         self.assertIn('class="feature ', svg)
         self.assertIn("data-region-label=", svg)
         first_cell = geometry.micro_cells[0]

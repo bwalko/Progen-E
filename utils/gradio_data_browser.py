@@ -103,6 +103,7 @@ from library.world_map_geometry import (  # noqa: E402
     WorldMapGeometry,
     build_world_map_geometry,
     project_local_point_to_region_footprint,
+    project_world_point_to_region_footprint,
 )
 from library.world_map_svg import load_world_map_overlays, render_world_map_svg  # noqa: E402
 
@@ -3551,6 +3552,57 @@ def _detail_card(label: str, value: object) -> str:
     )
 
 
+def _config_region_display_name(world: str, region_id: str) -> str:
+    cfg = _db_path(world, "Config DB")
+    if not cfg.exists():
+        return ""
+    try:
+        with _connect_readonly(cfg) as con:
+            if not _has_table(con, "world_geography_regions"):
+                return ""
+            row = con.execute(
+                """
+                select region_name
+                from world_geography_regions
+                where world = ? and region_id = ?
+                """,
+                (world, region_id),
+            ).fetchone()
+    except (FileNotFoundError, sqlite3.Error):
+        return ""
+    return str(row["region_name"] or "").strip() if row else ""
+
+
+def _render_empty_region_sheet(con: sqlite3.Connection, world: str, region_id: str) -> str:
+    name = _config_region_display_name(world, region_id) or region_id
+    cards = "".join(
+        [
+            _detail_card("Alive", 0),
+            _detail_card("Settlements", 0),
+            _detail_card("Food Pressure", "Unknown"),
+            _detail_card("Stability", "Unknown"),
+            _detail_card("Market Pull", "Unknown"),
+            _detail_card("Prosperity", "Unknown"),
+            _detail_card("Treasury", "Unknown"),
+            _detail_card("Polities", _polity_names_for_region(con, region_id) or "None"),
+        ]
+    )
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(name)}</h2>'
+        f'<div class="place-subtitle">Region {html.escape(region_id)}</div>'
+        f'<div class="place-muted">No settlements are recorded for region {html.escape(region_id)} in the current save yet.</div>'
+        f'<div class="place-grid">{cards}</div>'
+        f'{_region_map_html(con, world, region_id)}'
+        '<div class="place-columns">'
+        '<section><h3>Settlements</h3><p class="place-muted">None yet.</p></section>'
+        '<section><h3>Top Jobs</h3><p class="place-muted">None yet.</p></section>'
+        '<section><h3>Notable Residents</h3><p class="place-muted">None yet.</p></section>'
+        '</div>'
+        '</div>'
+    )
+
+
 def _load_local_geography(raw: object) -> dict[str, object]:
     if not raw:
         return {}
@@ -3673,19 +3725,32 @@ def _render_generated_region_map(
     for row in settlement_rows:
         slot = int(row["site_slot"] or 1) if "site_slot" in row.keys() else 1
         site = site_by_slot.get(slot)
+        world_xy: tuple[float, float] | None = None
         if site:
             try:
                 lx = float(site.get("x", 0.5))
                 ly = float(site.get("y", 0.5))
             except (TypeError, ValueError):
                 lx = ly = 0.5
+            try:
+                if site.get("world_x") is not None and site.get("world_y") is not None:
+                    world_xy = (float(site["world_x"]), float(site["world_y"]))
+            except (TypeError, ValueError):
+                world_xy = None
         else:
             lx = ly = 0.5
-        wx, wy = project_local_point_to_region_footprint(
-            geometry,
-            region_id,
-            (max(0.04, min(0.96, lx)), max(0.04, min(0.96, ly))),
-        )
+        if world_xy is not None:
+            wx, wy = project_world_point_to_region_footprint(
+                geometry,
+                region_id,
+                world_xy,
+            )
+        else:
+            wx, wy = project_local_point_to_region_footprint(
+                geometry,
+                region_id,
+                (max(0.04, min(0.96, lx)), max(0.04, min(0.96, ly))),
+            )
         x = sx(wx)
         y = sy(wy)
         sid = str(row["settlement_id"] or "")
@@ -4613,6 +4678,10 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
             (region_id,),
         ).fetchone()
     if not row:
+        if not _has_table(con, "simulation_settlements"):
+            if _config_region_display_name(world, region_id):
+                return _render_empty_region_sheet(con, world, region_id)
+            return f'<div class="place-sheet muted">No region named {html.escape(region_id)}.</div>'
         if _has_table(con, "simulation_settlements"):
             settlement_table = _place_read_relation(con, "simulation_settlements")
             where, params = _world_where(con, settlement_table, world)
@@ -4626,11 +4695,7 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
                 (*params, region_id),
             )
             if settlement_count == 0:
-                return (
-                    '<div class="place-sheet muted">'
-                    f'No settlements are recorded for region {html.escape(region_id)} in the current save yet.'
-                    '</div>'
-                )
+                return _render_empty_region_sheet(con, world, region_id)
         return f'<div class="place-sheet muted">No region named {html.escape(region_id)}.</div>'
     birth_region_sql = _person_birth_region_sql(con)
     alive_counts, top_jobs = _alive_counts_and_top_jobs_by_place(

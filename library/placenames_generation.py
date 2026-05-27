@@ -440,6 +440,12 @@ def seed_settlement_naming_for_region(
         primary_meaning=gen.primary_meaning,
         primary_category=gen.primary_category,
         db_path=ctx.db_path,
+        map_seed=getattr(ctx, "world_map_seed", None),
+        world_geometry=(
+            ctx.world_map_geometry_for_settlements()
+            if hasattr(ctx, "world_map_geometry_for_settlements")
+            else None
+        ),
     )
     placement_json = graph.to_json()
     return gen, placement_json

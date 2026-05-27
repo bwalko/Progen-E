@@ -19,6 +19,7 @@ from library.world_map_geometry import (
     RegionFeature,
     WorldMapGeometry,
     project_local_point_to_region_footprint,
+    project_world_point_to_region_footprint,
 )
 
 
@@ -610,6 +611,38 @@ def _site_xy(local_geography_json: object, site_slot: object) -> tuple[float, fl
     return None
 
 
+def _site_world_xy(local_geography_json: object, site_slot: object) -> tuple[float, float] | None:
+    if not local_geography_json:
+        return None
+    try:
+        data = json.loads(str(local_geography_json))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    sites = data.get("settlements")
+    if not isinstance(sites, list):
+        return None
+    try:
+        slot = int(site_slot or 1) - 1
+    except (TypeError, ValueError):
+        slot = 0
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        try:
+            if int(site.get("settlement_slot", 0)) != slot:
+                continue
+            wx = site.get("world_x")
+            wy = site.get("world_y")
+            if wx is None or wy is None:
+                return None
+            return (float(wx), float(wy))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def load_world_map_overlays(
     *,
     geometry: WorldMapGeometry,
@@ -665,13 +698,20 @@ def load_world_map_overlays(
                 cell = cells.get(rid)
                 if cell is None:
                     continue
+                world_xy = _site_world_xy(row["local_geography_json"], row["site_slot"])
                 local = _site_xy(row["local_geography_json"], row["site_slot"])
-                if local is None:
+                if world_xy is None and local is None:
                     rng = random.Random(_stable_seed(geometry.version, row["settlement_id"], "overlay"))
                     local = (0.5 + rng.uniform(-0.16, 0.16), 0.5 + rng.uniform(-0.16, 0.16))
-                lx = max(0.04, min(0.96, local[0]))
-                ly = max(0.04, min(0.96, local[1]))
-                world_x, world_y = project_local_point_to_region_footprint(geometry, rid, (lx, ly))
+                if world_xy is not None:
+                    world_x, world_y = project_world_point_to_region_footprint(
+                        geometry, rid, world_xy
+                    )
+                else:
+                    assert local is not None
+                    lx = max(0.04, min(0.96, local[0]))
+                    ly = max(0.04, min(0.96, local[1]))
+                    world_x, world_y = project_local_point_to_region_footprint(geometry, rid, (lx, ly))
                 settlements.append(
                     SettlementMapOverlay(
                         settlement_id=str(row["settlement_id"] or ""),
@@ -768,7 +808,7 @@ def render_world_map_svg(
         "</filter>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-beach{stroke:#b8aa8d;stroke-width:3.2}.coast-shadow{stroke:#2d3557;stroke-width:2.6}.coast-line{stroke:#20263d;stroke-width:1.55;stroke-linecap:butt;stroke-linejoin:round}.route.land_route{stroke:#725b42}.route.sea_route{stroke:#467aa2;stroke-dasharray:6 5}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round;fill:none}.river-bank{stroke:#175f83;opacity:.42}.river-water{stroke:#2787bd;opacity:.98}.river-highlight{stroke:#7cc6e7;opacity:.22}.river-mouth{fill:#2a8bc8;stroke:#174f72;stroke-width:.55;opacity:.42}.feature,.settlement{vector-effect:non-scaling-stroke}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#ffffff;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-beach{stroke:#b8aa8d;stroke-width:3.2}.coast-shadow{stroke:#2d3557;stroke-width:2.6}.coast-line{stroke:#20263d;stroke-width:1.55;stroke-linecap:butt;stroke-linejoin:round}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round;fill:none}.river-bank{stroke:#175f83;opacity:.42}.river-water{stroke:#2787bd;opacity:.98}.river-highlight{stroke:#7cc6e7;opacity:.22}.river-mouth{fill:#2a8bc8;stroke:#174f72;stroke-width:.55;opacity:.42}.feature,.settlement{vector-effect:non-scaling-stroke}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#ffffff;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="#454a78" />',
     ]
@@ -893,14 +933,6 @@ def render_world_map_svg(
                 f'<path class="cell terrain-{html.escape(cell.terrain_family)}" data-region-id="{html.escape(cell.region_id)}"{polity_attrs} '
                 f'd="{_poly_path(scaled)}" fill="{_cell_fill(cell, overlays)}" opacity="0.82" />'
             )
-
-    for edge in geometry.edges:
-        pts = [_scale(p, width, height, pad) for p in edge.points]
-        parts.append(
-            f'<path class="route {html.escape(edge.edge_class)}" data-from="{html.escape(edge.from_region_id)}" '
-            f'data-to="{html.escape(edge.to_region_id)}" d="{_line_path(pts)}" fill="none" '
-            f'stroke-width="{max(0.65, 2.15 / (1.0 + edge.friction / 5.0)):.2f}" opacity="0.28" />'
-        )
 
     for river in geometry.rivers:
         pts = _river_render_points(

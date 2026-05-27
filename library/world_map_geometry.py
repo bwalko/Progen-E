@@ -2399,31 +2399,71 @@ def _sea_lane_points(
     ])
 
 
+def _cells_for_region_footprint(
+    geometry: WorldMapGeometry,
+    region_id: str,
+) -> list[MicroRegionCell]:
+    rid = (region_id or "").strip()
+    cells = [c for c in geometry.micro_cells if c.region_id == rid]
+    if cells:
+        return cells
+    cell = geometry.cell_by_region_id().get(rid)
+    if cell is None:
+        return []
+    return [
+        MicroRegionCell(
+            micro_id=f"{rid}:region-cell",
+            region_id=rid,
+            continent_id=cell.continent_id,
+            center_x=cell.center_x,
+            center_y=cell.center_y,
+            polygon=cell.polygon,
+            elevation=cell.elevation,
+            moisture=cell.moisture,
+            terrain_family=cell.terrain_family,
+            is_coastal=cell.is_coastal,
+        )
+    ]
+
+
+def region_id_for_world_point(
+    geometry: WorldMapGeometry,
+    point: Point,
+) -> str | None:
+    """Return the region owning the micro-polygon containing ``point``."""
+    for cell in geometry.micro_cells:
+        if _point_in_polygon(point, cell.polygon):
+            return cell.region_id
+    for cell in geometry.cells:
+        if _point_in_polygon(point, cell.polygon):
+            return cell.region_id
+    return None
+
+
+def project_world_point_to_region_footprint(
+    geometry: WorldMapGeometry,
+    region_id: str,
+    point: Point,
+) -> Point:
+    """Clamp a world-space point to land owned by ``region_id``."""
+    cells = _cells_for_region_footprint(geometry, region_id)
+    if not cells:
+        return (_clamp(point[0], 0.0, 1.0), _clamp(point[1], 0.0, 1.0))
+    for cell in cells:
+        if _point_in_polygon(point, cell.polygon):
+            return _nudge_inside_polygon(point, cell.polygon)
+    return _best_region_interior_point(point, cells)
+
+
 def project_local_point_to_region_footprint(
     geometry: WorldMapGeometry,
     region_id: str,
     local: Point,
 ) -> Point:
     """Project a local [0, 1] point onto land actually owned by ``region_id``."""
-    cells = [c for c in geometry.micro_cells if c.region_id == region_id]
+    cells = _cells_for_region_footprint(geometry, region_id)
     if not cells:
-        cell = geometry.cell_by_region_id().get(region_id)
-        if cell is None:
-            return (_clamp(local[0], 0.0, 1.0), _clamp(local[1], 0.0, 1.0))
-        cells = [
-            MicroRegionCell(
-                micro_id=f"{region_id}:region-cell",
-                region_id=region_id,
-                continent_id=cell.continent_id,
-                center_x=cell.center_x,
-                center_y=cell.center_y,
-                polygon=cell.polygon,
-                elevation=cell.elevation,
-                moisture=cell.moisture,
-                terrain_family=cell.terrain_family,
-                is_coastal=cell.is_coastal,
-            )
-        ]
+        return (_clamp(local[0], 0.0, 1.0), _clamp(local[1], 0.0, 1.0))
     xs = [x for c in cells for x, _ in c.polygon]
     ys = [y for c in cells for _, y in c.polygon]
     if not xs or not ys:

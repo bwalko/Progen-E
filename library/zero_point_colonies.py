@@ -13,6 +13,7 @@ from typing import Sequence
 from library.generator import generate_person_random
 from library.geography import list_regions
 from library.geography import _get_route_edges_by_origin
+from library.world_map_geometry import build_world_map_geometry
 from library.person import Person
 from library.population_growth_runner import _with_founder_parent_names
 from library.reproduction import (
@@ -93,20 +94,58 @@ def pick_far_coastal_region_ids(
     db_path: Path,
     count: int = DEFAULT_FOUNDATION_COLONY_COUNT,
 ) -> list[str]:
-    """Pick coast/riverland regions: first one per continent, then farthest-from-chosen greedy."""
+    """Pick strong physical-map settlement regions, spaced by route friction."""
     w = world.strip()
     regions = list_regions(world=w, db_path=db_path)
-    coastal_sorted = sorted(
-        (r for r in regions if r.terrain.strip().lower() in ("coast", "riverland")),
-        key=lambda r: r.region_id,
+    region_by_id = {r.region_id: r for r in regions}
+    try:
+        geometry = build_world_map_geometry(world=w, db_path=db_path)
+    except Exception:
+        geometry = None
+    feature_score_by_region: dict[str, int] = {}
+    if geometry is not None:
+        weights = {
+            "harbor": 120,
+            "bay": 108,
+            "coast": 96,
+            "river": 88,
+            "ford": 84,
+            "stream": 72,
+            "lake": 54,
+            "spring": 48,
+        }
+        for feature in geometry.features:
+            feature_score_by_region[feature.region_id] = max(
+                feature_score_by_region.get(feature.region_id, 0),
+                weights.get((feature.kind or "").strip().lower(), 0),
+            )
+
+    def region_site_score(region_id: str) -> int:
+        region = region_by_id[region_id]
+        score = int(feature_score_by_region.get(region_id, 0))
+        text = " ".join(
+            str(v or "").lower()
+            for v in (region.region_name, region.biome, region.terrain, region.keywords)
+        )
+        if any(t in text for t in ("harbor", "port")):
+            score = max(score, 120)
+        elif any(t in text for t in ("coast", "shore", "bay", "delta", "fjord")):
+            score = max(score, 96)
+        if any(t in text for t in ("river", "stream", "floodplain", "ford")):
+            score = max(score, 88)
+        return score
+
+    site_sorted = sorted(
+        (r for r in regions if region_site_score(r.region_id) > 0),
+        key=lambda r: (-region_site_score(r.region_id), r.region_id),
     )
-    if len(coastal_sorted) < count:
+    if len(site_sorted) < count:
         raise LookupError(
-            f"need {count} coast/riverland regions but only found {len(coastal_sorted)} for world={world!r}"
+            f"need {count} harbor/coast/river regions but only found {len(site_sorted)} for world={world!r}"
         )
 
     by_cont: dict[str, list[str]] = defaultdict(list)
-    for r in coastal_sorted:
+    for r in site_sorted:
         cid = str(r.continent_id or "").strip()
         by_cont[cid].append(r.region_id)
 
@@ -116,7 +155,7 @@ def pick_far_coastal_region_ids(
     for cid in sorted(by_cont.keys()):
         if len(chosen) >= count:
             break
-        bucket = sorted(by_cont[cid])
+        bucket = sorted(by_cont[cid], key=lambda rid: (-region_site_score(rid), rid))
         for rid in bucket:
             if rid in taken:
                 continue
@@ -125,20 +164,20 @@ def pick_far_coastal_region_ids(
             break
 
     remain = sorted(
-        rid for rid in (r.region_id for r in coastal_sorted) if rid not in taken
+        (rid for rid in (r.region_id for r in site_sorted) if rid not in taken),
+        key=lambda rid: (-region_site_score(rid), rid),
     )
     adj = _weighted_adjacency(world=w, db_path=db_path)
     while len(chosen) < count and remain:
-        ch_set = set(chosen)
         best_rid: str | None = None
-        best_key: tuple[float, str] = (-math.inf, "")
-        for cand in sorted(remain):
+        best_key: tuple[float, int, str] = (-math.inf, -1, "")
+        for cand in remain:
             md = min(
                 (_shortest_distance_to_targets(adj, cand, {s}) for s in chosen),
                 default=math.inf,
             )
             sep = md if not math.isinf(md) else -1e9
-            key = (sep, cand)
+            key = (sep, region_site_score(cand), cand)
             if best_rid is None or key > best_key:
                 best_key = key
                 best_rid = cand
@@ -148,7 +187,7 @@ def pick_far_coastal_region_ids(
         remain.remove(best_rid)
 
     if len(chosen) < count:
-        raise LookupError(f"could not pick {count} coastal colonies for world={world!r}")
+        raise LookupError(f"could not pick {count} physical-site colonies for world={world!r}")
     return chosen[:count]
 
 

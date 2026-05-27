@@ -15,6 +15,7 @@ from library.world_map_geometry import (
     RegionFeature,
     WorldMapGeometry,
     build_world_map_geometry,
+    project_world_point_to_region_footprint,
 )
 
 
@@ -107,6 +108,8 @@ class AbstractFeature:
     x: float
     y: float
     source_region_feature_id: str | None = None
+    source_world_x: float | None = None
+    source_world_y: float | None = None
 
 
 @dataclass
@@ -125,6 +128,8 @@ class SettlementPin:
     offset_dx: float
     offset_dy: float
     narrative_hint: str
+    world_x: float | None = None
+    world_y: float | None = None
 
 
 @dataclass
@@ -360,6 +365,82 @@ def _feature_kind_for_anchor(primary_kind: str | None, region: Region) -> str:
     return kind or _settlement_landmark_kind(region)
 
 
+_SETTLEMENT_SITE_PRIORITY = {
+    "harbor": 120,
+    "bay": 108,
+    "coast": 96,
+    "river": 88,
+    "ford": 84,
+    "stream": 72,
+    "lake": 58,
+    "spring": 52,
+    "marsh": 46,
+    "meadow": 34,
+    "clearing": 30,
+    "well": 28,
+}
+
+
+def _site_priority(feature: AbstractFeature) -> int:
+    return _SETTLEMENT_SITE_PRIORITY.get((feature.kind or "").strip().lower(), 8)
+
+
+def _settlement_site_anchors(features: list[AbstractFeature]) -> list[AbstractFeature]:
+    """Physical-map anchors preferred for settlement sites."""
+    ranked = [f for f in features if _site_priority(f) >= 28]
+    if not ranked:
+        ranked = list(features)
+    return sorted(
+        ranked,
+        key=lambda f: (f.source_region_feature_id is None, -_site_priority(f), f.feature_id),
+    )
+
+
+def _distance_to_existing_pins(x: float, y: float, pins: list[SettlementPin]) -> float:
+    if not pins:
+        return math.inf
+    return min(math.hypot(x - p.x, y - p.y) for p in pins)
+
+
+def _site_point_near_anchor(
+    anchor: AbstractFeature,
+    rng: random.Random,
+    pins: list[SettlementPin],
+) -> tuple[float, float]:
+    """Nudge a settlement beside a harbor/river while keeping a readable buffer."""
+    radius = 0.035 if anchor.kind in {"harbor", "bay", "coast", "river", "ford"} else 0.055
+    best = (anchor.x, anchor.y)
+    best_d = _distance_to_existing_pins(best[0], best[1], pins)
+    for i in range(10):
+        angle = rng.uniform(0.0, math.tau)
+        dist = radius * (0.35 + 0.65 * (i + 1) / 10.0)
+        candidate = (
+            _clamp01(anchor.x + math.cos(angle) * dist),
+            _clamp01(anchor.y + math.sin(angle) * dist),
+        )
+        d = _distance_to_existing_pins(candidate[0], candidate[1], pins)
+        if d > best_d:
+            best = candidate
+            best_d = d
+    return best
+
+
+def _local_to_world_from_region_bounds(
+    local: tuple[float, float],
+    region_cell_polygon: list[tuple[float, float]],
+) -> tuple[float, float] | None:
+    if not region_cell_polygon:
+        return None
+    xs = [p[0] for p in region_cell_polygon]
+    ys = [p[1] for p in region_cell_polygon]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    return (
+        min_x + (max_x - min_x) * _clamp01(local[0], pad=0.0),
+        min_y + (max_y - min_y) * _clamp01(local[1], pad=0.0),
+    )
+
+
 def synthesize_features(
     region: Region,
     rng: random.Random,
@@ -383,7 +464,14 @@ def synthesize_features(
     n = base_n if n_features is None else max(3, int(n_features))
     feats: list[AbstractFeature] = []
 
-    def add(kind: str, x: float, y: float, source_region_feature_id: str | None = None) -> None:
+    def add(
+        kind: str,
+        x: float,
+        y: float,
+        source_region_feature_id: str | None = None,
+        source_world_x: float | None = None,
+        source_world_y: float | None = None,
+    ) -> None:
         feats.append(
             AbstractFeature(
                 feature_id=f"{region.region_id}:f{len(feats)}",
@@ -391,13 +479,15 @@ def synthesize_features(
                 x=_clamp01(x),
                 y=_clamp01(y),
                 source_region_feature_id=source_region_feature_id,
+                source_world_x=source_world_x,
+                source_world_y=source_world_y,
             )
         )
 
     if region_features:
         for feature in region_features:
             x, y = _region_feature_to_local_point(feature, region_cell_polygon or [])
-            add(feature.kind, x, y, feature.feature_id)
+            add(feature.kind, x, y, feature.feature_id, feature.x, feature.y)
 
     family = _terrain_family(region)
     if family == "riverland":
@@ -505,24 +595,66 @@ def place_settlement_pins(
     rng: random.Random,
     settlement_slots: int,
     primary_kind: str | None,
+    region_cell_polygon: list[tuple[float, float]] | None = None,
+    world_geometry: WorldMapGeometry | None = None,
 ) -> list[SettlementPin]:
-    """Assign each settlement slot a position relative to the nearest matching feature."""
+    """Assign settlement slots to strong physical sites with spacing.
+
+    Placename landmarks no longer drive site selection. The first pass prefers
+    physical-map harbors/coasts, then river/ford anchors, then softer lowland
+    support features. Additional settlements favor unused anchors before sharing
+    one already claimed by an existing slot.
+    """
     pins: list[SettlementPin] = []
-    anchors = list(features)
-    if primary_kind:
-        preferred = [f for f in features if f.kind == primary_kind]
-        if preferred:
-            anchors = preferred
+    anchors = _settlement_site_anchors(features)
+    used_anchor_ids: set[str] = set()
     for slot in range(max(1, settlement_slots)):
+        anchor = None
         if anchors:
-            anchor = anchors[slot % len(anchors)]
-            bx, by = _near_feature(anchor, rng, radius=0.11)
+            available = [f for f in anchors if f.feature_id not in used_anchor_ids] or anchors
+            if all(f.feature_id in used_anchor_ids for f in anchors):
+                anchor = max(
+                    available,
+                    key=lambda f: (
+                        min(_distance_to_existing_pins(f.x, f.y, pins), 1.0),
+                        _site_priority(f),
+                        f.feature_id,
+                    ),
+                )
+            else:
+                anchor = max(
+                    available,
+                    key=lambda f: (
+                        _site_priority(f),
+                        min(_distance_to_existing_pins(f.x, f.y, pins), 1.0),
+                        f.source_region_feature_id is not None,
+                        f.feature_id,
+                    ),
+                )
+            used_anchor_ids.add(anchor.feature_id)
+            bx, by = _site_point_near_anchor(anchor, rng, pins)
         else:
             bx, by = _settlement_base_point(region, rng, slot, max(1, settlement_slots))
             anchor = _nearest_feature(features, bx, by, primary_kind) if features else None
         ox = (bx - anchor.x) if anchor is not None else 0.0
         oy = (by - anchor.y) if anchor is not None else 0.0
         hint = f"near_{anchor.kind}" if anchor is not None else f"near_{_settlement_landmark_kind(region)}"
+        world_xy = None
+        if anchor is not None and anchor.source_world_x is not None and anchor.source_world_y is not None:
+            bounded = _local_to_world_from_region_bounds(
+                (anchor.x + ox, anchor.y + oy),
+                region_cell_polygon or [],
+            )
+            if bounded is not None:
+                world_xy = bounded
+        if world_xy is None:
+            world_xy = _local_to_world_from_region_bounds((bx, by), region_cell_polygon or [])
+        if world_xy is not None and world_geometry is not None:
+            world_xy = project_world_point_to_region_footprint(
+                world_geometry,
+                region.region_id,
+                world_xy,
+            )
         pins.append(
             SettlementPin(
                 settlement_slot=slot,
@@ -532,6 +664,8 @@ def place_settlement_pins(
                 offset_dx=ox,
                 offset_dy=oy,
                 narrative_hint=hint,
+                world_x=world_xy[0] if world_xy is not None else None,
+                world_y=world_xy[1] if world_xy is not None else None,
             )
         )
     return pins
@@ -644,15 +778,13 @@ def synthesize_borders(region: Region, rng: random.Random) -> list[AbstractBorde
 
 
 def intra_region_edges(pins: list[SettlementPin]) -> list[LocalEdge]:
-    """Complete graph with Euclidean distance as abstract travel cost."""
-    edges: list[LocalEdge] = []
-    n = len(pins)
-    for i in range(n):
-        for j in range(i + 1, n):
-            a, b = pins[i], pins[j]
-            d = math.hypot(a.x - b.x, a.y - b.y)
-            edges.append(LocalEdge(from_slot=a.settlement_slot, to_slot=b.settlement_slot, distance=d))
-    return edges
+    """No implicit roads.
+
+    Roads should be explicit route geometry between established settlements. The
+    old all-pairs Euclidean graph looked like straight roads and overpromised
+    pathing the simulator does not yet model.
+    """
+    return []
 
 
 def build_local_region_graph(
@@ -691,8 +823,9 @@ def build_local_region_graph(
         rng=rng,
         settlement_slots=settlement_slots,
         primary_kind=anchor_kind,
+        region_cell_polygon=region_cell_polygon,
+        world_geometry=world_geometry,
     )
-    attach_settlement_anchors(pins, feats, primary_kind=anchor_kind)
     borders = synthesize_borders(region, rng)
     edges = intra_region_edges(pins)
     return LocalRegionGraph(
