@@ -17,6 +17,7 @@ from library.world_map_geometry import (
     Point,
     RegionCell,
     RegionFeature,
+    RiverPath,
     WorldMapGeometry,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
@@ -266,6 +267,14 @@ def _line_path(points: list[tuple[float, float]]) -> str:
     return f"M {first[0]:.1f} {first[1]:.1f} {rest}"
 
 
+def _open_poly_path(points: list[tuple[float, float]]) -> str:
+    if not points:
+        return ""
+    first = points[0]
+    rest = " ".join(f"L {x:.1f} {y:.1f}" for x, y in points[1:])
+    return f"M {first[0]:.1f} {first[1]:.1f} {rest} Z"
+
+
 def _smooth_line_path(points: list[tuple[float, float]]) -> str:
     if not points:
         return ""
@@ -280,6 +289,38 @@ def _smooth_line_path(points: list[tuple[float, float]]) -> str:
         else:
             parts.append(f"T {current[0]:.1f} {current[1]:.1f}")
     return " ".join(parts)
+
+
+def _tapered_river_polygon(
+    points: list[tuple[float, float]],
+    *,
+    start_width: float,
+    end_width: float,
+) -> list[tuple[float, float]]:
+    if len(points) < 2:
+        return []
+    left: list[tuple[float, float]] = []
+    right: list[tuple[float, float]] = []
+    last = len(points) - 1
+    for i, point in enumerate(points):
+        if i == 0:
+            tx = points[1][0] - point[0]
+            ty = points[1][1] - point[1]
+        elif i == last:
+            tx = point[0] - points[i - 1][0]
+            ty = point[1] - points[i - 1][1]
+        else:
+            tx = points[i + 1][0] - points[i - 1][0]
+            ty = points[i + 1][1] - points[i - 1][1]
+        length = max(1e-6, math.hypot(tx, ty))
+        nx = -ty / length
+        ny = tx / length
+        downstream = (i / max(1, last)) ** 0.78
+        width = start_width + (end_width - start_width) * downstream
+        half = width / 2.0
+        left.append((point[0] + nx * half, point[1] + ny * half))
+        right.append((point[0] - nx * half, point[1] - ny * half))
+    return left + list(reversed(right))
 
 
 def _dedupe_render_points(points: list[tuple[float, float]], *, min_distance: float = 0.55) -> list[tuple[float, float]]:
@@ -329,6 +370,101 @@ def _river_render_points(
                 y += ny * bend
             out.append((x, y))
     return _dedupe_render_points(out, min_distance=0.7)
+
+
+def _river_corridor_fill(
+    river_micro_ids: set[str],
+    micro_by_id: dict[str, MicroRegionCell],
+    overlays: WorldMapOverlays | None,
+) -> str:
+    cells = [micro_by_id[mid] for mid in river_micro_ids if mid in micro_by_id]
+    if not cells:
+        return "#6f9271"
+    if overlays is not None and any(c.region_id in overlays.polities_by_region_id for c in cells):
+        return "#73856e"
+    avg_moisture = sum(c.moisture for c in cells) / len(cells)
+    avg_elevation = sum(c.elevation for c in cells) / len(cells)
+    coastal_share = sum(1 for c in cells if c.is_coastal) / len(cells)
+    families = {c.terrain_family for c in cells}
+    if coastal_share >= 0.35:
+        base = "#9daa7d"
+    elif avg_elevation >= 0.66:
+        base = "#87957f"
+    elif "drylands" in families and avg_moisture < 0.46:
+        base = "#aa9e6d"
+    elif "forest" in families or avg_moisture >= 0.66:
+        base = "#487d57"
+    else:
+        base = "#779964"
+    return _mix_color(base, "#b7ad82", 0.16)
+
+
+def _river_mouth_polygons(
+    pts: list[tuple[float, float]],
+    *,
+    width: float,
+) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    if len(pts) < 2:
+        return ([], [])
+    ax, ay = pts[-2]
+    bx, by = pts[-1]
+    dx = bx - ax
+    dy = by - ay
+    length = math.hypot(dx, dy)
+    if length <= 1e-6:
+        return ([], [])
+    nx = -dy / length
+    ny = dx / length
+    start = _lerp_point(pts[-2], pts[-1], 0.26)
+    mouth_tip = (pts[-1][0] + dx / length * width * 0.64, pts[-1][1] + dy / length * width * 0.64)
+    mid = _lerp_point(start, mouth_tip, 0.62)
+    inner_neck = width * 0.54
+    inner_mid = width * 1.08
+    inner_mouth = width * 1.55
+    outer_neck = width * 0.98
+    outer_mid = width * 1.55
+    outer_mouth = width * 2.15
+    water = [
+        (start[0] + nx * inner_neck, start[1] + ny * inner_neck),
+        (mid[0] + nx * inner_mid, mid[1] + ny * inner_mid),
+        (mouth_tip[0] + nx * inner_mouth, mouth_tip[1] + ny * inner_mouth),
+        (mouth_tip[0] - nx * inner_mouth, mouth_tip[1] - ny * inner_mouth),
+        (mid[0] - nx * inner_mid, mid[1] - ny * inner_mid),
+        (start[0] - nx * inner_neck, start[1] - ny * inner_neck),
+    ]
+    bank = [
+        (start[0] + nx * outer_neck, start[1] + ny * outer_neck),
+        (mid[0] + nx * outer_mid, mid[1] + ny * outer_mid),
+        (mouth_tip[0] + nx * outer_mouth, mouth_tip[1] + ny * outer_mouth),
+        (mouth_tip[0] - nx * outer_mouth, mouth_tip[1] - ny * outer_mouth),
+        (mid[0] - nx * outer_mid, mid[1] - ny * outer_mid),
+        (start[0] - nx * outer_neck, start[1] - ny * outer_neck),
+    ]
+    return (bank, water)
+
+
+def _offset_line_points(
+    points: list[tuple[float, float]],
+    *,
+    amount: float,
+) -> list[tuple[float, float]]:
+    if len(points) < 2 or abs(amount) <= 1e-6:
+        return points
+    out: list[tuple[float, float]] = []
+    last = len(points) - 1
+    for i, point in enumerate(points):
+        if i == 0:
+            tx = points[1][0] - point[0]
+            ty = points[1][1] - point[1]
+        elif i == last:
+            tx = point[0] - points[i - 1][0]
+            ty = point[1] - points[i - 1][1]
+        else:
+            tx = points[i + 1][0] - points[i - 1][0]
+            ty = points[i + 1][1] - points[i - 1][1]
+        length = max(1e-6, math.hypot(tx, ty))
+        out.append((point[0] - ty / length * amount, point[1] + tx / length * amount))
+    return out
 
 
 def _cell_fill(cell: RegionCell, overlays: WorldMapOverlays | None) -> str:
@@ -962,6 +1098,9 @@ def render_world_map_svg(
         '<filter id="terrain-mottle-soften" x="-20%" y="-20%" width="140%" height="140%">',
         '<feGaussianBlur stdDeviation="5.0" />',
         "</filter>",
+        '<filter id="river-corridor-soften" x="-20%" y="-20%" width="140%" height="140%">',
+        '<feGaussianBlur stdDeviation="1.5" />',
+        "</filter>",
         '<filter id="terrain-grain" x="0" y="0" width="100%" height="100%">',
         f'<feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="{_stable_seed(geometry.version, "terrain-grain") % 997}" result="grain" />',
         '<feColorMatrix in="grain" type="matrix" values="0 0 0 0 0.50 0 0 0 0 0.47 0 0 0 0 0.38 0 0 0 .30 0" />',
@@ -973,7 +1112,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river{stroke:#2f93c4;stroke-linecap:round;stroke-linejoin:round;fill:none}.river-bank{stroke:#f4e5b3;opacity:.52}.river-water{stroke:#2d8fbd;opacity:.98}.river-highlight{stroke:#bbebf2;opacity:.30}.river-mouth{fill:#6fb9cc;stroke:#1d6381;stroke-width:.55;opacity:.48}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{stroke:#fbf4db;stroke-width:.45}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{stroke:#fbf4db;stroke-width:.45}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -1120,6 +1259,8 @@ def render_world_map_svg(
                 f'd="{_poly_path(scaled)}" fill="{_cell_fill(cell, overlays)}" opacity="0.82" />'
             )
 
+    micro_by_id = {c.micro_id: c for c in geometry.micro_cells}
+    rendered_rivers: list[tuple[RiverPath, list[tuple[float, float]], str, float, set[str], str]] = []
     for river in geometry.rivers:
         pts = _river_render_points(
             [_scale(p, width, height, pad) for p in river.points],
@@ -1128,27 +1269,58 @@ def render_world_map_svg(
         )
         if len(pts) < 2:
             continue
-        water_width = 1.15 + math.sqrt(max(0.0, river.flow)) * 3.15
-        d = _smooth_line_path(pts)
-        parts.append(
-            f'<path class="river river-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-            f'd="{d}" stroke-width="{water_width + 2.75:.2f}" />'
+        water_width = 0.72 + math.sqrt(max(0.0, river.flow)) * 2.35
+        line_d = _smooth_line_path(pts)
+        river_micro_ids = {mid for segment in river.segments for mid in segment.micro_ids}
+        corridor_color = _river_corridor_fill(river_micro_ids, micro_by_id, overlays)
+        rendered_rivers.append((river, pts, line_d, water_width, river_micro_ids, corridor_color))
+        corridor_poly = _tapered_river_polygon(
+            pts,
+            start_width=max(1.9, water_width * 0.72 + 2.3),
+            end_width=water_width + 5.2,
         )
         parts.append(
-            f'<path class="river river-water {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-            f'd="{d}" stroke-width="{water_width:.2f}" />'
+            f'<path class="river-corridor {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+            f'd="{_open_poly_path(corridor_poly)}" fill="{corridor_color}" filter="url(#river-corridor-soften)" opacity="0.46" />'
+        )
+
+    for river_obj, pts, line_d, water_width, _river_micro_ids, _corridor_color in rendered_rivers:
+        river = river_obj
+        bank_fill = _mix_color(_corridor_color, "#2e88a6", 0.42)
+        bank_poly = _tapered_river_polygon(
+            pts,
+            start_width=max(0.78, water_width * 0.48 + 0.52),
+            end_width=water_width + 0.68,
+        )
+        water_poly = _tapered_river_polygon(
+            pts,
+            start_width=max(0.6, water_width * 0.40),
+            end_width=water_width,
+        )
+        parts.append(
+            f'<path class="river-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+            f'd="{_open_poly_path(bank_poly)}" fill="{bank_fill}" />'
+        )
+        parts.append(
+            f'<path class="river-water {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+            f'd="{_open_poly_path(water_poly)}" fill="#2f8dab" />'
         )
         if len(pts) >= 3:
-            highlight_width = max(0.45, water_width * 0.28)
+            highlight_width = max(0.24, water_width * 0.12)
+            highlight_points = _offset_line_points(pts, amount=max(0.20, water_width * -0.12))
             parts.append(
                 f'<path class="river river-highlight {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-                f'd="{d}" stroke-width="{highlight_width:.2f}" />'
+                f'd="{_smooth_line_path(highlight_points)}" stroke-width="{highlight_width:.2f}" opacity="0.72" />'
             )
-        if len(river.points) >= 2 and river.points[-1] != river.points[-2]:
-            mouth_x, mouth_y = pts[-1]
+        if len(pts) >= 2 and river.points[-1] != river.points[-2]:
+            mouth_bank, mouth_water = _river_mouth_polygons(pts, width=water_width)
             parts.append(
-                f'<ellipse class="river-mouth {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-                f'cx="{mouth_x:.1f}" cy="{mouth_y:.1f}" rx="{water_width * 0.58:.2f}" ry="{water_width * 0.34:.2f}" />'
+                f'<path class="river-mouth-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                f'd="{_open_poly_path(mouth_bank)}" fill="{_mix_color(_corridor_color, "#2f8dab", 0.34)}" />'
+            )
+            parts.append(
+                f'<path class="river-mouth {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                f'd="{_open_poly_path(mouth_water)}" fill="#3f95ad" />'
             )
 
     overlay_settlements = overlays.settlements if overlays is not None else []
