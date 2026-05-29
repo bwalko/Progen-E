@@ -62,11 +62,11 @@ class WorldMapOverlays:
 
 
 _CELL_COLORS = {
-    "coast": "#b6a58a",
-    "riverland": "#76a766",
-    "highlands": "#d8d9cf",
-    "forest": "#2d7c61",
-    "drylands": "#a99c80",
+    "coast": "#c8b889",
+    "riverland": "#6fa65f",
+    "highlands": "#bfc1aa",
+    "forest": "#2f7d55",
+    "drylands": "#b1a070",
     "plains": "#86ad67",
 }
 
@@ -150,13 +150,15 @@ def _mix_color(color: str, target: str, amount: float) -> str:
 def _terrain_tint(color: str, cell: MicroRegionCell) -> str:
     grain = ((_stable_seed("micro-fill", cell.micro_id) % 1000) / 999.0) - 0.5
     if grain >= 0.0:
-        color = _mix_color(color, "#f4efd2", grain * 0.13)
+        color = _mix_color(color, "#f4efd2", grain * 0.10)
     else:
-        color = _mix_color(color, "#314436", abs(grain) * 0.10)
-    if cell.elevation >= 0.62:
-        color = _mix_color(color, "#ddd9c4", min(0.18, (cell.elevation - 0.62) * 0.36))
+        color = _mix_color(color, "#314436", abs(grain) * 0.09)
+    if cell.elevation >= 0.58:
+        color = _mix_color(color, "#ddd9c4", min(0.22, (cell.elevation - 0.58) * 0.40))
+    if cell.elevation <= 0.36 and not cell.is_coastal:
+        color = _mix_color(color, "#4f7f57", min(0.10, (0.36 - cell.elevation) * 0.26))
     if cell.moisture >= 0.66 and not cell.is_coastal:
-        color = _mix_color(color, "#1f6f52", min(0.16, (cell.moisture - 0.66) * 0.28))
+        color = _mix_color(color, "#1f6f52", min(0.17, (cell.moisture - 0.66) * 0.30))
     return color
 
 
@@ -337,17 +339,20 @@ def _cell_fill(cell: RegionCell, overlays: WorldMapOverlays | None) -> str:
 
 def _micro_cell_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None) -> str:
     if overlays is not None and cell.region_id in overlays.polities_by_region_id:
-        return overlays.polities_by_region_id[cell.region_id].color
-    if cell.elevation >= 0.72:
-        base = "#f0f1ea" if cell.moisture >= 0.52 else "#c5c2ad"
+        polity = overlays.polities_by_region_id[cell.region_id].color
+        return _terrain_tint(_mix_color(polity, "#d8d0ad", 0.24), cell)
+    if cell.elevation >= 0.78:
+        base = "#ecebdc" if cell.moisture >= 0.52 else "#c9c3a3"
+    elif cell.elevation >= 0.64:
+        base = "#b9b897" if cell.moisture < 0.42 else "#aeb78f"
     elif cell.is_coastal:
-        base = "#a99b83"
+        base = "#c3b17f" if cell.moisture < 0.54 else "#9fb076"
     elif cell.moisture >= 0.78:
-        base = "#1f7660"
+        base = "#2c7a59"
     elif cell.moisture >= 0.58:
-        base = "#3d8d62"
+        base = "#5d965d"
     elif cell.moisture <= 0.28:
-        base = "#9f957b"
+        base = "#b6a56f"
     else:
         base = _CELL_COLORS.get(cell.terrain_family, _CELL_COLORS["plains"])
     return _terrain_tint(base, cell)
@@ -369,6 +374,42 @@ def _micro_mottle_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None)
     if grain > 0.72:
         return _mix_color(base, "#d8d5b9", 0.10 + (grain - 0.72) * 0.18)
     return _mix_color(base, "#6b8558", 0.10)
+
+
+def _micro_hillshade(
+    micro_cells: list[MicroRegionCell],
+    blend_edges: list[tuple[Point, Point, MicroRegionCell, MicroRegionCell]],
+) -> dict[str, tuple[str, float]]:
+    """Return deterministic Swiss-style light/dark relief washes for micro-cells."""
+
+    slopes: dict[str, list[tuple[float, float, float]]] = {c.micro_id: [] for c in micro_cells}
+    for _, _, first, second in blend_edges:
+        dx = second.center_x - first.center_x
+        dy = second.center_y - first.center_y
+        dist = max(1e-6, math.hypot(dx, dy))
+        delta = second.elevation - first.elevation
+        slopes[first.micro_id].append((dx / dist, dy / dist, delta / dist))
+        slopes[second.micro_id].append((-dx / dist, -dy / dist, -delta / dist))
+
+    light_x = -0.62
+    light_y = -0.78
+    shade: dict[str, tuple[str, float]] = {}
+    for cell in micro_cells:
+        samples = slopes.get(cell.micro_id, [])
+        if not samples or cell.is_coastal:
+            continue
+        gx = sum(dx * delta for dx, _, delta in samples) / len(samples)
+        gy = sum(dy * delta for _, dy, delta in samples) / len(samples)
+        facing_light = -(gx * light_x + gy * light_y)
+        steepness = min(1.0, math.hypot(gx, gy) * 0.30 + max(0.0, cell.elevation - 0.52) * 0.65)
+        amount = min(0.24, abs(facing_light) * 0.16 + steepness * 0.09)
+        if amount < 0.018:
+            continue
+        if facing_light >= 0.0:
+            shade[cell.micro_id] = ("#f7f0cf", amount)
+        else:
+            shade[cell.micro_id] = ("#233044", amount * 0.95)
+    return shade
 
 
 def _feature_radius(feature: RegionFeature) -> float:
@@ -925,11 +966,16 @@ def render_world_map_svg(
         f'<feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="{_stable_seed(geometry.version, "terrain-grain") % 997}" result="grain" />',
         '<feColorMatrix in="grain" type="matrix" values="0 0 0 0 0.50 0 0 0 0 0.47 0 0 0 0 0.38 0 0 0 .30 0" />',
         "</filter>",
+        '<linearGradient id="ocean-gradient" x1="0" y1="0" x2="1" y2="1">',
+        '<stop offset="0" stop-color="#5e7fa0" />',
+        '<stop offset=".52" stop-color="#466986" />',
+        '<stop offset="1" stop-color="#344a68" />',
+        "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-beach{stroke:#b8aa8d;stroke-width:3.2}.coast-shadow{stroke:#2d3557;stroke-width:2.6}.coast-line{stroke:#20263d;stroke-width:1.55;stroke-linecap:butt;stroke-linejoin:round}.river{stroke:#2a8bc8;stroke-linecap:round;stroke-linejoin:round;fill:none}.river-bank{stroke:#175f83;opacity:.42}.river-water{stroke:#2787bd;opacity:.98}.river-highlight{stroke:#7cc6e7;opacity:.22}.river-mouth{fill:#2a8bc8;stroke:#174f72;stroke-width:.55;opacity:.42}.feature,.settlement{vector-effect:non-scaling-stroke}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#ffffff;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river{stroke:#2f93c4;stroke-linecap:round;stroke-linejoin:round;fill:none}.river-bank{stroke:#f4e5b3;opacity:.52}.river-water{stroke:#2d8fbd;opacity:.98}.river-highlight{stroke:#bbebf2;opacity:.30}.river-mouth{fill:#6fb9cc;stroke:#1d6381;stroke-width:.55;opacity:.48}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{stroke:#fbf4db;stroke-width:.45}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
-        f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="#454a78" />',
+        f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
     occupied_labels: list[_LabelBox] = []
     deferred_labels: list[str] = []
@@ -949,12 +995,15 @@ def render_world_map_svg(
         )
         terrain_filter = ""
         parts.append(f'<g class="terrain-layer"{terrain_filter}>')
+        scaled_micro_paths: dict[str, str] = {}
         for cell in geometry.micro_cells:
             scaled = (
                 _micro_noisy_polygon_points(cell, noisy_edge_paths, width=width, height=height, pad=pad)
                 if noisy_edges
                 else [_scale(p, width, height, pad) for p in cell.polygon]
             )
+            path_d = _poly_path(scaled)
+            scaled_micro_paths[cell.micro_id] = path_d
             polity = overlays.polities_by_region_id.get(cell.region_id) if overlays else None
             polity_attrs = (
                 f' data-polity-id="{html.escape(polity.polity_id)}" data-polity-name="{html.escape(polity.polity_name)}"'
@@ -965,7 +1014,7 @@ def render_world_map_svg(
                 f'<path class="micro-cell terrain-{html.escape(cell.terrain_family)}" '
                 f'data-micro-id="{html.escape(cell.micro_id)}" data-region-id="{html.escape(cell.region_id)}"{polity_attrs} '
                 f'data-elevation="{cell.elevation:.4f}" data-moisture="{cell.moisture:.4f}" '
-                f'd="{_poly_path(scaled)}" fill="{_micro_cell_fill(cell, overlays)}" opacity="0.94" />'
+                f'd="{path_d}" fill="{_micro_cell_fill(cell, overlays)}" opacity="0.96" />'
             )
         parts.append("</g>")
         if noisy_edges and blend_edges:
@@ -1008,6 +1057,20 @@ def render_world_map_svg(
                 f'<rect class="terrain-texture" x="{pad}" y="{pad}" width="{width - pad * 2}" '
                 f'height="{height - pad * 2}" fill="#88806a" filter="url(#terrain-grain)" opacity="0.22" />'
             )
+            hillshade = _micro_hillshade(geometry.micro_cells, blend_edges)
+            if hillshade:
+                parts.append('<g class="terrain-shade-layer" opacity="1.0">')
+                for cell in geometry.micro_cells:
+                    shade = hillshade.get(cell.micro_id)
+                    if shade is None:
+                        continue
+                    color, opacity = shade
+                    cls = "terrain-shade-light" if color == "#f7f0cf" else "terrain-shade"
+                    parts.append(
+                        f'<path class="{cls}" d="{scaled_micro_paths[cell.micro_id]}" '
+                        f'fill="{color}" opacity="{opacity:.3f}" />'
+                    )
+                parts.append("</g>")
         coast_paths = _stitched_noisy_paths(
             _stitch_edge_chains(coast_edges),
             noisy_edge_paths,
@@ -1018,15 +1081,19 @@ def render_world_map_svg(
         )
         for path in coast_paths:
             parts.append(
-                f'<path class="coast-shadow" d="{path}" fill="none" opacity="0.42" />'
+                f'<path class="coast-shelf" d="{path}" fill="none" opacity="0.26" />'
             )
         for path in coast_paths:
             parts.append(
-                f'<path class="coast-beach" d="{path}" fill="none" opacity="0.70" />'
+                f'<path class="coast-shadow" d="{path}" fill="none" opacity="0.38" />'
             )
         for path in coast_paths:
             parts.append(
-                f'<path class="coast-line" d="{path}" fill="none" opacity="0.82" />'
+                f'<path class="coast-beach" d="{path}" fill="none" opacity="0.76" />'
+            )
+        for path in coast_paths:
+            parts.append(
+                f'<path class="coast-line" d="{path}" fill="none" opacity="0.78" />'
             )
         for a, b in region_edges:
             pts = (
@@ -1065,7 +1132,7 @@ def render_world_map_svg(
         d = _smooth_line_path(pts)
         parts.append(
             f'<path class="river river-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-            f'd="{d}" stroke-width="{water_width + 2.15:.2f}" />'
+            f'd="{d}" stroke-width="{water_width + 2.75:.2f}" />'
         )
         parts.append(
             f'<path class="river river-water {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
