@@ -1662,6 +1662,7 @@ class SimulationContext:
             lex=lex,
             rng=rng,
             settlement_slots=1,
+            site_slot=1,
         )
         rid = region.region_id
         seq = next_settlement_sequence(rid, list(self.settlements_by_id.keys()))
@@ -1734,6 +1735,7 @@ class SimulationContext:
             lex=lex,
             rng=r_rng,
             settlement_slots=slot,
+            site_slot=slot,
         )
         seq = next_settlement_sequence(rid, list(self.settlements_by_id.keys()))
         sid = make_settlement_id(rid, seq)

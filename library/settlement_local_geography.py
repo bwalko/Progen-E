@@ -555,16 +555,20 @@ def assign_feature_names(
     db_path: Path | str | None,
     placename_lexicon: PlacenameLexicon | None = None,
     proto_lexicon: EthnicProtoPlacewordLexicon | None = None,
+    anchor_feature_ids: set[str] | None = None,
+    used_names: set[str] | None = None,
 ) -> list[AbstractFeature]:
-    """Attach stable proto-derived names to local features.
+    """Attach stable proto-derived names to settlement anchor features.
 
-    This is intentionally called when the regional local-geography JSON is created
-    or refreshed. Because that JSON is then shared by all settlements in the
-    region, a river/mountain/harbor is named once by the inhabitants present at
-    first contact rather than renamed by each later settlement.
+    Physical features can exist without being known landmarks. Names are only
+    assigned when a settlement actually anchors to the feature, so maps do not
+    accumulate named dots for unused ridges, wadis, or groves.
     """
     weights = ethnic_weights or {}
     if not weights:
+        return features
+    allowed = {fid for fid in (anchor_feature_ids or set()) if fid}
+    if not allowed:
         return features
     try:
         placenames = placename_lexicon or PlacenameLexicon.from_db(db_path=db_path)
@@ -574,19 +578,40 @@ def assign_feature_names(
     if not proto.rows or not placenames.rows:
         return features
 
+    taken = {str(name or "").strip().casefold() for name in (used_names or set()) if str(name or "").strip()}
+    taken.update(str(f.display_name or "").strip().casefold() for f in features if (f.display_name or "").strip())
+
     for feature in features:
+        if feature.feature_id not in allowed:
+            continue
         if (feature.display_name or "").strip():
             continue
-        generated = generate_feature_name(
-            rng=rng,
-            proto=proto,
-            placenames=placenames,
-            ethnic_weights=weights,
-            local_kind=feature.kind,
-        )
+        generated = None
+        for _ in range(8):
+            candidate = generate_feature_name(
+                rng=rng,
+                proto=proto,
+                placenames=placenames,
+                ethnic_weights=weights,
+                local_kind=feature.kind,
+            )
+            if candidate is None:
+                break
+            if candidate.display_name.strip().casefold() not in taken:
+                generated = candidate
+                break
+            generated = candidate
         if generated is None:
             continue
-        feature.display_name = generated.display_name
+        display = generated.display_name
+        if display.strip().casefold() in taken:
+            base = display
+            idx = 2
+            while f"{base}{idx}".casefold() in taken:
+                idx += 1
+            display = f"{base}{idx}"
+        taken.add(display.strip().casefold())
+        feature.display_name = display
         feature.etymology = generated.etymology
         feature.name_ethnic = generated.ethnic
         feature.name_feature_type = generated.feature_type
@@ -883,14 +908,6 @@ def build_local_region_graph(
         region_features=source_features,
         region_cell_polygon=region_cell_polygon,
     )
-    assign_feature_names(
-        feats,
-        rng=rng,
-        ethnic_weights=ethnic_weights,
-        db_path=db_path,
-        placename_lexicon=placename_lexicon,
-        proto_lexicon=proto_placeword_lexicon,
-    )
     pins = place_settlement_pins(
         region=region,
         features=feats,
@@ -899,6 +916,15 @@ def build_local_region_graph(
         primary_kind=anchor_kind,
         region_cell_polygon=region_cell_polygon,
         world_geometry=world_geometry,
+    )
+    assign_feature_names(
+        feats,
+        rng=rng,
+        ethnic_weights=ethnic_weights,
+        db_path=db_path,
+        placename_lexicon=placename_lexicon,
+        proto_lexicon=proto_placeword_lexicon,
+        anchor_feature_ids={p.anchor_feature_id or "" for p in pins},
     )
     borders = synthesize_borders(region, rng)
     edges = intra_region_edges(pins)

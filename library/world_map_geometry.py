@@ -25,7 +25,7 @@ from library.geography import (
 )
 
 
-MAP_GEOMETRY_VERSION = "polygonal-v8"
+MAP_GEOMETRY_VERSION = "polygonal-v9"
 Point = tuple[float, float]
 
 
@@ -817,12 +817,15 @@ def _mask_continent_hull(
         if land.is_empty or land.area <= bw * bh * 0.12:
             return (float("inf"), [])
         soften = min(dx, dy) * 0.72
-        land = land.buffer(soften, join_style=1).buffer(-soften, join_style=1)
+        # Close tiny straits and one-cell isthmuses before tracing the exterior.
+        # Without this, the noise mask can produce C-shaped hooks or necklace-like
+        # chains of cells that look more like rendering artifacts than continents.
+        land = land.buffer(soften * 2.2, join_style=1).buffer(-soften * 1.7, join_style=1)
         if isinstance(land, MultiPolygon):
             land = max(land.geoms, key=lambda p: p.area)
         if land.is_empty:
             return (float("inf"), [])
-        land = land.simplify(min(dx, dy) * 0.32, preserve_topology=True)
+        land = land.simplify(min(dx, dy) * 0.44, preserve_topology=True)
         coords = [(float(x), float(y)) for x, y in list(land.exterior.coords)[:-1]]
         if len(coords) < 12:
             return (float("inf"), [])
@@ -830,10 +833,17 @@ def _mask_continent_hull(
         area_ratio = land.area / max(1e-9, bw * bh)
         width_ratio = (px1 - px0) / max(1e-9, bw)
         height_ratio = (py1 - py0) / max(1e-9, bh)
+        convex_area = max(1e-9, land.convex_hull.area)
+        convex_fill = land.area / convex_area
+        compactness = 4.0 * math.pi * land.area / max(1e-9, land.length * land.length)
+        if convex_fill < 0.52 or compactness < 0.18:
+            return (float("inf"), [])
         quality = (
             abs(area_ratio - target_area)
             + max(0.0, 0.66 - width_ratio) * 0.7
             + max(0.0, 0.62 - height_ratio) * 0.7
+            + max(0.0, 0.68 - convex_fill) * 1.25
+            + max(0.0, 0.28 - compactness) * 1.65
         )
         poly = _fit_polygon_to_box(_smooth_closed_polygon(coords, iterations=1), box)
         return (quality, [(round(x, 6), round(y, 6)) for x, y in poly])

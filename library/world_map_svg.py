@@ -9,7 +9,7 @@ import math
 import random
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from library.world_map_geometry import (
@@ -35,6 +35,17 @@ class SettlementMapOverlay:
 
 
 @dataclass(frozen=True)
+class FeatureMapOverlay:
+    feature_id: str
+    region_id: str
+    kind: str
+    display_name: str
+    x: float
+    y: float
+    etymology: str | None = None
+
+
+@dataclass(frozen=True)
 class PolityMapOverlay:
     region_id: str
     polity_id: str
@@ -47,6 +58,7 @@ class PolityMapOverlay:
 class WorldMapOverlays:
     settlements: list[SettlementMapOverlay]
     polities_by_region_id: dict[str, PolityMapOverlay]
+    features: list[FeatureMapOverlay] = field(default_factory=list)
 
 
 _CELL_COLORS = {
@@ -65,6 +77,25 @@ _FEATURE_COLORS = {
     "vegetation": "#3f7f4c",
     "settlement_support": "#8b6f3d",
     "landform": "#6f684d",
+}
+
+_FEATURE_CLASS_BY_KIND = {
+    "bay": "coast",
+    "coast": "coast",
+    "harbor": "coast",
+    "river": "water",
+    "stream": "water",
+    "ford": "water",
+    "lake": "water",
+    "marsh": "water",
+    "spring": "water",
+    "wadi": "water",
+    "ridge": "relief",
+    "mountain": "relief",
+    "pass": "relief",
+    "forest": "vegetation",
+    "grove": "vegetation",
+    "clearing": "vegetation",
 }
 
 _POLITY_COLORS = (
@@ -348,11 +379,32 @@ def _feature_radius(feature: RegionFeature) -> float:
     return 2.8
 
 
+def _feature_is_near_settlement(
+    feature: RegionFeature,
+    settlements: list[SettlementMapOverlay],
+    *,
+    max_distance: float = 0.065,
+) -> bool:
+    if not settlements:
+        return True
+    max_d2 = float(max_distance) * float(max_distance)
+    for settlement in settlements:
+        if settlement.region_id != feature.region_id:
+            continue
+        dx = settlement.x - feature.x
+        dy = settlement.y - feature.y
+        if dx * dx + dy * dy <= max_d2:
+            return True
+    return False
+
+
 def _label_box(x: float, y: float, text: str, font_size: float, *, anchor: str = "start") -> _LabelBox:
     width = max(10.0, len(text) * font_size * 0.54)
     height = font_size * 1.25
     if anchor == "middle":
         x0 = x - width / 2.0
+    elif anchor == "end":
+        x0 = x - width
     else:
         x0 = x
     return (x0 - 2.0, y - height + 1.0, x0 + width + 2.0, y + 3.0)
@@ -643,6 +695,59 @@ def _site_world_xy(local_geography_json: object, site_slot: object) -> tuple[flo
     return None
 
 
+def _named_feature_overlays_from_local_geography(
+    *,
+    geometry: WorldMapGeometry,
+    region_id: str,
+    local_geography_json: object,
+) -> list[FeatureMapOverlay]:
+    if not local_geography_json:
+        return []
+    try:
+        data = json.loads(str(local_geography_json))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    features = data.get("features")
+    if not isinstance(features, list):
+        return []
+    seen: set[str] = set()
+    out: list[FeatureMapOverlay] = []
+    for idx, feature in enumerate(features):
+        if not isinstance(feature, dict):
+            continue
+        name = str(feature.get("display_name") or "").strip()
+        if not name:
+            continue
+        fid = str(feature.get("feature_id") or f"{region_id}:local:{idx}").strip()
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        try:
+            if feature.get("source_world_x") is not None and feature.get("source_world_y") is not None:
+                world_xy = (float(feature["source_world_x"]), float(feature["source_world_y"]))
+                wx, wy = project_world_point_to_region_footprint(geometry, region_id, world_xy)
+            else:
+                lx = max(0.04, min(0.96, float(feature.get("x", 0.5))))
+                ly = max(0.04, min(0.96, float(feature.get("y", 0.5))))
+                wx, wy = project_local_point_to_region_footprint(geometry, region_id, (lx, ly))
+        except (TypeError, ValueError):
+            continue
+        out.append(
+            FeatureMapOverlay(
+                feature_id=fid,
+                region_id=region_id,
+                kind=str(feature.get("kind") or "feature"),
+                display_name=name,
+                x=wx,
+                y=wy,
+                etymology=str(feature.get("etymology") or "").strip() or None,
+            )
+        )
+    return out
+
+
 def load_world_map_overlays(
     *,
     geometry: WorldMapGeometry,
@@ -652,13 +757,14 @@ def load_world_map_overlays(
 ) -> WorldMapOverlays:
     """Load optional settlement and polity overlays from ``save.sqlite``."""
     if save_db_path is None:
-        return WorldMapOverlays(settlements=[], polities_by_region_id={})
+        return WorldMapOverlays(settlements=[], polities_by_region_id={}, features=[])
     path = Path(save_db_path)
     if not path.exists():
-        return WorldMapOverlays(settlements=[], polities_by_region_id={})
+        return WorldMapOverlays(settlements=[], polities_by_region_id={}, features=[])
     settlement_limit = max(0, int(max_settlements))
     cells = geometry.cell_by_region_id()
     settlements: list[SettlementMapOverlay] = []
+    features_by_id: dict[str, FeatureMapOverlay] = {}
     polities: dict[str, PolityMapOverlay] = {}
     with closing(sqlite3.connect(path)) as conn:
         conn.row_factory = sqlite3.Row
@@ -723,6 +829,12 @@ def load_world_map_overlays(
                         status=str(row["status"] or ""),
                     )
                 )
+                for feature in _named_feature_overlays_from_local_geography(
+                    geometry=geometry,
+                    region_id=rid,
+                    local_geography_json=row["local_geography_json"],
+                ):
+                    features_by_id.setdefault(feature.feature_id, feature)
         if {"simulation_polity_territory", "simulation_polities"}.issubset(relations):
             rows = conn.execute(
                 """
@@ -747,7 +859,11 @@ def load_world_map_overlays(
                     polity_type_id=str(row["polity_type_id"] or ""),
                     color=_stable_color(pid),
                 )
-    return WorldMapOverlays(settlements=settlements, polities_by_region_id=polities)
+    return WorldMapOverlays(
+        settlements=settlements,
+        polities_by_region_id=polities,
+        features=sorted(features_by_id.values(), key=lambda f: (f.region_id, f.feature_id)),
+    )
 
 
 def render_world_map_svg(
@@ -770,6 +886,9 @@ def render_world_map_svg(
         "svg.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
         "svg.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
         "svg.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(9.5*m/z)+'px');"
+        "svg.querySelectorAll('.feature-label[data-point-x],.settlement-label[data-point-x]').forEach(e=>{"
+        "const px=+e.dataset.pointX,py=+e.dataset.pointY,dx=+e.dataset.dx||0,dy=+e.dataset.dy||0;"
+        "e.setAttribute('x',px+dx/z);e.setAttribute('y',py+dy/z);});"
         "svg.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.35,Math.min(3.8,b*m/z)));});"
         "svg.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.38,Math.min(3.2,b*m/z)));});};"
     )
@@ -780,7 +899,7 @@ def render_world_map_svg(
         "const py=(event.clientY-r.top)/r.height;const nx=s.width*k,ny=s.height*k;"
         "s.x+=s.width*px-nx*px;s.y+=s.height*py-ny*py;s.width=nx;s.height=ny;"
         "zf(this);event.preventDefault();event.stopPropagation();\" "
-        "onpointerdown=\"if(event.target.closest('[data-settlement-id],[data-region-id],[data-region-label]')){this.dataset.pan='0';this.dataset.dragged='0';return;}this.dataset.pan='1';this.dataset.dragged='0';this.dataset.px=event.clientX;this.dataset.py=event.clientY;"
+        "onpointerdown=\"if(event.target.closest('[data-settlement-id],[data-feature-id],[data-region-id],[data-region-label]')){this.dataset.pan='0';this.dataset.dragged='0';return;}this.dataset.pan='1';this.dataset.dragged='0';this.dataset.px=event.clientX;this.dataset.py=event.clientY;"
         "this.dataset.vx=this.viewBox.baseVal.x;this.dataset.vy=this.viewBox.baseVal.y;"
         "this.setPointerCapture(event.pointerId);\" "
         f"onpointermove=\"{zoom_script}if(this.dataset.pan!=='1')return;const dx=event.clientX-this.dataset.px;const dy=event.clientY-this.dataset.py;"
@@ -965,7 +1084,10 @@ def render_world_map_svg(
                 f'cx="{mouth_x:.1f}" cy="{mouth_y:.1f}" rx="{water_width * 0.58:.2f}" ry="{water_width * 0.34:.2f}" />'
             )
 
-    if labels:
+    overlay_settlements = overlays.settlements if overlays is not None else []
+    named_feature_overlays = overlays.features if overlays is not None else []
+    show_region_labels = labels and not overlay_settlements
+    if show_region_labels:
         for cell in geometry.cells:
             x, y = _scale((cell.center_x, cell.center_y), width, height, pad)
             shown = cell.region_id.replace("_", " ").title()
@@ -978,22 +1100,53 @@ def render_world_map_svg(
                 )
 
     feature_labels = 0
-    sorted_features = sorted(geometry.features, key=lambda f: (-f.importance, f.region_id, f.feature_id))
+    if overlay_settlements and not named_feature_overlays:
+        renderable_features = [
+            f for f in geometry.features if _feature_is_near_settlement(f, overlay_settlements)
+        ]
+    elif overlay_settlements:
+        named_ids = {f.feature_id for f in named_feature_overlays}
+        renderable_features = [
+            f
+            for f in geometry.features
+            if f.feature_id in named_ids or _feature_is_near_settlement(f, overlay_settlements, max_distance=0.025)
+        ]
+    else:
+        renderable_features = list(geometry.features)
+    sorted_features = sorted(renderable_features, key=lambda f: (-f.importance, f.region_id, f.feature_id))
+    drawn_named_ids: set[str] = set()
+    for named in named_feature_overlays:
+        drawn_named_ids.add(named.feature_id)
+        x, y = _scale((named.x, named.y), width, height, pad)
+        feature_class = _FEATURE_CLASS_BY_KIND.get(named.kind.strip().lower(), "landform")
+        color = _FEATURE_COLORS.get(feature_class, _FEATURE_COLORS["landform"])
+        parts.append(
+            f'<circle class="feature named-feature {html.escape(feature_class)}" data-feature-id="{html.escape(named.feature_id)}" '
+            f'data-region-id="{html.escape(named.region_id)}" data-feature-name="{html.escape(named.display_name)}" '
+            f'data-feature-kind="{html.escape(named.kind)}" data-feature-etymology="{html.escape(named.etymology or "")}" '
+            f'cx="{x:.1f}" cy="{y:.1f}" r="3.4" data-base-r="3.4" fill="{color}" opacity="0.96" />'
+        )
     for feature in sorted_features:
+        if feature.feature_id in drawn_named_ids:
+            continue
         x, y = _scale((feature.x, feature.y), width, height, pad)
         color = _FEATURE_COLORS.get(feature.feature_class, _FEATURE_COLORS["landform"])
         parts.append(
             f'<circle class="feature {html.escape(feature.feature_class)}" data-feature-id="{html.escape(feature.feature_id)}" '
+            f'data-region-id="{html.escape(feature.region_id)}" data-feature-name="{html.escape(feature.label)}" '
+            f'data-feature-kind="{html.escape(feature.kind)}" data-feature-etymology="" '
             f'cx="{x:.1f}" cy="{y:.1f}" r="{_feature_radius(feature):.1f}" data-base-r="{_feature_radius(feature):.1f}" fill="{color}" opacity="0.9" />'
         )
-        if labels and feature.importance >= 0.76 and feature_labels < max_feature_labels:
+        if labels and not overlay_settlements and feature.importance >= 0.76 and feature_labels < max_feature_labels:
             box = _label_box(x + 5.0, y - 4.0, feature.label, 9.0)
-            if not _claim_label(occupied_labels, box, bounds=(width, height)):
-                continue
-            parts.append(
-                f'<text class="feature-label" x="{x + 5.0:.1f}" y="{y - 4.0:.1f}">{html.escape(feature.label)}</text>'
-            )
-            feature_labels += 1
+            if _claim_label(occupied_labels, box, bounds=(width, height)):
+                parts.append(
+                    f'<text class="feature-label" data-feature-id="{html.escape(feature.feature_id)}" '
+                    f'data-region-id="{html.escape(feature.region_id)}" data-feature-name="{html.escape(feature.label)}" '
+                    f'data-feature-kind="{html.escape(feature.kind)}" data-feature-etymology="" '
+                    f'x="{x + 5.0:.1f}" y="{y - 4.0:.1f}">{html.escape(feature.label)}</text>'
+                )
+                feature_labels += 1
 
     if overlays is not None:
         settlements = sorted(
@@ -1012,17 +1165,70 @@ def render_world_map_svg(
             )
             if labels and settlement.status.strip().lower() != "abandoned" and settlement_labels < max_settlement_labels:
                 shown = settlement.display_name[:24]
-                label_x = x + radius + 1.4
-                label_y = y + 3.0
-                box = _label_box(label_x, label_y, shown, 9.5)
-                if not _claim_label(occupied_labels, box, bounds=(width, height)):
+                label_dx = radius + 2.2
+                label_dy = 3.0
+                label_anchor = "start"
+                for dx, dy, anchor in (
+                    (radius + 2.2, 3.0, "start"),
+                    (-(radius + 2.2), 3.0, "end"),
+                    (0.0, -(radius + 3.0), "middle"),
+                    (0.0, radius + 10.0, "middle"),
+                ):
+                    box = _label_box(x + dx, y + dy, shown, 9.5, anchor=anchor)
+                    if _claim_label(occupied_labels, box, bounds=(width, height)):
+                        label_dx = dx
+                        label_dy = dy
+                        label_anchor = anchor
+                        break
+                else:
                     continue
+                label_x = x + label_dx
+                label_y = y + label_dy
                 parts.append(
                     f'<text class="settlement-label" data-settlement-id="{html.escape(settlement.settlement_id)}" '
                     f'data-region-id="{html.escape(settlement.region_id)}" '
-                    f'x="{label_x:.1f}" y="{label_y:.1f}">{html.escape(shown)}</text>'
+                    f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" data-dx="{label_dx:.2f}" data-dy="{label_dy:.2f}" '
+                    f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{label_anchor}">{html.escape(shown)}</text>'
                 )
                 settlement_labels += 1
+
+    if labels and named_feature_overlays:
+        for named in sorted(named_feature_overlays, key=lambda f: (f.region_id, f.display_name, f.feature_id)):
+            if feature_labels >= max_feature_labels:
+                break
+            x, y = _scale((named.x, named.y), width, height, pad)
+            shown = named.display_name[:24]
+            label_dx = 5.0
+            label_dy = -4.0
+            label_anchor = "start"
+            for dx, dy, anchor in (
+                (5.0, -4.0, "start"),
+                (5.0, 10.0, "start"),
+                (-5.0, -4.0, "end"),
+                (-5.0, 10.0, "end"),
+                (0.0, -8.0, "middle"),
+                (0.0, 12.0, "middle"),
+            ):
+                box = _label_box(x + dx, y + dy, shown, 9.0, anchor=anchor)
+                if _claim_label(occupied_labels, box, bounds=(width, height)):
+                    label_dx = dx
+                    label_dy = dy
+                    label_anchor = anchor
+                    break
+            else:
+                label_dx = 5.0
+                label_dy = 10.0
+                label_anchor = "start"
+            label_x = x + label_dx
+            label_y = y + label_dy
+            parts.append(
+                f'<text class="feature-label" data-feature-id="{html.escape(named.feature_id)}" '
+                f'data-region-id="{html.escape(named.region_id)}" data-feature-name="{html.escape(named.display_name)}" '
+                f'data-feature-kind="{html.escape(named.kind)}" data-feature-etymology="{html.escape(named.etymology or "")}" '
+                f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" data-dx="{label_dx:.2f}" data-dy="{label_dy:.2f}" '
+                f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{label_anchor}">{html.escape(shown)}</text>'
+            )
+            feature_labels += 1
 
     parts.extend(deferred_labels)
 

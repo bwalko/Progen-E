@@ -379,6 +379,7 @@ body.dark .place-sheet,
     padding: 5px 10px;
     cursor: pointer;
 }
+.world-map-card [data-feature-id],
 .world-map-card [data-region-id],
 .world-map-card [data-region-label],
 .world-map-card [data-settlement-id] {
@@ -753,7 +754,7 @@ def _render_world_map_html_cached(
         f'<div class="place-sheet world-map-card" onclick="{_world_map_click_onclick()}">'
         f"<h2>{html.escape(world_id)} World Map</h2>"
         f'<p class="place-muted">Generated polygon geography; showing {html.escape(overlay_text)}. '
-        "Click a region or settlement to open its detail sheet. Use the mouse wheel or drag to zoom and pan.</p>"
+        "Click a region, settlement, or named feature to open its detail sheet. Use the mouse wheel or drag to zoom and pan.</p>"
         f"{controls}"
         f"{svg}"
         "</div>"
@@ -768,15 +769,16 @@ def _world_map_click_onclick() -> str:
             "if(svg&&svg.dataset.dragged==='1'){svg.dataset.dragged='0';return true;}"
             "if(!target||!target.closest){return true;}"
             "const town=target.closest('[data-settlement-id]');"
-            "const region=town||target.closest('[data-region-id],[data-region-label]');"
+            "const feature=town?null:target.closest('[data-feature-id]');"
+            "const region=town||feature||target.closest('[data-region-id],[data-region-label]');"
             "if(!region){return true;}"
-            "const id=town?town.dataset.settlementId:(region.dataset.regionId||region.dataset.regionLabel);"
+            "const id=town?town.dataset.settlementId:(feature?feature.dataset.featureId:(region.dataset.regionId||region.dataset.regionLabel));"
             "if(!id){return true;}"
             "event.preventDefault();event.stopPropagation();"
             "const input=document.querySelector('#map-open-selection textarea,#map-open-selection input');"
             "const button=document.querySelector('#map-open-button button,#map-open-button');"
             "if(input&&button){"
-            "const value=JSON.stringify({view:town?'Towns':'Regions',id:id});"
+            "const value=JSON.stringify(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||''}:{view:town?'Towns':'Regions',id:id});"
             "const descriptor=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value');"
             "if(descriptor&&descriptor.set){descriptor.set.call(input,value);}else{input.value=value;}"
             "input.dispatchEvent(new Event('input',{bubbles:true}));"
@@ -3722,6 +3724,37 @@ def _render_generated_region_map(
                     site_by_slot[int(site.get("settlement_slot", 0)) + 1] = site
                 except (TypeError, ValueError):
                     continue
+    features = geo.get("features") if isinstance(geo, dict) else None
+    if isinstance(features, list):
+        for feat in features:
+            if not isinstance(feat, dict):
+                continue
+            display = str(feat.get("display_name") or "").strip()
+            if not display:
+                continue
+            try:
+                if feat.get("source_world_x") is not None and feat.get("source_world_y") is not None:
+                    world_xy = (float(feat["source_world_x"]), float(feat["source_world_y"]))
+                    wx, wy = project_world_point_to_region_footprint(geometry, region_id, world_xy)
+                else:
+                    lx = max(0.04, min(0.96, float(feat.get("x", 0.5))))
+                    ly = max(0.04, min(0.96, float(feat.get("y", 0.5))))
+                    wx, wy = project_local_point_to_region_footprint(geometry, region_id, (lx, ly))
+            except (TypeError, ValueError):
+                continue
+            x = sx(wx)
+            y = sy(wy)
+            kind = str(feat.get("kind") or "feature")
+            parts.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r=".72" fill="{_feature_color(kind)}" opacity=".92" '
+                'stroke="#ffffff" stroke-width=".18" />'
+            )
+            parts.append(
+                f'<text x="{x + 1.05:.1f}" y="{y - .65:.1f}" font-size="1.45" '
+                'font-family="Arial,Helvetica,sans-serif" paint-order="stroke" '
+                'stroke="#ffffff" stroke-width=".35" stroke-linejoin="round" fill="#222222">'
+                f'{html.escape(display[:20])}</text>'
+            )
     for row in settlement_rows:
         slot = int(row["site_slot"] or 1) if "site_slot" in row.keys() else 1
         site = site_by_slot.get(slot)
@@ -3834,9 +3867,10 @@ def _render_local_map(
             parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.9" fill="{color}" opacity=".75" />')
         else:
             parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.4" fill="{color}" opacity=".8" />')
+        label = str(feat.get("display_name") or kind)
         parts.append(
             f'<text x="{x + 1.6:.1f}" y="{y - 1.6:.1f}" font-size="1.9" fill="var(--place-muted)">'
-            f'{html.escape(kind[:12])}</text>'
+            f'{html.escape(label[:18])}</text>'
         )
     for row in settlements:
         slot = int(row["site_slot"] or 1) if "site_slot" in row.keys() else 1
@@ -4955,6 +4989,27 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
         return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
     view = str(selection.get("view") or "Regions")
     item_id = str(selection.get("id") or "").strip()
+    if view == "Features" and item_id:
+        name = str(selection.get("name") or item_id).strip()
+        kind = str(selection.get("kind") or "feature").strip()
+        region_id = str(selection.get("region_id") or "").strip()
+        etymology = str(selection.get("etymology") or "").strip()
+        cards = "".join(
+            [
+                _detail_card("Kind", kind or "feature"),
+                _detail_card("Region", region_id or "Unknown"),
+                _detail_card("Feature ID", item_id),
+            ]
+        )
+        return (
+            '<div class="place-sheet">'
+            f'<h2>{html.escape(name)}</h2>'
+            f'<div class="place-subtitle">Named {html.escape(kind or "feature")}'
+            f'{(" in " + html.escape(region_id)) if region_id else ""}</div>'
+            f'<div class="place-grid">{cards}</div>'
+            f'{f"<p class=\"place-muted\">{html.escape(etymology)}</p>" if etymology else ""}'
+            '</div>'
+        )
     if view not in {"Regions", "Towns"} or not item_id:
         return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
     return render_place_detail(world, view, _encode_place_key(world, "", item_id))
@@ -4975,7 +5030,7 @@ def render_world_map_with_detail_reset(
             labels=labels,
             include_inactive_settlements=include_inactive_settlements,
         ),
-        '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>',
+        '<div class="place-sheet muted">Click a region, settlement, or named feature on the map to inspect it.</div>',
     )
 
 

@@ -215,7 +215,7 @@ When adding or renaming a genome trait, update both `genome.csv` and this mappin
 
 ## `config/ethnic_proto_placewords.csv`
 
-**Purpose:** Proto-form semantic stems for named local geography features. `library.ethnic_proto_placewords` uses the resident ethnic mix at first regional local-geography creation, maps local feature kinds (river, mountain, harbor, etc.) to this table's `feature_type`, picks a `core_concept`, then uses `normalized_form` as the seed stem. The seed is combined with `placenames.csv` rows from `Topography`, `Sacred`, and `Status` categories; `rewind_constructed_toponym_placeholder` now applies the initial IE modulo-4 sound law for Germanic vs Italic/Celtic-style toponyms while keeping the function name as the future tuning hook.
+**Purpose:** Proto-form semantic stems for named local geography features. `library.ethnic_proto_placewords` uses the resident ethnic mix when a settlement anchors to a nearby natural feature, maps local feature kinds (river, mountain, harbor, etc.) to this table's `feature_type`, picks a `core_concept`, then uses `normalized_form` as the seed stem. The seed is combined with `placenames.csv` rows from `Topography`, `Sacred`, and `Status` categories; `rewind_constructed_toponym_placeholder` now applies the initial IE modulo-4 sound law for Germanic vs Italic/Celtic-style toponyms while keeping the function name as the future tuning hook. Unused physical features remain unnamed.
 
 | Column | Type / role | Notes |
 |--------|-------------|-------|

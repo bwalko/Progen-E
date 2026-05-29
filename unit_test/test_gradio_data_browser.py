@@ -188,7 +188,16 @@ def _memory_place_save() -> sqlite3.Connection:
         (
             json.dumps(
                 {
-                    "features": [{"kind": "river", "x": 0.2, "y": 0.3}],
+                    "features": [
+                        {
+                            "feature_id": "r1:f0",
+                            "kind": "river",
+                            "x": 0.2,
+                            "y": 0.3,
+                            "display_name": "Bluewater",
+                            "etymology": "blue · river",
+                        }
+                    ],
                     "settlements": [{"settlement_slot": 0, "x": 0.55, "y": 0.45}],
                 }
             ),
@@ -1365,11 +1374,67 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             try:
                 region_html = render_world_map_selection_detail("test", json.dumps({"view": "Regions", "id": "r1"}))
                 town_html = render_world_map_selection_detail("test", json.dumps({"view": "Towns", "id": "r1:s1"}))
+                feature_html = render_world_map_selection_detail(
+                    "test",
+                    json.dumps(
+                        {
+                            "view": "Features",
+                            "id": "r1:f0",
+                            "region_id": "r1",
+                            "name": "Bluewater",
+                            "kind": "river",
+                            "etymology": "blue · river",
+                        }
+                    ),
+                )
             finally:
                 gdb._db_path = original_db_path
 
         self.assertIn("River Country", region_html)
         self.assertIn("Fordham", town_html)
+        self.assertIn("Bluewater", feature_html)
+        self.assertIn("Named river", feature_html)
+        self.assertIn("blue · river", feature_html)
+
+    def test_world_map_overlays_read_named_features_from_local_geography(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+            geometry = WorldMapGeometry(
+                world="test",
+                version="unit",
+                width=1.0,
+                height=1.0,
+                cells=[
+                    RegionCell(
+                        region_id="r1",
+                        continent_id="test",
+                        center_x=0.5,
+                        center_y=0.5,
+                        polygon=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                        elevation=0.0,
+                        moisture=0.0,
+                        ruggedness=0.0,
+                        terrain_family="plains",
+                        is_coastal=False,
+                        feature_ids=[],
+                    )
+                ],
+                micro_cells=[],
+                features=[],
+                edges=[],
+                rivers=[],
+            )
+
+            overlays = load_world_map_overlays(geometry=geometry, save_db_path=path)
+
+        self.assertEqual([f.display_name for f in overlays.features], ["Bluewater"])
+        self.assertEqual(overlays.features[0].kind, "river")
+        self.assertEqual(overlays.features[0].region_id, "r1")
 
     def test_world_map_overlays_read_keyed_place_schema_through_readable_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -1460,6 +1525,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertIn("Fordham", html)
         self.assertIn("Ford · home", html)
+        self.assertIn("Bluewater", html)
         self.assertIn("miller: 1", html)
         self.assertIn("Ada Forge", html)
 

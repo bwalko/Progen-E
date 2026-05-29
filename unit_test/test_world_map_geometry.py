@@ -31,6 +31,7 @@ from library.world_map_geometry import (
 )
 from library.world_save import read_world_map_seed, write_world_map_seed
 from library.world_map_svg import (
+    FeatureMapOverlay,
     SettlementMapOverlay,
     WorldMapOverlays,
     load_world_map_overlays,
@@ -114,11 +115,25 @@ class TestWorldMapGeometry(unittest.TestCase):
                 for a, b in zip(hull, hull[1:] + hull[:1])
                 if abs(a[0] - b[0]) < 1e-6 or abs(a[1] - b[1]) < 1e-6
             )
+            area = abs(
+                sum(
+                    hull[i][0] * hull[(i + 1) % len(hull)][1]
+                    - hull[(i + 1) % len(hull)][0] * hull[i][1]
+                    for i in range(len(hull))
+                )
+                / 2.0
+            )
+            perimeter = sum(
+                ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+                for a, b in zip(hull, hull[1:] + hull[:1])
+            )
+            compactness = 4.0 * 3.141592653589793 * area / max(1e-9, perimeter * perimeter)
 
             self.assertNotEqual(hull_points, bbox_corners)
             self.assertGreater(len({round(x, 3) for x, _ in hull}), 4)
             self.assertGreater(len({round(y, 3) for _, y in hull}), 4)
             self.assertLess(axis_aligned_edges, len(hull) * 0.08)
+            self.assertGreater(compactness, 0.18)
 
     def test_continent_footprints_do_not_overlap(self) -> None:
         continents = list_continents(world="default", db_path=self.cfg)
@@ -403,6 +418,10 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn(".river{stroke:#2a8bc8", svg)
         self.assertNotIn('class="route ', svg)
         self.assertIn('class="feature ', svg)
+        first_feature = geometry.features[0]
+        self.assertIn(f'data-feature-id="{first_feature.feature_id}"', svg)
+        self.assertIn(f'data-feature-name="{first_feature.label}"', svg)
+        self.assertIn(f'data-feature-kind="{first_feature.kind}"', svg)
         self.assertIn("data-region-label=", svg)
         first_cell = geometry.micro_cells[0]
         first_path = next(
@@ -427,12 +446,50 @@ class TestWorldMapGeometry(unittest.TestCase):
                 )
             ],
             polities_by_region_id={},
+            features=[
+                FeatureMapOverlay(
+                    feature_id=f"{cell.region_id}:f1",
+                    region_id=cell.region_id,
+                    kind="river",
+                    display_name="Bluewater",
+                    x=cell.center_x + 0.01,
+                    y=cell.center_y,
+                    etymology="blue · river",
+                )
+            ],
         )
 
         svg = render_world_map_svg(geometry, overlays=overlays)
 
         self.assertIn('class="settlement active"', svg)
         self.assertIn(f'data-settlement-id="{cell.region_id}:s1"', svg)
+        self.assertIn(f'data-feature-id="{cell.region_id}:f1"', svg)
+        self.assertIn('data-feature-name="Bluewater"', svg)
+        self.assertIn(">Test Town</text>", svg)
+        self.assertIn(">Bluewater</text>", svg)
+
+    def test_world_map_features_filter_to_nearby_settlements_when_overlaid(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        cell = geometry.cells[0]
+        overlays = WorldMapOverlays(
+            settlements=[
+                SettlementMapOverlay(
+                    settlement_id=f"{cell.region_id}:s1",
+                    region_id="not_a_real_region",
+                    display_name="Test Town",
+                    x=cell.center_x,
+                    y=cell.center_y,
+                    population=42,
+                    status="active",
+                )
+            ],
+            polities_by_region_id={},
+        )
+
+        svg = render_world_map_svg(geometry, overlays=overlays)
+
+        self.assertIn('class="settlement active"', svg)
+        self.assertNotIn('class="feature ', svg)
 
     def test_load_world_map_overlays_reads_save_tables(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -461,7 +518,21 @@ class TestWorldMapGeometry(unittest.TestCase):
                     42,
                     "active",
                     1,
-                    json.dumps({"settlements": [{"settlement_slot": 0, "x": 0.5, "y": 0.5}]}),
+                    json.dumps(
+                        {
+                            "features": [
+                                {
+                                    "feature_id": f"{cell.region_id}:f1",
+                                    "kind": "river",
+                                    "x": 0.45,
+                                    "y": 0.5,
+                                    "display_name": "Bluewater",
+                                    "etymology": "blue · river",
+                                }
+                            ],
+                            "settlements": [{"settlement_slot": 0, "x": 0.5, "y": 0.5}],
+                        }
+                    ),
                 ),
             )
             con.execute(
@@ -485,6 +556,9 @@ class TestWorldMapGeometry(unittest.TestCase):
 
         self.assertEqual(len(overlays.settlements), 1)
         self.assertEqual(overlays.settlements[0].display_name, "Test Town")
+        self.assertEqual(len(overlays.features), 1)
+        self.assertEqual(overlays.features[0].display_name, "Bluewater")
+        self.assertEqual(overlays.features[0].kind, "river")
         self.assertEqual(overlays.polities_by_region_id[cell.region_id].polity_name, "Test Realm")
 
     def test_load_world_map_overlays_limits_settlements(self) -> None:

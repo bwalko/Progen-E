@@ -379,8 +379,13 @@ class TestLocalGeography(unittest.TestCase):
         )
         named1 = [(f.kind, f.display_name, f.name_ethnic) for f in g1.features if f.display_name]
         named2 = [(f.kind, f.display_name, f.name_ethnic) for f in g2.features if f.display_name]
+        anchor_ids = {p.anchor_feature_id for p in g1.settlements if p.anchor_feature_id}
+        named_ids = {f.feature_id for f in g1.features if f.display_name}
         self.assertTrue(named1)
         self.assertEqual(named1, named2)
+        self.assertLessEqual(len(named_ids), len(anchor_ids))
+        self.assertTrue(named_ids.issubset(anchor_ids))
+        self.assertEqual(len({item[1].casefold() for item in named1}), len(named1))
         self.assertTrue(all(item[2] == "Middle English" for item in named1))
 
 

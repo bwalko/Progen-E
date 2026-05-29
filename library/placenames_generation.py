@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import random
 from typing import Any
@@ -22,6 +22,7 @@ from library.random_traits import DEFAULT_DB_PATH, _connect
 from library.settlement_local_geography import (
     build_local_region_graph,
     category_weights_for_region,
+    feature_kind_for_meaning,
     make_region_geography_rng,
 )
 
@@ -43,10 +44,65 @@ class GeneratedSettlementName:
 
 _MEANING_SEP = " · "
 
+_LOCATIVE_ANCHOR_KINDS = {
+    "bay",
+    "coast",
+    "ford",
+    "harbor",
+    "lake",
+    "marsh",
+    "river",
+    "spring",
+    "stream",
+    "wadi",
+    "well",
+}
+
 
 def _join_etymology_parts(*parts: str) -> str:
     bits = [p.strip() for p in parts if (p or "").strip()]
     return _MEANING_SEP.join(bits)
+
+
+def _unique_display_name(name: str, used_names: set[str]) -> str:
+    base = (name or "").strip() or "Place"
+    taken = {n.strip().casefold() for n in used_names if n.strip()}
+    if base.casefold() not in taken:
+        return base
+    idx = 2
+    while f"{base}{idx}".casefold() in taken:
+        idx += 1
+    return f"{base}{idx}"
+
+
+def _locative_settlement_display(base_name: str, anchor_kind: str, used_names: set[str]) -> str:
+    """Readable settlement form for a town named by position near a natural feature."""
+    base = normalize_placename_stem(base_name)
+    kind = (anchor_kind or "").strip().lower()
+    suffix = "by"
+    if kind in {"harbor", "bay", "coast"}:
+        suffix = "havenby"
+    elif kind in {"ford"}:
+        suffix = "fordby"
+    elif kind in {"spring", "well"}:
+        suffix = "wellby"
+    candidate = format_toponym_display(join_tokens(base, suffix))
+    return _unique_display_name(candidate, used_names)
+
+
+def _anchor_feature_for_slot(graph, site_slot: int):
+    target_slot = max(0, int(site_slot) - 1)
+    anchor_id = ""
+    for pin in graph.settlements:
+        if int(pin.settlement_slot) == target_slot:
+            anchor_id = (pin.anchor_feature_id or "").strip()
+            break
+    if not anchor_id:
+        return None
+    for feature in graph.features:
+        if feature.feature_id == anchor_id:
+            return feature
+    return None
 
 
 def _weighted_choice(rng: random.Random, pairs: list[tuple[Any, float]]) -> Any:
@@ -415,6 +471,7 @@ def seed_settlement_naming_for_region(
     lex: PlacenameLexicon,
     rng: random.Random,
     settlement_slots: int = 1,
+    site_slot: int | None = None,
 ) -> tuple[GeneratedSettlementName, str]:
     """Return generated name and shared region placement JSON."""
     weights = region_ethnic_weights(ctx, region.region_id, db_path=ctx.db_path)
@@ -449,5 +506,35 @@ def seed_settlement_naming_for_region(
             else None
         ),
     )
+    used_names = {
+        (st.display_name or "").strip()
+        for st in getattr(ctx, "settlements_by_id", {}).values()
+        if getattr(st, "region_id", "") == region.region_id and (st.display_name or "").strip()
+    }
+    used_names.update(
+        (feature.display_name or "").strip()
+        for feature in graph.features
+        if (feature.display_name or "").strip()
+    )
+    target_site_slot = site_slot if site_slot is not None else max(1, int(settlement_slots))
+    anchor = _anchor_feature_for_slot(graph, target_site_slot)
+    anchor_kind = (getattr(anchor, "kind", "") or "").strip().lower() if anchor is not None else ""
+    primary_kind = feature_kind_for_meaning(gen.primary_meaning, gen.primary_category)
+    if (
+        anchor is not None
+        and (getattr(anchor, "display_name", None) or "").strip()
+        and (anchor_kind in _LOCATIVE_ANCHOR_KINDS or primary_kind in _LOCATIVE_ANCHOR_KINDS)
+    ):
+        locative = _locative_settlement_display(gen.display_name, anchor_kind, used_names)
+        gen = replace(
+            gen,
+            display_name=locative,
+            etymology=_join_etymology_parts(
+                gen.etymology,
+                f"by {anchor_kind or 'landmark'} {anchor.display_name}",
+            ),
+        )
+    else:
+        gen = replace(gen, display_name=_unique_display_name(gen.display_name, used_names))
     placement_json = graph.to_json()
     return gen, placement_json
