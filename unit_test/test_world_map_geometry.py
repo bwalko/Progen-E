@@ -201,6 +201,8 @@ class TestWorldMapGeometry(unittest.TestCase):
             self.assertTrue(0.0 <= cell.center_y <= 1.0)
             self.assertTrue(0.0 <= cell.elevation <= 1.0)
             self.assertTrue(0.0 <= cell.moisture <= 1.0)
+            self.assertTrue(0.0 <= cell.river_distance <= 1.0)
+            self.assertGreaterEqual(cell.river_flow, 0.0)
         for region in regions:
             text = f"{region.region_id} {region.region_name} {region.terrain} {region.keywords}".lower()
             region_micro = [c for c in geometry.micro_cells if c.region_id == region.region_id]
@@ -314,8 +316,17 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertTrue(all(f.label for f in geometry.features))
         self.assertTrue(all(r.river_class in {"major_river", "minor_river"} for r in geometry.rivers))
         self.assertTrue(any(r.points for r in geometry.rivers))
+        self.assertTrue(geometry.river_channels)
+        self.assertTrue(all(c.water_polygon for c in geometry.river_channels))
+        self.assertTrue(all(c.bank_polygon for c in geometry.river_channels))
+        self.assertTrue(all(c.corridor_polygon for c in geometry.river_channels))
         self.assertTrue(any(c.elevation >= 0.6 for c in geometry.micro_cells))
         self.assertTrue(any(c.moisture >= 0.8 for c in geometry.micro_cells))
+        self.assertTrue(any(c.is_channel for c in geometry.micro_cells))
+        self.assertTrue(any(c.is_floodplain and c.river_flow > 0.0 for c in geometry.micro_cells))
+        carved = [c for c in geometry.micro_cells if c.land_polygons]
+        self.assertTrue(carved)
+        self.assertTrue(all(all(len(poly) >= 3 for poly in c.land_polygons) for c in carved))
 
     def test_river_segments_keep_local_region_ownership(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -408,6 +419,8 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn('id="terrain-warp"', svg)
         self.assertIn('id="ocean-gradient"', svg)
         self.assertIn('id="river-corridor-soften"', svg)
+        self.assertIn('id="river-cut-mask"', svg)
+        self.assertIn('class="river-cut-mask-shape"', svg)
         self.assertIn('class="terrain-blend"', svg)
         self.assertIn('class="terrain-mottle"', svg)
         self.assertIn('class="terrain-texture"', svg)
@@ -420,7 +433,6 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn('class="coast-shadow"', svg)
         self.assertLess(svg.count('class="coast-beach"'), 50)
         self.assertIn(".river-corridor,.river-bank,.river-water", svg)
-        self.assertIn('class="river-corridor ', svg)
         self.assertIn('class="river-bank ', svg)
         self.assertIn('class="river-water ', svg)
         self.assertIn('class="river-mouth-bank ', svg)

@@ -135,6 +135,10 @@ def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
     return "#" + "".join(f"{max(0, min(255, c)):02x}" for c in rgb)
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 def _mix_color(color: str, target: str, amount: float) -> str:
     amount = max(0.0, min(1.0, amount))
     r, g, b = _hex_to_rgb(color)
@@ -273,6 +277,10 @@ def _open_poly_path(points: list[tuple[float, float]]) -> str:
     first = points[0]
     rest = " ".join(f"L {x:.1f} {y:.1f}" for x, y in points[1:])
     return f"M {first[0]:.1f} {first[1]:.1f} {rest} Z"
+
+
+def _multi_poly_path(polys: list[list[tuple[float, float]]]) -> str:
+    return " ".join(_open_poly_path(poly) for poly in polys if len(poly) >= 3)
 
 
 def _smooth_line_path(points: list[tuple[float, float]]) -> str:
@@ -491,6 +499,19 @@ def _micro_cell_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None) -
         base = "#b6a56f"
     else:
         base = _CELL_COLORS.get(cell.terrain_family, _CELL_COLORS["plains"])
+    river_flow = max(0.0, float(getattr(cell, "river_flow", 0.0) or 0.0))
+    river_distance = max(0.0, float(getattr(cell, "river_distance", 1.0) or 1.0))
+    if getattr(cell, "is_floodplain", False) or river_flow > 0.0:
+        influence = _clamp(1.0 - river_distance / max(0.001, 0.034 + river_flow * 0.010), 0.0, 1.0)
+        if influence > 0.0:
+            alluvial = "#829a6a"
+            if cell.moisture >= 0.72:
+                alluvial = "#4f8060"
+            elif cell.moisture <= 0.38:
+                alluvial = "#aaa06e"
+            base = _mix_color(base, alluvial, min(0.42, 0.18 + influence * 0.24))
+            if getattr(cell, "is_channel", False):
+                base = _mix_color(base, "#4f8da0", 0.16)
     return _terrain_tint(base, cell)
 
 
@@ -1118,6 +1139,63 @@ def render_world_map_svg(
     ]
     occupied_labels: list[_LabelBox] = []
     deferred_labels: list[str] = []
+    micro_by_id = {c.micro_id: c for c in geometry.micro_cells}
+    channel_by_river_id = {c.river_id: c for c in geometry.river_channels}
+
+    if channel_by_river_id:
+        mask_paths: list[str] = []
+        for channel in channel_by_river_id.values():
+            for poly in (channel.bank_polygon, channel.mouth_bank_polygon):
+                if len(poly) >= 3:
+                    mask_paths.append(_open_poly_path([_scale(p, width, height, pad) for p in poly]))
+        if mask_paths:
+            parts.append(
+                f'<mask id="river-cut-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="{width}" height="{height}">'
+            )
+            parts.append(f'<rect x="0" y="0" width="{width}" height="{height}" fill="#ffffff" />')
+            for path_d in mask_paths:
+                parts.append(f'<path class="river-cut-mask-shape" d="{path_d}" fill="#000000" />')
+            parts.append("</mask>")
+        parts.append('<g class="river-cut-layer">')
+        for river in geometry.rivers:
+            channel = channel_by_river_id.get(river.river_id)
+            if channel is None:
+                continue
+            river_micro_ids = {mid for segment in river.segments for mid in segment.micro_ids}
+            corridor_color = _river_corridor_fill(river_micro_ids, micro_by_id, overlays)
+            bank_fill = _mix_color(corridor_color, "#2e88a6", 0.42)
+            bank_poly = [_scale(p, width, height, pad) for p in channel.bank_polygon]
+            water_poly = [_scale(p, width, height, pad) for p in channel.water_polygon]
+            if bank_poly:
+                parts.append(
+                    f'<path class="river-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                    f'd="{_open_poly_path(bank_poly)}" fill="{bank_fill}" />'
+                )
+            if water_poly:
+                parts.append(
+                    f'<path class="river-water {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                    f'd="{_open_poly_path(water_poly)}" fill="#2f8dab" />'
+                )
+            if channel.highlight_points:
+                water_width = 0.72 + math.sqrt(max(0.0, river.flow)) * 2.35
+                highlight_width = max(0.24, water_width * 0.12)
+                highlight_points = [_scale(p, width, height, pad) for p in channel.highlight_points]
+                parts.append(
+                    f'<path class="river river-highlight {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                    f'd="{_smooth_line_path(highlight_points)}" stroke-width="{highlight_width:.2f}" opacity="0.72" />'
+                )
+            if channel.mouth_bank_polygon and channel.mouth_water_polygon:
+                mouth_bank = [_scale(p, width, height, pad) for p in channel.mouth_bank_polygon]
+                mouth_water = [_scale(p, width, height, pad) for p in channel.mouth_water_polygon]
+                parts.append(
+                    f'<path class="river-mouth-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                    f'd="{_open_poly_path(mouth_bank)}" fill="{_mix_color(corridor_color, "#2f8dab", 0.34)}" />'
+                )
+                parts.append(
+                    f'<path class="river-mouth {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                    f'd="{_open_poly_path(mouth_water)}" fill="#3f95ad" />'
+                )
+        parts.append("</g>")
 
     if geometry.micro_cells:
         region_edges, coast_edges, blend_edges = _micro_edge_segments(geometry.micro_cells)
@@ -1132,17 +1210,29 @@ def render_world_map_svg(
             if noisy_edges
             else {}
         )
+        terrain_mask = ' mask="url(#river-cut-mask)"' if channel_by_river_id else ""
         terrain_filter = ""
-        parts.append(f'<g class="terrain-layer"{terrain_filter}>')
+        parts.append(f'<g class="terrain-layer"{terrain_filter}{terrain_mask}>')
         scaled_micro_paths: dict[str, str] = {}
         for cell in geometry.micro_cells:
-            scaled = (
-                _micro_noisy_polygon_points(cell, noisy_edge_paths, width=width, height=height, pad=pad)
-                if noisy_edges
-                else [_scale(p, width, height, pad) for p in cell.polygon]
-            )
-            path_d = _poly_path(scaled)
+            land_polygons = getattr(cell, "land_polygons", []) or []
+            if land_polygons:
+                scaled_land_polygons = [
+                    [_scale(p, width, height, pad) for p in poly]
+                    for poly in land_polygons
+                    if len(poly) >= 3
+                ]
+                path_d = _multi_poly_path(scaled_land_polygons)
+            else:
+                scaled = (
+                    _micro_noisy_polygon_points(cell, noisy_edge_paths, width=width, height=height, pad=pad)
+                    if noisy_edges
+                    else [_scale(p, width, height, pad) for p in cell.polygon]
+                )
+                path_d = _poly_path(scaled)
             scaled_micro_paths[cell.micro_id] = path_d
+            if not path_d:
+                continue
             polity = overlays.polities_by_region_id.get(cell.region_id) if overlays else None
             polity_attrs = (
                 f' data-polity-id="{html.escape(polity.polity_id)}" data-polity-name="{html.escape(polity.polity_name)}"'
@@ -1153,11 +1243,11 @@ def render_world_map_svg(
                 f'<path class="micro-cell terrain-{html.escape(cell.terrain_family)}" '
                 f'data-micro-id="{html.escape(cell.micro_id)}" data-region-id="{html.escape(cell.region_id)}"{polity_attrs} '
                 f'data-elevation="{cell.elevation:.4f}" data-moisture="{cell.moisture:.4f}" '
-                f'd="{path_d}" fill="{_micro_cell_fill(cell, overlays)}" opacity="0.96" />'
+                f'd="{path_d}" fill="{_micro_cell_fill(cell, overlays)}" opacity="0.96" fill-rule="evenodd" />'
             )
         parts.append("</g>")
         if noisy_edges and blend_edges:
-            parts.append('<g class="terrain-mottle-layer" filter="url(#terrain-mottle-soften)" opacity="0.36">')
+            parts.append(f'<g class="terrain-mottle-layer" filter="url(#terrain-mottle-soften)" opacity="0.36"{terrain_mask}>')
             for cell in geometry.micro_cells:
                 if cell.is_coastal:
                     continue
@@ -1175,7 +1265,7 @@ def render_world_map_svg(
                     f'fill="{_micro_mottle_fill(cell, overlays)}" opacity="{rng.uniform(0.20, 0.38):.2f}" />'
                 )
             parts.append("</g>")
-            parts.append('<g class="terrain-blend-layer" opacity="0.34">')
+            parts.append(f'<g class="terrain-blend-layer" opacity="0.34"{terrain_mask}>')
             parts.append('<g filter="url(#terrain-soften)">')
             for a, b, first, second in blend_edges:
                 pts = _oriented_noisy_edge_path(
@@ -1194,11 +1284,11 @@ def render_world_map_svg(
             parts.append("</g>")
             parts.append(
                 f'<rect class="terrain-texture" x="{pad}" y="{pad}" width="{width - pad * 2}" '
-                f'height="{height - pad * 2}" fill="#88806a" filter="url(#terrain-grain)" opacity="0.22" />'
+                f'height="{height - pad * 2}" fill="#88806a" filter="url(#terrain-grain)" opacity="0.22"{terrain_mask} />'
             )
             hillshade = _micro_hillshade(geometry.micro_cells, blend_edges)
             if hillshade:
-                parts.append('<g class="terrain-shade-layer" opacity="1.0">')
+                parts.append(f'<g class="terrain-shade-layer" opacity="1.0"{terrain_mask}>')
                 for cell in geometry.micro_cells:
                     shade = hillshade.get(cell.micro_id)
                     if shade is None:
@@ -1259,9 +1349,10 @@ def render_world_map_svg(
                 f'd="{_poly_path(scaled)}" fill="{_cell_fill(cell, overlays)}" opacity="0.82" />'
             )
 
-    micro_by_id = {c.micro_id: c for c in geometry.micro_cells}
     rendered_rivers: list[tuple[RiverPath, list[tuple[float, float]], str, float, set[str], str]] = []
     for river in geometry.rivers:
+        if river.river_id in channel_by_river_id:
+            continue
         pts = _river_render_points(
             [_scale(p, width, height, pad) for p in river.points],
             river.river_id,
@@ -1274,28 +1365,39 @@ def render_world_map_svg(
         river_micro_ids = {mid for segment in river.segments for mid in segment.micro_ids}
         corridor_color = _river_corridor_fill(river_micro_ids, micro_by_id, overlays)
         rendered_rivers.append((river, pts, line_d, water_width, river_micro_ids, corridor_color))
-        corridor_poly = _tapered_river_polygon(
-            pts,
-            start_width=max(1.9, water_width * 0.72 + 2.3),
-            end_width=water_width + 5.2,
-        )
-        parts.append(
-            f'<path class="river-corridor {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-            f'd="{_open_poly_path(corridor_poly)}" fill="{corridor_color}" filter="url(#river-corridor-soften)" opacity="0.46" />'
-        )
+        channel = channel_by_river_id.get(river.river_id)
+        if channel is None:
+            corridor_poly = _tapered_river_polygon(
+                pts,
+                start_width=max(1.9, water_width * 0.72 + 2.3),
+                end_width=water_width + 5.2,
+            )
+            parts.append(
+                f'<path class="river-corridor {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                f'd="{_open_poly_path(corridor_poly)}" fill="{corridor_color}" filter="url(#river-corridor-soften)" opacity="0.46" />'
+            )
 
     for river_obj, pts, line_d, water_width, _river_micro_ids, _corridor_color in rendered_rivers:
         river = river_obj
+        channel = channel_by_river_id.get(river.river_id)
         bank_fill = _mix_color(_corridor_color, "#2e88a6", 0.42)
-        bank_poly = _tapered_river_polygon(
-            pts,
-            start_width=max(0.78, water_width * 0.48 + 0.52),
-            end_width=water_width + 0.68,
+        bank_poly = (
+            [_scale(p, width, height, pad) for p in channel.bank_polygon]
+            if channel is not None and channel.bank_polygon
+            else _tapered_river_polygon(
+                pts,
+                start_width=max(0.78, water_width * 0.48 + 0.52),
+                end_width=water_width + 0.68,
+            )
         )
-        water_poly = _tapered_river_polygon(
-            pts,
-            start_width=max(0.6, water_width * 0.40),
-            end_width=water_width,
+        water_poly = (
+            [_scale(p, width, height, pad) for p in channel.water_polygon]
+            if channel is not None and channel.water_polygon
+            else _tapered_river_polygon(
+                pts,
+                start_width=max(0.6, water_width * 0.40),
+                end_width=water_width,
+            )
         )
         parts.append(
             f'<path class="river-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
@@ -1307,13 +1409,21 @@ def render_world_map_svg(
         )
         if len(pts) >= 3:
             highlight_width = max(0.24, water_width * 0.12)
-            highlight_points = _offset_line_points(pts, amount=max(0.20, water_width * -0.12))
+            highlight_points = (
+                [_scale(p, width, height, pad) for p in channel.highlight_points]
+                if channel is not None and channel.highlight_points
+                else _offset_line_points(pts, amount=max(0.20, water_width * -0.12))
+            )
             parts.append(
                 f'<path class="river river-highlight {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
                 f'd="{_smooth_line_path(highlight_points)}" stroke-width="{highlight_width:.2f}" opacity="0.72" />'
             )
         if len(pts) >= 2 and river.points[-1] != river.points[-2]:
-            mouth_bank, mouth_water = _river_mouth_polygons(pts, width=water_width)
+            if channel is not None and channel.mouth_bank_polygon and channel.mouth_water_polygon:
+                mouth_bank = [_scale(p, width, height, pad) for p in channel.mouth_bank_polygon]
+                mouth_water = [_scale(p, width, height, pad) for p in channel.mouth_water_polygon]
+            else:
+                mouth_bank, mouth_water = _river_mouth_polygons(pts, width=water_width)
             parts.append(
                 f'<path class="river-mouth-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
                 f'd="{_open_poly_path(mouth_bank)}" fill="{_mix_color(_corridor_color, "#2f8dab", 0.34)}" />'

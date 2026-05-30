@@ -12,9 +12,14 @@ import heapq
 import math
 import random
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
+
+from shapely.geometry import GeometryCollection
+from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.ops import unary_union
 
 from library.geography import (
     Region,
@@ -88,6 +93,19 @@ class RiverPath:
 
 
 @dataclass(frozen=True)
+class RiverChannel:
+    river_id: str
+    river_class: str
+    corridor_polygon: list[Point]
+    bank_polygon: list[Point]
+    water_polygon: list[Point]
+    mouth_bank_polygon: list[Point]
+    mouth_water_polygon: list[Point]
+    highlight_points: list[Point]
+    flow: float
+
+
+@dataclass(frozen=True)
 class RegionCell:
     region_id: str
     continent_id: str
@@ -114,6 +132,12 @@ class MicroRegionCell:
     moisture: float
     terrain_family: str
     is_coastal: bool
+    river_distance: float = 1.0
+    river_flow: float = 0.0
+    river_side: float = 0.0
+    is_floodplain: bool = False
+    is_channel: bool = False
+    land_polygons: list[list[Point]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -127,6 +151,7 @@ class WorldMapGeometry:
     features: list[RegionFeature]
     edges: list[RegionEdge]
     rivers: list[RiverPath]
+    river_channels: list[RiverChannel] = field(default_factory=list)
 
     def cell_by_region_id(self) -> dict[str, RegionCell]:
         return {c.region_id: c for c in self.cells}
@@ -148,6 +173,7 @@ class WorldMapGeometry:
             "features": [asdict(f) for f in self.features],
             "edges": [asdict(e) for e in self.edges],
             "rivers": [asdict(r) for r in self.rivers],
+            "river_channels": [asdict(r) for r in self.river_channels],
         }
 
 
@@ -2573,6 +2599,296 @@ def _build_rivers(
     return rivers
 
 
+def _apply_river_influence_to_micro_cells(
+    micro_cells: list[MicroRegionCell],
+    rivers: list[RiverPath],
+) -> list[MicroRegionCell]:
+    if not micro_cells or not rivers:
+        return micro_cells
+
+    river_segments: list[tuple[Point, Point, float]] = []
+    channel_ids: dict[str, float] = {}
+    for river in rivers:
+        flow = max(0.0, float(river.flow))
+        for segment in river.segments:
+            if len(segment.points) >= 2:
+                river_segments.append((segment.points[0], segment.points[-1], flow))
+            for mid in segment.micro_ids:
+                channel_ids[mid] = max(channel_ids.get(mid, 0.0), flow)
+
+    if not river_segments:
+        return micro_cells
+
+    influence_radius = 0.030
+    out: list[MicroRegionCell] = []
+    for cell in micro_cells:
+        center = (cell.center_x, cell.center_y)
+        best_distance = 1.0
+        best_flow = channel_ids.get(cell.micro_id, 0.0)
+        best_side = 0.0
+        for a, b, flow in river_segments:
+            distance = _point_segment_distance(center, a, b)
+            if distance >= best_distance:
+                continue
+            ax, ay = a
+            bx, by = b
+            cross = (bx - ax) * (center[1] - ay) - (by - ay) * (center[0] - ax)
+            best_distance = distance
+            best_flow = max(best_flow, flow)
+            best_side = 1.0 if cross >= 0.0 else -1.0
+
+        is_channel = cell.micro_id in channel_ids or best_distance <= 0.0038 + best_flow * 0.0025
+        floodplain_radius = influence_radius + best_flow * 0.010
+        is_floodplain = is_channel or best_distance <= floodplain_radius
+        if not is_floodplain and best_flow <= 0.0:
+            out.append(cell)
+            continue
+
+        river_strength = _clamp(1.0 - best_distance / max(1e-6, floodplain_radius), 0.0, 1.0)
+        moisture = _clamp(cell.moisture + river_strength * (0.20 + best_flow * 0.08), 0.0, 1.0)
+        elevation = _clamp(cell.elevation - river_strength * (0.018 + best_flow * 0.010), 0.0, 1.0)
+        family = cell.terrain_family
+        if is_floodplain and not cell.is_coastal and cell.terrain_family in {"drylands", "plains", "forest"}:
+            family = _generated_terrain_family(elevation=elevation, moisture=moisture, coastal=False)
+        out.append(
+            replace(
+                cell,
+                elevation=round(elevation, 4),
+                moisture=round(moisture, 4),
+                terrain_family=family,
+                river_distance=round(min(1.0, best_distance), 5),
+                river_flow=round(best_flow, 4),
+                river_side=best_side,
+                is_floodplain=is_floodplain,
+                is_channel=is_channel,
+            )
+        )
+    return out
+
+
+def _dedupe_polyline_points(points: list[Point], *, min_distance: float = 0.001) -> list[Point]:
+    out: list[Point] = []
+    for point in points:
+        if out and math.dist(out[-1], point) < min_distance:
+            continue
+        out.append(point)
+    return out
+
+
+def _tapered_polyline_polygon(
+    points: list[Point],
+    *,
+    start_width: float,
+    end_width: float,
+) -> list[Point]:
+    points = _dedupe_polyline_points(points)
+    if len(points) < 2:
+        return []
+    left: list[Point] = []
+    right: list[Point] = []
+    last = len(points) - 1
+    for i, point in enumerate(points):
+        if i == 0:
+            tx = points[1][0] - point[0]
+            ty = points[1][1] - point[1]
+        elif i == last:
+            tx = point[0] - points[i - 1][0]
+            ty = point[1] - points[i - 1][1]
+        else:
+            tx = points[i + 1][0] - points[i - 1][0]
+            ty = points[i + 1][1] - points[i - 1][1]
+        length = max(1e-9, math.hypot(tx, ty))
+        nx = -ty / length
+        ny = tx / length
+        downstream = (i / max(1, last)) ** 0.78
+        width = start_width + (end_width - start_width) * downstream
+        half = width / 2.0
+        left.append((round(point[0] + nx * half, 6), round(point[1] + ny * half, 6)))
+        right.append((round(point[0] - nx * half, 6), round(point[1] - ny * half, 6)))
+    return left + list(reversed(right))
+
+
+def _offset_polyline(points: list[Point], *, amount: float) -> list[Point]:
+    points = _dedupe_polyline_points(points)
+    if len(points) < 2 or abs(amount) <= 1e-9:
+        return points
+    out: list[Point] = []
+    last = len(points) - 1
+    for i, point in enumerate(points):
+        if i == 0:
+            tx = points[1][0] - point[0]
+            ty = points[1][1] - point[1]
+        elif i == last:
+            tx = point[0] - points[i - 1][0]
+            ty = point[1] - points[i - 1][1]
+        else:
+            tx = points[i + 1][0] - points[i - 1][0]
+            ty = points[i + 1][1] - points[i - 1][1]
+        length = max(1e-9, math.hypot(tx, ty))
+        out.append((round(point[0] - ty / length * amount, 6), round(point[1] + tx / length * amount, 6)))
+    return out
+
+
+def _river_mouth_polygons_for_path(points: list[Point], *, width: float) -> tuple[list[Point], list[Point]]:
+    points = _dedupe_polyline_points(points)
+    if len(points) < 2:
+        return ([], [])
+    ax, ay = points[-2]
+    bx, by = points[-1]
+    dx = bx - ax
+    dy = by - ay
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return ([], [])
+    nx = -dy / length
+    ny = dx / length
+    start = (ax + (bx - ax) * 0.26, ay + (by - ay) * 0.26)
+    mouth_tip = (bx + dx / length * width * 0.64, by + dy / length * width * 0.64)
+    mid = (start[0] + (mouth_tip[0] - start[0]) * 0.62, start[1] + (mouth_tip[1] - start[1]) * 0.62)
+    inner_neck = width * 0.54
+    inner_mid = width * 1.08
+    inner_mouth = width * 1.55
+    outer_neck = width * 0.98
+    outer_mid = width * 1.55
+    outer_mouth = width * 2.15
+    water = [
+        (start[0] + nx * inner_neck, start[1] + ny * inner_neck),
+        (mid[0] + nx * inner_mid, mid[1] + ny * inner_mid),
+        (mouth_tip[0] + nx * inner_mouth, mouth_tip[1] + ny * inner_mouth),
+        (mouth_tip[0] - nx * inner_mouth, mouth_tip[1] - ny * inner_mouth),
+        (mid[0] - nx * inner_mid, mid[1] - ny * inner_mid),
+        (start[0] - nx * inner_neck, start[1] - ny * inner_neck),
+    ]
+    bank = [
+        (start[0] + nx * outer_neck, start[1] + ny * outer_neck),
+        (mid[0] + nx * outer_mid, mid[1] + ny * outer_mid),
+        (mouth_tip[0] + nx * outer_mouth, mouth_tip[1] + ny * outer_mouth),
+        (mouth_tip[0] - nx * outer_mouth, mouth_tip[1] - ny * outer_mouth),
+        (mid[0] - nx * outer_mid, mid[1] - ny * outer_mid),
+        (start[0] - nx * outer_neck, start[1] - ny * outer_neck),
+    ]
+    return (
+        [(round(x, 6), round(y, 6)) for x, y in bank],
+        [(round(x, 6), round(y, 6)) for x, y in water],
+    )
+
+
+def _build_river_channels(rivers: list[RiverPath]) -> list[RiverChannel]:
+    channels: list[RiverChannel] = []
+    for river in rivers:
+        points = _dedupe_polyline_points(river.points, min_distance=0.0008)
+        if len(points) < 2:
+            continue
+        flow = max(0.0, float(river.flow))
+        water_width = 0.00060 + math.sqrt(flow) * 0.00205
+        corridor = _tapered_polyline_polygon(
+            points,
+            start_width=max(0.0018, water_width * 0.72 + 0.0020),
+            end_width=water_width + 0.0046,
+        )
+        bank = _tapered_polyline_polygon(
+            points,
+            start_width=max(0.0007, water_width * 0.48 + 0.00045),
+            end_width=water_width + 0.00058,
+        )
+        water = _tapered_polyline_polygon(
+            points,
+            start_width=max(0.0005, water_width * 0.40),
+            end_width=water_width,
+        )
+        mouth_bank, mouth_water = (
+            _river_mouth_polygons_for_path(points, width=water_width)
+            if len(points) >= 2 and points[-1] != points[-2]
+            else ([], [])
+        )
+        highlight = _offset_polyline(points, amount=max(0.00018, water_width * -0.12))
+        channels.append(
+            RiverChannel(
+                river_id=river.river_id,
+                river_class=river.river_class,
+                corridor_polygon=corridor,
+                bank_polygon=bank,
+                water_polygon=water,
+                mouth_bank_polygon=mouth_bank,
+                mouth_water_polygon=mouth_water,
+                highlight_points=highlight,
+                flow=round(flow, 4),
+            )
+        )
+    return channels
+
+
+def _valid_polygon(points: list[Point]) -> ShapelyPolygon | None:
+    if len(points) < 3:
+        return None
+    poly = ShapelyPolygon(points)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    if poly.is_empty or not isinstance(poly, ShapelyPolygon) or poly.area <= 1e-12:
+        return None
+    return poly
+
+
+def _polygons_from_geometry(geom: object) -> list[ShapelyPolygon]:
+    if isinstance(geom, ShapelyPolygon):
+        return [geom] if not geom.is_empty and geom.area > 1e-12 else []
+    if isinstance(geom, ShapelyMultiPolygon):
+        return [p for p in geom.geoms if not p.is_empty and p.area > 1e-12]
+    if isinstance(geom, GeometryCollection):
+        return [p for g in geom.geoms for p in _polygons_from_geometry(g)]
+    return []
+
+
+def _rounded_ring(poly: ShapelyPolygon) -> list[Point]:
+    pts = list(poly.exterior.coords)
+    if pts and pts[0] == pts[-1]:
+        pts = pts[:-1]
+    return [(round(float(x), 6), round(float(y), 6)) for x, y in pts]
+
+
+def _carve_river_channels_from_micro_cells(
+    micro_cells: list[MicroRegionCell],
+    channels: list[RiverChannel],
+) -> list[MicroRegionCell]:
+    if not micro_cells or not channels:
+        return micro_cells
+
+    cutters = [
+        poly
+        for channel in channels
+        for points in (channel.bank_polygon, channel.mouth_bank_polygon)
+        for poly in [_valid_polygon(points)]
+        if poly is not None
+    ]
+    if not cutters:
+        return micro_cells
+    water_union = unary_union(cutters)
+    if water_union.is_empty:
+        return micro_cells
+
+    out: list[MicroRegionCell] = []
+    for cell in micro_cells:
+        if not (cell.is_channel or cell.is_floodplain):
+            out.append(cell)
+            continue
+        base = _valid_polygon(cell.polygon)
+        if base is None or not base.intersects(water_union):
+            out.append(cell)
+            continue
+        carved = base.difference(water_union)
+        land = [
+            ring
+            for poly in _polygons_from_geometry(carved)
+            for ring in [_rounded_ring(poly)]
+            if len(ring) >= 3
+        ]
+        if not land:
+            out.append(cell)
+            continue
+        out.append(replace(cell, land_polygons=land))
+    return out
+
+
 def build_world_map_geometry(
     *,
     world: str = "default",
@@ -2622,6 +2938,7 @@ def build_world_map_geometry(
             region_hints=region_hints,
         )
         continent_rivers, _ = _build_micro_rivers(continent_micro)
+        continent_micro = _apply_river_influence_to_micro_cells(continent_micro, continent_rivers)
         micro_cells.extend(continent_micro)
         micro_rivers.extend(continent_rivers)
         polys.update(c_polys)
@@ -2673,6 +2990,9 @@ def build_world_map_geometry(
         )
 
     cell_map = {c.region_id: c for c in cells}
+    rivers = micro_rivers or _build_rivers(cell_map, world=world_id, db_path=db_path)
+    river_channels = _build_river_channels(rivers)
+    micro_cells = _carve_river_channels_from_micro_cells(micro_cells, river_channels)
     return WorldMapGeometry(
         world=world_id,
         version=MAP_GEOMETRY_VERSION,
@@ -2682,6 +3002,7 @@ def build_world_map_geometry(
         micro_cells=sorted(micro_cells, key=lambda c: (c.continent_id, c.micro_id)),
         features=sorted(features, key=lambda f: (f.region_id, f.feature_id)),
         edges=_build_region_edges(all_regions, points, micro_cells, world=world_id, db_path=db_path),
-        rivers=micro_rivers or _build_rivers(cell_map, world=world_id, db_path=db_path),
+        rivers=rivers,
+        river_channels=river_channels,
     )
 
