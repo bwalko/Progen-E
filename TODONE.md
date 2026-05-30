@@ -23,6 +23,33 @@
   - settlement site slots mapped to generated geography features
   - existing Gradio place browser rendering remains covered
 
+### Completed Polygonal Terrain Pass
+
+- Replaced the original TODO plan with implemented micro-cell terrain generation in `library.world_map_geometry`:
+  - deterministic continent-clipped micro-region cells
+  - authored-region ownership layered over those micro-cells, preserving existing region IDs for saves, settlements, births, and routes
+  - elevation and moisture values per micro-cell
+  - terrain-family assignment from generated physics plus authored region cues
+  - micro-cell adjacency and route paths through shared cell borders
+  - river paths that carry segment ownership, reach coastal boundaries, and avoid stacking on identical channels
+  - river channel, bank, mouth, corridor, floodplain, and carved-land polygons for SVG rendering
+  - aggregated authored-region footprints derived from owned micro-cells
+
+- Updated map rendering/debug coverage:
+  - visible micro-cell terrain layer with terrain texture/shade semantics
+  - river-water, bank, corridor, mouth, and cut-mask layers
+  - settlement, feature, polity, label, and route overlays preserved above the terrain
+  - SVG data attributes expose micro-cell IDs for inspection
+
+- Added focused regression coverage for the polygonal terrain pass:
+  - every configured region owns multiple micro-cells
+  - micro-cell elevation, moisture, river distance, terrain family, coastal flags, and floodplain/channel flags stay in valid ranges
+  - river segments preserve local region ownership
+  - coastal rivers terminate on coastline boundaries
+  - channels are not duplicated across rivers
+  - settlement and arbitrary point projection stay inside the declared authored-region footprint
+  - debug SVG output includes the noisy map, river, and overlay layers
+
 ## Scale Population Simulation Toward Millions
 
 ### Completed Performance Work

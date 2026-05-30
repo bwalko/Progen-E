@@ -2,18 +2,16 @@
 
 ## Polygonal World Map Generation
 
-Reference model: Amit Patel's polygonal map generator uses many Voronoi polygons as the physical map, with named/gameplay regions layered over contiguous groups of those micro-polygons. Rivers flow along polygon-corner/border paths from high inland terrain to the coast; moisture and biomes derive from fresh water, elevation, and terrain.
+The first polygonal terrain pass is done. `library.world_map_geometry` now builds deterministic continent-clipped micro-cells, assigns them to authored regions, computes elevation/moisture/terrain families, routes rivers through micro-cell adjacency, carves river channels/floodplains, aggregates named region footprints from micro-cells, and renders noisy terrain/rivers in the debug/world SVG path. See `TODONE.md`.
 
-Implementation plan:
+Remaining map work:
 
-1. Add deterministic micro-region cells per continent in `library.world_map_geometry`, clipped to the continent hull.
-2. Group contiguous micro-cells under existing authored `world_geography_regions` so saves, settlements, births, and routes keep their current region IDs.
-3. Compute micro-cell elevation from distance inland plus configured region terrain cues; favor highlands/mountains as river headwaters.
-4. Build micro-cell adjacency from shared Voronoi borders and route rivers downhill along shared border midpoints toward coastal cells.
-5. Compute moisture from fresh water and coast distance, then assign render biomes/terrain colors from elevation + moisture + authored region biome/terrain.
-6. Render micro-cells as the visible land layer while keeping named region overlays, labels, settlements, and polity coloring at the authored-region level.
-7. Persist or export enough debug JSON/SVG data to inspect micro-cell regions, river flow, elevation, and moisture when tuning.
-8. Later: replace convex named-region summary polygons with true dissolved boundaries, add lakes/ocean water cells, and consider a reusable Delaunay/corner graph if dependencies allow.
+1. Tune terrain classification, elevation gradients, river density, river mouth shape, and moisture spread against generated SVGs from multiple map seeds.
+2. Replace summary/aggregate region boundaries with cleaner dissolved boundaries where adjacent micro-cells share the same authored region.
+3. Add explicit lakes and ocean/water cells instead of treating all non-land as only background water.
+4. Decide whether to keep the current dependency-light micro-cell graph or introduce a reusable Delaunay/corner graph if a stable dependency is worth it.
+5. Persist or export richer map debug data when tuning needs more than the current SVG/data attributes expose.
+6. Add map-seed comparison fixtures or golden-light tests once the visual style settles enough to make regressions meaningful.
 
 ## Scale Population Simulation Toward Millions
 
@@ -118,7 +116,7 @@ First-pass aggregate background cohort generation now exists in the canonical po
 - cohorts count in Gradio place stats through `simulation_cohorts_readable`;
 - cohorts do not enter detailed annual event loops.
 
-Still missing: richer passive births/deaths/aging, passive relationship dynamics, passive-to-detailed promotion, and mixed-mode population reports.
+Still missing: richer passive births/deaths/aging, passive relationship dynamics, passive-to-detailed promotion, and fuller mixed-mode population reports. The canonical runner prints `detailed_alive` and latest-year `passive_cohort_alive`, but timing/history reports still need clearer detailed/passive/cohort separation.
 
 ### Detailed Population Fraction
 
@@ -216,5 +214,5 @@ Important invariant:
 3. Replace the first-pass static background cohorts with passive births/deaths/aging/partnerships at settlement or cohort level.
 4. Add passive-to-detailed promotion for one event type, probably office selection or marriage into a detailed family.
 5. Generate plausible `Person` state from passive facts without replaying yearly event rolls.
-6. Add mixed-mode reports that separately show detailed, passive, and cohort counts.
+6. Add fuller mixed-mode reports that separately show detailed, passive-person, and aggregate cohort counts over time.
 7. Run mixed-mode simulations at 100K, 1M, and 10M historical scale.
