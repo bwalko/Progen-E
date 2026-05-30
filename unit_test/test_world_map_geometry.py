@@ -440,6 +440,9 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertNotIn('<ellipse class="river-mouth ', svg)
         self.assertNotIn('class="route ', svg)
         self.assertIn('class="feature ', svg)
+        self.assertIn('class="feature-fa-shape"', svg)
+        self.assertIn("data-icon-name=", svg)
+        self.assertIn('data-feature-named="0"', svg)
         first_feature = geometry.features[0]
         self.assertIn(f'data-feature-id="{first_feature.feature_id}"', svg)
         self.assertIn(f'data-feature-name="{first_feature.label}"', svg)
@@ -472,21 +475,24 @@ class TestWorldMapGeometry(unittest.TestCase):
                 FeatureMapOverlay(
                     feature_id=f"{cell.region_id}:f1",
                     region_id=cell.region_id,
-                    kind="river",
+                    kind="stream",
                     display_name="Bluewater",
                     x=cell.center_x + 0.01,
                     y=cell.center_y,
-                    etymology="blue · river",
+                    etymology="blue · stream",
                 )
             ],
         )
 
-        svg = render_world_map_svg(geometry, overlays=overlays)
+        svg = render_world_map_svg(geometry, overlays=overlays, max_feature_labels=0)
 
         self.assertIn('class="settlement active"', svg)
         self.assertIn(f'data-settlement-id="{cell.region_id}:s1"', svg)
         self.assertIn(f'data-feature-id="{cell.region_id}:f1"', svg)
         self.assertIn('data-feature-name="Bluewater"', svg)
+        self.assertIn('data-feature-named="1"', svg)
+        self.assertIn('data-icon-name="water"', svg)
+        self.assertIn('data-base-r="4.0"', svg)
         self.assertIn(">Test Town</text>", svg)
         self.assertIn(">Bluewater</text>", svg)
 

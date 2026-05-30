@@ -105,6 +105,7 @@ from library.world_map_geometry import (  # noqa: E402
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
 )
+from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID  # noqa: E402
 from library.world_map_svg import load_world_map_overlays, render_world_map_svg  # noqa: E402
 
 
@@ -736,8 +737,7 @@ def _render_world_map_html_cached(
         "s.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
         "s.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
         "s.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(9.5*m/z)+'px');"
-        "s.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.35,Math.min(3.8,b*m/z)));});"
-        "s.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.38,Math.min(3.2,b*m/z)));});"
+        "s.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||4;e.setAttribute('r',Math.max(2.4,Math.min(7.0,b*m/z)));});"
     )
     controls = (
         '<div class="map-controls">'
@@ -778,7 +778,7 @@ def _world_map_click_onclick() -> str:
             "const input=document.querySelector('#map-open-selection textarea,#map-open-selection input');"
             "const button=document.querySelector('#map-open-button button,#map-open-button');"
             "if(input&&button){"
-            "const value=JSON.stringify(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||''}:{view:town?'Towns':'Regions',id:id});"
+            "const value=JSON.stringify(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||'',named:feature.dataset.featureNamed||'0'}:{view:town?'Towns':'Regions',id:id});"
             "const descriptor=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value');"
             "if(descriptor&&descriptor.set){descriptor.set.call(input,value);}else{input.value=value;}"
             "input.dispatchEvent(new Event('input',{bubbles:true}));"
@@ -3624,6 +3624,37 @@ def _feature_color(kind: str) -> str:
     return "var(--place-map-feature)"
 
 
+def _feature_fontawesome_name(kind: str) -> str:
+    k = (kind or "").strip().lower()
+    if k in {"harbor", "bay", "coast", "coastline"}:
+        return "anchor"
+    if k in {"lake", "spring", "marsh", "bog", "wadi"}:
+        return "droplet"
+    if k in {"river", "stream", "ford", "fishery"}:
+        return "water"
+    if k in {"mountain", "ridge", "pass", "hill", "cliff", "mesa"}:
+        return "mountain"
+    if k in {"forest", "grove", "clearing", "meadow", "pasture", "orchard"}:
+        return "tree"
+    if k in {"bridge", "road", "route"}:
+        return "bridge"
+    if k in {"engineering", "workshop", "mine", "quarry"}:
+        return "gears"
+    if k in {"sacred", "shrine", "temple"}:
+        return "landmark"
+    if k in {"star", "wonder"}:
+        return "star"
+    return "location-dot"
+
+
+def _fontawesome_local_paths(kind: str, x: float, y: float, *, size: float = 4.1) -> tuple[str, str]:
+    icon = FONT_AWESOME_FREE_SOLID[_feature_fontawesome_name(kind)]
+    scale = size / max(icon.width, icon.height)
+    tx = x - icon.width * scale / 2.0
+    ty = y - icon.height * scale / 2.0
+    return (icon.path, f"translate({tx:.2f} {ty:.2f}) scale({scale:.5f})")
+
+
 def _region_micro_fill(cell: object) -> str:
     elev = float(getattr(cell, "elevation", 0.0))
     moist = float(getattr(cell, "moisture", 0.0))
@@ -3862,15 +3893,22 @@ def _render_local_map(
         except (TypeError, ValueError):
             continue
         kind = str(feat.get("kind") or "feature")
-        color = _feature_color(kind)
-        if kind.lower() in {"river", "stream", "coast", "bay", "harbor", "wadi", "fishery"}:
-            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.9" fill="{color}" opacity=".75" />')
-        else:
-            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.4" fill="{color}" opacity=".8" />')
+        path, transform = _fontawesome_local_paths(kind, x, y)
+        parts.append(
+            f'<path d="{html.escape(path)}" transform="{transform}" fill="none" '
+            'stroke="#fff8e6" stroke-width="1.1" stroke-linejoin="round" '
+            'vector-effect="non-scaling-stroke" opacity=".92" />'
+        )
+        parts.append(
+            f'<path d="{html.escape(path)}" transform="{transform}" fill="#101827" '
+            'stroke="#101827" stroke-width=".08" stroke-linejoin="round" '
+            'vector-effect="non-scaling-stroke" />'
+        )
         label = str(feat.get("display_name") or kind)
         parts.append(
-            f'<text x="{x + 1.6:.1f}" y="{y - 1.6:.1f}" font-size="1.9" fill="var(--place-muted)">'
-            f'{html.escape(label[:18])}</text>'
+            f'<text x="{x + 2.0:.1f}" y="{y - 1.1:.1f}" font-size="1.9" '
+            'font-family="Arial,Helvetica,sans-serif" paint-order="stroke" stroke="#fff8e6" '
+            f'stroke-width=".55" stroke-linejoin="round" fill="#1f2833" font-weight="700">{html.escape(label[:20])}</text>'
         )
     for row in settlements:
         slot = int(row["site_slot"] or 1) if "site_slot" in row.keys() else 1
@@ -4994,8 +5032,17 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
         kind = str(selection.get("kind") or "feature").strip()
         region_id = str(selection.get("region_id") or "").strip()
         etymology = str(selection.get("etymology") or "").strip()
+        is_named = str(selection.get("named") or "").strip().lower() in {"1", "true", "yes"}
+        kind_title = (kind or "feature").replace("_", " ").title()
+        title = name if is_named and name else kind_title
+        subtitle = (
+            f'Named {html.escape(kind or "feature")}'
+            if is_named
+            else f'Regional {html.escape(kind or "feature")} landmark'
+        )
         cards = "".join(
             [
+                _detail_card("Name", name if is_named and name else "Unnamed"),
                 _detail_card("Kind", kind or "feature"),
                 _detail_card("Region", region_id or "Unknown"),
                 _detail_card("Feature ID", item_id),
@@ -5003,8 +5050,8 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
         )
         return (
             '<div class="place-sheet">'
-            f'<h2>{html.escape(name)}</h2>'
-            f'<div class="place-subtitle">Named {html.escape(kind or "feature")}'
+            f'<h2>{html.escape(title)}</h2>'
+            f'<div class="place-subtitle">{subtitle}'
             f'{(" in " + html.escape(region_id)) if region_id else ""}</div>'
             f'<div class="place-grid">{cards}</div>'
             f'{f"<p class=\"place-muted\">{html.escape(etymology)}</p>" if etymology else ""}'

@@ -67,7 +67,7 @@ _MEANING_HINT_TO_FEATURE = (
     ("wood", "forest"),
     ("grove", "forest"),
     ("oak", "forest"),
-    ("river", "river"),
+    ("river", "stream"),
     ("stream", "stream"),
     ("brook", "stream"),
     ("burn", "stream"),
@@ -249,9 +249,9 @@ def _feature_kind_weights(region: Region) -> list[tuple[str, float]]:
         "grove": 0.35,
     }
     if family == "coast":
-        weights.update({"coast": 2.2, "bay": 1.4, "harbor": 1.1, "cliff": 0.9, "river": 0.45, "ford": 0.15})
+        weights.update({"coast": 2.2, "bay": 1.4, "harbor": 1.1, "cliff": 0.9, "stream": 0.45, "ford": 0.15})
     elif family == "riverland":
-        weights.update({"river": 2.0, "stream": 1.2, "ford": 1.25, "bridge": 0.75, "marsh": 0.75, "meadow": 0.8, "mill": 0.55})
+        weights.update({"stream": 2.6, "ford": 1.35, "bridge": 0.75, "marsh": 0.75, "meadow": 0.8, "mill": 0.55})
     elif family == "highlands":
         weights.update({"ridge": 1.8, "mountain": 1.15, "pass": 1.0, "spring": 0.9, "quarry": 0.65, "hill": 1.1, "lake": 0.35})
     elif family == "forest":
@@ -275,7 +275,7 @@ def _feature_kind_weights(region: Region) -> list[tuple[str, float]]:
         "forest": "forest",
         "creek": "stream",
         "stream": "stream",
-        "river": "river",
+        "river": "stream",
         "harbor": "harbor",
         "flood": "marsh",
     }
@@ -303,7 +303,7 @@ def _keyword_feature_kinds(region: Region) -> list[str]:
         ("forest", "forest"),
         ("creek", "stream"),
         ("stream", "stream"),
-        ("river", "river"),
+        ("river", "stream"),
         ("harbor", "harbor"),
         ("mill", "mill"),
         ("flood", "marsh"),
@@ -420,8 +420,8 @@ def _site_point_near_anchor(
     rng: random.Random,
     pins: list[SettlementPin],
 ) -> tuple[float, float]:
-    """Nudge a settlement beside a harbor/river while keeping a readable buffer."""
-    radius = 0.035 if anchor.kind in {"harbor", "bay", "coast", "river", "ford"} else 0.055
+    """Nudge a settlement beside a water/coast anchor while keeping a readable buffer."""
+    radius = 0.035 if anchor.kind in {"harbor", "bay", "coast", "river", "stream", "ford"} else 0.055
     best = (anchor.x, anchor.y)
     best_d = _distance_to_existing_pins(best[0], best[1], pins)
     for i in range(10):
@@ -505,7 +505,7 @@ def synthesize_features(
     family = _terrain_family(region)
     if family == "riverland":
         for x in (0.14, 0.34, 0.56, 0.78):
-            add("river", x + rng.uniform(-0.025, 0.025), _river_y(x) + rng.uniform(-0.025, 0.025))
+            add("stream", x + rng.uniform(-0.025, 0.025), _river_y(x) + rng.uniform(-0.025, 0.025))
     elif family == "coast":
         for x, kind in ((0.18, "coast"), (0.42, "bay"), (0.66, "harbor"), (0.84, "cliff")):
             add(kind, x + rng.uniform(-0.035, 0.035), rng.uniform(0.76, 0.9))

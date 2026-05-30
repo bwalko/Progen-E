@@ -1384,6 +1384,20 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                             "name": "Bluewater",
                             "kind": "river",
                             "etymology": "blue · river",
+                            "named": "1",
+                        }
+                    ),
+                )
+                generic_feature_html = render_world_map_selection_detail(
+                    "test",
+                    json.dumps(
+                        {
+                            "view": "Features",
+                            "id": "r1:wf1",
+                            "region_id": "r1",
+                            "name": "Ford",
+                            "kind": "ford",
+                            "named": "0",
                         }
                     ),
                 )
@@ -1395,6 +1409,9 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Bluewater", feature_html)
         self.assertIn("Named river", feature_html)
         self.assertIn("blue · river", feature_html)
+        self.assertIn("Ford", generic_feature_html)
+        self.assertIn("Regional ford landmark", generic_feature_html)
+        self.assertIn("Unnamed", generic_feature_html)
 
     def test_world_map_overlays_read_named_features_from_local_geography(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

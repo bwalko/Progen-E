@@ -12,6 +12,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID, FontAwesomeIcon
 from library.world_map_geometry import (
     MicroRegionCell,
     Point,
@@ -571,10 +572,75 @@ def _micro_hillshade(
 
 def _feature_radius(feature: RegionFeature) -> float:
     if feature.feature_class in {"coast", "water"}:
-        return 3.7
+        return 2.7
     if feature.feature_class == "relief":
-        return 3.3
-    return 2.8
+        return 2.8
+    if feature.feature_class == "vegetation":
+        return 2.8
+    return 2.6
+
+
+def _feature_icon_name(kind: str, feature_class: str) -> str:
+    k = (kind or "").strip().lower()
+    if k in {"harbor", "bay", "coast", "coastline"}:
+        return "anchor"
+    if k in {"lake", "spring", "marsh", "bog", "wadi"}:
+        return "droplet"
+    if k in {"river", "stream", "ford", "fishery"} or feature_class == "water":
+        return "water"
+    if k in {"mountain", "ridge", "pass", "hill", "cliff", "mesa"} or feature_class == "relief":
+        return "mountain"
+    if k in {"forest", "grove", "clearing", "meadow", "pasture", "orchard"} or feature_class == "vegetation":
+        return "tree"
+    if k in {"bridge", "road", "route"}:
+        return "bridge"
+    if k in {"engineering", "workshop", "mine", "quarry"}:
+        return "gears"
+    if k in {"sacred", "shrine", "temple"}:
+        return "landmark"
+    if k in {"star", "wonder"}:
+        return "star"
+    return "location-dot"
+
+
+def _fontawesome_icon_path(
+    *,
+    icon: FontAwesomeIcon,
+    x: float,
+    y: float,
+    size: float,
+) -> tuple[str, str]:
+    scale = size / max(icon.width, icon.height)
+    tx = x - icon.width * scale / 2.0
+    ty = y - icon.height * scale / 2.0
+    transform = f"translate({tx:.2f} {ty:.2f}) scale({scale:.5f})"
+    return (icon.path, transform)
+
+
+def _feature_symbol_svg(
+    *,
+    feature_class: str,
+    kind: str,
+    attrs: str,
+    x: float,
+    y: float,
+    radius: float,
+    color: str,
+    named: bool = False,
+) -> str:
+    r = radius * (1.10 if named else 1.0)
+    icon_name = _feature_icon_name(kind, feature_class)
+    icon = FONT_AWESOME_FREE_SOLID.get(icon_name, FONT_AWESOME_FREE_SOLID["location-dot"])
+    path_d, transform = _fontawesome_icon_path(icon=icon, x=x, y=y, size=r * 2.55)
+    return (
+        f'<g class="feature {"named-feature " if named else ""}{html.escape(feature_class)}" '
+        f'data-base-r="{r:.1f}" data-icon-name="{html.escape(icon_name)}">'
+        f'<g {attrs}>'
+        f'<path class="feature-fa-underlay" d="{html.escape(path_d)}" transform="{transform}" />'
+        f'<path class="feature-fa-shape" d="{html.escape(path_d)}" transform="{transform}" />'
+        f'</g>'
+        f'</g>'
+    )
 
 
 def _feature_is_near_settlement(
@@ -620,6 +686,48 @@ def _claim_label(occupied: list[_LabelBox], box: _LabelBox, *, bounds: tuple[flo
         return False
     occupied.append(box)
     return True
+
+
+def _marker_box(x: float, y: float, radius: float, *, padding: float = 2.0) -> _LabelBox:
+    size = radius + padding
+    return (x - size, y - size, x + size, y + size)
+
+
+def _claim_marker(occupied: list[_LabelBox], box: _LabelBox, *, bounds: tuple[float, float]) -> bool:
+    width, height = bounds
+    if box[0] < 0.0 or box[1] < 0.0 or box[2] > width or box[3] > height:
+        return False
+    if any(_boxes_intersect(box, other) for other in occupied):
+        return False
+    occupied.append(box)
+    return True
+
+
+def _place_marker(
+    x: float,
+    y: float,
+    radius: float,
+    occupied: list[_LabelBox],
+    *,
+    bounds: tuple[float, float],
+    seed: object,
+    max_offset: float = 34.0,
+) -> tuple[float, float]:
+    if _claim_marker(occupied, _marker_box(x, y, radius), bounds=bounds):
+        return (x, y)
+    rng = random.Random(_stable_seed("marker-placement", seed))
+    angles = [i * math.pi / 4.0 for i in range(8)]
+    rng.shuffle(angles)
+    for distance in (10.0, 16.0, 23.0, 30.0, max_offset):
+        for angle in angles:
+            cx = x + math.cos(angle) * distance
+            cy = y + math.sin(angle) * distance
+            if _claim_marker(occupied, _marker_box(cx, cy, radius), bounds=bounds):
+                return (cx, cy)
+    clamped_x = _clamp(x, radius + 2.0, bounds[0] - radius - 2.0)
+    clamped_y = _clamp(y, radius + 2.0, bounds[1] - radius - 2.0)
+    occupied.append(_marker_box(clamped_x, clamped_y, radius))
+    return (clamped_x, clamped_y)
 
 
 def _cell_bbox(cell: RegionCell) -> tuple[float, float, float, float]:
@@ -893,6 +1001,26 @@ def _site_world_xy(local_geography_json: object, site_slot: object) -> tuple[flo
     return None
 
 
+def _nearest_coastal_world_point(
+    geometry: WorldMapGeometry,
+    region_id: str,
+    target: tuple[float, float],
+) -> tuple[float, float] | None:
+    candidates = [
+        cell
+        for cell in geometry.micro_cells
+        if cell.region_id == region_id and cell.is_coastal
+    ]
+    if not candidates:
+        return None
+    tx, ty = target
+    cell = min(
+        candidates,
+        key=lambda c: ((c.center_x - tx) ** 2 + (c.center_y - ty) ** 2, c.elevation, c.micro_id),
+    )
+    return (cell.center_x, cell.center_y)
+
+
 def _named_feature_overlays_from_local_geography(
     *,
     geometry: WorldMapGeometry,
@@ -922,6 +1050,7 @@ def _named_feature_overlays_from_local_geography(
         if not fid or fid in seen:
             continue
         seen.add(fid)
+        kind = str(feature.get("kind") or "feature").strip() or "feature"
         try:
             if feature.get("source_world_x") is not None and feature.get("source_world_y") is not None:
                 world_xy = (float(feature["source_world_x"]), float(feature["source_world_y"]))
@@ -930,13 +1059,17 @@ def _named_feature_overlays_from_local_geography(
                 lx = max(0.04, min(0.96, float(feature.get("x", 0.5))))
                 ly = max(0.04, min(0.96, float(feature.get("y", 0.5))))
                 wx, wy = project_local_point_to_region_footprint(geometry, region_id, (lx, ly))
+            if kind.lower() in {"harbor", "bay", "coast"}:
+                coastal_xy = _nearest_coastal_world_point(geometry, region_id, (wx, wy))
+                if coastal_xy is not None:
+                    wx, wy = coastal_xy
         except (TypeError, ValueError):
             continue
         out.append(
             FeatureMapOverlay(
                 feature_id=fid,
                 region_id=region_id,
-                kind=str(feature.get("kind") or "feature"),
+                kind=kind,
                 display_name=name,
                 x=wx,
                 y=wy,
@@ -1072,7 +1205,7 @@ def render_world_map_svg(
     noisy_edges: bool = True,
     labels: bool = True,
     overlays: WorldMapOverlays | None = None,
-    max_feature_labels: int = 18,
+    max_feature_labels: int = 64,
     max_settlement_labels: int = 24,
     max_settlements: int = DEFAULT_MAX_SETTLEMENT_OVERLAYS,
 ) -> str:
@@ -1087,8 +1220,7 @@ def render_world_map_svg(
         "svg.querySelectorAll('.feature-label[data-point-x],.settlement-label[data-point-x]').forEach(e=>{"
         "const px=+e.dataset.pointX,py=+e.dataset.pointY,dx=+e.dataset.dx||0,dy=+e.dataset.dy||0;"
         "e.setAttribute('x',px+dx/z);e.setAttribute('y',py+dy/z);});"
-        "svg.querySelectorAll('.feature').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.35,Math.min(3.8,b*m/z)));});"
-        "svg.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||2;e.setAttribute('r',Math.max(.38,Math.min(3.2,b*m/z)));});};"
+        "svg.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||4;e.setAttribute('r',Math.max(2.4,Math.min(7.0,b*m/z)));});};"
     )
     zoom_handlers = (
         f"data-original-viewbox='0 0 {width} {height}' "
@@ -1133,7 +1265,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{stroke:#fbf4db;stroke-width:.45}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#3d3427;stroke-width:2.2px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{fill:#101827;stroke:#101827;stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -1435,6 +1567,21 @@ def render_world_map_svg(
 
     overlay_settlements = overlays.settlements if overlays is not None else []
     named_feature_overlays = overlays.features if overlays is not None else []
+    settlements = (
+        sorted(
+            overlay_settlements,
+            key=lambda s: ((s.status or "").strip().lower() != "active", -s.population, s.settlement_id),
+        )[: max(0, int(max_settlements))]
+        if overlays is not None
+        else []
+    )
+    occupied_markers: list[_LabelBox] = []
+    settlement_positions: dict[str, tuple[float, float, float]] = {}
+    for settlement in settlements:
+        sx, sy = _scale((settlement.x, settlement.y), width, height, pad)
+        sr = max(3.6, min(6.8, 3.6 + math.sqrt(max(0, settlement.population)) * 0.060))
+        settlement_positions[settlement.settlement_id] = (sx, sy, sr)
+        _claim_marker(occupied_markers, _marker_box(sx, sy, sr, padding=4.0), bounds=(width, height))
     show_region_labels = labels and not overlay_settlements
     if show_region_labels:
         for cell in geometry.cells:
@@ -1449,6 +1596,54 @@ def render_world_map_svg(
                 )
 
     feature_labels = 0
+
+    def append_feature_label(
+        *,
+        feature_id: str,
+        region_id: str,
+        name: str,
+        kind: str,
+        etymology: str,
+        x: float,
+        y: float,
+        preferred_font_size: float = 9.2,
+        force: bool = False,
+    ) -> bool:
+        nonlocal feature_labels
+        shown = name[:24]
+        placements = (
+            (4.8, -3.2, "start"),
+            (4.8, 8.2, "start"),
+            (-4.8, -3.2, "end"),
+            (-4.8, 8.2, "end"),
+            (0.0, -7.4, "middle"),
+            (0.0, 11.0, "middle"),
+        )
+        chosen: tuple[float, float, str, _LabelBox] | None = None
+        for dx, dy, anchor in placements:
+            box = _label_box(x + dx, y + dy, shown, preferred_font_size, anchor=anchor)
+            if _claim_label(occupied_labels, box, bounds=(width, height)):
+                chosen = (dx, dy, anchor, box)
+                break
+        if chosen is None:
+            if not force:
+                return False
+            dx, dy, anchor = (4.8, 8.2, "start")
+            box = _label_box(x + dx, y + dy, shown, preferred_font_size, anchor=anchor)
+            chosen = (dx, dy, anchor, box)
+        label_dx, label_dy, label_anchor, label_box = chosen
+        label_x = x + label_dx
+        label_y = y + label_dy
+        parts.append(
+            f'<text class="feature-label" data-feature-id="{html.escape(feature_id)}" '
+            f'data-region-id="{html.escape(region_id)}" data-feature-name="{html.escape(name)}" '
+            f'data-feature-kind="{html.escape(kind)}" data-feature-etymology="{html.escape(etymology)}" '
+            f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" data-dx="{label_dx:.2f}" data-dy="{label_dy:.2f}" '
+            f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{label_anchor}">{html.escape(shown)}</text>'
+        )
+        feature_labels += 1
+        return True
+
     if overlay_settlements and not named_feature_overlays:
         renderable_features = [
             f for f in geometry.features if _feature_is_near_settlement(f, overlay_settlements)
@@ -1469,44 +1664,98 @@ def render_world_map_svg(
         x, y = _scale((named.x, named.y), width, height, pad)
         feature_class = _FEATURE_CLASS_BY_KIND.get(named.kind.strip().lower(), "landform")
         color = _FEATURE_COLORS.get(feature_class, _FEATURE_COLORS["landform"])
-        parts.append(
-            f'<circle class="feature named-feature {html.escape(feature_class)}" data-feature-id="{html.escape(named.feature_id)}" '
+        radius = 3.0
+        x, y = _place_marker(
+            x,
+            y,
+            radius,
+            occupied_markers,
+            bounds=(width, height),
+            seed=(named.feature_id, named.display_name),
+            max_offset=42.0,
+        )
+        attrs = (
+            f'data-feature-id="{html.escape(named.feature_id)}" '
             f'data-region-id="{html.escape(named.region_id)}" data-feature-name="{html.escape(named.display_name)}" '
             f'data-feature-kind="{html.escape(named.kind)}" data-feature-etymology="{html.escape(named.etymology or "")}" '
-            f'cx="{x:.1f}" cy="{y:.1f}" r="3.4" data-base-r="3.4" fill="{color}" opacity="0.96" />'
+            'data-feature-named="1" '
         )
+        parts.append(
+            _feature_symbol_svg(
+                feature_class=feature_class,
+                kind=named.kind,
+                attrs=attrs,
+                x=x,
+                y=y,
+                radius=radius,
+                color=color,
+                named=True,
+            )
+        )
+        if labels:
+            append_feature_label(
+                feature_id=named.feature_id,
+                region_id=named.region_id,
+                name=named.display_name,
+                kind=named.kind,
+                etymology=named.etymology or "",
+                x=x,
+                y=y,
+                force=True,
+            )
     for feature in sorted_features:
         if feature.feature_id in drawn_named_ids:
             continue
         x, y = _scale((feature.x, feature.y), width, height, pad)
         color = _FEATURE_COLORS.get(feature.feature_class, _FEATURE_COLORS["landform"])
-        parts.append(
-            f'<circle class="feature {html.escape(feature.feature_class)}" data-feature-id="{html.escape(feature.feature_id)}" '
+        radius = _feature_radius(feature)
+        x, y = _place_marker(
+            x,
+            y,
+            radius,
+            occupied_markers,
+            bounds=(width, height),
+            seed=(feature.feature_id, feature.label),
+            max_offset=36.0,
+        )
+        attrs = (
+            f'data-feature-id="{html.escape(feature.feature_id)}" '
             f'data-region-id="{html.escape(feature.region_id)}" data-feature-name="{html.escape(feature.label)}" '
             f'data-feature-kind="{html.escape(feature.kind)}" data-feature-etymology="" '
-            f'cx="{x:.1f}" cy="{y:.1f}" r="{_feature_radius(feature):.1f}" data-base-r="{_feature_radius(feature):.1f}" fill="{color}" opacity="0.9" />'
+            'data-feature-named="0" '
         )
-        if labels and not overlay_settlements and feature.importance >= 0.76 and feature_labels < max_feature_labels:
-            box = _label_box(x + 5.0, y - 4.0, feature.label, 9.0)
-            if _claim_label(occupied_labels, box, bounds=(width, height)):
-                parts.append(
-                    f'<text class="feature-label" data-feature-id="{html.escape(feature.feature_id)}" '
-                    f'data-region-id="{html.escape(feature.region_id)}" data-feature-name="{html.escape(feature.label)}" '
-                    f'data-feature-kind="{html.escape(feature.kind)}" data-feature-etymology="" '
-                    f'x="{x + 5.0:.1f}" y="{y - 4.0:.1f}">{html.escape(feature.label)}</text>'
-                )
-                feature_labels += 1
+        parts.append(
+            _feature_symbol_svg(
+                feature_class=feature.feature_class,
+                kind=feature.kind,
+                attrs=attrs,
+                x=x,
+                y=y,
+                radius=radius,
+                color=color,
+            )
+        )
+        if labels and feature_labels < max_feature_labels and (
+            not overlay_settlements or feature.importance >= 0.70
+        ):
+            append_feature_label(
+                feature_id=feature.feature_id,
+                region_id=feature.region_id,
+                name=feature.label,
+                kind=feature.kind,
+                etymology="",
+                x=x,
+                y=y,
+            )
 
     if overlays is not None:
-        settlements = sorted(
-            overlays.settlements,
-            key=lambda s: ((s.status or "").strip().lower() != "active", -s.population, s.settlement_id),
-        )[: max(0, int(max_settlements))]
         settlement_labels = 0
         for settlement in settlements:
-            x, y = _scale((settlement.x, settlement.y), width, height, pad)
+            x, y, radius = settlement_positions.get(
+                settlement.settlement_id,
+                (*_scale((settlement.x, settlement.y), width, height, pad), 2.0),
+            )
             status_class = "abandoned" if settlement.status.strip().lower() == "abandoned" else "active"
-            radius = max(1.25, min(3.2, 1.25 + math.sqrt(max(0, settlement.population)) * 0.036))
             parts.append(
                 f'<circle class="settlement {status_class}" data-settlement-id="{html.escape(settlement.settlement_id)}" '
                 f'data-region-id="{html.escape(settlement.region_id)}" cx="{x:.1f}" cy="{y:.1f}" '
@@ -1540,44 +1789,6 @@ def render_world_map_svg(
                     f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{label_anchor}">{html.escape(shown)}</text>'
                 )
                 settlement_labels += 1
-
-    if labels and named_feature_overlays:
-        for named in sorted(named_feature_overlays, key=lambda f: (f.region_id, f.display_name, f.feature_id)):
-            if feature_labels >= max_feature_labels:
-                break
-            x, y = _scale((named.x, named.y), width, height, pad)
-            shown = named.display_name[:24]
-            label_dx = 5.0
-            label_dy = -4.0
-            label_anchor = "start"
-            for dx, dy, anchor in (
-                (5.0, -4.0, "start"),
-                (5.0, 10.0, "start"),
-                (-5.0, -4.0, "end"),
-                (-5.0, 10.0, "end"),
-                (0.0, -8.0, "middle"),
-                (0.0, 12.0, "middle"),
-            ):
-                box = _label_box(x + dx, y + dy, shown, 9.0, anchor=anchor)
-                if _claim_label(occupied_labels, box, bounds=(width, height)):
-                    label_dx = dx
-                    label_dy = dy
-                    label_anchor = anchor
-                    break
-            else:
-                label_dx = 5.0
-                label_dy = 10.0
-                label_anchor = "start"
-            label_x = x + label_dx
-            label_y = y + label_dy
-            parts.append(
-                f'<text class="feature-label" data-feature-id="{html.escape(named.feature_id)}" '
-                f'data-region-id="{html.escape(named.region_id)}" data-feature-name="{html.escape(named.display_name)}" '
-                f'data-feature-kind="{html.escape(named.kind)}" data-feature-etymology="{html.escape(named.etymology or "")}" '
-                f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" data-dx="{label_dx:.2f}" data-dy="{label_dy:.2f}" '
-                f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{label_anchor}">{html.escape(shown)}</text>'
-            )
-            feature_labels += 1
 
     parts.extend(deferred_labels)
 

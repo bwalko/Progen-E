@@ -1013,7 +1013,7 @@ def _feature_class(kind: str) -> str:
     k = (kind or "").lower()
     if k in {"coast", "bay", "harbor"}:
         return "coast"
-    if k in {"river", "ford", "wadi", "lake", "marsh", "spring"}:
+    if k in {"river", "stream", "ford", "wadi", "lake", "marsh", "spring"}:
         return "water"
     if k in {"ridge", "mountain", "pass", "mesa"}:
         return "relief"
@@ -1147,7 +1147,7 @@ def _region_feature_kinds(region: Region) -> list[str]:
     if "coast" in terrain or "coastal" in biome or any(t in text for t in ("shore", "port", "littoral", "fjord", "bay", "delta")):
         kinds.extend(["coast", "harbor" if "harbor" in text or "port" in text else "bay"])
     if "river" in terrain or "river" in text or "stream" in text or "delta" in text:
-        kinds.extend(["river", "ford"])
+        kinds.extend(["stream", "ford"])
     if "highland" in terrain or "mountain" in text or "range" in text or "ridge" in text:
         kinds.extend(["ridge", "spring"])
     if "forest" in terrain or "forest" in text or "taiga" in biome:
@@ -1178,10 +1178,15 @@ def _feature_anchor_cell(
     used_micro_ids = used_micro_ids or set()
     available = [c for c in cells if c.micro_id not in used_micro_ids] or cells
     k = (kind or "").lower()
-    if k in {"coast", "bay", "harbor"}:
+    if k == "harbor":
+        pool = [c for c in available if c.is_coastal]
+        if not pool:
+            return None
+        return min(pool, key=lambda c: (c.elevation, c.micro_id))
+    if k in {"coast", "bay"}:
         pool = [c for c in available if c.is_coastal] or available
         return min(pool, key=lambda c: (c.elevation, c.micro_id))
-    if k in {"river", "ford", "lake", "marsh", "spring"}:
+    if k in {"river", "stream", "ford", "lake", "marsh", "spring"}:
         pool = [c for c in available if c.moisture >= 0.78] or available
         return max(pool, key=lambda c: (c.moisture, -c.elevation, c.micro_id))
     if k in {"ridge", "mountain", "pass", "mesa"}:
@@ -1212,6 +1217,8 @@ def _features_for_region(
     used_micro_ids: set[str] = set()
     for i, kind in enumerate(_region_feature_kinds(region)):
         anchor = _feature_anchor_cell(kind, micro_cells or [], rng, used_micro_ids)
+        if anchor is None and kind == "harbor":
+            continue
         if anchor is not None:
             used_micro_ids.add(anchor.micro_id)
             x, y = anchor.center_x, anchor.center_y
