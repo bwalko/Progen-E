@@ -24,6 +24,7 @@ from library.world_map_geometry import (
     _point_in_polygon,
     _point_segment_distance,
     _polygon_bounds,
+    build_world_map_debug_data,
     build_world_map_geometry,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
@@ -320,13 +321,33 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertTrue(all(c.water_polygon for c in geometry.river_channels))
         self.assertTrue(all(c.bank_polygon for c in geometry.river_channels))
         self.assertTrue(all(c.corridor_polygon for c in geometry.river_channels))
+        self.assertTrue(geometry.water_cells)
+        self.assertTrue(any(w.kind == "ocean" for w in geometry.water_cells))
+        self.assertTrue(any(w.kind == "lake" for w in geometry.water_cells))
         self.assertTrue(any(c.elevation >= 0.6 for c in geometry.micro_cells))
         self.assertTrue(any(c.moisture >= 0.8 for c in geometry.micro_cells))
+        self.assertGreaterEqual(len(geometry.rivers), 4)
         self.assertTrue(any(c.is_channel for c in geometry.micro_cells))
         self.assertTrue(any(c.is_floodplain and c.river_flow > 0.0 for c in geometry.micro_cells))
         carved = [c for c in geometry.micro_cells if c.land_polygons]
         self.assertTrue(carved)
         self.assertTrue(all(all(len(poly) >= 3 for poly in c.land_polygons) for c in carved))
+
+    def test_map_seed_debug_fixtures_capture_stable_comparison_metrics(self) -> None:
+        campaign_a = build_world_map_geometry(world="default", db_path=self.cfg, map_seed="campaign-a")
+        campaign_b = build_world_map_geometry(world="default", db_path=self.cfg, map_seed="campaign-b")
+        debug_a = build_world_map_debug_data(campaign_a)
+        debug_b = build_world_map_debug_data(campaign_b)
+
+        self.assertEqual(debug_a["graph_backend"]["decision"], "keep_lightweight_micro_cell_graph")
+        self.assertEqual(debug_a["counts"]["regions"], debug_b["counts"]["regions"])
+        self.assertGreaterEqual(debug_a["counts"]["micro_cells"], debug_a["counts"]["regions"] * 20)
+        self.assertGreaterEqual(debug_a["counts"]["water_cells"], 30)
+        self.assertGreaterEqual(debug_a["counts"]["rivers"], 4)
+        self.assertIn("lake", debug_a["water_counts"])
+        self.assertIn("ocean", debug_a["water_counts"])
+        self.assertNotEqual(debug_a["terrain_counts"], debug_b["terrain_counts"])
+        self.assertNotEqual(debug_a["river_lengths"], debug_b["river_lengths"])
 
     def test_river_segments_keep_local_region_ownership(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -437,6 +458,9 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn('class="river-water ', svg)
         self.assertIn('class="river-mouth-bank ', svg)
         self.assertIn('class="river-mouth ', svg)
+        self.assertIn('class="water-cell ocean"', svg)
+        self.assertIn('class="water-cell lake"', svg)
+        self.assertIn("data-water-id=", svg)
         self.assertNotIn('<ellipse class="river-mouth ', svg)
         self.assertNotIn('class="route ', svg)
         self.assertIn('class="feature ', svg)

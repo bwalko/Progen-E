@@ -19,6 +19,7 @@ from library.world_map_geometry import (
     RegionCell,
     RegionFeature,
     RiverPath,
+    WaterCell,
     WorldMapGeometry,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
@@ -514,6 +515,12 @@ def _micro_cell_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None) -
             if getattr(cell, "is_channel", False):
                 base = _mix_color(base, "#4f8da0", 0.16)
     return _terrain_tint(base, cell)
+
+
+def _water_cell_fill(cell: WaterCell) -> str:
+    if cell.kind == "lake":
+        return _mix_color("#3c9ab6", "#174964", min(0.45, cell.depth * 0.38))
+    return _mix_color("#5f8eaa", "#243d59", min(0.55, cell.depth * 0.42))
 
 
 def _micro_blend_fill(
@@ -1265,7 +1272,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{fill:#101827;stroke:#101827;stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{fill:#101827;stroke:#101827;stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -1273,6 +1280,20 @@ def render_world_map_svg(
     deferred_labels: list[str] = []
     micro_by_id = {c.micro_id: c for c in geometry.micro_cells}
     channel_by_river_id = {c.river_id: c for c in geometry.river_channels}
+    ocean_cells = [w for w in geometry.water_cells if w.kind == "ocean"]
+    lake_cells = [w for w in geometry.water_cells if w.kind == "lake"]
+
+    if ocean_cells:
+        parts.append('<g class="water-cell-layer ocean-water-cells">')
+        for water in ocean_cells:
+            scaled = [_scale(p, width, height, pad) for p in water.polygon]
+            parts.append(
+                f'<path class="water-cell {html.escape(water.kind)}" '
+                f'data-water-id="{html.escape(water.water_id)}" data-water-kind="{html.escape(water.kind)}" '
+                f'data-region-id="{html.escape(water.region_id)}" data-depth="{water.depth:.4f}" '
+                f'd="{_poly_path(scaled)}" fill="{_water_cell_fill(water)}" opacity="0.56" />'
+            )
+        parts.append("</g>")
 
     if channel_by_river_id:
         mask_paths: list[str] = []
@@ -1456,6 +1477,17 @@ def render_world_map_svg(
             parts.append(
                 f'<path class="coast-line" d="{path}" fill="none" opacity="0.78" />'
             )
+        if lake_cells:
+            parts.append('<g class="water-cell-layer lake-water-cells">')
+            for water in lake_cells:
+                scaled = [_scale(p, width, height, pad) for p in water.polygon]
+                parts.append(
+                    f'<path class="water-cell {html.escape(water.kind)}" '
+                    f'data-water-id="{html.escape(water.water_id)}" data-water-kind="{html.escape(water.kind)}" '
+                    f'data-region-id="{html.escape(water.region_id)}" data-depth="{water.depth:.4f}" '
+                    f'd="{_poly_path(scaled)}" fill="{_water_cell_fill(water)}" opacity="0.82" />'
+                )
+            parts.append("</g>")
         for a, b in region_edges:
             pts = (
                 _oriented_noisy_edge_path(noisy_edge_paths, a, b, width=width, height=height, pad=pad)

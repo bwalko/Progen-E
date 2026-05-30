@@ -30,7 +30,7 @@ from library.geography import (
 )
 
 
-MAP_GEOMETRY_VERSION = "polygonal-v9"
+MAP_GEOMETRY_VERSION = "polygonal-v10"
 Point = tuple[float, float]
 
 
@@ -141,6 +141,19 @@ class MicroRegionCell:
 
 
 @dataclass(frozen=True)
+class WaterCell:
+    water_id: str
+    kind: str
+    region_id: str
+    continent_id: str
+    center_x: float
+    center_y: float
+    polygon: list[Point]
+    depth: float
+    moisture_source: float = 1.0
+
+
+@dataclass(frozen=True)
 class WorldMapGeometry:
     world: str
     version: str
@@ -152,6 +165,7 @@ class WorldMapGeometry:
     edges: list[RegionEdge]
     rivers: list[RiverPath]
     river_channels: list[RiverChannel] = field(default_factory=list)
+    water_cells: list[WaterCell] = field(default_factory=list)
 
     def cell_by_region_id(self) -> dict[str, RegionCell]:
         return {c.region_id: c for c in self.cells}
@@ -174,6 +188,7 @@ class WorldMapGeometry:
             "edges": [asdict(e) for e in self.edges],
             "rivers": [asdict(r) for r in self.rivers],
             "river_channels": [asdict(r) for r in self.river_channels],
+            "water_cells": [asdict(w) for w in self.water_cells],
         }
 
 
@@ -1248,11 +1263,13 @@ def _features_for_region(
 def _generated_terrain_family(*, elevation: float, moisture: float, coastal: bool) -> str:
     if coastal:
         return "coast"
-    if elevation >= 0.72:
+    if elevation >= 0.70 or (elevation >= 0.62 and moisture <= 0.42):
         return "highlands"
-    if moisture >= 0.76:
+    if moisture >= 0.84 and elevation <= 0.40:
+        return "riverland"
+    if moisture >= 0.68:
         return "forest"
-    if moisture <= 0.28:
+    if moisture <= 0.32 and elevation <= 0.66:
         return "drylands"
     return "plains"
 
@@ -1373,7 +1390,7 @@ def _build_physical_micro_cells_for_continent(
     x0, y0, x1, y1 = _polygon_bounds(hull)
     bw = x1 - x0
     bh = y1 - y0
-    target_count = 1700
+    target_count = max(820, min(1200, region_count * 90))
     aspect = max(0.25, bw / max(1e-6, bh))
     cols = max(20, int(math.sqrt(target_count * 1.65 * aspect)))
     rows = max(20, int(math.sqrt(target_count * 1.65 / aspect)))
@@ -1422,17 +1439,20 @@ def _build_physical_micro_cells_for_continent(
         boundary_inland = _clamp(boundary_dist / max_inland, 0.0, 1.0)
         nx = (cx - x0) / max(1e-6, bw)
         ny = (cy - y0) / max(1e-6, bh)
-        broad = _fbm_noise_2d(terrain_seed, nx * 2.15, ny * 2.15, octaves=5)
-        detail = _fbm_noise_2d((terrain_seed + 0xA511E9B3) & 0xFFFFFFFF, nx * 7.5 + 19.0, ny * 7.5 - 11.0, octaves=3)
-        ridge_noise = _fbm_noise_2d((terrain_seed + 0x63D83595) & 0xFFFFFFFF, nx * 4.4 - 3.0, ny * 4.4 + 13.0, octaves=4)
-        ridge = (1.0 - abs(ridge_noise * 2.0 - 1.0)) ** 1.75
-        interior = inland ** 1.32
+        broad = _fbm_noise_2d(terrain_seed, nx * 2.05, ny * 2.05, octaves=5)
+        detail = _fbm_noise_2d((terrain_seed + 0xA511E9B3) & 0xFFFFFFFF, nx * 8.0 + 19.0, ny * 8.0 - 11.0, octaves=3)
+        ridge_noise = _fbm_noise_2d((terrain_seed + 0x63D83595) & 0xFFFFFFFF, nx * 4.8 - 3.0, ny * 4.8 + 13.0, octaves=4)
+        basin_noise = _fbm_noise_2d((terrain_seed + 0xC2B2AE35) & 0xFFFFFFFF, nx * 3.6 + 41.0, ny * 3.6 - 29.0, octaves=4)
+        ridge = (1.0 - abs(ridge_noise * 2.0 - 1.0)) ** 1.55
+        basin = max(0.0, 0.56 - basin_noise) ** 1.35
+        interior = inland ** 1.22
         elev = _clamp(
             0.035
-            + interior * 0.46
-            + broad * 0.30
-            + ridge * 0.25
-            + detail * 0.06
+            + interior * 0.42
+            + broad * 0.31
+            + ridge * 0.28
+            + detail * 0.07
+            - basin * 0.23
             - (1.0 - inland) ** 2.0 * 0.10,
             0.0,
             1.0,
@@ -1441,11 +1461,14 @@ def _build_physical_micro_cells_for_continent(
         if coastal:
             elev = min(elev, 0.24 + inland * 0.34)
         wet_noise = _fbm_noise_2d((terrain_seed + 0xB7E15162) & 0xFFFFFFFF, nx * 3.0 + 5.0, ny * 3.0 - 17.0, octaves=4)
-        rain_shadow = max(0.0, elev - 0.58) * 0.22
+        storm_band = _fbm_noise_2d((terrain_seed + 0x27D4EB2F) & 0xFFFFFFFF, nx * 1.25 - 7.0, ny * 1.25 + 23.0, octaves=3)
+        rain_shadow = max(0.0, elev - 0.56) * 0.30
         moisture = _clamp(
-            (0.80 if coastal else 0.36)
-            - inland * 0.32
-            + wet_noise * 0.31
+            (0.82 if coastal else 0.34)
+            - inland * 0.26
+            + wet_noise * 0.27
+            + storm_band * 0.13
+            + basin * 0.18
             - rain_shadow
             + (detail - 0.5) * 0.06,
             0.02,
@@ -2109,11 +2132,11 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
             ),
             key=lambda c: (-c.elevation, c.micro_id),
         )
-        river_count = max(1, min(5, len(cells) // 24))
+        river_count = max(2, min(8, len(cells) // 18))
         used_channels: set[str] = set()
         used_outlets: list[Point] = []
         selected_sources: list[MicroRegionCell] = []
-        min_source_spacing = 0.10
+        min_source_spacing = 0.075
         for _ in range(river_count):
             available_sources = [
                 c for c in source_pool
@@ -2141,20 +2164,22 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
             visited = {current}
             path_micro_ids = [source.micro_id]
             path_points: list[Point] = [(source.center_x, source.center_y)]
-            for _ in range(36):
+            for _ in range(52):
                 cell = by_id[current]
                 if cell.is_coastal and boundary_edges.get(current):
                     break
                 neighbors = [by_id[nid] for nid in adjacency.get(current, set()) if nid not in visited]
                 if not neighbors:
                     break
-                downhill = [n for n in neighbors if n.elevation <= cell.elevation + 0.025]
+                downhill = [n for n in neighbors if n.elevation <= cell.elevation + 0.035]
                 if not downhill:
                     downhill = neighbors
                 nxt = min(
                     downhill,
                     key=lambda n: (
-                        n.elevation + (0.32 if n.micro_id in used_channels else 0.0),
+                        n.elevation
+                        + max(0.0, n.moisture - 0.58) * 0.045
+                        + (0.28 if n.micro_id in used_channels else 0.0),
                         0 if n.is_coastal and boundary_edges.get(n.micro_id) else 1,
                         0 if n.is_coastal else 1,
                         (
@@ -2228,9 +2253,9 @@ def _moisten_micro_cells(
     for cell in micro_cells:
         strength = 0.0
         if cell.is_coastal:
-            strength = max(strength, 0.68)
+            strength = max(strength, 0.72)
         if cell.micro_id in river_cell_ids:
-            strength = max(strength, 0.90)
+            strength = max(strength, 0.94)
         if strength > 0.0:
             best_moisture[cell.micro_id] = strength
             heapq.heappush(queue, (-strength, cell.micro_id))
@@ -2243,9 +2268,10 @@ def _moisten_micro_cells(
         for neighbor_id in adjacency.get(micro_id, set()):
             neighbor = by_id[neighbor_id]
             uphill = max(0.0, neighbor.elevation - cell.elevation)
-            decay = 0.070 + uphill * 0.22 + max(0.0, neighbor.elevation - 0.68) * 0.050
+            downhill_bonus = max(0.0, cell.elevation - neighbor.elevation) * 0.070
+            decay = 0.055 + uphill * 0.28 + max(0.0, neighbor.elevation - 0.66) * 0.070 - downhill_bonus
             next_strength = strength - decay
-            if next_strength < 0.48:
+            if next_strength < 0.44:
                 continue
             if next_strength > best_moisture.get(neighbor_id, 0.0) + 0.01:
                 best_moisture[neighbor_id] = next_strength
@@ -2280,13 +2306,28 @@ def _aggregate_region_polygons(
     micro_cells: list[MicroRegionCell],
     fallback_polys: dict[str, list[Point]],
 ) -> dict[str, list[Point]]:
-    by_region: dict[str, list[Point]] = {}
+    by_region: dict[str, list[ShapelyPolygon]] = {}
     for cell in micro_cells:
-        by_region.setdefault(cell.region_id, []).extend(cell.polygon)
+        poly = _valid_polygon(cell.polygon)
+        if poly is not None:
+            by_region.setdefault(cell.region_id, []).append(poly)
     out: dict[str, list[Point]] = {}
     for region in all_regions:
-        hull = _convex_hull(by_region.get(region.region_id, []))
-        out[region.region_id] = hull if len(hull) >= 3 else fallback_polys.get(region.region_id, [])
+        owned = by_region.get(region.region_id, [])
+        ring: list[Point] = []
+        if owned:
+            dissolved = unary_union(owned)
+            candidates = _polygons_from_geometry(dissolved)
+            if candidates:
+                # Assigned micro-cells are contiguous in normal builds; if a tiny sliver
+                # survives as a separate polygon, the largest dissolved outline is the
+                # clean display boundary and the micro-cells remain authoritative.
+                largest = max(candidates, key=lambda p: p.area)
+                simplified = largest.simplify(0.00045, preserve_topology=True)
+                if isinstance(simplified, ShapelyPolygon) and not simplified.is_empty:
+                    largest = simplified
+                ring = _rounded_ring(largest)
+        out[region.region_id] = ring if len(ring) >= 3 else fallback_polys.get(region.region_id, [])
     return out
 
 
@@ -2896,6 +2937,175 @@ def _carve_river_channels_from_micro_cells(
     return out
 
 
+def _water_cell_depth(kind: str, cell: MicroRegionCell) -> float:
+    if kind == "ocean":
+        return round(_clamp(0.58 + cell.moisture * 0.20 - cell.elevation * 0.12, 0.25, 1.0), 4)
+    return round(_clamp(0.20 + cell.moisture * 0.38 - cell.elevation * 0.30, 0.08, 0.72), 4)
+
+
+def _build_lake_water_cells(micro_cells: list[MicroRegionCell]) -> list[WaterCell]:
+    if not micro_cells:
+        return []
+    by_continent: dict[str, list[MicroRegionCell]] = {}
+    for cell in micro_cells:
+        by_continent.setdefault(cell.continent_id, []).append(cell)
+    out: list[WaterCell] = []
+    for continent_id, cells in sorted(by_continent.items()):
+        candidates = sorted(
+            (
+                c for c in cells
+                if not c.is_coastal
+                and not c.is_channel
+                and c.moisture >= 0.82
+                and c.elevation <= 0.38
+            ),
+            key=lambda c: (
+                c.elevation,
+                -c.moisture,
+                _stable_seed(MAP_GEOMETRY_VERSION, continent_id, c.micro_id, "lake-cell"),
+            ),
+        )
+        max_lakes = max(2, min(14, len(cells) // 150))
+        used: list[Point] = []
+        continent_lakes = 0
+        for cell in candidates:
+            if continent_lakes >= max_lakes:
+                break
+            center = (cell.center_x, cell.center_y)
+            if any(math.hypot(center[0] - x, center[1] - y) < 0.026 for x, y in used):
+                continue
+            shrink = 0.72 if cell.river_flow <= 0.0 else 0.60
+            cx, cy = center
+            lake_poly = [
+                (round(cx + (x - cx) * shrink, 6), round(cy + (y - cy) * shrink, 6))
+                for x, y in cell.polygon
+            ]
+            out.append(
+                WaterCell(
+                    water_id=f"{cell.micro_id}:lake",
+                    kind="lake",
+                    region_id=cell.region_id,
+                    continent_id=cell.continent_id,
+                    center_x=cell.center_x,
+                    center_y=cell.center_y,
+                    polygon=lake_poly,
+                    depth=_water_cell_depth("lake", cell),
+                    moisture_source=round(cell.moisture, 4),
+                )
+            )
+            used.append(center)
+            continent_lakes += 1
+    return out
+
+
+def _build_ocean_water_cells(micro_cells: list[MicroRegionCell]) -> list[WaterCell]:
+    if not micro_cells:
+        return []
+    boundary_edges = _micro_boundary_edges(micro_cells)
+    by_id = {c.micro_id: c for c in micro_cells}
+    continent_centers: dict[str, Point] = {}
+    for continent_id in sorted({c.continent_id for c in micro_cells}):
+        pts = [(c.center_x, c.center_y) for c in micro_cells if c.continent_id == continent_id]
+        continent_centers[continent_id] = _centroid(pts)
+
+    out: list[WaterCell] = []
+    for micro_id, edges in sorted(boundary_edges.items()):
+        cell = by_id.get(micro_id)
+        if cell is None or not cell.is_coastal:
+            continue
+        continent_center = continent_centers.get(cell.continent_id, (cell.center_x, cell.center_y))
+        for i, (a, b) in enumerate(edges):
+            mx = (a[0] + b[0]) / 2.0
+            my = (a[1] + b[1]) / 2.0
+            dx = mx - continent_center[0]
+            dy = my - continent_center[1]
+            length = max(1e-9, math.hypot(dx, dy))
+            edge_length = math.hypot(a[0] - b[0], a[1] - b[1])
+            shelf = _clamp(0.007 + edge_length * 0.65, 0.006, 0.018)
+            ox = dx / length * shelf
+            oy = dy / length * shelf
+            polygon = [
+                (round(a[0], 6), round(a[1], 6)),
+                (round(b[0], 6), round(b[1], 6)),
+                (round(b[0] + ox, 6), round(b[1] + oy, 6)),
+                (round(a[0] + ox, 6), round(a[1] + oy, 6)),
+            ]
+            out.append(
+                WaterCell(
+                    water_id=f"{micro_id}:ocean:{i}",
+                    kind="ocean",
+                    region_id=cell.region_id,
+                    continent_id=cell.continent_id,
+                    center_x=round(mx + ox * 0.5, 6),
+                    center_y=round(my + oy * 0.5, 6),
+                    polygon=polygon,
+                    depth=_water_cell_depth("ocean", cell),
+                    moisture_source=round(cell.moisture, 4),
+                )
+            )
+    return out
+
+
+def _build_water_cells(micro_cells: list[MicroRegionCell]) -> list[WaterCell]:
+    return sorted(
+        _build_ocean_water_cells(micro_cells) + _build_lake_water_cells(micro_cells),
+        key=lambda w: (w.continent_id, w.kind, w.water_id),
+    )
+
+
+def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
+    """Return compact map diagnostics that are easier to diff than SVG paths."""
+    terrain_counts: dict[str, int] = {}
+    for cell in geometry.micro_cells:
+        terrain_counts[cell.terrain_family] = terrain_counts.get(cell.terrain_family, 0) + 1
+    water_counts: dict[str, int] = {}
+    for cell in geometry.water_cells:
+        water_counts[cell.kind] = water_counts.get(cell.kind, 0) + 1
+    river_lengths = [
+        round(
+            sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(r.points, r.points[1:])),
+            5,
+        )
+        for r in geometry.rivers
+    ]
+    return {
+        "world": geometry.world,
+        "version": geometry.version,
+        "graph_backend": {
+            "decision": "keep_lightweight_micro_cell_graph",
+            "reason": "Voronoi micro-cells already drive settlement projection, routes, river carving, SVG fills, and deterministic tests; a reusable Delaunay/corner graph can be revisited after visuals stabilize.",
+        },
+        "counts": {
+            "regions": len(geometry.cells),
+            "micro_cells": len(geometry.micro_cells),
+            "water_cells": len(geometry.water_cells),
+            "rivers": len(geometry.rivers),
+            "river_channels": len(geometry.river_channels),
+            "features": len(geometry.features),
+        },
+        "terrain_counts": dict(sorted(terrain_counts.items())),
+        "water_counts": dict(sorted(water_counts.items())),
+        "river_lengths": river_lengths,
+        "major_rivers": sum(1 for r in geometry.rivers if r.river_class == "major_river"),
+        "moisture": {
+            "min": round(min((c.moisture for c in geometry.micro_cells), default=0.0), 4),
+            "max": round(max((c.moisture for c in geometry.micro_cells), default=0.0), 4),
+            "avg": round(
+                sum(c.moisture for c in geometry.micro_cells) / max(1, len(geometry.micro_cells)),
+                4,
+            ),
+        },
+        "elevation": {
+            "min": round(min((c.elevation for c in geometry.micro_cells), default=0.0), 4),
+            "max": round(max((c.elevation for c in geometry.micro_cells), default=0.0), 4),
+            "avg": round(
+                sum(c.elevation for c in geometry.micro_cells) / max(1, len(geometry.micro_cells)),
+                4,
+            ),
+        },
+    }
+
+
 def build_world_map_geometry(
     *,
     world: str = "default",
@@ -3000,6 +3210,7 @@ def build_world_map_geometry(
     rivers = micro_rivers or _build_rivers(cell_map, world=world_id, db_path=db_path)
     river_channels = _build_river_channels(rivers)
     micro_cells = _carve_river_channels_from_micro_cells(micro_cells, river_channels)
+    water_cells = _build_water_cells(micro_cells)
     return WorldMapGeometry(
         world=world_id,
         version=MAP_GEOMETRY_VERSION,
@@ -3011,5 +3222,6 @@ def build_world_map_geometry(
         edges=_build_region_edges(all_regions, points, micro_cells, world=world_id, db_path=db_path),
         rivers=rivers,
         river_channels=river_channels,
+        water_cells=water_cells,
     )
 

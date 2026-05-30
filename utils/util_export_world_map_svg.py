@@ -9,6 +9,7 @@ Typical usage::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -16,7 +17,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from library.world_map_geometry import build_world_map_geometry  # noqa: E402
+from library.world_map_geometry import build_world_map_debug_data, build_world_map_geometry  # noqa: E402
 from library.world_map_svg import (  # noqa: E402
     load_world_map_overlays,
     render_world_map_svg,
@@ -43,6 +44,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--height", type=int, default=800, help="SVG viewBox height.")
     p.add_argument("--no-labels", action="store_true", help="Omit feature and region labels.")
     p.add_argument("--straight-edges", action="store_true", help="Render raw polygon edges without noisy displacement.")
+    p.add_argument(
+        "--debug-output",
+        type=Path,
+        default=None,
+        help="Optional JSON output with map comparison/debug metrics.",
+    )
     p.add_argument(
         "--save",
         type=Path,
@@ -90,6 +97,15 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(svg, encoding="utf-8", newline="\n")
     print(f"wrote {output}")
+    if args.debug_output is not None:
+        debug_output = args.debug_output.resolve()
+        debug_output.parent.mkdir(parents=True, exist_ok=True)
+        debug_output.write_text(
+            json.dumps(build_world_map_debug_data(geometry), indent=2, sort_keys=True),
+            encoding="utf-8",
+            newline="\n",
+        )
+        print(f"wrote {debug_output}")
 
 
 if __name__ == "__main__":
