@@ -332,6 +332,25 @@ class TestWorldMapGeometry(unittest.TestCase):
         carved = [c for c in geometry.micro_cells if c.land_polygons]
         self.assertTrue(carved)
         self.assertTrue(all(all(len(poly) >= 3 for poly in c.land_polygons) for c in carved))
+        coastline_edges = _micro_boundary_edges(geometry.micro_cells)
+        micro_by_region = {}
+        for cell in geometry.micro_cells:
+            micro_by_region.setdefault(cell.region_id, []).append(cell)
+        for feature in geometry.features:
+            if feature.kind not in {"harbor", "bay", "coast"}:
+                continue
+            region_coast_edges = [
+                edge
+                for cell in micro_by_region.get(feature.region_id, [])
+                for edge in coastline_edges.get(cell.micro_id, [])
+                if cell.is_coastal
+            ]
+            self.assertTrue(region_coast_edges, feature.feature_id)
+            distance_to_coast = min(
+                _point_segment_distance((feature.x, feature.y), a, b)
+                for a, b in region_coast_edges
+            )
+            self.assertLessEqual(distance_to_coast, 0.010, feature.feature_id)
 
     def test_map_seed_debug_fixtures_capture_stable_comparison_metrics(self) -> None:
         campaign_a = build_world_map_geometry(world="default", db_path=self.cfg, map_seed="campaign-a")
@@ -344,10 +363,23 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertGreaterEqual(debug_a["counts"]["micro_cells"], debug_a["counts"]["regions"] * 20)
         self.assertGreaterEqual(debug_a["counts"]["water_cells"], 30)
         self.assertGreaterEqual(debug_a["counts"]["rivers"], 4)
+        self.assertLessEqual(debug_a["counts"]["rivers"], 20)
         self.assertIn("lake", debug_a["water_counts"])
         self.assertIn("ocean", debug_a["water_counts"])
         self.assertNotEqual(debug_a["terrain_counts"], debug_b["terrain_counts"])
         self.assertNotEqual(debug_a["river_lengths"], debug_b["river_lengths"])
+        for debug in (debug_a, debug_b):
+            self.assertGreaterEqual(debug["moisture"]["avg"], 0.68)
+            self.assertLessEqual(debug["moisture"]["avg"], 0.82)
+            self.assertIn("drylands", debug["terrain_counts"])
+            self.assertIn("plains", debug["terrain_counts"])
+            self.assertIn("forest", debug["terrain_counts"])
+            self.assertEqual(debug["qa"]["missing_coastal_feature_edges"], 0)
+            self.assertLessEqual(debug["qa"]["max_coastal_feature_distance"], 0.010)
+            self.assertEqual(debug["qa"]["missing_river_mouth_edges"], 0)
+            self.assertLessEqual(debug["qa"]["max_river_mouth_distance"], 0.00001)
+            self.assertTrue(debug["coastal_feature_distances"])
+            self.assertTrue(debug["river_mouth_distances"])
 
     def test_river_segments_keep_local_region_ownership(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)

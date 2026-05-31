@@ -1187,6 +1187,7 @@ def _feature_anchor_cell(
     cells: list[MicroRegionCell],
     rng: random.Random,
     used_micro_ids: set[str] | None = None,
+    boundary_edges: dict[str, list[tuple[Point, Point]]] | None = None,
 ) -> MicroRegionCell | None:
     if not cells:
         return None
@@ -1194,12 +1195,20 @@ def _feature_anchor_cell(
     available = [c for c in cells if c.micro_id not in used_micro_ids] or cells
     k = (kind or "").lower()
     if k == "harbor":
-        pool = [c for c in available if c.is_coastal]
+        pool = [
+            c for c in available
+            if c.is_coastal and boundary_edges is not None and boundary_edges.get(c.micro_id)
+        ]
         if not pool:
             return None
-        return min(pool, key=lambda c: (c.elevation, c.micro_id))
+        return min(pool, key=lambda c: (c.elevation, -len(boundary_edges.get(c.micro_id, [])), c.micro_id))
     if k in {"coast", "bay"}:
-        pool = [c for c in available if c.is_coastal] or available
+        pool = [
+            c for c in available
+            if c.is_coastal and boundary_edges is not None and boundary_edges.get(c.micro_id)
+        ]
+        if not pool:
+            pool = [c for c in available if c.is_coastal] or available
         return min(pool, key=lambda c: (c.elevation, c.micro_id))
     if k in {"river", "stream", "ford", "lake", "marsh", "spring"}:
         pool = [c for c in available if c.moisture >= 0.78] or available
@@ -1218,6 +1227,36 @@ def _feature_anchor_cell(
     return available[int(rng.random() * len(available)) % len(available)]
 
 
+def _coastal_feature_point(
+    cell: MicroRegionCell,
+    boundary_edges: dict[str, list[tuple[Point, Point]]] | None,
+    *,
+    kind: str,
+    rng: random.Random,
+) -> Point:
+    edges = (boundary_edges or {}).get(cell.micro_id, [])
+    if not edges:
+        return (cell.center_x, cell.center_y)
+    cx, cy = cell.center_x, cell.center_y
+    edge = max(
+        edges,
+        key=lambda e: (
+            math.hypot(e[0][0] - e[1][0], e[0][1] - e[1][1]),
+            -abs(((e[0][0] + e[1][0]) / 2.0) - cx),
+            -abs(((e[0][1] + e[1][1]) / 2.0) - cy),
+        ),
+    )
+    a, b = edge
+    t = 0.42 + rng.random() * 0.16
+    x = a[0] + (b[0] - a[0]) * t
+    y = a[1] + (b[1] - a[1]) * t
+    inward = 0.16 if kind == "coast" else 0.24
+    return (
+        _clamp(x + (cx - x) * inward, 0.0, 1.0),
+        _clamp(y + (cy - y) * inward, 0.0, 1.0),
+    )
+
+
 def _features_for_region(
     region: Region,
     poly: list[Point],
@@ -1225,20 +1264,26 @@ def _features_for_region(
     micro_cells: list[MicroRegionCell] | None = None,
     *,
     map_seed: str,
+    boundary_edges: dict[str, list[tuple[Point, Point]]] | None = None,
 ) -> list[RegionFeature]:
     rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, map_seed, region.world, region.region_id, "features"))
     vertices = poly or [center]
     features: list[RegionFeature] = []
     used_micro_ids: set[str] = set()
     for i, kind in enumerate(_region_feature_kinds(region)):
-        anchor = _feature_anchor_cell(kind, micro_cells or [], rng, used_micro_ids)
+        anchor = _feature_anchor_cell(kind, micro_cells or [], rng, used_micro_ids, boundary_edges)
         if anchor is None and kind == "harbor":
             continue
         if anchor is not None:
             used_micro_ids.add(anchor.micro_id)
-            x, y = anchor.center_x, anchor.center_y
-            x += rng.uniform(-0.006, 0.006)
-            y += rng.uniform(-0.006, 0.006)
+            if kind in {"harbor", "bay", "coast"}:
+                x, y = _coastal_feature_point(anchor, boundary_edges, kind=kind, rng=rng)
+                x += rng.uniform(-0.002, 0.002)
+                y += rng.uniform(-0.002, 0.002)
+            else:
+                x, y = anchor.center_x, anchor.center_y
+                x += rng.uniform(-0.006, 0.006)
+                y += rng.uniform(-0.006, 0.006)
         else:
             target = vertices[(i * 2 + _stable_seed(MAP_GEOMETRY_VERSION, map_seed, region.region_id, kind) % len(vertices)) % len(vertices)]
             amount = 0.34 + 0.28 * rng.random()
@@ -1464,13 +1509,13 @@ def _build_physical_micro_cells_for_continent(
         storm_band = _fbm_noise_2d((terrain_seed + 0x27D4EB2F) & 0xFFFFFFFF, nx * 1.25 - 7.0, ny * 1.25 + 23.0, octaves=3)
         rain_shadow = max(0.0, elev - 0.56) * 0.30
         moisture = _clamp(
-            (0.82 if coastal else 0.34)
-            - inland * 0.26
-            + wet_noise * 0.27
-            + storm_band * 0.13
-            + basin * 0.18
-            - rain_shadow
-            + (detail - 0.5) * 0.06,
+            (0.74 if coastal else 0.28)
+            - inland * 0.30
+            + wet_noise * 0.23
+            + storm_band * 0.10
+            + basin * 0.13
+            - rain_shadow * 1.15
+            + (detail - 0.5) * 0.05,
             0.02,
             1.0,
         )
@@ -1490,7 +1535,7 @@ def _build_physical_micro_cells_for_continent(
             )
         )
     if out:
-        coastal_rank = max(1, int(len(out) * 0.24))
+        coastal_rank = max(1, int(len(out) * 0.18))
         edge_dist_by_id = {
             cell.micro_id: _distance_to_polygon_edge((cell.center_x, cell.center_y), hull)
             for cell in out
@@ -1499,7 +1544,7 @@ def _build_physical_micro_cells_for_continent(
         revised: list[MicroRegionCell] = []
         for cell in out:
             coastal = edge_dist_by_id[cell.micro_id] <= coastal_cutoff
-            moisture = max(cell.moisture, 0.78) if coastal else cell.moisture
+            moisture = max(cell.moisture, 0.68) if coastal else cell.moisture
             family = "coast" if coastal else _generated_terrain_family(
                 elevation=cell.elevation,
                 moisture=moisture,
@@ -2132,7 +2177,7 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
             ),
             key=lambda c: (-c.elevation, c.micro_id),
         )
-        river_count = max(2, min(8, len(cells) // 18))
+        river_count = max(2, min(6, len(cells) // 24))
         used_channels: set[str] = set()
         used_outlets: list[Point] = []
         selected_sources: list[MicroRegionCell] = []
@@ -2253,9 +2298,9 @@ def _moisten_micro_cells(
     for cell in micro_cells:
         strength = 0.0
         if cell.is_coastal:
-            strength = max(strength, 0.72)
+            strength = max(strength, 0.58)
         if cell.micro_id in river_cell_ids:
-            strength = max(strength, 0.94)
+            strength = max(strength, 0.84)
         if strength > 0.0:
             best_moisture[cell.micro_id] = strength
             heapq.heappush(queue, (-strength, cell.micro_id))
@@ -2268,10 +2313,10 @@ def _moisten_micro_cells(
         for neighbor_id in adjacency.get(micro_id, set()):
             neighbor = by_id[neighbor_id]
             uphill = max(0.0, neighbor.elevation - cell.elevation)
-            downhill_bonus = max(0.0, cell.elevation - neighbor.elevation) * 0.070
-            decay = 0.055 + uphill * 0.28 + max(0.0, neighbor.elevation - 0.66) * 0.070 - downhill_bonus
+            downhill_bonus = max(0.0, cell.elevation - neighbor.elevation) * 0.045
+            decay = 0.085 + uphill * 0.34 + max(0.0, neighbor.elevation - 0.62) * 0.095 - downhill_bonus
             next_strength = strength - decay
-            if next_strength < 0.44:
+            if next_strength < 0.36:
                 continue
             if next_strength > best_moisture.get(neighbor_id, 0.0) + 0.01:
                 best_moisture[neighbor_id] = next_strength
@@ -3053,6 +3098,66 @@ def _build_water_cells(micro_cells: list[MicroRegionCell]) -> list[WaterCell]:
     )
 
 
+def _coastal_feature_distances(geometry: WorldMapGeometry) -> list[dict[str, object]]:
+    boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+    micro_by_region: dict[str, list[MicroRegionCell]] = {}
+    for cell in geometry.micro_cells:
+        micro_by_region.setdefault(cell.region_id, []).append(cell)
+    out: list[dict[str, object]] = []
+    for feature in geometry.features:
+        if feature.kind not in {"harbor", "bay", "coast"}:
+            continue
+        edges = [
+            edge
+            for cell in micro_by_region.get(feature.region_id, [])
+            for edge in boundary_edges.get(cell.micro_id, [])
+            if cell.is_coastal
+        ]
+        if not edges:
+            distance = None
+        else:
+            distance = round(
+                min(_point_segment_distance((feature.x, feature.y), a, b) for a, b in edges),
+                5,
+            )
+        out.append(
+            {
+                "feature_id": feature.feature_id,
+                "region_id": feature.region_id,
+                "kind": feature.kind,
+                "distance_to_coast": distance,
+            }
+        )
+    return out
+
+
+def _river_mouth_distances(geometry: WorldMapGeometry) -> list[dict[str, object]]:
+    boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+    micro_by_id = {cell.micro_id: cell for cell in geometry.micro_cells}
+    out: list[dict[str, object]] = []
+    for river in geometry.rivers:
+        if not river.points or not river.segments or not river.segments[-1].micro_ids:
+            continue
+        sink = micro_by_id.get(river.segments[-1].micro_ids[0])
+        if sink is None or not sink.is_coastal:
+            continue
+        edges = boundary_edges.get(sink.micro_id, [])
+        if not edges:
+            distance = None
+        else:
+            mouth = river.points[-1]
+            distance = round(min(_point_segment_distance(mouth, a, b) for a, b in edges), 6)
+        out.append(
+            {
+                "river_id": river.river_id,
+                "sink_region_id": sink.region_id,
+                "distance_to_coast": distance,
+                "flow": river.flow,
+            }
+        )
+    return out
+
+
 def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
     """Return compact map diagnostics that are easier to diff than SVG paths."""
     terrain_counts: dict[str, int] = {}
@@ -3067,6 +3172,18 @@ def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
             5,
         )
         for r in geometry.rivers
+    ]
+    coastal_feature_distances = _coastal_feature_distances(geometry)
+    river_mouth_distances = _river_mouth_distances(geometry)
+    coastal_feature_values = [
+        float(row["distance_to_coast"])
+        for row in coastal_feature_distances
+        if row["distance_to_coast"] is not None
+    ]
+    river_mouth_values = [
+        float(row["distance_to_coast"])
+        for row in river_mouth_distances
+        if row["distance_to_coast"] is not None
     ]
     return {
         "world": geometry.world,
@@ -3087,6 +3204,18 @@ def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
         "water_counts": dict(sorted(water_counts.items())),
         "river_lengths": river_lengths,
         "major_rivers": sum(1 for r in geometry.rivers if r.river_class == "major_river"),
+        "coastal_feature_distances": coastal_feature_distances,
+        "river_mouth_distances": river_mouth_distances,
+        "qa": {
+            "max_coastal_feature_distance": round(max(coastal_feature_values, default=0.0), 5),
+            "missing_coastal_feature_edges": sum(
+                1 for row in coastal_feature_distances if row["distance_to_coast"] is None
+            ),
+            "max_river_mouth_distance": round(max(river_mouth_values, default=0.0), 6),
+            "missing_river_mouth_edges": sum(
+                1 for row in river_mouth_distances if row["distance_to_coast"] is None
+            ),
+        },
         "moisture": {
             "min": round(min((c.moisture for c in geometry.micro_cells), default=0.0), 4),
             "max": round(max((c.moisture for c in geometry.micro_cells), default=0.0), 4),
@@ -3172,6 +3301,7 @@ def build_world_map_geometry(
     micro_by_region: dict[str, list[MicroRegionCell]] = {}
     for micro in micro_cells:
         micro_by_region.setdefault(micro.region_id, []).append(micro)
+    coastline_edges = _micro_boundary_edges(micro_cells)
     for region in all_regions:
         poly = polys.get(region.region_id, [])
         cx, cy = _centroid(poly) if poly else points.get(region.region_id, (0.5, 0.5))
@@ -3188,6 +3318,7 @@ def build_world_map_geometry(
             (cx, cy),
             micro_by_region.get(region.region_id, []),
             map_seed=resolved_map_seed,
+            boundary_edges=coastline_edges,
         )
         features.extend(r_features)
         cells.append(

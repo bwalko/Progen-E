@@ -46,6 +46,8 @@ Quick orientation for `library`, `utils`, and `unit_test`.
   - Region/continent graph, travel-era friction, migration sampling; route lists include engine-augmented edges (see `route_inference`).
 - `library/geography_inference.py`
   - Deterministic continent/region “physics” from CSV `keywords` + biome/terrain; optional plug-in backend.
+- `library/world_map_geometry.py` / `library/world_map_svg.py`
+  - Generated world-map physical layer for SVGs and settlement-local geography: tuned micro-cell terrain/elevation/moisture, dissolved region display boundaries from owned micro-cells, explicit river channels/mouths, lakes, and ocean shelf cells. The current backend deliberately keeps the lightweight Voronoi micro-cell graph instead of adopting a reusable Delaunay/corner graph because settlement projection, route paths, water carving, SVG fills, and deterministic tests already share this representation. Use `build_world_map_debug_data()` or `utils/util_export_world_map_svg.py --debug-output ...` for multi-seed tuning/debug metrics rather than scraping SVG attributes.
 - `library/route_inference.py`
   - Completes bidirectional land/sea pairs and adds sparse continental `land` bridges when the authored graph would otherwise split a continent.
 - `library/simulation_careers.py`
