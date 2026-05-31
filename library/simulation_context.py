@@ -17,7 +17,12 @@ import numpy as np
 
 from library import simulation_timing
 from library.config_import import refresh_world_config_from_csv
-from library.passive_population import PassiveCohort, PassivePerson, PassivePersonRecord
+from library.passive_population import (
+    PassiveCohort,
+    PassivePerson,
+    PassivePersonRecord,
+    passive_person_to_detailed_person,
+)
 from library.person import Person
 from library.geography import get_region, list_regions, region_connectivity_score
 from library.random_names import preload_name_cache
@@ -713,6 +718,75 @@ class SimulationContext:
         """Stage one aggregate cohort bucket for checkpoint persistence."""
         self.passive_cohorts.append(cohort)
         return cohort
+
+    def promote_passive_person(
+        self,
+        passive_id: int,
+        *,
+        year: int,
+        reason: str,
+        source: dict[str, Any] | None = None,
+    ) -> SimulationPersonRecord:
+        """Materialize a passive person into the detailed annual simulation."""
+        prec = self.passive_people.pop(int(passive_id))
+        person = passive_person_to_detailed_person(
+            prec.person,
+            simulation_context=self,
+            simulation_year=int(year),
+        )
+        rec = SimulationPersonRecord(
+            person_id=int(prec.person_id),
+            person=person,
+            is_founder=False,
+            father_id=prec.person.father_id,
+            mother_id=prec.person.mother_id,
+        )
+        self.people.append(rec)
+        self.id_to_record[rec.person_id] = rec
+        if person.deathyear is None or int(person.deathyear) > int(year):
+            self.current_people_ids.add(rec.person_id)
+        self.next_person_id = max(int(self.next_person_id), int(rec.person_id) + 1)
+        self.invalidate_alive_census_cache()
+        if self.file_store is not None:
+            self.file_store.append_person(
+                {
+                    "person_id": rec.person_id,
+                    "first_name": rec.person.first_name,
+                    "last_name": rec.person.last_name,
+                    "gender": rec.person.gender,
+                    "ethnic": rec.person.ethnic,
+                    "species": rec.person.species,
+                    "birthplace": rec.person.birthplace,
+                    "birthplace_region_id": rec.person.birthplace_region_id,
+                    "birthplace_settlement_id": rec.person.birthplace_settlement_id,
+                    "birthyear": rec.person.birthyear,
+                    "is_founder": False,
+                    "father_id": rec.father_id or "",
+                    "mother_id": rec.mother_id or "",
+                }
+            )
+        payload = {
+            "year": int(year),
+            "person_id": int(rec.person_id),
+            "reason": str(reason),
+            "birthyear": int(person.birthyear),
+            "settlement_id": person.current_settlement_id,
+            "region_id": person.birthplace_region_id,
+            "source": source or {},
+        }
+        self._record_inferred_simulation_event(year, "passive_person_promoted", payload)
+        self._record_inferred_simulation_event(
+            person.birthyear,
+            "promotion_backfill_birth",
+            {
+                "person_id": int(rec.person_id),
+                "birthyear": int(person.birthyear),
+                "father_id": rec.father_id,
+                "mother_id": rec.mother_id,
+                "reason": str(reason),
+            },
+        )
+        return rec
 
     @staticmethod
     def _relationship_pair_key(person_a_id: int, person_b_id: int) -> tuple[int, int]:
@@ -1908,15 +1982,58 @@ class SimulationContext:
         if self.file_store is not None:
             if prof:
                 t0 = tpc()
+            latest_cohort_year = max(
+                (int(c.sim_year) for c in self.passive_cohorts),
+                default=None,
+            )
+            passive_person_alive_count = sum(
+                1
+                for rec in self.passive_people.values()
+                if rec.person.deathyear is None or int(rec.person.deathyear) > int(year)
+            )
+            aggregate_cohort_alive_count = sum(
+                int(c.population_count)
+                for c in self.passive_cohorts
+                if latest_cohort_year is not None and int(c.sim_year) == latest_cohort_year
+            )
+            aggregate_cohort_partnered_count = sum(
+                int(c.population_count)
+                for c in self.passive_cohorts
+                if latest_cohort_year is not None
+                and int(c.sim_year) == latest_cohort_year
+                and (c.status_bucket or "").strip().lower() == "partnered"
+            )
+            passive_cohort_births_count = sum(
+                int(c.birth_count)
+                for c in self.passive_cohorts
+                if latest_cohort_year is not None and int(c.sim_year) == latest_cohort_year
+            )
+            passive_cohort_deaths_count = sum(
+                int(c.death_count)
+                for c in self.passive_cohorts
+                if latest_cohort_year is not None and int(c.sim_year) == latest_cohort_year
+            )
+            detailed_alive_count = len(self.current_people_ids)
             self.file_store.append_yearly_summary(
                 {
                     "year": year,
                     "historical_year": int(mortality_rates["historical_year"]),
                     "milestone_year": int(mortality_rates["milestone_year"]),
-                    "alive_count": len(self.current_people_ids),
-                    "dead_count": len(self.people) - len(self.current_people_ids),
+                    "alive_count": detailed_alive_count,
+                    "dead_count": len(self.people) - detailed_alive_count,
+                    "detailed_alive_count": detailed_alive_count,
+                    "passive_person_alive_count": passive_person_alive_count,
+                    "aggregate_cohort_alive_count": aggregate_cohort_alive_count,
+                    "aggregate_cohort_partnered_count": aggregate_cohort_partnered_count,
+                    "mixed_mode_alive_count": (
+                        detailed_alive_count
+                        + passive_person_alive_count
+                        + aggregate_cohort_alive_count
+                    ),
                     "births_count": births_count,
                     "deaths_count": deaths_count,
+                    "passive_cohort_births_count": passive_cohort_births_count,
+                    "passive_cohort_deaths_count": passive_cohort_deaths_count,
                     "couples_count": len(self.couples),
                     "infant_mortality_pct": mortality_rates["infant_mortality_pct"],
                     "under5_mortality_pct": mortality_rates["under5_mortality_pct"],

@@ -109,14 +109,24 @@ Initial foundation already exists:
   - `simulation_cohorts_readable`
   - `simulation_promotion_log`
 
-First-pass aggregate background cohort generation now exists in the canonical population runner:
+Hybrid background cohort generation now exists in the canonical population runner:
 
-- each active settlement receives yearly `simulation_cohorts` rows;
-- cohort totals are based on configured regional carrying capacity minus detailed residents;
+- each active settlement receives `simulation_cohorts` rows;
+- the initial passive snapshot is based on configured regional carrying capacity minus detailed residents;
+- later passive snapshots age forward, apply passive births/deaths, and mark partnered adult cohorts;
+- detailed births over the configured detailed-active soft cap are absorbed into passive newborn cohorts;
 - cohorts count in Gradio place stats through `simulation_cohorts_readable`;
 - cohorts do not enter detailed annual event loops.
 
-Still missing: richer passive births/deaths/aging, passive relationship dynamics, passive-to-detailed promotion, and fuller mixed-mode population reports. The canonical runner prints `detailed_alive` and latest-year `passive_cohort_alive`, but timing/history reports still need clearer detailed/passive/cohort separation.
+Office selection can now promote one passive adult into detailed simulation when no detailed candidate is available. Promotion synthesizes a full `Person` from passive facts and records inferred/backfilled events.
+
+Yearly summaries now split detailed alive, passive-person alive, aggregate-cohort alive, aggregate partnered cohorts, mixed-mode alive, passive births, and passive deaths.
+
+`utils/run_mixed_mode_scale_smoke.py` now exercises aggregate passive/cohort evolution at 100K, 1M, and 10M targets without materializing millions of detailed people. It writes `temp/mixed_mode_scale_smoke.tsv`.
+
+`utils/run_mixed_mode_calibration.py` now runs the full population runner at 100K, 1M, and 10M mixed-mode targets with bounded detailed samples and aggregate settlement seeding. It writes `temp/mixed_mode_calibration.tsv`.
+
+Still missing: longer full mixed-mode calibration beyond short smoke runs; richer passive person family/partnership records; additional promotion triggers such as marriage into a detailed family, migration into a focal settlement, user inspection, and narrative spotlighting.
 
 ### Detailed Population Fraction
 
@@ -211,8 +221,4 @@ Important invariant:
 
 1. Use late-year profiling to confirm the next hot path for ~15K active people.
 2. Get 15K active people / 10 late years under 5 minutes.
-3. Replace the first-pass static background cohorts with passive births/deaths/aging/partnerships at settlement or cohort level.
-4. Add passive-to-detailed promotion for one event type, probably office selection or marriage into a detailed family.
-5. Generate plausible `Person` state from passive facts without replaying yearly event rolls.
-6. Add fuller mixed-mode reports that separately show detailed, passive-person, and aggregate cohort counts over time.
-7. Run mixed-mode simulations at 100K, 1M, and 10M historical scale.
+3. Run longer mixed-mode calibration scenarios after each meaningful performance/modeling change, starting from the hardware-friendly `utils/run_mixed_mode_calibration.py` defaults before attempting production-scale years.

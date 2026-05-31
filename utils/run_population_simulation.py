@@ -206,6 +206,13 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help="Aggregate background population as a multiplier of active regions' carrying capacity (default: 1.0; use 0 to disable).",
     )
+    p.add_argument(
+        "--detailed-active-soft-cap",
+        type=int,
+        default=15000,
+        metavar="N",
+        help="Shift new births into passive cohorts once detailed alive reaches this target (default: 15000; use 0 to disable).",
+    )
     args = p.parse_args()
     if args.years < 1:
         p.error("--years must be >= 1")
@@ -217,6 +224,8 @@ def _parse_args() -> argparse.Namespace:
         p.error("--passive-population-scale must be >= 0")
     if args.profile_last_years is not None and args.profile_last_years < 1:
         p.error("--profile-last-years must be >= 1")
+    if args.detailed_active_soft_cap < 0:
+        p.error("--detailed-active-soft-cap must be >= 0")
     return args
 
 
@@ -276,6 +285,11 @@ def main() -> None:
             duration_years=int(args.years),
             starting_couples=int(args.starting_couples),
             passive_population_scale=float(args.passive_population_scale),
+            detailed_active_soft_cap=(
+                int(args.detailed_active_soft_cap)
+                if int(args.detailed_active_soft_cap) > 0
+                else None
+            ),
             progress_callback=_print_progress,
             print_timing_report=False,
         )
@@ -340,6 +354,7 @@ def main() -> None:
     print(
         f"store_flush_batch_years={flush} | years={args.years} | "
         f"start_year={args.start_year} | starting_couples={args.starting_couples} | "
+        f"detailed_active_soft_cap={args.detailed_active_soft_cap} | "
         f"detailed_alive={alive_end} | passive_cohort_alive={passive_cohort_alive} | "
         f"wrote {_OUTPUT_PATH} in {elapsed:.2f}s"
     )

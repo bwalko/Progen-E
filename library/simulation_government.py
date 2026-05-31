@@ -36,6 +36,7 @@ from library.place_namer import (
     region_geographic_label,
     region_label_after_dominant_city,
 )
+from library.passive_population import promote_passive_candidate_for_office
 from library.polity import (
     AllianceState,
     DynastyState,
@@ -204,7 +205,15 @@ def _pick_head_candidate_in_region(
         stream=20_001,
     )
     if not residents:
-        return None
+        promoted = promote_passive_candidate_for_office(
+            ctx,
+            year=eff_year,
+            region_id=rid,
+            min_age=int(head_title.min_age) if head_title is not None else 16,
+            reason="office_selection_head_region",
+            source={"region_id": rid},
+        )
+        return promoted.person_id if promoted is not None else None
     already_holding = _holder_ids_currently_in_office(ctx)
     available = [r for r in residents if int(r.person_id) not in already_holding]
     if available:
@@ -243,7 +252,15 @@ def _pick_head_candidate_in_settlement(
         stream=20_002,
     )
     if not residents:
-        return None
+        promoted = promote_passive_candidate_for_office(
+            ctx,
+            year=eff_year,
+            settlement_id=sid,
+            min_age=int(head_title.min_age) if head_title is not None else 16,
+            reason="office_selection_head_settlement",
+            source={"settlement_id": sid},
+        )
+        return promoted.person_id if promoted is not None else None
     already_holding = _holder_ids_currently_in_office(ctx)
     available = [r for r in residents if int(r.person_id) not in already_holding]
     if available:
@@ -641,6 +658,27 @@ def _fill_merit_or_election(
         duty_mult = max(0.0, 1.0 - GOV_CHILD_DUTY_MERIT_WEIGHT * duty)
         scored.append((base * w * duty_mult, pid))
     if not scored:
+        promoted = promote_passive_candidate_for_office(
+            ctx,
+            year=year,
+            settlement_id=seat.scope_settlement_id,
+            region_id=None
+            if seat.scope_settlement_id
+            else next(iter(polity_regions(ctx, seat.polity_id)), None),
+            min_age=int(title.min_age),
+            reason="office_selection",
+            source={
+                "seat_id": int(seat.seat_id),
+                "title_id": title.title_id,
+                "polity_id": int(seat.polity_id),
+            },
+        )
+        if promoted is None:
+            return
+        pick = int(promoted.person_id)
+        disp = display_title_name(title, era_key)
+        term = year + int(title.term_years) if title.term_years else None
+        assign_holder(ctx, seat, pick, year, display_job=disp, term_expires=term)
         return
     scored.sort(reverse=True)
     top = scored[: min(8, len(scored))]

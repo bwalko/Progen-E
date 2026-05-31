@@ -199,6 +199,55 @@
 - Passive people share the global `person_id` sequence but do **not** enter `current_people_ids`, detailed alive counts, social contact loops, government candidate pools, migration loops, or other detailed-person event thresholds.
 - Added regression tests for passive-person/cohort roundtrips, inferred event provenance, and passive people staying out of detailed alive counts.
 
+### Completed Hybrid Mixed-Mode Population Pass
+
+- Replaced static background cohort snapshots in the canonical population runner with passive demographic evolution:
+  - initial passive cohorts are seeded from regional capacity minus detailed residents;
+  - later cohorts age forward by one year;
+  - passive deaths are applied by age;
+  - passive births produce age-0 aggregate newborn cohorts;
+  - adult cohorts track a coarse `partnered` status bucket for passive partnership mass;
+  - detailed births above the configured detailed-active soft cap are absorbed into passive newborn cohorts instead of generating full `Person` records.
+
+- Added passive-to-detailed promotion for office selection:
+  - government head-seat and merit/election vacancy paths can promote a passive adult when the detailed candidate pool is empty;
+  - the source aggregate cohort is decremented when a person is promoted;
+  - promotion records inferred events so generated history can distinguish synthesized anchors from ordinary annual simulation.
+
+- Added plausible full `Person` synthesis from passive facts:
+  - promotion preserves known birth year, gender, species, ethnic/culture, birthplace/current settlement, partner id, death year, and coarse prosperity/status where known;
+  - missing genome, mind/body, names, fertility ages, appearance, and derived traits are generated through the normal person generator;
+  - passive `species` and `ethnic` now roundtrip through `simulation_people_light` so post-checkpoint promotion keeps culture/species context.
+
+- Added fuller mixed-mode reporting:
+  - `yearly_summary.csv` now includes `detailed_alive_count`, `passive_person_alive_count`, `aggregate_cohort_alive_count`, `aggregate_cohort_partnered_count`, `mixed_mode_alive_count`, `passive_cohort_births_count`, and `passive_cohort_deaths_count`;
+  - `run_population_simulation.py` exposes `--detailed-active-soft-cap` and still prints detailed plus latest aggregate cohort counts at run end.
+
+- Added focused regression coverage:
+  - passive cohorts age, birth, die, and keep deterministic counts;
+  - passive newborn cohorts are retained even when background population scale is zero;
+  - office promotion materializes a passive candidate into a detailed `Person` with genome/mind-body state;
+  - passive person checkpoint roundtrip preserves species/ethnic fields.
+
+- Added `utils/run_mixed_mode_scale_smoke.py` for hardware-friendly scale preflights:
+  - seeds one active aggregate settlement per configured region;
+  - evolves passive/cohort demographics for target historical populations without materializing detailed people;
+  - writes `temp/mixed_mode_scale_smoke.tsv`;
+  - default 10-year smoke targets completed locally:
+    - 100K target: 94,890 aggregate alive, 14,741 cohort rows, 1.17s;
+    - 1M target: 948,862 aggregate alive, 19,525 cohort rows, 1.71s;
+    - 10M target: 9,488,947 aggregate alive, 22,569 cohort rows, 1.64s.
+
+- Added `utils/run_mixed_mode_calibration.py` for full-runner mixed-mode calibration:
+  - calls the canonical population-growth runner instead of only exercising passive cohorts directly;
+  - seeds one aggregate active settlement per configured region so passive population can scale across the whole authored world;
+  - bounds detailed people with a configurable target fraction and min/max detailed cap;
+  - writes `temp/mixed_mode_calibration.tsv`;
+  - local 3-year smoke with 5 starting couples and 50-500 detailed cap completed:
+    - 100K target: 98,239 mixed alive, 12 detailed alive, 17,211 cohort rows, 5.10s;
+    - 1M target: 982,097 mixed alive, 13 detailed alive, 23,220 cohort rows, 9.51s;
+    - 10M target: 9,820,933 mixed alive, 12 detailed alive, 24,853 cohort rows, 9.44s.
+
 ### Event Threshold Decision
 
 - Passive/cohort scale does not feed detailed-person event loops automatically.

@@ -670,6 +670,8 @@ class TestSaveCheckpoint(unittest.TestCase):
                     name="Mira Lowdetail",
                     birthyear=1001,
                     gender="female",
+                    species=detailed.person.species,
+                    ethnic=detailed.person.ethnic,
                     birthplace_region_id=detailed.person.birthplace_region_id,
                     birthplace_settlement_id=detailed.person.birthplace_settlement_id,
                     current_settlement_id=detailed.person.current_settlement_id,
@@ -734,6 +736,8 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertIn("simulation_cohorts", tables)
             self.assertIn("simulation_promotion_log", tables)
             self.assertEqual(row["name"], "Mira Lowdetail")
+            self.assertEqual(row["species"], detailed.person.species)
+            self.assertEqual(row["ethnic"], detailed.person.ethnic)
             self.assertEqual(row["job_family"], "farm")
             self.assertEqual(row["father_id"], detailed.person_id)
             self.assertEqual(row["child_count"], 2)
@@ -755,6 +759,8 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             loaded_passive = loaded.passive_people[passive.person_id].person
             self.assertEqual(loaded_passive.name, "Mira Lowdetail")
+            self.assertEqual(loaded_passive.species, detailed.person.species)
+            self.assertEqual(loaded_passive.ethnic, detailed.person.ethnic)
             self.assertEqual(loaded_passive.job_family, "farm")
             self.assertEqual(loaded_passive.father_id, detailed.person_id)
             self.assertNotIn(passive.person_id, loaded.current_people_ids)

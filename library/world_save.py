@@ -491,6 +491,8 @@ def _ensure_hybrid_population_tables(conn: sqlite3.Connection) -> None:
             deathyear INTEGER,
             is_alive INTEGER NOT NULL,
             gender TEXT NOT NULL DEFAULT '',
+            species TEXT,
+            ethnic TEXT,
             birthplace_region_key INTEGER,
             birthplace_settlement_key INTEGER,
             current_settlement_key INTEGER,
@@ -544,6 +546,11 @@ def _ensure_hybrid_population_tables(conn: sqlite3.Connection) -> None:
         ON simulation_promotion_log (person_id, sim_year);
         """
     )
+    cols = set(_table_columns(conn, "simulation_people_light"))
+    if "species" not in cols:
+        conn.execute("ALTER TABLE simulation_people_light ADD COLUMN species TEXT")
+    if "ethnic" not in cols:
+        conn.execute("ALTER TABLE simulation_people_light ADD COLUMN ethnic TEXT")
 
 
 def _event_origin_from_payload(payload: dict) -> str:
@@ -1617,6 +1624,8 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
             p.deathyear,
             p.is_alive,
             p.gender,
+            p.species,
+            p.ethnic,
             br.region_id AS birthplace_region_id,
             bs.settlement_id AS birthplace_settlement_id,
             cs.settlement_id AS current_settlement_id,
@@ -2689,6 +2698,8 @@ def _passive_person_values(
         p.deathyear,
         1 if p.deathyear is None else 0,
         p.gender,
+        p.species,
+        p.ethnic,
         birthplace_region_key,
         birthplace_settlement_key,
         current_settlement_key,
@@ -2719,6 +2730,8 @@ def _passive_person_from_checkpoint_row(
         birthyear=int(row["birthyear"] or 0),
         deathyear=int(row["deathyear"]) if row["deathyear"] is not None else None,
         gender=str(row["gender"] or ""),
+        species=str(row["species"]) if "species" in row.keys() and row["species"] is not None else None,
+        ethnic=str(row["ethnic"]) if "ethnic" in row.keys() and row["ethnic"] is not None else None,
         birthplace_region_id=region_id(row["birthplace_region_key"]),
         birthplace_settlement_id=settlement_id(row["birthplace_settlement_key"]),
         current_settlement_id=settlement_id(row["current_settlement_key"]),
@@ -2852,6 +2865,8 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             "deathyear",
             "is_alive",
             "gender",
+            "species",
+            "ethnic",
             "birthplace_region_key",
             "birthplace_settlement_key",
             "current_settlement_key",

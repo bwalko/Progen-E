@@ -45,6 +45,10 @@ _PASSIVE_JOB_FAMILY_SHARES: tuple[tuple[str, float], ...] = (
     ("service", 0.06),
     ("admin", 0.04),
 )
+_PASSIVE_AGE_MAX = 90
+_PASSIVE_BIRTH_RATE = 0.105
+_PASSIVE_PARTNERSHIP_ADULT_SHARE = 0.72
+_PASSIVE_PARTNERSHIP_ELDER_SHARE = 0.55
 
 
 def resolve_population_sim_seed() -> int:
@@ -550,6 +554,8 @@ def births_by_settlement(
     sim_seed: int,
     by_settlement: dict[str, list[SimulationPersonRecord]],
     resource_facts=None,
+    detailed_active_soft_cap: int | None = None,
+    passive_births_by_place: dict[tuple[str, str, str, str], int] | None = None,
 ) -> int:
     """Run birth attempts by settlement id, then mother person id.
 
@@ -559,6 +565,7 @@ def births_by_settlement(
     spouse alone does not enable conception without a separate male partner/paramour.
     """
     births_count = 0
+    cap = int(detailed_active_soft_cap) if detailed_active_soft_cap else None
     rng = random.Random(year * 1_000_003 + sim_seed)
     for sid in sorted(by_settlement.keys()):
         mothers_this_year = [
@@ -594,6 +601,24 @@ def births_by_settlement(
             )
             crng = conception_rng(year, sim_seed, rec.person_id, father_id)
             if crng.random() >= p_try:
+                continue
+            if cap is not None and len(ctx.current_people_ids) + births_count >= cap:
+                sid_birth = rec.person.current_settlement_id or rec.person.birthplace_settlement_id or sid
+                st = ctx.settlements_by_id.get(str(sid_birth))
+                rid_birth = (
+                    (st.region_id if st is not None else None)
+                    or rec.person.birthplace_region_id
+                    or ""
+                )
+                key = (
+                    str(rid_birth),
+                    str(sid_birth),
+                    str(rec.person.species or father.person.species or ""),
+                    str(rec.person.ethnic or father.person.ethnic or ""),
+                )
+                if passive_births_by_place is not None:
+                    passive_births_by_place[key] = passive_births_by_place.get(key, 0) + 1
+                rec.person = replace(rec.person, last_birth_event_year=year)
                 continue
             surname_convention = ctx.surname_convention_for_parents(
                 father.person_id, rec.person_id
@@ -641,6 +666,79 @@ def _partition_count(total: int, shares: tuple[tuple[str, float], ...]) -> list[
         if count > 0:
             out.append((label, count))
     return out
+
+
+def _passive_age_band(age: int) -> str:
+    return str(max(0, min(_PASSIVE_AGE_MAX, int(age))))
+
+
+def _passive_age_from_band(age_band: str) -> int:
+    raw = (age_band or "").strip()
+    if "-" in raw:
+        raw = raw.split("-", 1)[0]
+    try:
+        return max(0, min(_PASSIVE_AGE_MAX, int(raw)))
+    except ValueError:
+        return 30
+
+
+def _passive_death_rate(age: int) -> float:
+    a = max(0, int(age))
+    if a <= 1:
+        return 0.035
+    if a < 5:
+        return 0.012
+    if a < 15:
+        return 0.004
+    if a < 45:
+        return 0.006 + max(0, a - 15) * 0.00035
+    if a < 65:
+        return 0.020 + max(0, a - 45) * 0.0016
+    return min(0.45, 0.060 + max(0, a - 65) * 0.014)
+
+
+def _passive_partner_share(age: int) -> float:
+    if age < 16:
+        return 0.0
+    if age < 22:
+        return 0.30 + (age - 16) * 0.06
+    if age < 55:
+        return _PASSIVE_PARTNERSHIP_ADULT_SHARE
+    return _PASSIVE_PARTNERSHIP_ELDER_SHARE
+
+
+def _passive_birth_rate_for_age(age: int) -> float:
+    if age < 17 or age > 42:
+        return 0.0
+    peak = 1.0 - abs(age - 26) / 18.0
+    return _PASSIVE_BIRTH_RATE * max(0.18, peak)
+
+
+def _scaled_round(count: int, rate: float, key: str) -> int:
+    exact = max(0.0, float(count) * float(rate))
+    base = int(exact)
+    frac = exact - base
+    if frac <= 0.0:
+        return base
+    return base + (1 if _stable_unit_interval(key) < frac else 0)
+
+
+def _passive_species_culture_for_settlement(
+    ctx: SimulationContext, settlement_id: str
+) -> tuple[str, str]:
+    records = ctx.current_people_by_settlement().get(settlement_id, ())
+    if records:
+        p = records[0].person
+        return (p.species or "human", p.ethnic or "human")
+    return "", ""
+
+
+def _initial_passive_age_count(total: int, age: int) -> int:
+    if total <= 0:
+        return 0
+    weights = [max(0.02, (1.0 - a / 105.0) ** 2.35) for a in range(_PASSIVE_AGE_MAX + 1)]
+    exact = total * weights[age] / sum(weights)
+    return int(round(exact))
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -707,14 +805,26 @@ def refresh_passive_background_cohorts(
     year: int,
     *,
     population_scale: float = 1.0,
+    extra_newborns_by_place: dict[tuple[str, str, str, str], int] | None = None,
 ) -> int:
-    """Create aggregate background population cohorts for active settlements.
+    """Evolve aggregate background cohorts with births, deaths, aging, and pairing.
 
     Cohorts count for demographics and place stats, but they do not enter detailed
-    person event loops. The target is based on configured regional carrying
-    capacity and split across active settlements in that region.
+    person event loops. The first year seeds each active settlement from regional
+    carrying capacity; later years age the previous passive snapshot forward.
     """
     scale = max(0.0, float(population_scale))
+    extra_newborns_by_place = extra_newborns_by_place or {}
+    if scale <= 0.0 and extra_newborns_by_place:
+        next_cohorts = [c for c in ctx.passive_cohorts if int(c.sim_year) != int(year)]
+        total = _append_passive_newborn_cohorts(
+            ctx,
+            year,
+            extra_newborns_by_place,
+            next_cohorts=next_cohorts,
+        )
+        ctx.passive_cohorts = next_cohorts
+        return total
     if scale <= 0.0 or not ctx.settlements_by_id:
         return 0
     ctx.sync_settlement_resident_counts()
@@ -726,6 +836,94 @@ def refresh_passive_background_cohorts(
         active_by_region.setdefault(st.region_id, []).append(sid)
     for sids in active_by_region.values():
         sids.sort()
+
+    previous_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+    if previous_year is not None:
+        next_cohorts: list[PassiveCohort] = [
+            c for c in ctx.passive_cohorts if int(c.sim_year) != int(year)
+        ]
+        total_background = 0
+        births_by_place: dict[tuple[str, str, str, str], int] = {}
+        previous = [c for c in ctx.passive_cohorts if int(c.sim_year) == previous_year]
+        for cohort in previous:
+            if (cohort.settlement_id or "") not in ctx.settlements_by_id:
+                continue
+            count = max(0, int(cohort.population_count))
+            if count <= 0:
+                continue
+            age = _passive_age_from_band(cohort.age_band)
+            deaths = _scaled_round(
+                count,
+                _passive_death_rate(age),
+                f"death|{year}|{cohort.settlement_id}|{cohort.gender}|{age}|{cohort.job_family}",
+            )
+            survivors = max(0, count - deaths)
+            if (cohort.gender or "").strip().lower().startswith("f"):
+                births = _scaled_round(
+                    survivors,
+                    _passive_birth_rate_for_age(age)
+                    * (0.30 + 0.70 * _passive_partner_share(age)),
+                    f"birth|{year}|{cohort.settlement_id}|{age}|{cohort.job_family}",
+                )
+                key = (
+                    str(cohort.region_id or ""),
+                    str(cohort.settlement_id or ""),
+                    str(cohort.species or "human"),
+                    str(cohort.culture or "human"),
+                )
+                births_by_place[key] = births_by_place.get(key, 0) + births
+            next_age = min(_PASSIVE_AGE_MAX, age + 1)
+            partner_share = _passive_partner_share(next_age)
+            status = "partnered" if partner_share >= 0.5 else (cohort.status_bucket or "common")
+            if survivors:
+                total_background += survivors
+                next_cohorts.append(
+                    PassiveCohort(
+                        sim_year=int(year),
+                        region_id=cohort.region_id,
+                        settlement_id=cohort.settlement_id,
+                        age_band=_passive_age_band(next_age),
+                        gender=cohort.gender,
+                        species=cohort.species,
+                        culture=cohort.culture,
+                        job_family=cohort.job_family,
+                        status_bucket=status,
+                        population_count=survivors,
+                        death_count=deaths,
+                    )
+                )
+        for (rid, sid, species, culture), births in sorted(births_by_place.items()):
+            if births <= 0:
+                continue
+            total_background += births
+            male_births = births // 2
+            female_births = births - male_births
+            for gender, count in (("Male", male_births), ("Female", female_births)):
+                if count <= 0:
+                    continue
+                next_cohorts.append(
+                    PassiveCohort(
+                        sim_year=int(year),
+                        region_id=rid,
+                        settlement_id=sid,
+                        age_band="0",
+                        gender=gender,
+                        species=species,
+                        culture=culture,
+                        job_family="dependent",
+                        status_bucket="child",
+                        population_count=count,
+                        birth_count=count,
+                    )
+                )
+        ctx.passive_cohorts = next_cohorts
+        total_background += _append_passive_newborn_cohorts(
+            ctx,
+            year,
+            extra_newborns_by_place or {},
+            next_cohorts=ctx.passive_cohorts,
+        )
+        return total_background
 
     next_cohorts = [c for c in ctx.passive_cohorts if int(c.sim_year) != int(year)]
     total_background = 0
@@ -742,24 +940,112 @@ def refresh_passive_background_cohorts(
         background_by_settlement = _allocate_counts_by_weight(background_target, weights)
         for sid in settlement_ids:
             background = background_by_settlement.get(sid, 0)
-            total_background += background
-            for job_family, count in _partition_count(background, _PASSIVE_JOB_FAMILY_SHARES):
+            species, culture = _passive_species_culture_for_settlement(ctx, sid)
+            seeded = 0
+            for age in range(_PASSIVE_AGE_MAX + 1):
+                age_count = _initial_passive_age_count(background, age)
+                if age == _PASSIVE_AGE_MAX:
+                    age_count = max(0, background - seeded)
+                seeded += age_count
+                if age_count <= 0:
+                    continue
+                male_count = age_count // 2
+                female_count = age_count - male_count
+                for gender, gender_count in (("Male", male_count), ("Female", female_count)):
+                    if gender_count <= 0:
+                        continue
+                    for job_family, count in _partition_count(
+                        gender_count,
+                        _PASSIVE_JOB_FAMILY_SHARES if age >= 14 else (("dependent", 1.0),),
+                    ):
+                        status_share = _passive_partner_share(age)
+                        status = (
+                            "child"
+                            if age < 14
+                            else "partnered"
+                            if status_share >= 0.5
+                            else "single"
+                        )
+                        total_background += count
+                        next_cohorts.append(
+                            PassiveCohort(
+                                sim_year=int(year),
+                                region_id=rid,
+                                settlement_id=sid,
+                                age_band=_passive_age_band(age),
+                                gender=gender,
+                                species=species,
+                                culture=culture,
+                                job_family=job_family,
+                                status_bucket=status,
+                                population_count=count,
+                            )
+                        )
+    ctx.passive_cohorts = next_cohorts
+    if extra_newborns_by_place:
+        total_background += _append_passive_newborn_cohorts(
+            ctx,
+            year,
+            extra_newborns_by_place,
+            next_cohorts=ctx.passive_cohorts,
+        )
+    return total_background
+
+
+def _append_passive_newborn_cohorts(
+    ctx: SimulationContext,
+    year: int,
+    newborns_by_place: dict[tuple[str, str, str, str], int],
+    *,
+    next_cohorts: list[PassiveCohort],
+) -> int:
+    total = 0
+    for (rid, sid, species, culture), births in sorted(newborns_by_place.items()):
+        if births <= 0:
+            continue
+        total += int(births)
+        male_births = int(births) // 2
+        female_births = int(births) - male_births
+        for gender, count in (("Male", male_births), ("Female", female_births)):
+            if count <= 0:
+                continue
+            merged = False
+            for i, cohort in enumerate(next_cohorts):
+                if (
+                    int(cohort.sim_year) == int(year)
+                    and str(cohort.region_id or "") == str(rid)
+                    and str(cohort.settlement_id or "") == str(sid)
+                    and str(cohort.age_band or "") == "0"
+                    and str(cohort.gender or "") == str(gender)
+                    and str(cohort.species or "") == str(species)
+                    and str(cohort.culture or "") == str(culture)
+                    and str(cohort.job_family or "") == "dependent"
+                    and str(cohort.status_bucket or "") == "child"
+                ):
+                    next_cohorts[i] = replace(
+                        cohort,
+                        population_count=int(cohort.population_count) + int(count),
+                        birth_count=int(cohort.birth_count) + int(count),
+                    )
+                    merged = True
+                    break
+            if not merged:
                 next_cohorts.append(
                     PassiveCohort(
                         sim_year=int(year),
                         region_id=rid,
                         settlement_id=sid,
-                        age_band="all",
-                        gender="mixed",
-                        species="mixed",
-                        culture="mixed",
-                        job_family=job_family,
-                        status_bucket="background",
+                        age_band="0",
+                        gender=gender,
+                        species=species,
+                        culture=culture,
+                        job_family="dependent",
+                        status_bucket="child",
                         population_count=count,
+                        birth_count=count,
                     )
                 )
-    ctx.passive_cohorts = next_cohorts
-    return total_background
+    return total
 
 
 def run_population_growth_simulation(
@@ -770,6 +1056,7 @@ def run_population_growth_simulation(
     duration_years: int,
     starting_couples: int,
     passive_population_scale: float = 1.0,
+    detailed_active_soft_cap: int | None = None,
     progress_callback: Callable[[int], None] | None = None,
     print_timing_report: bool = True,
 ) -> None:
@@ -803,6 +1090,7 @@ def run_population_growth_simulation(
         ctx.current_year = year
         ctx.apply_pending_settlement_moves(year)
         births_count = 0
+        passive_births_by_place: dict[tuple[str, str, str, str], int] = {}
         prof = simulation_timing.active_for_year(year)
         tpc = time.perf_counter
 
@@ -821,6 +1109,8 @@ def run_population_growth_simulation(
             sim_seed=sim_seed,
             by_settlement=people_by_settlement,
             resource_facts=ctx.annual_resource_facts(year),
+            detailed_active_soft_cap=detailed_active_soft_cap,
+            passive_births_by_place=passive_births_by_place,
         )
         if prof:
             simulation_timing.accumulate("runner.births", tpc() - t0)
@@ -837,6 +1127,7 @@ def run_population_growth_simulation(
             ctx,
             year,
             population_scale=passive_population_scale,
+            extra_newborns_by_place=passive_births_by_place,
         )
         if prof:
             simulation_timing.accumulate("runner.passive_cohorts", tpc() - t0)
