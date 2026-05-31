@@ -21,6 +21,7 @@ from library.world_map_geometry import (
     RiverPath,
     WaterCell,
     WorldMapGeometry,
+    _micro_boundary_edges,
     project_feature_point_to_region_footprint,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
@@ -819,6 +820,158 @@ def _place_marker(
         clamped_y = y
     occupied.append(_marker_box(clamped_x, clamped_y, radius))
     return (clamped_x, clamped_y)
+
+
+def _nearest_point_on_segment(
+    point: tuple[float, float],
+    a: tuple[float, float],
+    b: tuple[float, float],
+) -> tuple[float, float]:
+    px, py = point
+    ax, ay = a
+    bx, by = b
+    vx = bx - ax
+    vy = by - ay
+    denom = vx * vx + vy * vy
+    if denom <= 1e-12:
+        return a
+    t = _clamp(((px - ax) * vx + (py - ay) * vy) / denom, 0.0, 1.0)
+    return (ax + vx * t, ay + vy * t)
+
+
+def _polygon_bounds(points: list[tuple[float, float]]) -> tuple[float, float, float, float]:
+    if not points:
+        return (0.0, 0.0, 1.0, 1.0)
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _representative_point_in_polygon(points: list[tuple[float, float]]) -> tuple[float, float]:
+    if not points:
+        return (0.5, 0.5)
+    center = (
+        sum(p[0] for p in points) / len(points),
+        sum(p[1] for p in points) / len(points),
+    )
+    if _point_in_polygon(center, points):
+        return center
+    x0, y0, x1, y1 = _polygon_bounds(points)
+    candidates = [
+        (x0 + (x1 - x0) * ix / 8.0, y0 + (y1 - y0) * iy / 8.0)
+        for ix in range(1, 8)
+        for iy in range(1, 8)
+    ]
+    candidates.extend(
+        ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+        for a, b in zip(points, points[1:] + points[:1])
+    )
+    for candidate in sorted(
+        candidates,
+        key=lambda p: ((p[0] - center[0]) ** 2 + (p[1] - center[1]) ** 2, p[0], p[1]),
+    ):
+        if _point_in_polygon(candidate, points):
+            return candidate
+    return center
+
+
+def _nearest_screen_point_inside_polygon(
+    point: tuple[float, float],
+    polygon: list[tuple[float, float]],
+    *,
+    min_distance: float,
+) -> tuple[float, float] | None:
+    if not polygon:
+        return None
+    x0, y0, x1, y1 = _polygon_bounds(polygon)
+    candidates = [
+        (x0 + (x1 - x0) * ix / 18.0, y0 + (y1 - y0) * iy / 18.0)
+        for ix in range(1, 18)
+        for iy in range(1, 18)
+    ]
+    candidates.extend(
+        ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+        for a, b in zip(polygon, polygon[1:] + polygon[:1])
+    )
+    usable = [
+        p
+        for p in candidates
+        if _point_in_polygon(p, polygon)
+        and math.hypot(p[0] - point[0], p[1] - point[1]) >= min_distance
+    ]
+    if not usable:
+        usable = [p for p in candidates if _point_in_polygon(p, polygon)]
+    if not usable:
+        return None
+    return min(
+        usable,
+        key=lambda p: (
+            math.hypot(p[0] - point[0], p[1] - point[1]),
+            p[0],
+            p[1],
+        ),
+    )
+
+
+def _coastline_marker_screen_point(
+    geometry: WorldMapGeometry,
+    *,
+    region_id: str,
+    kind: str,
+    world_point: tuple[float, float],
+    radius: float,
+    width: int,
+    height: int,
+    pad: int,
+    allowed_polygon: list[tuple[float, float]] | None,
+) -> tuple[float, float]:
+    if (kind or "").strip().lower() not in {"harbor", "bay", "coast"}:
+        return _scale(world_point, width, height, pad)
+    boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+    best: tuple[float, tuple[float, float], tuple[float, float]] | None = None
+    for cell in geometry.micro_cells:
+        if cell.region_id != region_id or not cell.is_coastal:
+            continue
+        interior = _representative_point_in_polygon(cell.polygon)
+        for a, b in boundary_edges.get(cell.micro_id, []):
+            coast = _nearest_point_on_segment(world_point, a, b)
+            dist2 = (coast[0] - world_point[0]) ** 2 + (coast[1] - world_point[1]) ** 2
+            candidate = (dist2, coast, interior)
+            if best is None or candidate < best:
+                best = candidate
+    if best is None:
+        return _scale(world_point, width, height, pad)
+    _dist2, coast_world, interior_world = best
+    cx, cy = _scale(coast_world, width, height, pad)
+    ix, iy = _scale(interior_world, width, height, pad)
+    dx = ix - cx
+    dy = iy - cy
+    length = math.hypot(dx, dy)
+    if length <= 1e-6:
+        return (cx, cy)
+    inset = radius * 2.35 + 4.0
+    center_fallback: tuple[float, float] | None = None
+    for scale in (1.0, 1.45, 2.0, 2.8, 3.6, 0.72, 0.48):
+        point = (cx + dx / length * inset * scale, cy + dy / length * inset * scale)
+        if not allowed_polygon:
+            return point
+        if _marker_position_allowed(point[0], point[1], radius, allowed_polygon=allowed_polygon):
+            return point
+        if center_fallback is None and _point_in_polygon(point, allowed_polygon):
+            center_fallback = point
+    if center_fallback is not None:
+        return center_fallback
+    if allowed_polygon and _point_in_polygon((ix, iy), allowed_polygon):
+        return (ix, iy)
+    if allowed_polygon:
+        inland = _nearest_screen_point_inside_polygon(
+            (cx, cy),
+            allowed_polygon,
+            min_distance=radius * 2.0 + 3.0,
+        )
+        if inland is not None:
+            return inland
+    return (cx, cy)
 
 
 def _feature_marker_allowed_polygon(
@@ -1859,7 +2012,6 @@ def render_world_map_svg(
     drawn_named_ids: set[str] = set()
     for named in named_feature_overlays:
         drawn_named_ids.add(named.feature_id)
-        x, y = _scale((named.x, named.y), width, height, pad)
         feature_class = _FEATURE_CLASS_BY_KIND.get(named.kind.strip().lower(), "landform")
         color = _FEATURE_COLORS.get(feature_class, _FEATURE_COLORS["landform"])
         radius = 3.0
@@ -1872,6 +2024,17 @@ def render_world_map_svg(
             width=width,
             height=height,
             pad=pad,
+        )
+        x, y = _coastline_marker_screen_point(
+            geometry,
+            region_id=named.region_id,
+            kind=named.kind,
+            world_point=(named.x, named.y),
+            radius=radius,
+            width=width,
+            height=height,
+            pad=pad,
+            allowed_polygon=allowed_polygon,
         )
         x, y = _place_marker(
             x,
@@ -1915,7 +2078,6 @@ def render_world_map_svg(
     for feature in sorted_features:
         if feature.feature_id in drawn_named_ids:
             continue
-        x, y = _scale((feature.x, feature.y), width, height, pad)
         color = _FEATURE_COLORS.get(feature.feature_class, _FEATURE_COLORS["landform"])
         radius = _feature_radius(feature)
         allowed_polygon = _feature_marker_allowed_polygon(
@@ -1927,6 +2089,17 @@ def render_world_map_svg(
             width=width,
             height=height,
             pad=pad,
+        )
+        x, y = _coastline_marker_screen_point(
+            geometry,
+            region_id=feature.region_id,
+            kind=feature.kind,
+            world_point=(feature.x, feature.y),
+            radius=radius,
+            width=width,
+            height=height,
+            pad=pad,
+            allowed_polygon=allowed_polygon,
         )
         x, y = _place_marker(
             x,

@@ -37,6 +37,8 @@ from library.world_map_svg import (
     FeatureMapOverlay,
     SettlementMapOverlay,
     WorldMapOverlays,
+    _coastline_marker_screen_point,
+    _feature_marker_allowed_polygon,
     _place_marker,
     _point_in_polygon as _svg_point_in_polygon,
     load_world_map_overlays,
@@ -694,6 +696,40 @@ class TestWorldMapGeometry(unittest.TestCase):
 
         self.assertTrue(_svg_point_in_polygon((x, y), land_polygon))
         self.assertLessEqual(x, 54.0)
+
+    def test_coastline_feature_marker_draws_landward_of_geographic_point(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        feature = next(f for f in geometry.features if f.kind in {"harbor", "bay", "coast"})
+        allowed = _feature_marker_allowed_polygon(
+            geometry,
+            region_id=feature.region_id,
+            kind=feature.kind,
+            world_point=(feature.x, feature.y),
+            region_screen_polygons={
+                cell.region_id: [(36 + x * (640 - 72), 36 + y * (420 - 72)) for x, y in cell.polygon]
+                for cell in geometry.cells
+            },
+            width=640,
+            height=420,
+            pad=36,
+        )
+        coast_x = 36 + feature.x * (640 - 72)
+        coast_y = 36 + feature.y * (420 - 72)
+
+        marker_x, marker_y = _coastline_marker_screen_point(
+            geometry,
+            region_id=feature.region_id,
+            kind=feature.kind,
+            world_point=(feature.x, feature.y),
+            radius=3.0,
+            width=640,
+            height=420,
+            pad=36,
+            allowed_polygon=allowed,
+        )
+
+        self.assertGreater(((marker_x - coast_x) ** 2 + (marker_y - coast_y) ** 2) ** 0.5, 4.0)
+        self.assertTrue(_svg_point_in_polygon((marker_x, marker_y), allowed or []))
 
     def test_feature_icons_use_earth_tone_category_colors(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
