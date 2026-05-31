@@ -21,6 +21,7 @@ from library.world_map_geometry import (
     RiverPath,
     WaterCell,
     WorldMapGeometry,
+    project_feature_point_to_region_footprint,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
 )
@@ -74,12 +75,12 @@ _CELL_COLORS = {
 }
 
 _FEATURE_COLORS = {
-    "coast": "#4f83a2",
-    "water": "#3f8fbc",
-    "relief": "#7b6757",
-    "vegetation": "#3f7f4c",
-    "settlement_support": "#8b6f3d",
-    "landform": "#6f684d",
+    "coast": "#4e5558",
+    "water": "#3f7891",
+    "relief": "#c9c7bd",
+    "vegetation": "#3f6f52",
+    "settlement_support": "#75684c",
+    "landform": "#6b6657",
 }
 
 _FEATURE_CLASS_BY_KIND = {
@@ -591,15 +592,51 @@ def _feature_icon_name(kind: str, feature_class: str) -> str:
     k = (kind or "").strip().lower()
     if k in {"harbor", "bay", "coast", "coastline"}:
         return "anchor"
-    if k in {"lake", "spring", "marsh", "bog", "wadi"}:
+    if k in {"marsh", "bog", "swamp", "fen", "wetland"}:
+        return "spa"
+    if k in {"lake", "spring", "oasis", "well", "wadi"}:
         return "droplet"
-    if k in {"river", "stream", "ford", "fishery"} or feature_class == "water":
+    if k in {"river", "stream", "fishery"} or feature_class == "water":
         return "water"
-    if k in {"mountain", "ridge", "pass", "hill", "cliff", "mesa"} or feature_class == "relief":
+    if k in {"ford", "bridge"}:
+        return "bridge-water"
+    if k in {"volcano"}:
+        return "volcano"
+    if k in {"snowfield", "glacier", "icefield"}:
+        return "snowflake"
+    if k in {"ice", "icicle", "icicles"}:
+        return "icicles"
+    if k in {"mountain", "ridge", "pass", "cliff", "mesa"} or feature_class == "relief":
         return "mountain"
+    if k in {"hill", "mound", "barrow"}:
+        return "mound"
+    if k in {"forest", "grove", "wood", "woods"}:
+        return "tree"
+    if k in {"clearing", "meadow", "pasture", "orchard", "heath"}:
+        return "leaf"
+    if k in {"grassland", "scrub", "shrubland"} or feature_class == "vegetation":
+        return "seedling"
+    if k in {"wilt", "wilted", "flower", "flowers"}:
+        return "plant-wilt"
+    if k in {"mine", "quarry"}:
+        return "gem"
+    if k in {"marker", "ore", "deposit"}:
+        return "diamond"
+    if k in {"ruin", "gate", "arch"}:
+        return "archway"
+    if k in {"monument", "obelisk"}:
+        return "monument"
+    if k in {"cave", "dungeon"}:
+        return "dungeon"
+    if k in {"danger", "grave", "bones"}:
+        return "skull-crossbones"
+    if k in {"record", "archive", "scroll"}:
+        return "scroll"
+    if k in {"spiral", "whorl"}:
+        return "spiral"
     if k in {"forest", "grove", "clearing", "meadow", "pasture", "orchard"} or feature_class == "vegetation":
         return "tree"
-    if k in {"bridge", "road", "route"}:
+    if k in {"road", "route"}:
         return "bridge"
     if k in {"engineering", "workshop", "mine", "quarry"}:
         return "gears"
@@ -644,7 +681,8 @@ def _feature_symbol_svg(
         f'data-base-r="{r:.1f}" data-icon-name="{html.escape(icon_name)}">'
         f'<g {attrs}>'
         f'<path class="feature-fa-underlay" d="{html.escape(path_d)}" transform="{transform}" />'
-        f'<path class="feature-fa-shape" d="{html.escape(path_d)}" transform="{transform}" />'
+        f'<path class="feature-fa-shape" d="{html.escape(path_d)}" transform="{transform}" '
+        f'fill="{html.escape(color)}" stroke="{html.escape(color)}" />'
         f'</g>'
         f'</g>'
     )
@@ -710,6 +748,44 @@ def _claim_marker(occupied: list[_LabelBox], box: _LabelBox, *, bounds: tuple[fl
     return True
 
 
+def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
+    if len(polygon) < 3:
+        return True
+    x, y = point
+    inside = False
+    j = len(polygon) - 1
+    for i, (xi, yi) in enumerate(polygon):
+        xj, yj = polygon[j]
+        if (yi > y) != (yj > y):
+            crossing_x = (xj - xi) * (y - yi) / max(1e-9, yj - yi) + xi
+            if x < crossing_x:
+                inside = not inside
+        j = i
+    return inside
+
+
+def _marker_position_allowed(
+    x: float,
+    y: float,
+    radius: float,
+    *,
+    allowed_polygon: list[tuple[float, float]] | None,
+) -> bool:
+    if not allowed_polygon:
+        return True
+    inset = max(1.5, radius * 0.65)
+    return all(
+        _point_in_polygon(point, allowed_polygon)
+        for point in (
+            (x, y),
+            (x - inset, y),
+            (x + inset, y),
+            (x, y - inset),
+            (x, y + inset),
+        )
+    )
+
+
 def _place_marker(
     x: float,
     y: float,
@@ -719,8 +795,11 @@ def _place_marker(
     bounds: tuple[float, float],
     seed: object,
     max_offset: float = 34.0,
+    allowed_polygon: list[tuple[float, float]] | None = None,
 ) -> tuple[float, float]:
-    if _claim_marker(occupied, _marker_box(x, y, radius), bounds=bounds):
+    if _marker_position_allowed(x, y, radius, allowed_polygon=allowed_polygon) and _claim_marker(
+        occupied, _marker_box(x, y, radius), bounds=bounds
+    ):
         return (x, y)
     rng = random.Random(_stable_seed("marker-placement", seed))
     angles = [i * math.pi / 4.0 for i in range(8)]
@@ -729,12 +808,39 @@ def _place_marker(
         for angle in angles:
             cx = x + math.cos(angle) * distance
             cy = y + math.sin(angle) * distance
+            if not _marker_position_allowed(cx, cy, radius, allowed_polygon=allowed_polygon):
+                continue
             if _claim_marker(occupied, _marker_box(cx, cy, radius), bounds=bounds):
                 return (cx, cy)
     clamped_x = _clamp(x, radius + 2.0, bounds[0] - radius - 2.0)
     clamped_y = _clamp(y, radius + 2.0, bounds[1] - radius - 2.0)
+    if not _marker_position_allowed(clamped_x, clamped_y, radius, allowed_polygon=allowed_polygon):
+        clamped_x = x
+        clamped_y = y
     occupied.append(_marker_box(clamped_x, clamped_y, radius))
     return (clamped_x, clamped_y)
+
+
+def _feature_marker_allowed_polygon(
+    geometry: WorldMapGeometry,
+    *,
+    region_id: str,
+    kind: str,
+    world_point: tuple[float, float],
+    region_screen_polygons: dict[str, list[tuple[float, float]]],
+    width: int,
+    height: int,
+    pad: int,
+) -> list[tuple[float, float]] | None:
+    k = (kind or "").strip().lower()
+    if k in {"harbor", "bay", "coast"}:
+        return region_screen_polygons.get(region_id)
+    for cell in geometry.micro_cells:
+        if cell.region_id != region_id or cell.is_coastal:
+            continue
+        if _point_in_polygon(world_point, cell.polygon):
+            return [_scale(point, width, height, pad) for point in cell.polygon]
+    return region_screen_polygons.get(region_id)
 
 
 def _cell_bbox(cell: RegionCell) -> tuple[float, float, float, float]:
@@ -1008,24 +1114,42 @@ def _site_world_xy(local_geography_json: object, site_slot: object) -> tuple[flo
     return None
 
 
-def _nearest_coastal_world_point(
-    geometry: WorldMapGeometry,
-    region_id: str,
-    target: tuple[float, float],
-) -> tuple[float, float] | None:
-    candidates = [
-        cell
-        for cell in geometry.micro_cells
-        if cell.region_id == region_id and cell.is_coastal
-    ]
-    if not candidates:
-        return None
-    tx, ty = target
-    cell = min(
-        candidates,
-        key=lambda c: ((c.center_x - tx) ** 2 + (c.center_y - ty) ** 2, c.elevation, c.micro_id),
-    )
-    return (cell.center_x, cell.center_y)
+def _site_anchor_has_source_world(local_geography_json: object, site_slot: object) -> bool:
+    if not local_geography_json:
+        return False
+    try:
+        data = json.loads(str(local_geography_json))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    sites = data.get("settlements")
+    features = data.get("features")
+    if not isinstance(sites, list) or not isinstance(features, list):
+        return False
+    try:
+        slot = int(site_slot or 1) - 1
+    except (TypeError, ValueError):
+        slot = 0
+    anchor_id = ""
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        try:
+            if int(site.get("settlement_slot", 0)) == slot:
+                anchor_id = str(site.get("anchor_feature_id") or "").strip()
+                break
+        except (TypeError, ValueError):
+            continue
+    if not anchor_id:
+        return False
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        if str(feature.get("feature_id") or "").strip() != anchor_id:
+            continue
+        return feature.get("source_world_x") is not None and feature.get("source_world_y") is not None
+    return False
 
 
 def _named_feature_overlays_from_local_geography(
@@ -1066,10 +1190,12 @@ def _named_feature_overlays_from_local_geography(
                 lx = max(0.04, min(0.96, float(feature.get("x", 0.5))))
                 ly = max(0.04, min(0.96, float(feature.get("y", 0.5))))
                 wx, wy = project_local_point_to_region_footprint(geometry, region_id, (lx, ly))
-            if kind.lower() in {"harbor", "bay", "coast"}:
-                coastal_xy = _nearest_coastal_world_point(geometry, region_id, (wx, wy))
-                if coastal_xy is not None:
-                    wx, wy = coastal_xy
+            wx, wy = project_feature_point_to_region_footprint(
+                geometry,
+                region_id,
+                (wx, wy),
+                kind=kind,
+            )
         except (TypeError, ValueError):
             continue
         out.append(
@@ -1142,8 +1268,12 @@ def load_world_map_overlays(
                 cell = cells.get(rid)
                 if cell is None:
                     continue
-                world_xy = _site_world_xy(row["local_geography_json"], row["site_slot"])
                 local = _site_xy(row["local_geography_json"], row["site_slot"])
+                world_xy = (
+                    _site_world_xy(row["local_geography_json"], row["site_slot"])
+                    if _site_anchor_has_source_world(row["local_geography_json"], row["site_slot"])
+                    else None
+                )
                 if world_xy is None and local is None:
                     rng = random.Random(_stable_seed(geometry.version, row["settlement_id"], "overlay"))
                     local = (0.5 + rng.uniform(-0.16, 0.16), 0.5 + rng.uniform(-0.16, 0.16))
@@ -1272,7 +1402,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{fill:#101827;stroke:#101827;stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -1599,6 +1729,10 @@ def render_world_map_svg(
 
     overlay_settlements = overlays.settlements if overlays is not None else []
     named_feature_overlays = overlays.features if overlays is not None else []
+    region_screen_polygons = {
+        cell.region_id: [_scale(point, width, height, pad) for point in cell.polygon]
+        for cell in geometry.cells
+    }
     settlements = (
         sorted(
             overlay_settlements,
@@ -1615,19 +1749,16 @@ def render_world_map_svg(
         settlement_positions[settlement.settlement_id] = (sx, sy, sr)
         _claim_marker(occupied_markers, _marker_box(sx, sy, sr, padding=4.0), bounds=(width, height))
     settlement_label_parts: dict[str, str] = {}
-    settlement_labels = 0
     if labels:
         for settlement in settlements:
-            if (
-                settlement.status.strip().lower() == "abandoned"
-                or settlement_labels >= max_settlement_labels
-            ):
+            if settlement.status.strip().lower() == "abandoned":
                 continue
             x, y, radius = settlement_positions.get(
                 settlement.settlement_id,
                 (*_scale((settlement.x, settlement.y), width, height, pad), 2.0),
             )
-            shown = settlement.display_name[:24]
+            shown = ((settlement.display_name or "").strip() or settlement.settlement_id)[:24]
+            chosen: tuple[float, float, str] | None = None
             for dx, dy, anchor in (
                 (radius + 2.2, 3.0, "start"),
                 (-(radius + 2.2), 3.0, "end"),
@@ -1635,18 +1766,20 @@ def render_world_map_svg(
                 (0.0, radius + 10.0, "middle"),
             ):
                 box = _label_box(x + dx, y + dy, shown, 9.5, anchor=anchor)
-                if not _claim_label(occupied_labels, box, bounds=(width, height)):
-                    continue
-                label_x = x + dx
-                label_y = y + dy
-                settlement_label_parts[settlement.settlement_id] = (
-                    f'<text class="settlement-label" data-settlement-id="{html.escape(settlement.settlement_id)}" '
-                    f'data-region-id="{html.escape(settlement.region_id)}" '
-                    f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" data-dx="{dx:.2f}" data-dy="{dy:.2f}" '
-                    f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{anchor}">{html.escape(shown)}</text>'
-                )
-                settlement_labels += 1
-                break
+                if _claim_label(occupied_labels, box, bounds=(width, height)):
+                    chosen = (dx, dy, anchor)
+                    break
+            if chosen is None:
+                chosen = (radius + 2.2, 3.0, "start")
+            dx, dy, anchor = chosen
+            label_x = x + dx
+            label_y = y + dy
+            settlement_label_parts[settlement.settlement_id] = (
+                f'<text class="settlement-label" data-settlement-id="{html.escape(settlement.settlement_id)}" '
+                f'data-region-id="{html.escape(settlement.region_id)}" '
+                f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" data-dx="{dx:.2f}" data-dy="{dy:.2f}" '
+                f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{anchor}">{html.escape(shown)}</text>'
+            )
     show_region_labels = labels and not overlay_settlements
     if show_region_labels:
         for cell in geometry.cells:
@@ -1730,6 +1863,16 @@ def render_world_map_svg(
         feature_class = _FEATURE_CLASS_BY_KIND.get(named.kind.strip().lower(), "landform")
         color = _FEATURE_COLORS.get(feature_class, _FEATURE_COLORS["landform"])
         radius = 3.0
+        allowed_polygon = _feature_marker_allowed_polygon(
+            geometry,
+            region_id=named.region_id,
+            kind=named.kind,
+            world_point=(named.x, named.y),
+            region_screen_polygons=region_screen_polygons,
+            width=width,
+            height=height,
+            pad=pad,
+        )
         x, y = _place_marker(
             x,
             y,
@@ -1738,6 +1881,7 @@ def render_world_map_svg(
             bounds=(width, height),
             seed=(named.feature_id, named.display_name),
             max_offset=42.0,
+            allowed_polygon=allowed_polygon,
         )
         attrs = (
             f'data-feature-id="{html.escape(named.feature_id)}" '
@@ -1774,6 +1918,16 @@ def render_world_map_svg(
         x, y = _scale((feature.x, feature.y), width, height, pad)
         color = _FEATURE_COLORS.get(feature.feature_class, _FEATURE_COLORS["landform"])
         radius = _feature_radius(feature)
+        allowed_polygon = _feature_marker_allowed_polygon(
+            geometry,
+            region_id=feature.region_id,
+            kind=feature.kind,
+            world_point=(feature.x, feature.y),
+            region_screen_polygons=region_screen_polygons,
+            width=width,
+            height=height,
+            pad=pad,
+        )
         x, y = _place_marker(
             x,
             y,
@@ -1782,6 +1936,7 @@ def render_world_map_svg(
             bounds=(width, height),
             seed=(feature.feature_id, feature.label),
             max_offset=36.0,
+            allowed_polygon=allowed_polygon,
         )
         attrs = (
             f'data-feature-id="{html.escape(feature.feature_id)}" '
@@ -1800,9 +1955,7 @@ def render_world_map_svg(
                 color=color,
             )
         )
-        if labels and feature_labels < max_feature_labels and (
-            not overlay_settlements or feature.importance >= 0.70
-        ):
+        if labels:
             append_feature_label(
                 feature_id=feature.feature_id,
                 region_id=feature.region_id,
@@ -1811,6 +1964,7 @@ def render_world_map_svg(
                 etymology="",
                 x=x,
                 y=y,
+                force=True,
             )
 
     if overlays is not None:

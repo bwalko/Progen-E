@@ -5667,7 +5667,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                 sim_start_year = gr.Number(value=1000, label="Start", precision=0, scale=1, min_width=90)
                 sim_seed = gr.Textbox(value="", label="Seed", placeholder="Blank", scale=1, min_width=100)
                 sim_flush = gr.Number(value=10, label="Flush", precision=0, scale=1, min_width=90)
-                sim_reset = gr.Checkbox(value=False, label="Reset", scale=0, min_width=75)
+                sim_reset = gr.Checkbox(value=True, label="Reset", scale=0, min_width=75)
                 sim_skip_timing = gr.Checkbox(value=False, label="No Timing", scale=0, min_width=95)
                 sim_run_button = gr.Button("Run", variant="primary", scale=0, min_width=70)
             with gr.Accordion("Advanced command options", open=False):

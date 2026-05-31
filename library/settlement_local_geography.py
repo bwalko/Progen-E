@@ -423,7 +423,7 @@ def _site_point_near_anchor(
     """Nudge a settlement beside a water/coast anchor while keeping a readable buffer."""
     radius = 0.035 if anchor.kind in {"harbor", "bay", "coast", "river", "stream", "ford"} else 0.055
     best = (anchor.x, anchor.y)
-    best_d = _distance_to_existing_pins(best[0], best[1], pins)
+    best_d = _distance_to_existing_pins(best[0], best[1], pins) if pins else -1.0
     for i in range(10):
         angle = rng.uniform(0.0, math.tau)
         dist = radius * (0.35 + 0.65 * (i + 1) / 10.0)

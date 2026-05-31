@@ -55,7 +55,12 @@ from library.world_bootstrap import save_has_simulation_people
 from library.world_bootstrap import should_refresh_world_config_auto
 from library.world_paths import config_db_path as world_folder_config_db_path
 from library.world_paths import derive_save_db_path_from_config
-from library.world_map_geometry import WorldMapGeometry, build_world_map_geometry
+from library.world_map_geometry import (
+    WorldMapGeometry,
+    build_world_map_geometry,
+    micro_cell_id_for_world_point,
+    project_local_point_to_region_footprint,
+)
 from library.world_time import ensure_world_state, reset_world_time, set_world_current_year
 from library.world_save import (
     checkpoint_simulation_to_save,
@@ -1821,6 +1826,85 @@ class SimulationContext:
                 return self.reestablish_from_abandoned(st)
         return self.ensure_active_settlement_for_region(rid)
 
+    def _site_world_xy_from_geo_json(
+        self,
+        local_geography_json: str | None,
+        site_slot: int,
+        region_id: str,
+    ) -> tuple[float, float] | None:
+        if not local_geography_json:
+            return None
+        try:
+            data = json.loads(local_geography_json)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        sites = data.get("settlements")
+        if not isinstance(sites, list):
+            return None
+        target_slot = max(0, int(site_slot) - 1)
+        for site in sites:
+            if not isinstance(site, dict):
+                continue
+            try:
+                if int(site.get("settlement_slot", 0)) != target_slot:
+                    continue
+                wx = site.get("world_x")
+                wy = site.get("world_y")
+                if wx is not None and wy is not None:
+                    return (float(wx), float(wy))
+                lx = float(site.get("x", 0.5))
+                ly = float(site.get("y", 0.5))
+            except (TypeError, ValueError):
+                return None
+            return project_local_point_to_region_footprint(
+                self.world_map_geometry_for_settlements(),
+                region_id,
+                (lx, ly),
+            )
+        return None
+
+    def active_settlement_in_same_map_polygon(
+        self,
+        region_id: str,
+        *,
+        site_slot: int,
+        local_geography_json: str | None,
+    ) -> SettlementState | None:
+        """Return an active settlement already occupying the proposed site's map polygon."""
+        rid = (region_id or "").strip()
+        candidate_xy = self._site_world_xy_from_geo_json(local_geography_json, site_slot, rid)
+        if candidate_xy is None:
+            return None
+        geometry = self.world_map_geometry_for_settlements()
+        candidate_micro_id = micro_cell_id_for_world_point(
+            geometry,
+            candidate_xy,
+            region_id=rid,
+        )
+        if not candidate_micro_id:
+            return None
+        for st in self.active_settlements_in_region(rid):
+            if int(st.site_slot) == int(site_slot):
+                continue
+            st_xy = self._site_world_xy_from_geo_json(
+                local_geography_json,
+                int(st.site_slot),
+                rid,
+            )
+            if st_xy is None:
+                st_xy = self._site_world_xy_from_geo_json(
+                    st.local_geography_json,
+                    int(st.site_slot),
+                    rid,
+                )
+            if st_xy is None:
+                continue
+            if micro_cell_id_for_world_point(geometry, st_xy, region_id=rid) == candidate_micro_id:
+                return st
+        return None
+
     def create_additional_active_settlement(self, region_id: str) -> SettlementState:
         rid = (region_id or "").strip()
         region = get_region(rid, world=self.world, db_path=self.db_path)
@@ -1838,6 +1922,13 @@ class SimulationContext:
             settlement_slots=slot,
             site_slot=slot,
         )
+        existing = self.active_settlement_in_same_map_polygon(
+            rid,
+            site_slot=slot,
+            local_geography_json=geo_json,
+        )
+        if existing is not None:
+            return existing
         seq = next_settlement_sequence(rid, list(self.settlements_by_id.keys()))
         sid = make_settlement_id(rid, seq)
         year = self._settlement_founding_year()

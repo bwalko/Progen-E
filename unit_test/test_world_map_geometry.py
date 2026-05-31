@@ -26,6 +26,8 @@ from library.world_map_geometry import (
     _polygon_bounds,
     build_world_map_debug_data,
     build_world_map_geometry,
+    micro_cell_id_for_world_point,
+    project_feature_point_to_region_footprint,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
     region_id_for_world_point,
@@ -35,6 +37,8 @@ from library.world_map_svg import (
     FeatureMapOverlay,
     SettlementMapOverlay,
     WorldMapOverlays,
+    _place_marker,
+    _point_in_polygon as _svg_point_in_polygon,
     load_world_map_overlays,
     render_world_map_svg,
 )
@@ -350,7 +354,67 @@ class TestWorldMapGeometry(unittest.TestCase):
                 _point_segment_distance((feature.x, feature.y), a, b)
                 for a, b in region_coast_edges
             )
-            self.assertLessEqual(distance_to_coast, 0.010, feature.feature_id)
+            self.assertLessEqual(distance_to_coast, 0.00001, feature.feature_id)
+        micro_by_id = {cell.micro_id: cell for cell in geometry.micro_cells}
+        for feature in geometry.features:
+            if feature.kind in {"harbor", "bay", "coast"}:
+                continue
+            region_micro = [c for c in geometry.micro_cells if c.region_id == feature.region_id]
+            if not any(not c.is_coastal for c in region_micro):
+                continue
+            micro_id = micro_cell_id_for_world_point(
+                geometry,
+                (feature.x, feature.y),
+                region_id=feature.region_id,
+            )
+            self.assertIsNotNone(micro_id, feature.feature_id)
+            self.assertFalse(micro_by_id[micro_id].is_coastal, feature.feature_id)
+
+    def test_feature_projection_respects_coastline_and_interior_rules(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+        coastal_region_id = next(
+            cell.region_id
+            for cell in geometry.micro_cells
+            if cell.is_coastal
+            and any(
+                other.region_id == cell.region_id and not other.is_coastal
+                for other in geometry.micro_cells
+            )
+        )
+        coastal_cell = next(c for c in geometry.micro_cells if c.region_id == coastal_region_id and c.is_coastal)
+        inland_by_id = {c.micro_id: c for c in geometry.micro_cells}
+
+        harbor = project_feature_point_to_region_footprint(
+            geometry,
+            coastal_region_id,
+            (coastal_cell.center_x, coastal_cell.center_y),
+            kind="harbor",
+        )
+        coast_edges = [
+            edge
+            for cell in geometry.micro_cells
+            if cell.region_id == coastal_region_id and cell.is_coastal
+            for edge in boundary_edges.get(cell.micro_id, [])
+        ]
+        self.assertLessEqual(
+            min(_point_segment_distance(harbor, a, b) for a, b in coast_edges),
+            0.00001,
+        )
+
+        meadow = project_feature_point_to_region_footprint(
+            geometry,
+            coastal_region_id,
+            harbor,
+            kind="meadow",
+        )
+        meadow_micro_id = micro_cell_id_for_world_point(
+            geometry,
+            meadow,
+            region_id=coastal_region_id,
+        )
+        self.assertIsNotNone(meadow_micro_id)
+        self.assertFalse(inland_by_id[meadow_micro_id].is_coastal)
 
     def test_map_seed_debug_fixtures_capture_stable_comparison_metrics(self) -> None:
         campaign_a = build_world_map_geometry(world="default", db_path=self.cfg, map_seed="campaign-a")
@@ -586,6 +650,104 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn(">Anchor Hamlet</text>", svg)
         self.assertIn(">Anchor Spring</text>", svg)
 
+    def test_all_active_settlement_icons_get_labels_even_when_overlapping(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        cell = geometry.cells[0]
+        settlements = [
+            SettlementMapOverlay(
+                settlement_id=f"{cell.region_id}:s{i}",
+                region_id=cell.region_id,
+                display_name=f"Town {i}",
+                x=cell.center_x,
+                y=cell.center_y,
+                population=10 + i,
+                status="active",
+            )
+            for i in range(32)
+        ]
+        overlays = WorldMapOverlays(settlements=settlements, polities_by_region_id={})
+
+        svg = render_world_map_svg(
+            geometry,
+            overlays=overlays,
+            max_settlement_labels=1,
+            max_feature_labels=0,
+        )
+
+        for i in range(32):
+            self.assertIn(f">Town {i}</text>", svg)
+
+    def test_feature_marker_nudge_stays_inside_allowed_region_polygon(self) -> None:
+        occupied = [(44.0, 44.0, 56.0, 56.0)]
+        land_polygon = [(0.0, 0.0), (54.0, 0.0), (54.0, 100.0), (0.0, 100.0)]
+
+        x, y = _place_marker(
+            50.0,
+            50.0,
+            4.0,
+            occupied,
+            bounds=(120.0, 120.0),
+            seed="coastal-feature",
+            max_offset=34.0,
+            allowed_polygon=land_polygon,
+        )
+
+        self.assertTrue(_svg_point_in_polygon((x, y), land_polygon))
+        self.assertLessEqual(x, 54.0)
+
+    def test_feature_icons_use_earth_tone_category_colors(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        cell = geometry.cells[0]
+        overlays = WorldMapOverlays(
+            settlements=[],
+            polities_by_region_id={},
+            features=[
+                FeatureMapOverlay(
+                    feature_id=f"{cell.region_id}:forest",
+                    region_id=cell.region_id,
+                    kind="forest",
+                    display_name="Greenwood",
+                    x=cell.center_x,
+                    y=cell.center_y,
+                ),
+                FeatureMapOverlay(
+                    feature_id=f"{cell.region_id}:spring",
+                    region_id=cell.region_id,
+                    kind="spring",
+                    display_name="Blue Spring",
+                    x=cell.center_x + 0.02,
+                    y=cell.center_y,
+                ),
+                FeatureMapOverlay(
+                    feature_id=f"{cell.region_id}:ridge",
+                    region_id=cell.region_id,
+                    kind="ridge",
+                    display_name="Grey Ridge",
+                    x=cell.center_x - 0.02,
+                    y=cell.center_y,
+                ),
+            ],
+        )
+
+        svg = render_world_map_svg(geometry, overlays=overlays, max_feature_labels=0)
+
+        self.assertIn('data-icon-name="tree"', svg)
+        self.assertIn('data-icon-name="droplet"', svg)
+        self.assertIn('data-icon-name="mountain"', svg)
+        self.assertIn('fill="#3f6f52"', svg)
+        self.assertIn('fill="#3f7891"', svg)
+        self.assertIn('fill="#c9c7bd"', svg)
+
+    def test_all_rendered_feature_icons_get_labels(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+
+        svg = render_world_map_svg(geometry, labels=True, max_feature_labels=0)
+
+        icon_count = svg.count('data-icon-name="')
+        label_count = svg.count('class="feature-label"')
+        self.assertGreater(icon_count, 0)
+        self.assertEqual(label_count, icon_count)
+
     def test_world_map_features_filter_to_nearby_settlements_when_overlaid(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
         cell = geometry.cells[0]
@@ -678,6 +840,146 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertEqual(overlays.features[0].display_name, "Bluewater")
         self.assertEqual(overlays.features[0].kind, "river")
         self.assertEqual(overlays.polities_by_region_id[cell.region_id].polity_name, "Test Realm")
+
+    def test_local_anchor_settlement_and_feature_share_projection(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        cell = geometry.cells[0]
+        save_path = Path(self._td.name) / "save.sqlite"
+        import sqlite3
+
+        with closing(sqlite3.connect(save_path)) as con:
+            con.execute(
+                """
+                create table simulation_settlements (
+                    settlement_id text, region_id text, display_name text,
+                    population_cap integer, status text, site_slot integer,
+                    local_geography_json text
+                )
+                """
+            )
+            con.execute(
+                "insert into simulation_settlements values (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"{cell.region_id}:s1",
+                    cell.region_id,
+                    "Anchor Town",
+                    42,
+                    "active",
+                    1,
+                    json.dumps(
+                        {
+                            "features": [
+                                {
+                                    "feature_id": f"{cell.region_id}:f1",
+                                    "kind": "stream",
+                                    "x": 0.5,
+                                    "y": 0.5,
+                                    "display_name": "Anchor Stream",
+                                }
+                            ],
+                            "settlements": [
+                                {
+                                    "settlement_slot": 0,
+                                    "x": 0.5,
+                                    "y": 0.5,
+                                    "anchor_feature_id": f"{cell.region_id}:f1",
+                                    "world_x": 0.01,
+                                    "world_y": 0.01,
+                                }
+                            ],
+                        }
+                    ),
+                ),
+            )
+            con.commit()
+
+        overlays = load_world_map_overlays(geometry=geometry, save_db_path=save_path)
+
+        self.assertEqual(len(overlays.settlements), 1)
+        self.assertEqual(len(overlays.features), 1)
+        self.assertAlmostEqual(overlays.settlements[0].x, overlays.features[0].x, places=6)
+        self.assertAlmostEqual(overlays.settlements[0].y, overlays.features[0].y, places=6)
+
+    def test_local_named_feature_overlays_respect_coastline_and_interior_rules(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+        coastal_region_id = next(
+            cell.region_id
+            for cell in geometry.micro_cells
+            if cell.is_coastal
+            and any(
+                other.region_id == cell.region_id and not other.is_coastal
+                for other in geometry.micro_cells
+            )
+        )
+        save_path = Path(self._td.name) / "coastal-features-save.sqlite"
+        import sqlite3
+
+        with closing(sqlite3.connect(save_path)) as con:
+            con.execute(
+                """
+                create table simulation_settlements (
+                    settlement_id text, region_id text, display_name text,
+                    population_cap integer, status text, site_slot integer,
+                    local_geography_json text
+                )
+                """
+            )
+            con.execute(
+                "insert into simulation_settlements values (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"{coastal_region_id}:s1",
+                    coastal_region_id,
+                    "Coast Town",
+                    42,
+                    "active",
+                    1,
+                    json.dumps(
+                        {
+                            "features": [
+                                {
+                                    "feature_id": f"{coastal_region_id}:harbor",
+                                    "kind": "harbor",
+                                    "x": 0.5,
+                                    "y": 0.5,
+                                    "display_name": "Test Harbor",
+                                },
+                                {
+                                    "feature_id": f"{coastal_region_id}:meadow",
+                                    "kind": "meadow",
+                                    "x": 0.5,
+                                    "y": 0.5,
+                                    "display_name": "Test Meadow",
+                                },
+                            ],
+                            "settlements": [{"settlement_slot": 0, "x": 0.5, "y": 0.5}],
+                        }
+                    ),
+                ),
+            )
+            con.commit()
+
+        overlays = load_world_map_overlays(geometry=geometry, save_db_path=save_path)
+        by_name = {feature.display_name: feature for feature in overlays.features}
+        harbor = by_name["Test Harbor"]
+        meadow = by_name["Test Meadow"]
+        coast_edges = [
+            edge
+            for cell in geometry.micro_cells
+            if cell.region_id == coastal_region_id and cell.is_coastal
+            for edge in boundary_edges.get(cell.micro_id, [])
+        ]
+        self.assertLessEqual(
+            min(_point_segment_distance((harbor.x, harbor.y), a, b) for a, b in coast_edges),
+            0.00001,
+        )
+        meadow_micro_id = micro_cell_id_for_world_point(
+            geometry,
+            (meadow.x, meadow.y),
+            region_id=coastal_region_id,
+        )
+        self.assertIsNotNone(meadow_micro_id)
+        self.assertFalse({c.micro_id: c for c in geometry.micro_cells}[meadow_micro_id].is_coastal)
 
     def test_load_world_map_overlays_limits_settlements(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)

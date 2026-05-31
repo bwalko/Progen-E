@@ -326,6 +326,7 @@ class TestLocalGeography(unittest.TestCase):
             anchor = by_id[str(pin.anchor_feature_id)]
             distance = math.hypot(pin.x - anchor.x, pin.y - anchor.y)
             self.assertLessEqual(distance, 0.16)
+            self.assertGreater(distance, 0.01)
 
     def test_feature_kinds_follow_region_terrain(self) -> None:
         coast = get_region("aeria_port", world="default", db_path=self.cfg)

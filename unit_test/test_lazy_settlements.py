@@ -105,6 +105,64 @@ class TestLazySettlements(unittest.TestCase):
             finally:
                 ctx.finalize_run()
 
+    def test_proposed_same_polygon_settlement_reuses_active_settlement(self) -> None:
+        from library.simulation_context import SimulationContext
+        from pathlib import Path
+        import tempfile
+        from library.config_import import load_all_csvs_into_sqlite
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext(
+                db_path=cfg,
+                save_db_path=root / "save.sqlite",
+                world="default",
+                simulation_start_year=1000,
+                history_equivalent_start_year=1000,
+                current_year=1005,
+            )
+            try:
+                first = ctx.ensure_active_settlement_for_region("boreas_fjord_shore")
+                first_xy = ctx._site_world_xy_from_geo_json(
+                    first.local_geography_json,
+                    first.site_slot,
+                    first.region_id,
+                )
+                self.assertIsNotNone(first_xy)
+                proposed_geo = json.dumps(
+                    {
+                        "settlements": [
+                            {
+                                "settlement_slot": 0,
+                                "x": 0.5,
+                                "y": 0.5,
+                                "world_x": first_xy[0],
+                                "world_y": first_xy[1],
+                            },
+                            {
+                                "settlement_slot": 1,
+                                "x": 0.5,
+                                "y": 0.5,
+                                "world_x": first_xy[0],
+                                "world_y": first_xy[1],
+                            },
+                        ]
+                    }
+                )
+
+                existing = ctx.active_settlement_in_same_map_polygon(
+                    first.region_id,
+                    site_slot=2,
+                    local_geography_json=proposed_geo,
+                )
+
+                self.assertIsNotNone(existing)
+                self.assertEqual(existing.settlement_id, first.settlement_id)
+            finally:
+                ctx.finalize_run()
+
 
 if __name__ == "__main__":
     unittest.main()

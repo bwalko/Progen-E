@@ -1210,6 +1210,9 @@ def _feature_anchor_cell(
         if not pool:
             pool = [c for c in available if c.is_coastal] or available
         return min(pool, key=lambda c: (c.elevation, c.micro_id))
+    inland_available = [c for c in available if not c.is_coastal]
+    if inland_available:
+        available = inland_available
     if k in {"river", "stream", "ford", "lake", "marsh", "spring"}:
         pool = [c for c in available if c.moisture >= 0.78] or available
         return max(pool, key=lambda c: (c.moisture, -c.elevation, c.micro_id))
@@ -1250,11 +1253,60 @@ def _coastal_feature_point(
     t = 0.42 + rng.random() * 0.16
     x = a[0] + (b[0] - a[0]) * t
     y = a[1] + (b[1] - a[1]) * t
-    inward = 0.16 if kind == "coast" else 0.24
-    return (
-        _clamp(x + (cx - x) * inward, 0.0, 1.0),
-        _clamp(y + (cy - y) * inward, 0.0, 1.0),
+    return (_clamp(x, 0.0, 1.0), _clamp(y, 0.0, 1.0))
+
+
+_COASTLINE_FEATURE_KINDS = {"harbor", "bay", "coast"}
+
+
+def _nearest_coastline_point_for_region(
+    geometry: WorldMapGeometry,
+    region_id: str,
+    point: Point,
+) -> Point | None:
+    boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+    edges = [
+        edge
+        for cell in geometry.micro_cells
+        if cell.region_id == region_id and cell.is_coastal
+        for edge in boundary_edges.get(cell.micro_id, [])
+    ]
+    if not edges:
+        return None
+    return min(
+        (_nearest_point_on_segment(point, a, b) for a, b in edges),
+        key=lambda p: ((p[0] - point[0]) ** 2 + (p[1] - point[1]) ** 2, p[0], p[1]),
     )
+
+
+def project_feature_point_to_region_footprint(
+    geometry: WorldMapGeometry,
+    region_id: str,
+    point: Point,
+    *,
+    kind: str,
+) -> Point:
+    """Project a landmark to its valid map side.
+
+    Harbor/coast/bay features pin to the coastline edge. Other landmarks prefer
+    a non-coastal micro-cell, keeping them at least one land polygon inland when
+    that region has any interior land.
+    """
+    rid = (region_id or "").strip()
+    k = (kind or "").strip().lower()
+    if k in _COASTLINE_FEATURE_KINDS:
+        coastal = _nearest_coastline_point_for_region(geometry, rid, point)
+        if coastal is not None:
+            return coastal
+        return project_world_point_to_region_footprint(geometry, rid, point)
+    cells = _cells_for_region_footprint(geometry, rid)
+    inland = [cell for cell in cells if not cell.is_coastal]
+    if inland:
+        for cell in inland:
+            if _point_in_polygon(point, cell.polygon):
+                return _nudge_inside_polygon(point, cell.polygon)
+        return _best_region_interior_point(point, inland)
+    return project_world_point_to_region_footprint(geometry, rid, point)
 
 
 def _features_for_region(
@@ -1278,8 +1330,6 @@ def _features_for_region(
             used_micro_ids.add(anchor.micro_id)
             if kind in {"harbor", "bay", "coast"}:
                 x, y = _coastal_feature_point(anchor, boundary_edges, kind=kind, rng=rng)
-                x += rng.uniform(-0.002, 0.002)
-                y += rng.uniform(-0.002, 0.002)
             else:
                 x, y = anchor.center_x, anchor.center_y
                 x += rng.uniform(-0.006, 0.006)
@@ -1290,6 +1340,10 @@ def _features_for_region(
             x, y = _point_toward(poly, center, target[0], target[1], amount)
             x += rng.uniform(-0.015, 0.015)
             y += rng.uniform(-0.015, 0.015)
+        if kind not in {"harbor", "bay", "coast"}:
+            inland_cells = [c for c in (micro_cells or []) if not c.is_coastal]
+            if inland_cells:
+                x, y = _best_region_interior_point((x, y), inland_cells)
         features.append(
             RegionFeature(
                 feature_id=f"{region.region_id}:wf{i}",
@@ -2566,6 +2620,25 @@ def region_id_for_world_point(
     for cell in geometry.cells:
         if _point_in_polygon(point, cell.polygon):
             return cell.region_id
+    return None
+
+
+def micro_cell_id_for_world_point(
+    geometry: WorldMapGeometry,
+    point: Point,
+    *,
+    region_id: str | None = None,
+) -> str | None:
+    """Return the micro-polygon id containing ``point``.
+
+    If ``region_id`` is provided, only cells belonging to that region are considered.
+    """
+    rid = (region_id or "").strip()
+    for cell in geometry.micro_cells:
+        if rid and cell.region_id != rid:
+            continue
+        if _point_in_polygon(point, cell.polygon):
+            return cell.micro_id
     return None
 
 
