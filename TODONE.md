@@ -229,6 +229,13 @@
   - office promotion materializes a passive candidate into a detailed `Person` with genome/mind-body state;
   - passive person checkpoint roundtrip preserves species/ethnic fields.
 
+- Added richer passive family/partnership records:
+  - `PassivePerson` now carries coarse partner name/birth/death years, partnership start/end years, passive child ids, and child birth years;
+  - `simulation_people_light` and `simulation_people_light_readable` persist/expose these fields;
+  - office promotion synthesizes partner and child timing facts when promoting from a partnered aggregate cohort;
+  - passive promotion emits inferred `promotion_backfill_partnership` and `promotion_backfill_children` events so later narrative/detail systems can see the established passive family anchors;
+  - checkpoint and promotion regression tests cover passive family roundtrip and inferred family backfill events.
+
 - Added `utils/run_mixed_mode_scale_smoke.py` for hardware-friendly scale preflights:
   - seeds one active aggregate settlement per configured region;
   - evolves passive/cohort demographics for target historical populations without materializing detailed people;
@@ -247,6 +254,17 @@
     - 100K target: 98,239 mixed alive, 12 detailed alive, 17,211 cohort rows, 5.10s;
     - 1M target: 982,097 mixed alive, 13 detailed alive, 23,220 cohort rows, 9.51s;
     - 10M target: 9,820,933 mixed alive, 12 detailed alive, 24,853 cohort rows, 9.44s.
+  - local 10-year calibration with 10 starting couples and 100-1,000 detailed cap completed:
+    - 100K target: 94,906 mixed alive, 37 detailed alive, 14,702 cohort rows, 28.59s;
+    - 1M target: 949,001 mixed alive, 27 detailed alive, 19,582 cohort rows, 38.03s;
+    - 10M target: 9,489,032 mixed alive, 26 detailed alive, 22,746 cohort rows, 37.97s.
+
+- Tuned passive fertility for target-stable 10-year mixed-mode calibration:
+  - raised `_PASSIVE_BIRTH_RATE` from `0.105` to `0.165`;
+  - local 10-year calibration with 10 starting couples and 100-1,000 detailed cap now completes near target:
+    - 100K target: 99,976 mixed alive, 37 detailed alive, 14,702 cohort rows, 28.39s;
+    - 1M target: 999,948 mixed alive, 27 detailed alive, 19,582 cohort rows, 37.14s;
+    - 10M target: 9,998,875 mixed alive, 26 detailed alive, 22,746 cohort rows, 40.19s.
 
 ### Event Threshold Decision
 

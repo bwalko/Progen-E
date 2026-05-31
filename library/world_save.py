@@ -498,9 +498,16 @@ def _ensure_hybrid_population_tables(conn: sqlite3.Connection) -> None:
             current_settlement_key INTEGER,
             job_family TEXT,
             partner_person_id INTEGER,
+            partner_name TEXT,
+            partner_birthyear INTEGER,
+            partner_deathyear INTEGER,
+            partnership_start_year INTEGER,
+            partnership_end_year INTEGER,
             father_id INTEGER,
             mother_id INTEGER,
             child_count INTEGER NOT NULL DEFAULT 0,
+            child_person_ids_json TEXT NOT NULL DEFAULT '[]',
+            child_birthyears_json TEXT NOT NULL DEFAULT '[]',
             status_bucket TEXT,
             prosperity_bucket TEXT
         );
@@ -551,6 +558,17 @@ def _ensure_hybrid_population_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE simulation_people_light ADD COLUMN species TEXT")
     if "ethnic" not in cols:
         conn.execute("ALTER TABLE simulation_people_light ADD COLUMN ethnic TEXT")
+    for col, spec in (
+        ("partner_name", "TEXT"),
+        ("partner_birthyear", "INTEGER"),
+        ("partner_deathyear", "INTEGER"),
+        ("partnership_start_year", "INTEGER"),
+        ("partnership_end_year", "INTEGER"),
+        ("child_person_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("child_birthyears_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE simulation_people_light ADD COLUMN {col} {spec}")
 
 
 def _event_origin_from_payload(payload: dict) -> str:
@@ -578,6 +596,7 @@ _EVENT_PERSON_LIST_ROLES: dict[str, str] = {
     "household_member_ids": "household_member",
     "dependent_minor_ids": "dependent_minor",
     "moved_person_ids": "moved",
+    "child_ids": "child",
 }
 
 _EVENT_SETTLEMENT_KEYS: tuple[str, ...] = (
@@ -1631,9 +1650,16 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
             cs.settlement_id AS current_settlement_id,
             p.job_family,
             p.partner_person_id,
+            p.partner_name,
+            p.partner_birthyear,
+            p.partner_deathyear,
+            p.partnership_start_year,
+            p.partnership_end_year,
             p.father_id,
             p.mother_id,
             p.child_count,
+            p.child_person_ids_json,
+            p.child_birthyears_json,
             p.status_bucket,
             p.prosperity_bucket
         FROM simulation_people_light p
@@ -2705,12 +2731,54 @@ def _passive_person_values(
         current_settlement_key,
         p.job_family,
         p.partner_person_id,
+        p.partner_name,
+        p.partner_birthyear,
+        p.partner_deathyear,
+        p.partnership_start_year,
+        p.partnership_end_year,
         p.father_id,
         p.mother_id,
         int(p.child_count),
+        _json_int_tuple(p.child_person_ids),
+        _json_int_tuple(p.child_birthyears),
         p.status_bucket,
         p.prosperity_bucket,
     )
+
+
+def _json_int_tuple(values: tuple[int, ...]) -> str:
+    return json.dumps([int(v) for v in values], separators=(",", ":"))
+
+
+def _row_optional_int(row: sqlite3.Row, key: str) -> int | None:
+    if key not in row.keys() or row[key] is None:
+        return None
+    return int(row[key])
+
+
+def _row_optional_str(row: sqlite3.Row, key: str) -> str | None:
+    if key not in row.keys() or row[key] is None:
+        return None
+    value = str(row[key]).strip()
+    return value or None
+
+
+def _parse_json_int_tuple(row: sqlite3.Row, key: str) -> tuple[int, ...]:
+    if key not in row.keys() or row[key] is None:
+        return ()
+    try:
+        data = json.loads(str(row[key] or "[]"))
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(data, list):
+        return ()
+    out: list[int] = []
+    for item in data:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return tuple(out)
 
 
 def _passive_person_from_checkpoint_row(
@@ -2741,9 +2809,16 @@ def _passive_person_from_checkpoint_row(
             if row["partner_person_id"] is not None
             else None
         ),
+        partner_name=_row_optional_str(row, "partner_name"),
+        partner_birthyear=_row_optional_int(row, "partner_birthyear"),
+        partner_deathyear=_row_optional_int(row, "partner_deathyear"),
+        partnership_start_year=_row_optional_int(row, "partnership_start_year"),
+        partnership_end_year=_row_optional_int(row, "partnership_end_year"),
         father_id=int(row["father_id"]) if row["father_id"] is not None else None,
         mother_id=int(row["mother_id"]) if row["mother_id"] is not None else None,
         child_count=int(row["child_count"] or 0),
+        child_person_ids=_parse_json_int_tuple(row, "child_person_ids_json"),
+        child_birthyears=_parse_json_int_tuple(row, "child_birthyears_json"),
         status_bucket=(
             str(row["status_bucket"]) if row["status_bucket"] is not None else None
         ),
@@ -2872,9 +2947,16 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             "current_settlement_key",
             "job_family",
             "partner_person_id",
+            "partner_name",
+            "partner_birthyear",
+            "partner_deathyear",
+            "partnership_start_year",
+            "partnership_end_year",
             "father_id",
             "mother_id",
             "child_count",
+            "child_person_ids_json",
+            "child_birthyears_json",
             "status_bucket",
             "prosperity_bucket",
         )

@@ -126,7 +126,7 @@ Yearly summaries now split detailed alive, passive-person alive, aggregate-cohor
 
 `utils/run_mixed_mode_calibration.py` now runs the full population runner at 100K, 1M, and 10M mixed-mode targets with bounded detailed samples and aggregate settlement seeding. It writes `temp/mixed_mode_calibration.tsv`.
 
-Still missing: longer full mixed-mode calibration beyond short smoke runs; richer passive person family/partnership records; additional promotion triggers such as marriage into a detailed family, migration into a focal settlement, user inspection, and narrative spotlighting.
+Longer 10-year full mixed-mode calibration now runs comfortably on local hardware and preserves the configured target closely after passive fertility tuning. Still missing: additional promotion triggers such as marriage into a detailed family, migration into a focal settlement, user inspection, and narrative spotlighting.
 
 ### Detailed Population Fraction
 
@@ -221,4 +221,4 @@ Important invariant:
 
 1. Use late-year profiling to confirm the next hot path for ~15K active people.
 2. Get 15K active people / 10 late years under 5 minutes.
-3. Run longer mixed-mode calibration scenarios after each meaningful performance/modeling change, starting from the hardware-friendly `utils/run_mixed_mode_calibration.py` defaults before attempting production-scale years.
+3. Add another passive-to-detailed promotion trigger such as marriage into a detailed family, migration into a focal settlement, user inspection, or narrative spotlighting.

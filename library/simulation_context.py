@@ -775,6 +775,33 @@ class SimulationContext:
             "source": source or {},
         }
         self._record_inferred_simulation_event(year, "passive_person_promoted", payload)
+        if prec.person.partner_name or prec.person.partner_person_id is not None:
+            self._record_inferred_simulation_event(
+                prec.person.partnership_start_year or year,
+                "promotion_backfill_partnership",
+                {
+                    "person_id": int(rec.person_id),
+                    "partner_person_id": prec.person.partner_person_id,
+                    "partner_name": prec.person.partner_name,
+                    "partner_birthyear": prec.person.partner_birthyear,
+                    "partner_deathyear": prec.person.partner_deathyear,
+                    "partnership_start_year": prec.person.partnership_start_year,
+                    "partnership_end_year": prec.person.partnership_end_year,
+                    "reason": str(reason),
+                },
+            )
+        if prec.person.child_count or prec.person.child_birthyears or prec.person.child_person_ids:
+            self._record_inferred_simulation_event(
+                year,
+                "promotion_backfill_children",
+                {
+                    "person_id": int(rec.person_id),
+                    "child_count": int(prec.person.child_count),
+                    "child_ids": list(prec.person.child_person_ids),
+                    "child_birthyears": list(prec.person.child_birthyears),
+                    "reason": str(reason),
+                },
+            )
         self._record_inferred_simulation_event(
             person.birthyear,
             "promotion_backfill_birth",

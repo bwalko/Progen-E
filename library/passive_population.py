@@ -9,6 +9,7 @@ from typing import Any
 
 from library.generator import generate_person_random
 from library.person import Person
+from library.random_names import choose_random_first_last
 
 
 @dataclass(frozen=True)
@@ -26,9 +27,16 @@ class PassivePerson:
     current_settlement_id: str | None = None
     job_family: str | None = None
     partner_person_id: int | None = None
+    partner_name: str | None = None
+    partner_birthyear: int | None = None
+    partner_deathyear: int | None = None
+    partnership_start_year: int | None = None
+    partnership_end_year: int | None = None
     father_id: int | None = None
     mother_id: int | None = None
     child_count: int = 0
+    child_person_ids: tuple[int, ...] = ()
+    child_birthyears: tuple[int, ...] = ()
     status_bucket: str | None = None
     prosperity_bucket: str | None = None
 
@@ -171,6 +179,13 @@ def promote_passive_candidate_for_office(
     updated = replace(cohort, population_count=int(cohort.population_count) - 1)
     ctx.passive_cohorts[cohort_index] = updated
     birthyear = int(year) - int(age)
+    family_facts = _synthesize_family_facts_for_cohort(
+        ctx,
+        cohort=cohort,
+        birthyear=birthyear,
+        year=int(year),
+        rng=rng,
+    )
     person = PassivePerson(
         name="",
         birthyear=birthyear,
@@ -183,6 +198,7 @@ def promote_passive_candidate_for_office(
         job_family=cohort.job_family,
         status_bucket=cohort.status_bucket,
         prosperity_bucket=_prosperity_from_status(cohort.status_bucket),
+        **family_facts,
     )
     passive = ctx.add_passive_person(person)
     return ctx.promote_passive_person(
@@ -225,3 +241,89 @@ def _prosperity_from_status(status: str | None) -> str | None:
     if s:
         return "common"
     return None
+
+
+def _synthesize_family_facts_for_cohort(
+    ctx: Any,
+    *,
+    cohort: PassiveCohort,
+    birthyear: int,
+    year: int,
+    rng: random.Random,
+) -> dict[str, object]:
+    age = max(0, int(year) - int(birthyear))
+    partnered = (cohort.status_bucket or "").strip().lower() == "partnered"
+    if not partnered or age < 16:
+        return {}
+    start_age = min(age, rng.randint(18, 28))
+    partnership_start_year = int(birthyear) + int(start_age)
+    partner_birthyear = int(birthyear) + rng.randint(-5, 5)
+    partner_gender = (
+        "Female"
+        if normalize_passive_gender(cohort.gender, fallback="Male") == "Male"
+        else "Male"
+    )
+    partner_name = _passive_related_name(
+        ctx,
+        gender=partner_gender,
+        ethnic=(cohort.culture or None),
+        region_id=cohort.region_id,
+        settlement_id=cohort.settlement_id,
+    )
+    child_birthyears = _synthesize_child_birthyears(
+        birthyear=int(birthyear),
+        partnership_start_year=partnership_start_year,
+        year=int(year),
+        rng=rng,
+    )
+    return {
+        "partner_name": partner_name,
+        "partner_birthyear": partner_birthyear,
+        "partnership_start_year": partnership_start_year,
+        "child_count": len(child_birthyears),
+        "child_birthyears": tuple(child_birthyears),
+    }
+
+
+def _synthesize_child_birthyears(
+    *,
+    birthyear: int,
+    partnership_start_year: int,
+    year: int,
+    rng: random.Random,
+) -> tuple[int, ...]:
+    latest = min(int(year), int(birthyear) + 42)
+    first = max(int(partnership_start_year) + rng.randint(0, 2), int(birthyear) + 18)
+    if first > latest:
+        return ()
+    out: list[int] = []
+    cur = first
+    while cur <= latest and len(out) < 8:
+        out.append(cur)
+        cur += rng.randint(2, 5)
+        if rng.random() < 0.18:
+            cur += rng.randint(1, 3)
+    return tuple(out)
+
+
+def _passive_related_name(
+    ctx: Any,
+    *,
+    gender: str,
+    ethnic: str | None,
+    region_id: str | None,
+    settlement_id: str | None,
+) -> str:
+    try:
+        first, last = choose_random_first_last(
+            ethnic=ethnic,
+            gender=gender,
+            birthplace="Placeholder",
+            db_path=ctx.db_path,
+            birthplace_region_id=region_id,
+            world=ctx.world,
+            simulation_context=ctx,
+        )
+        return f"{first} {last}".strip()
+    except Exception:
+        return "Unknown Partner"

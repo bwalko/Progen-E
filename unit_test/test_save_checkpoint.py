@@ -676,8 +676,13 @@ class TestSaveCheckpoint(unittest.TestCase):
                     birthplace_settlement_id=detailed.person.birthplace_settlement_id,
                     current_settlement_id=detailed.person.current_settlement_id,
                     job_family="farm",
+                    partner_name="Toma Lowdetail",
+                    partner_birthyear=999,
+                    partnership_start_year=1019,
                     father_id=detailed.person_id,
                     child_count=2,
+                    child_birthyears=(1020, 1023),
+                    child_person_ids=(9001, 9002),
                     status_bucket="common",
                     prosperity_bucket="modest",
                 )
@@ -739,8 +744,13 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertEqual(row["species"], detailed.person.species)
             self.assertEqual(row["ethnic"], detailed.person.ethnic)
             self.assertEqual(row["job_family"], "farm")
+            self.assertEqual(row["partner_name"], "Toma Lowdetail")
+            self.assertEqual(row["partner_birthyear"], 999)
+            self.assertEqual(row["partnership_start_year"], 1019)
             self.assertEqual(row["father_id"], detailed.person_id)
             self.assertEqual(row["child_count"], 2)
+            self.assertEqual(json.loads(row["child_birthyears_json"]), [1020, 1023])
+            self.assertEqual(json.loads(row["child_person_ids_json"]), [9001, 9002])
             self.assertEqual(
                 row["current_settlement_id"], detailed.person.current_settlement_id
             )
@@ -762,7 +772,12 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertEqual(loaded_passive.species, detailed.person.species)
             self.assertEqual(loaded_passive.ethnic, detailed.person.ethnic)
             self.assertEqual(loaded_passive.job_family, "farm")
+            self.assertEqual(loaded_passive.partner_name, "Toma Lowdetail")
+            self.assertEqual(loaded_passive.partner_birthyear, 999)
+            self.assertEqual(loaded_passive.partnership_start_year, 1019)
             self.assertEqual(loaded_passive.father_id, detailed.person_id)
+            self.assertEqual(loaded_passive.child_birthyears, (1020, 1023))
+            self.assertEqual(loaded_passive.child_person_ids, (9001, 9002))
             self.assertNotIn(passive.person_id, loaded.current_people_ids)
             self.assertEqual(len(loaded.passive_cohorts), 1)
             self.assertEqual(loaded.passive_cohorts[0].population_count, 80)
@@ -812,6 +827,64 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertAlmostEqual(caps.get("aeria_north", 0.0), 0.33, places=5)
             self.assertIsNotNone(nid)
             self.assertEqual(str(nid[0]).strip(), expected_next)
+
+    def test_promote_passive_person_backfills_family_events(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="promofam",
+                world="default",
+                start_year=1050,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            st = ctx.ensure_active_settlement_for_region("aeria_north")
+            passive = ctx.add_passive_person(
+                PassivePerson(
+                    name="Mira Lowdetail",
+                    birthyear=1020,
+                    gender="Female",
+                    species="Human",
+                    ethnic="Gaulish",
+                    birthplace_region_id=st.region_id,
+                    birthplace_settlement_id=st.settlement_id,
+                    current_settlement_id=st.settlement_id,
+                    partner_name="Toma Lowdetail",
+                    partner_birthyear=1018,
+                    partnership_start_year=1040,
+                    child_count=2,
+                    child_birthyears=(1041, 1044),
+                )
+            )
+
+            promoted = ctx.promote_passive_person(
+                passive.person_id,
+                year=1050,
+                reason="unit_test_family",
+            )
+
+            self.assertEqual(promoted.person_id, passive.person_id)
+            event_types = [event_type for _, event_type, _ in ctx._pending_simulation_events]
+            self.assertIn("promotion_backfill_partnership", event_types)
+            self.assertIn("promotion_backfill_children", event_types)
+            family_payloads = {
+                event_type: payload
+                for _, event_type, payload in ctx._pending_simulation_events
+                if event_type.startswith("promotion_backfill_")
+            }
+            self.assertEqual(
+                family_payloads["promotion_backfill_partnership"]["partner_name"],
+                "Toma Lowdetail",
+            )
+            self.assertEqual(
+                family_payloads["promotion_backfill_children"]["child_birthyears"],
+                [1041, 1044],
+            )
 
     def test_region_effective_cap_multiplier_roundtrip_on_resume(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
