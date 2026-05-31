@@ -806,6 +806,78 @@ def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, flo
     return inside
 
 
+def _point_segment_distance(
+    point: tuple[float, float],
+    a: tuple[float, float],
+    b: tuple[float, float],
+) -> float:
+    nearest = _nearest_point_on_segment(point, a, b)
+    return math.hypot(point[0] - nearest[0], point[1] - nearest[1])
+
+
+def _thing_polygon_id(
+    geometry: WorldMapGeometry,
+    *,
+    x: float,
+    y: float,
+    width: int,
+    height: int,
+    pad: int,
+    region_id: str | None = None,
+) -> str | None:
+    world_point = _unscale((x, y), width, height, pad)
+    region = (region_id or "").strip()
+    candidates = [
+        cell
+        for cell in geometry.micro_cells
+        if not region or cell.region_id == region
+    ]
+    for cell in candidates:
+        if _point_in_polygon(world_point, cell.polygon):
+            return cell.micro_id
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda cell: (
+            min(
+                _point_segment_distance(world_point, a, b)
+                for a, b in zip(cell.polygon, cell.polygon[1:] + cell.polygon[:1])
+            ),
+            (cell.center_x - world_point[0]) ** 2 + (cell.center_y - world_point[1]) ** 2,
+            cell.micro_id,
+        ),
+    ).micro_id
+
+
+def _claim_active_thing_polygon(
+    occupied_polygon_ids: set[str],
+    geometry: WorldMapGeometry,
+    *,
+    x: float,
+    y: float,
+    width: int,
+    height: int,
+    pad: int,
+    region_id: str | None = None,
+) -> bool:
+    polygon_id = _thing_polygon_id(
+        geometry,
+        x=x,
+        y=y,
+        width=width,
+        height=height,
+        pad=pad,
+        region_id=region_id,
+    )
+    if polygon_id is None:
+        return True
+    if polygon_id in occupied_polygon_ids:
+        return False
+    occupied_polygon_ids.add(polygon_id)
+    return True
+
+
 def _marker_position_allowed(
     x: float,
     y: float,
@@ -1958,15 +2030,30 @@ def render_world_map_svg(
         else []
     )
     occupied_markers: list[_LabelBox] = []
+    occupied_thing_polygons: set[str] = set()
     settlement_positions: dict[str, tuple[float, float, float]] = {}
+    displayed_settlements: list[SettlementMapOverlay] = []
     for settlement in settlements:
         sx, sy = _scale((settlement.x, settlement.y), width, height, pad)
         sr = max(3.6, min(6.8, 3.6 + math.sqrt(max(0, settlement.population)) * 0.060))
+        active_status = settlement.status.strip().lower() != "abandoned"
+        if active_status and not _claim_active_thing_polygon(
+            occupied_thing_polygons,
+            geometry,
+            x=sx,
+            y=sy,
+            width=width,
+            height=height,
+            pad=pad,
+            region_id=settlement.region_id,
+        ):
+            continue
+        displayed_settlements.append(settlement)
         settlement_positions[settlement.settlement_id] = (sx, sy, sr)
         _claim_marker(occupied_markers, _marker_box(sx, sy, sr, padding=4.0), bounds=(width, height))
     settlement_label_parts: dict[str, str] = {}
     if labels:
-        for settlement in settlements:
+        for settlement in displayed_settlements:
             if settlement.status.strip().lower() == "abandoned":
                 continue
             x, y, radius = settlement_positions.get(
@@ -2090,7 +2177,6 @@ def render_world_map_svg(
     sorted_features = sorted(renderable_features, key=lambda f: (-f.importance, f.region_id, f.feature_id))
     drawn_named_ids: set[str] = set()
     for named in named_feature_overlays:
-        drawn_named_ids.add(named.feature_id)
         feature_class = _FEATURE_CLASS_BY_KIND.get(named.kind.strip().lower(), "landform")
         color = _FEATURE_COLORS.get(feature_class, _FEATURE_COLORS["landform"])
         radius = 3.0
@@ -2115,6 +2201,7 @@ def render_world_map_svg(
             pad=pad,
             allowed_polygon=allowed_polygon,
         )
+        trial_occupied_markers = list(occupied_markers)
         x, y = _place_coastline_marker(
             geometry,
             region_id=named.region_id,
@@ -2122,7 +2209,7 @@ def render_world_map_svg(
             x=x,
             y=y,
             radius=radius,
-            occupied=occupied_markers,
+            occupied=trial_occupied_markers,
             bounds=(width, height),
             seed=(named.feature_id, named.display_name),
             width=width,
@@ -2131,6 +2218,19 @@ def render_world_map_svg(
             max_offset=42.0,
             allowed_polygon=allowed_polygon,
         )
+        if not _claim_active_thing_polygon(
+            occupied_thing_polygons,
+            geometry,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            pad=pad,
+            region_id=named.region_id,
+        ):
+            continue
+        occupied_markers[:] = trial_occupied_markers
+        drawn_named_ids.add(named.feature_id)
         attrs = (
             f'data-feature-id="{html.escape(named.feature_id)}" '
             f'data-region-id="{html.escape(named.region_id)}" data-feature-name="{html.escape(named.display_name)}" '
@@ -2187,6 +2287,7 @@ def render_world_map_svg(
             pad=pad,
             allowed_polygon=allowed_polygon,
         )
+        trial_occupied_markers = list(occupied_markers)
         x, y = _place_coastline_marker(
             geometry,
             region_id=feature.region_id,
@@ -2194,7 +2295,7 @@ def render_world_map_svg(
             x=x,
             y=y,
             radius=radius,
-            occupied=occupied_markers,
+            occupied=trial_occupied_markers,
             bounds=(width, height),
             seed=(feature.feature_id, feature.label),
             width=width,
@@ -2203,6 +2304,18 @@ def render_world_map_svg(
             max_offset=36.0,
             allowed_polygon=allowed_polygon,
         )
+        if not _claim_active_thing_polygon(
+            occupied_thing_polygons,
+            geometry,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            pad=pad,
+            region_id=feature.region_id,
+        ):
+            continue
+        occupied_markers[:] = trial_occupied_markers
         attrs = (
             f'data-feature-id="{html.escape(feature.feature_id)}" '
             f'data-region-id="{html.escape(feature.region_id)}" data-feature-name="{html.escape(feature.label)}" '
@@ -2233,7 +2346,7 @@ def render_world_map_svg(
             )
 
     if overlays is not None:
-        for settlement in settlements:
+        for settlement in displayed_settlements:
             x, y, radius = settlement_positions.get(
                 settlement.settlement_id,
                 (*_scale((settlement.x, settlement.y), width, height, pad), 2.0),

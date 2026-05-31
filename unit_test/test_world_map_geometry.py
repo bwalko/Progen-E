@@ -43,6 +43,7 @@ from library.world_map_svg import (
     _place_coastline_marker,
     _place_marker,
     _point_in_polygon as _svg_point_in_polygon,
+    _thing_polygon_id,
     load_world_map_overlays,
     render_world_map_svg,
 )
@@ -585,14 +586,17 @@ class TestWorldMapGeometry(unittest.TestCase):
     def test_debug_svg_renderer_outputs_settlement_and_polity_overlays(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
         cell = geometry.cells[0]
+        region_micro = [m for m in geometry.micro_cells if m.region_id == cell.region_id]
+        town_micro = region_micro[0]
+        feature_micro = region_micro[-1]
         overlays = WorldMapOverlays(
             settlements=[
                 SettlementMapOverlay(
                     settlement_id=f"{cell.region_id}:s1",
                     region_id=cell.region_id,
                     display_name="Test Town",
-                    x=cell.center_x,
-                    y=cell.center_y,
+                    x=town_micro.center_x,
+                    y=town_micro.center_y,
                     population=42,
                     status="active",
                 )
@@ -604,8 +608,8 @@ class TestWorldMapGeometry(unittest.TestCase):
                     region_id=cell.region_id,
                     kind="stream",
                     display_name="Bluewater",
-                    x=cell.center_x + 0.01,
-                    y=cell.center_y,
+                    x=feature_micro.center_x,
+                    y=feature_micro.center_y,
                     etymology="blue · stream",
                 )
             ],
@@ -627,14 +631,17 @@ class TestWorldMapGeometry(unittest.TestCase):
     def test_settlement_label_wins_when_anchor_feature_is_named(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
         cell = geometry.cells[0]
+        region_micro = [m for m in geometry.micro_cells if m.region_id == cell.region_id]
+        town_micro = region_micro[0]
+        feature_micro = region_micro[-1]
         overlays = WorldMapOverlays(
             settlements=[
                 SettlementMapOverlay(
                     settlement_id=f"{cell.region_id}:s1",
                     region_id=cell.region_id,
                     display_name="Anchor Hamlet",
-                    x=cell.center_x,
-                    y=cell.center_y,
+                    x=town_micro.center_x,
+                    y=town_micro.center_y,
                     population=10,
                     status="active",
                 )
@@ -646,8 +653,8 @@ class TestWorldMapGeometry(unittest.TestCase):
                     region_id=cell.region_id,
                     kind="spring",
                     display_name="Anchor Spring",
-                    x=cell.center_x,
-                    y=cell.center_y,
+                    x=feature_micro.center_x,
+                    y=feature_micro.center_y,
                     etymology="anchor · spring",
                 )
             ],
@@ -662,17 +669,7 @@ class TestWorldMapGeometry(unittest.TestCase):
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
         source = next(f for f in geometry.features if f.kind == "spring")
         overlays = WorldMapOverlays(
-            settlements=[
-                SettlementMapOverlay(
-                    settlement_id=f"{source.region_id}:s1",
-                    region_id=source.region_id,
-                    display_name="Spring Town",
-                    x=source.x + 0.005,
-                    y=source.y,
-                    population=42,
-                    status="active",
-                )
-            ],
+            settlements=[],
             polities_by_region_id={},
             features=[
                 FeatureMapOverlay(
@@ -695,7 +692,84 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertNotIn(f'data-feature-id="{source.feature_id}"', svg)
         self.assertIn(">Named Spring</text>", svg)
 
-    def test_all_active_settlement_icons_get_labels_even_when_overlapping(self) -> None:
+    def test_active_things_claim_one_marker_per_micro_polygon(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        micro = geometry.micro_cells[0]
+        overlays = WorldMapOverlays(
+            settlements=[
+                SettlementMapOverlay(
+                    settlement_id=f"{micro.region_id}:active",
+                    region_id=micro.region_id,
+                    display_name="Active Town",
+                    x=micro.center_x,
+                    y=micro.center_y,
+                    population=42,
+                    status="active",
+                ),
+                SettlementMapOverlay(
+                    settlement_id=f"{micro.region_id}:abandoned",
+                    region_id=micro.region_id,
+                    display_name="Old Town",
+                    x=micro.center_x,
+                    y=micro.center_y,
+                    population=42,
+                    status="abandoned",
+                ),
+            ],
+            polities_by_region_id={},
+            features=[
+                FeatureMapOverlay(
+                    feature_id=f"{micro.region_id}:spring",
+                    region_id=micro.region_id,
+                    kind="spring",
+                    display_name="Crowded Spring",
+                    x=micro.center_x,
+                    y=micro.center_y,
+                )
+            ],
+        )
+
+        svg = render_world_map_svg(geometry, overlays=overlays)
+
+        self.assertIn(f'data-settlement-id="{micro.region_id}:active"', svg)
+        self.assertIn(f'data-settlement-id="{micro.region_id}:abandoned"', svg)
+        self.assertNotIn(f'data-feature-id="{micro.region_id}:spring"', svg)
+
+    def test_rendered_active_things_have_unique_micro_polygons(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        width = 1200
+        height = 800
+        pad = 36
+        svg = render_world_map_svg(geometry, width=width, height=height, overlays=None)
+        polygon_ids: list[str] = []
+        for match in re.finditer(
+            r'<g class="feature [^"]*" (?P<outer>[^>]*)>\s*<g (?P<inner>[^>]*)>',
+            svg,
+        ):
+            outer_attrs = match.group("outer")
+            inner_attrs = match.group("inner")
+            region_match = re.search(r'data-region-id="([^"]+)"', inner_attrs)
+            x_match = re.search(r'data-point-x="([^"]+)"', outer_attrs)
+            y_match = re.search(r'data-point-y="([^"]+)"', outer_attrs)
+            self.assertIsNotNone(region_match)
+            self.assertIsNotNone(x_match)
+            self.assertIsNotNone(y_match)
+            polygon_id = _thing_polygon_id(
+                geometry,
+                x=float(x_match.group(1)),
+                y=float(y_match.group(1)),
+                width=width,
+                height=height,
+                pad=pad,
+                region_id=region_match.group(1),
+            )
+            self.assertIsNotNone(polygon_id)
+            polygon_ids.append(str(polygon_id))
+
+        self.assertTrue(polygon_ids)
+        self.assertEqual(len(polygon_ids), len(set(polygon_ids)))
+
+    def test_overlapping_active_settlements_render_one_per_micro_polygon(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
         cell = geometry.cells[0]
         settlements = [
@@ -719,8 +793,11 @@ class TestWorldMapGeometry(unittest.TestCase):
             max_feature_labels=0,
         )
 
-        for i in range(32):
-            self.assertIn(f">Town {i}</text>", svg)
+        rendered_labels = re.findall(r">Town \d+</text>", svg)
+        rendered_icons = re.findall(r'class="settlement active"', svg)
+        self.assertEqual(len(rendered_labels), 1)
+        self.assertEqual(len(rendered_icons), 1)
+        self.assertIn(">Town 31</text>", svg)
 
     def test_feature_marker_nudge_stays_inside_allowed_region_polygon(self) -> None:
         occupied = [(44.0, 44.0, 56.0, 56.0)]
@@ -887,7 +964,8 @@ class TestWorldMapGeometry(unittest.TestCase):
             )
 
         self.assertTrue(coastal_feature_ids)
-        self.assertEqual(coastal_feature_ids, {feature_id for feature_id, _kind, _x, _y in rendered})
+        self.assertTrue(rendered)
+        self.assertTrue({feature_id for feature_id, _kind, _x, _y in rendered}.issubset(coastal_feature_ids))
         boundary_edges = _micro_boundary_edges(geometry.micro_cells)
         for feature_id, kind, x, y in rendered:
             region_id = feature_id.split(":")[0]
