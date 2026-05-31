@@ -236,6 +236,11 @@
   - passive promotion emits inferred `promotion_backfill_partnership` and `promotion_backfill_children` events so later narrative/detail systems can see the established passive family anchors;
   - checkpoint and promotion regression tests cover passive family roundtrip and inferred family backfill events.
 
+- Added passive-to-detailed promotion for marriage into detailed families:
+  - after normal same-settlement and same-region pairing, a bounded fallback can promote single adult passive people as spouses for unmatched detailed adults;
+  - the source aggregate cohort is decremented and the promoted person enters the normal detailed couple path;
+  - regression coverage verifies the passive spouse promotion, cohort decrement, and `marriage_into_detailed_family` promotion event.
+
 - Added `utils/run_mixed_mode_scale_smoke.py` for hardware-friendly scale preflights:
   - seeds one active aggregate settlement per configured region;
   - evolves passive/cohort demographics for target historical populations without materializing detailed people;

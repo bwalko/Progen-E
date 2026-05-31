@@ -39,7 +39,7 @@ from library.population_growth_runner import (
     refresh_passive_background_cohorts,
     run_population_growth_simulation,
 )
-from library.passive_population import promote_passive_candidate_for_office
+from library.passive_population import PassiveCohort, promote_passive_candidate_for_office
 from library.simulation_context import SimulationContext
 from library.settlements import SettlementState
 
@@ -288,6 +288,74 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
 
         self.assertIn((local_male.person_id, local_female.person_id), ctx.couples)
         self.assertIn((fallback_male.person_id, fallback_female.person_id), ctx.couples)
+
+    def test_pairing_can_promote_passive_spouse_for_unpaired_detailed_person(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=START_YEAR,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            sid = "region:s1"
+            ctx.settlements_by_id[sid] = SettlementState(
+                region_id="region",
+                settlement_id=sid,
+                status="active",
+            )
+            detailed = ctx.add_person(
+                person=Person(
+                    first_name="Unpaired",
+                    last_name="Detailed",
+                    gender="Male",
+                    ethnic="Human",
+                    species="Human",
+                    birthyear=START_YEAR - 30,
+                    birthplace_region_id="region",
+                    birthplace_settlement_id=sid,
+                    current_settlement_id=sid,
+                    min_fertility_age=18,
+                ),
+                is_founder=False,
+            )
+            ctx.add_passive_cohort(
+                PassiveCohort(
+                    sim_year=START_YEAR,
+                    region_id="region",
+                    settlement_id=sid,
+                    age_band="28",
+                    gender="Female",
+                    species="",
+                    culture="",
+                    job_family="farm",
+                    status_bucket="single",
+                    population_count=1,
+                )
+            )
+
+            pair_people_by_settlement_then_region(
+                ctx, START_YEAR, ctx.current_people_by_settlement()
+            )
+
+            self.assertEqual(len(ctx.couples), 1)
+            spouse_id = next(pid for pid in ctx.couples[0] if pid != detailed.person_id)
+            self.assertIn(spouse_id, ctx.current_people_ids)
+            self.assertEqual(ctx.id_to_record[spouse_id].person.gender, "Female")
+            self.assertEqual(ctx.passive_cohorts[0].population_count, 0)
+            self.assertTrue(
+                any(
+                    event_type == "passive_person_promoted"
+                    and payload.get("reason") == "marriage_into_detailed_family"
+                    for _, event_type, payload in ctx._pending_simulation_events
+                )
+            )
 
     def test_pairing_skips_parent_child_when_other_partner_exists(self) -> None:
         ctx = SimulationContext(

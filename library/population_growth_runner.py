@@ -15,7 +15,7 @@ from zlib import crc32
 import numpy as np
 
 from library.generator import generate_person_random
-from library.passive_population import PassiveCohort
+from library.passive_population import PassiveCohort, promote_passive_candidate_for_marriage
 from library.random_names import choose_random_first_last
 from library.settlements import SettlementState
 from library.reproduction import (
@@ -36,6 +36,7 @@ KIN_PAIR_HALF_SIBLING_PROB = 0.00002
 KIN_PAIR_RNG_STREAM = 612_047
 PAIRING_EXHAUSTIVE_PAIR_LIMIT = 25_000
 PAIRING_CANDIDATE_ATTEMPTS_PER_PERSON = 8
+PASSIVE_MARRIAGE_PROMOTION_CAP_PER_YEAR = 24
 
 _PASSIVE_JOB_FAMILY_SHARES: tuple[tuple[str, float], ...] = (
     ("farm", 0.46),
@@ -514,6 +515,58 @@ def _pair_from_records(
         remaining_females.remove(female)
 
 
+def _opposite_binary_gender(gender: str | None) -> str | None:
+    raw = (gender or "").strip().lower()
+    if raw.startswith("m"):
+        return "Female"
+    if raw.startswith("f"):
+        return "Male"
+    return None
+
+
+def _promote_passive_spouses_for_unpaired_detailed(
+    ctx: SimulationContext,
+    year: int,
+    by_settlement: dict[str, list[SimulationPersonRecord]],
+    paired_ids: set[int],
+) -> None:
+    promotions = 0
+    for sid in sorted(by_settlement.keys()):
+        st = ctx.settlements_by_id.get(sid)
+        rid = (st.region_id or "").strip() if st is not None else ""
+        records = sorted(by_settlement[sid], key=lambda rec: int(rec.person_id))
+        for rec in records:
+            if promotions >= PASSIVE_MARRIAGE_PROMOTION_CAP_PER_YEAR:
+                return
+            if rec.is_founder or rec.person_id in paired_ids or not _is_mature(rec, year):
+                continue
+            spouse_gender = _opposite_binary_gender(rec.person.gender)
+            if spouse_gender is None:
+                continue
+            min_age = int(rec.person.min_fertility_age or 16)
+            promoted = promote_passive_candidate_for_marriage(
+                ctx,
+                year=int(year),
+                gender=spouse_gender,
+                settlement_id=sid,
+                region_id=rid or None,
+                min_age=min_age,
+                source={
+                    "detailed_person_id": int(rec.person_id),
+                    "detailed_settlement_id": sid,
+                },
+            )
+            if promoted is None:
+                continue
+            ctx.add_couple(rec.person_id, promoted.person_id)
+            ctx._pending_simulation_events[-1][2].update(
+                {"passive_promotion_reason": "marriage_into_detailed_family"}
+            )
+            paired_ids.add(rec.person_id)
+            paired_ids.add(promoted.person_id)
+            promotions += 1
+
+
 def pair_people_by_settlement_then_region(
     ctx: SimulationContext,
     year: int,
@@ -545,6 +598,8 @@ def pair_people_by_settlement_then_region(
 
     for rid in sorted(by_region.keys()):
         _pair_from_records(ctx, by_region[rid], year, paired_ids)
+
+    _promote_passive_spouses_for_unpaired_detailed(ctx, year, by_settlement, paired_ids)
 
 
 def births_by_settlement(

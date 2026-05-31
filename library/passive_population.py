@@ -214,6 +214,91 @@ def promote_passive_candidate_for_office(
     )
 
 
+def promote_passive_candidate_for_marriage(
+    ctx: Any,
+    *,
+    year: int,
+    gender: str,
+    settlement_id: str | None = None,
+    region_id: str | None = None,
+    min_age: int = 16,
+    reason: str = "marriage_into_detailed_family",
+    source: dict[str, Any] | None = None,
+) -> Any | None:
+    """Promote one single adult from aggregate cohorts as a detailed spouse."""
+    latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+    if latest_year is None:
+        return None
+    wanted_gender = normalize_passive_gender(gender)
+    sid = (settlement_id or "").strip()
+    rid = (region_id or "").strip()
+    candidates: list[tuple[int, int, PassiveCohort]] = []
+    for idx, cohort in enumerate(ctx.passive_cohorts):
+        if int(cohort.sim_year) != latest_year:
+            continue
+        if int(cohort.population_count) <= 0:
+            continue
+        if sid and (cohort.settlement_id or "").strip() != sid:
+            continue
+        if rid and (cohort.region_id or "").strip() != rid:
+            continue
+        if normalize_passive_gender(cohort.gender, fallback="") != wanted_gender:
+            continue
+        status = (cohort.status_bucket or "").strip().lower()
+        if status in {"child", "partnered"}:
+            continue
+        age = _age_from_band(cohort.age_band)
+        if age < int(min_age):
+            continue
+        candidates.append((age, idx, cohort))
+    if not candidates:
+        return None
+    seed = _stable_seed(
+        "|".join(
+            (
+                str(getattr(ctx, "world", "")),
+                str(getattr(ctx, "placename_rng_salt", 0)),
+                str(year),
+                sid,
+                rid,
+                wanted_gender,
+                str(reason),
+                str((source or {}).get("detailed_person_id", "")),
+            )
+        )
+    )
+    rng = random.Random(seed)
+    age, cohort_index, cohort = rng.choice(candidates)
+    updated = replace(cohort, population_count=int(cohort.population_count) - 1)
+    ctx.passive_cohorts[cohort_index] = updated
+    birthyear = int(year) - int(age)
+    person = PassivePerson(
+        name="",
+        birthyear=birthyear,
+        gender=wanted_gender,
+        species=(cohort.species or None),
+        ethnic=(cohort.culture or None),
+        birthplace_region_id=cohort.region_id,
+        birthplace_settlement_id=cohort.settlement_id,
+        current_settlement_id=cohort.settlement_id,
+        job_family=cohort.job_family,
+        status_bucket=cohort.status_bucket,
+        prosperity_bucket=_prosperity_from_status(cohort.status_bucket),
+    )
+    passive = ctx.add_passive_person(person)
+    return ctx.promote_passive_person(
+        passive.person_id,
+        year=int(year),
+        reason=reason,
+        source={
+            **(source or {}),
+            "source_cohort_year": int(latest_year),
+            "source_age_band": cohort.age_band,
+            "source_population_before": int(cohort.population_count),
+        },
+    )
+
+
 def _age_from_band(age_band: str) -> int:
     raw = (age_band or "").strip()
     if "-" in raw:
