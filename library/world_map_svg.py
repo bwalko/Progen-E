@@ -1614,6 +1614,39 @@ def render_world_map_svg(
         sr = max(3.6, min(6.8, 3.6 + math.sqrt(max(0, settlement.population)) * 0.060))
         settlement_positions[settlement.settlement_id] = (sx, sy, sr)
         _claim_marker(occupied_markers, _marker_box(sx, sy, sr, padding=4.0), bounds=(width, height))
+    settlement_label_parts: dict[str, str] = {}
+    settlement_labels = 0
+    if labels:
+        for settlement in settlements:
+            if (
+                settlement.status.strip().lower() == "abandoned"
+                or settlement_labels >= max_settlement_labels
+            ):
+                continue
+            x, y, radius = settlement_positions.get(
+                settlement.settlement_id,
+                (*_scale((settlement.x, settlement.y), width, height, pad), 2.0),
+            )
+            shown = settlement.display_name[:24]
+            for dx, dy, anchor in (
+                (radius + 2.2, 3.0, "start"),
+                (-(radius + 2.2), 3.0, "end"),
+                (0.0, -(radius + 3.0), "middle"),
+                (0.0, radius + 10.0, "middle"),
+            ):
+                box = _label_box(x + dx, y + dy, shown, 9.5, anchor=anchor)
+                if not _claim_label(occupied_labels, box, bounds=(width, height)):
+                    continue
+                label_x = x + dx
+                label_y = y + dy
+                settlement_label_parts[settlement.settlement_id] = (
+                    f'<text class="settlement-label" data-settlement-id="{html.escape(settlement.settlement_id)}" '
+                    f'data-region-id="{html.escape(settlement.region_id)}" '
+                    f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" data-dx="{dx:.2f}" data-dy="{dy:.2f}" '
+                    f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{anchor}">{html.escape(shown)}</text>'
+                )
+                settlement_labels += 1
+                break
     show_region_labels = labels and not overlay_settlements
     if show_region_labels:
         for cell in geometry.cells:
@@ -1781,7 +1814,6 @@ def render_world_map_svg(
             )
 
     if overlays is not None:
-        settlement_labels = 0
         for settlement in settlements:
             x, y, radius = settlement_positions.get(
                 settlement.settlement_id,
@@ -1793,34 +1825,9 @@ def render_world_map_svg(
                 f'data-region-id="{html.escape(settlement.region_id)}" cx="{x:.1f}" cy="{y:.1f}" '
                 f'r="{radius:.1f}" data-base-r="{radius:.1f}" fill="#111111" />'
             )
-            if labels and settlement.status.strip().lower() != "abandoned" and settlement_labels < max_settlement_labels:
-                shown = settlement.display_name[:24]
-                label_dx = radius + 2.2
-                label_dy = 3.0
-                label_anchor = "start"
-                for dx, dy, anchor in (
-                    (radius + 2.2, 3.0, "start"),
-                    (-(radius + 2.2), 3.0, "end"),
-                    (0.0, -(radius + 3.0), "middle"),
-                    (0.0, radius + 10.0, "middle"),
-                ):
-                    box = _label_box(x + dx, y + dy, shown, 9.5, anchor=anchor)
-                    if _claim_label(occupied_labels, box, bounds=(width, height)):
-                        label_dx = dx
-                        label_dy = dy
-                        label_anchor = anchor
-                        break
-                else:
-                    continue
-                label_x = x + label_dx
-                label_y = y + label_dy
-                parts.append(
-                    f'<text class="settlement-label" data-settlement-id="{html.escape(settlement.settlement_id)}" '
-                    f'data-region-id="{html.escape(settlement.region_id)}" '
-                    f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" data-dx="{label_dx:.2f}" data-dy="{label_dy:.2f}" '
-                    f'x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="{label_anchor}">{html.escape(shown)}</text>'
-                )
-                settlement_labels += 1
+            label = settlement_label_parts.get(settlement.settlement_id)
+            if label:
+                parts.append(label)
 
     parts.extend(deferred_labels)
 

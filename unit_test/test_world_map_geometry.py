@@ -552,6 +552,40 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn(">Test Town</text>", svg)
         self.assertIn(">Bluewater</text>", svg)
 
+    def test_settlement_label_wins_when_anchor_feature_is_named(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        cell = geometry.cells[0]
+        overlays = WorldMapOverlays(
+            settlements=[
+                SettlementMapOverlay(
+                    settlement_id=f"{cell.region_id}:s1",
+                    region_id=cell.region_id,
+                    display_name="Anchor Hamlet",
+                    x=cell.center_x,
+                    y=cell.center_y,
+                    population=10,
+                    status="active",
+                )
+            ],
+            polities_by_region_id={},
+            features=[
+                FeatureMapOverlay(
+                    feature_id=f"{cell.region_id}:f1",
+                    region_id=cell.region_id,
+                    kind="spring",
+                    display_name="Anchor Spring",
+                    x=cell.center_x,
+                    y=cell.center_y,
+                    etymology="anchor · spring",
+                )
+            ],
+        )
+
+        svg = render_world_map_svg(geometry, overlays=overlays, max_feature_labels=0)
+
+        self.assertIn(">Anchor Hamlet</text>", svg)
+        self.assertIn(">Anchor Spring</text>", svg)
+
     def test_world_map_features_filter_to_nearby_settlements_when_overlaid(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
         cell = geometry.cells[0]
