@@ -17,9 +17,11 @@ from library.ethnic_proto_placewords import (
 )
 from library.geography import get_region
 from library.placenames_generation import (
+    _should_use_locative_display,
     _compose_dual_affix,
     generate_settlement_name,
     region_ethnic_weights,
+    seed_settlement_naming_for_region,
 )
 from library.placenames_lexicon import (
     PlacenameLexicon,
@@ -69,6 +71,33 @@ class TestJoinAndAffix(unittest.TestCase):
 
     def test_compose_dual_affix_two_prefix_fallback(self) -> None:
         self.assertEqual(_compose_dual_affix("Ash$", "Mere$"), "AshMere")
+
+    def test_locative_display_suffix_is_probabilistic(self) -> None:
+        rng = random.Random(1)
+        self.assertFalse(
+            _should_use_locative_display(
+                rng=rng,
+                anchor_kind="stream",
+                primary_kind="river",
+                probability=0.0,
+            )
+        )
+        self.assertTrue(
+            _should_use_locative_display(
+                rng=rng,
+                anchor_kind="stream",
+                primary_kind="river",
+                probability=1.0,
+            )
+        )
+        self.assertFalse(
+            _should_use_locative_display(
+                rng=rng,
+                anchor_kind="ridge",
+                primary_kind="hill",
+                probability=1.0,
+            )
+        )
 
 
 
@@ -220,6 +249,33 @@ class TestPlacenameGeneration(unittest.TestCase):
                 self.assertNotIn(g.primary_category.casefold(), d)
                 if g.secondary_category:
                     self.assertNotIn(g.secondary_category.casefold(), d)
+
+    def test_locative_anchor_keeps_etymology_without_forcing_by_display(self) -> None:
+        class _Ctx:
+            current_year = 100
+            current_people_ids: set[int] = set()
+            id_to_record = {}
+            placename_rng_salt = 0
+            world_map_seed = None
+            settlements_by_id = {}
+
+        region = get_region("boreas_peat_river", world="default", db_path=self.cfg)
+        ctx = _Ctx()
+        ctx.db_path = self.cfg
+        ctx.world = "default"
+        rng = make_settlement_name_rng("default", region.region_id)
+        gen, _geo = seed_settlement_naming_for_region(
+            world="default",
+            region=region,
+            ctx=ctx,
+            lex=self.lex,
+            rng=rng,
+            settlement_slots=1,
+            site_slot=1,
+            locative_display_probability=0.0,
+        )
+        self.assertIn("by ", gen.etymology.casefold())
+        self.assertFalse(gen.display_name.casefold().endswith("by"))
 
     def test_proto_placeword_feature_name_uses_ethnic_feature_type(self) -> None:
         rng = random.Random(31001)

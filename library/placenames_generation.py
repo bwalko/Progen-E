@@ -58,6 +58,10 @@ _LOCATIVE_ANCHOR_KINDS = {
     "well",
 }
 
+# Visible locative compounds are flavorful, but if every anchored settlement gets
+# one the map collapses into a wall of "-by" names.
+LOCATIVE_DISPLAY_PROBABILITY = 0.18
+
 
 def _join_etymology_parts(*parts: str) -> str:
     bits = [p.strip() for p in parts if (p or "").strip()]
@@ -103,6 +107,19 @@ def _anchor_feature_for_slot(graph, site_slot: int):
         if feature.feature_id == anchor_id:
             return feature
     return None
+
+
+def _should_use_locative_display(
+    *,
+    rng: random.Random,
+    anchor_kind: str,
+    primary_kind: str,
+    probability: float = LOCATIVE_DISPLAY_PROBABILITY,
+) -> bool:
+    if not (anchor_kind in _LOCATIVE_ANCHOR_KINDS or primary_kind in _LOCATIVE_ANCHOR_KINDS):
+        return False
+    p = max(0.0, min(1.0, float(probability)))
+    return rng.random() < p
 
 
 def _weighted_choice(rng: random.Random, pairs: list[tuple[Any, float]]) -> Any:
@@ -472,6 +489,7 @@ def seed_settlement_naming_for_region(
     rng: random.Random,
     settlement_slots: int = 1,
     site_slot: int | None = None,
+    locative_display_probability: float = LOCATIVE_DISPLAY_PROBABILITY,
 ) -> tuple[GeneratedSettlementName, str]:
     """Return generated name and shared region placement JSON."""
     weights = region_ethnic_weights(ctx, region.region_id, db_path=ctx.db_path)
@@ -520,15 +538,23 @@ def seed_settlement_naming_for_region(
     anchor = _anchor_feature_for_slot(graph, target_site_slot)
     anchor_kind = (getattr(anchor, "kind", "") or "").strip().lower() if anchor is not None else ""
     primary_kind = feature_kind_for_meaning(gen.primary_meaning, gen.primary_category)
-    if (
+    has_locative_anchor = (
         anchor is not None
         and (getattr(anchor, "display_name", None) or "").strip()
         and (anchor_kind in _LOCATIVE_ANCHOR_KINDS or primary_kind in _LOCATIVE_ANCHOR_KINDS)
-    ):
-        locative = _locative_settlement_display(gen.display_name, anchor_kind, used_names)
+    )
+    if has_locative_anchor:
+        display = _unique_display_name(gen.display_name, used_names)
+        if _should_use_locative_display(
+            rng=rng,
+            anchor_kind=anchor_kind,
+            primary_kind=primary_kind,
+            probability=locative_display_probability,
+        ):
+            display = _locative_settlement_display(gen.display_name, anchor_kind, used_names)
         gen = replace(
             gen,
-            display_name=locative,
+            display_name=display,
             etymology=_join_etymology_parts(
                 gen.etymology,
                 f"by {anchor_kind or 'landmark'} {anchor.display_name}",
