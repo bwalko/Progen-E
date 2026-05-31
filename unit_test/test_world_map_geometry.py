@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from collections import Counter
@@ -39,6 +40,7 @@ from library.world_map_svg import (
     WorldMapOverlays,
     _coastline_marker_screen_point,
     _feature_marker_allowed_polygon,
+    _place_coastline_marker,
     _place_marker,
     _point_in_polygon as _svg_point_in_polygon,
     load_world_map_overlays,
@@ -564,6 +566,9 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn('class="feature ', svg)
         self.assertIn('class="feature-fa-shape"', svg)
         self.assertIn("data-icon-name=", svg)
+        self.assertIn("const maxIcon=0.02*Math.max(rect.width,rect.height)/pxu;", svg)
+        self.assertIn("data-base-size=", svg)
+        self.assertIn("data-icon-w=", svg)
         self.assertIn('data-feature-named="0"', svg)
         first_feature = geometry.features[0]
         self.assertIn(f'data-feature-id="{first_feature.feature_id}"', svg)
@@ -615,6 +620,7 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn('data-feature-named="1"', svg)
         self.assertIn('data-icon-name="water"', svg)
         self.assertIn('data-base-r="4.0"', svg)
+        self.assertIn("data-base-size=", svg)
         self.assertIn(">Test Town</text>", svg)
         self.assertIn(">Bluewater</text>", svg)
 
@@ -651,6 +657,43 @@ class TestWorldMapGeometry(unittest.TestCase):
 
         self.assertIn(">Anchor Hamlet</text>", svg)
         self.assertIn(">Anchor Spring</text>", svg)
+
+    def test_named_local_feature_suppresses_source_world_feature(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        source = next(f for f in geometry.features if f.kind == "spring")
+        overlays = WorldMapOverlays(
+            settlements=[
+                SettlementMapOverlay(
+                    settlement_id=f"{source.region_id}:s1",
+                    region_id=source.region_id,
+                    display_name="Spring Town",
+                    x=source.x + 0.005,
+                    y=source.y,
+                    population=42,
+                    status="active",
+                )
+            ],
+            polities_by_region_id={},
+            features=[
+                FeatureMapOverlay(
+                    feature_id=f"{source.region_id}:f1",
+                    region_id=source.region_id,
+                    kind=source.kind,
+                    display_name="Named Spring",
+                    x=source.x,
+                    y=source.y,
+                    etymology="named · spring",
+                    source_region_feature_id=source.feature_id,
+                )
+            ],
+        )
+
+        svg = render_world_map_svg(geometry, overlays=overlays)
+
+        self.assertIn(f'data-feature-id="{source.region_id}:f1"', svg)
+        self.assertIn(f'data-source-region-feature-id="{source.feature_id}"', svg)
+        self.assertNotIn(f'data-feature-id="{source.feature_id}"', svg)
+        self.assertIn(">Named Spring</text>", svg)
 
     def test_all_active_settlement_icons_get_labels_even_when_overlapping(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
@@ -728,8 +771,138 @@ class TestWorldMapGeometry(unittest.TestCase):
             allowed_polygon=allowed,
         )
 
-        self.assertGreater(((marker_x - coast_x) ** 2 + (marker_y - coast_y) ** 2) ** 0.5, 4.0)
+        self.assertLessEqual(((marker_x - coast_x) ** 2 + (marker_y - coast_y) ** 2) ** 0.5, 2.7)
         self.assertTrue(_svg_point_in_polygon((marker_x, marker_y), allowed or []))
+
+    def test_coastline_marker_collision_nudge_stays_near_coastline(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        feature = next(f for f in geometry.features if f.kind in {"harbor", "bay", "coast"})
+        width = 640
+        height = 420
+        pad = 36
+        radius = 4.0
+        allowed = _feature_marker_allowed_polygon(
+            geometry,
+            region_id=feature.region_id,
+            kind=feature.kind,
+            world_point=(feature.x, feature.y),
+            region_screen_polygons={
+                cell.region_id: [
+                    (pad + x * (width - pad * 2), pad + y * (height - pad * 2))
+                    for x, y in cell.polygon
+                ]
+                for cell in geometry.cells
+            },
+            width=width,
+            height=height,
+            pad=pad,
+        )
+        start_x, start_y = _coastline_marker_screen_point(
+            geometry,
+            region_id=feature.region_id,
+            kind=feature.kind,
+            world_point=(feature.x, feature.y),
+            radius=radius,
+            width=width,
+            height=height,
+            pad=pad,
+            allowed_polygon=allowed,
+        )
+        occupied = [(start_x - radius - 2.0, start_y - radius - 2.0, start_x + radius + 2.0, start_y + radius + 2.0)]
+
+        marker_x, marker_y = _place_coastline_marker(
+            geometry,
+            region_id=feature.region_id,
+            kind=feature.kind,
+            x=start_x,
+            y=start_y,
+            radius=radius,
+            occupied=occupied,
+            bounds=(width, height),
+            seed=(feature.feature_id, "collision"),
+            width=width,
+            height=height,
+            pad=pad,
+            allowed_polygon=allowed,
+        )
+        marker_screen = (marker_x, marker_y)
+        coast_edges = [
+            (
+                (pad + a[0] * (width - pad * 2), pad + a[1] * (height - pad * 2)),
+                (pad + b[0] * (width - pad * 2), pad + b[1] * (height - pad * 2)),
+            )
+            for cell in geometry.micro_cells
+            if cell.region_id == feature.region_id and cell.is_coastal
+            for a, b in _micro_boundary_edges(geometry.micro_cells).get(cell.micro_id, [])
+        ]
+
+        self.assertLessEqual(
+            min(_point_segment_distance(marker_screen, a, b) for a, b in coast_edges),
+            2.7,
+        )
+
+    def test_rendered_coastal_landmarks_stay_within_two_coast_strokes(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        width = 1200
+        height = 800
+        pad = 36
+        coast_stroke_width = 1.35
+        max_distance = coast_stroke_width * 2.0
+        coastal_feature_ids = {
+            feature.feature_id
+            for feature in geometry.features
+            if feature.kind in {"bay", "harbor", "coast"}
+        }
+
+        svg = render_world_map_svg(
+            geometry,
+            width=width,
+            height=height,
+            labels=True,
+            overlays=None,
+        )
+        rendered: list[tuple[str, str, float, float]] = []
+        for match in re.finditer(
+            r'<g class="feature [^"]*" (?P<outer>[^>]*)>\s*<g (?P<inner>[^>]*)>',
+            svg,
+        ):
+            outer_attrs = match.group("outer")
+            inner_attrs = match.group("inner")
+            kind_match = re.search(r'data-feature-kind="([^"]+)"', inner_attrs)
+            if kind_match is None or kind_match.group(1) not in {"bay", "harbor", "coast"}:
+                continue
+            feature_id_match = re.search(r'data-feature-id="([^"]+)"', inner_attrs)
+            x_match = re.search(r'data-point-x="([^"]+)"', outer_attrs)
+            y_match = re.search(r'data-point-y="([^"]+)"', outer_attrs)
+            self.assertIsNotNone(feature_id_match)
+            self.assertIsNotNone(x_match)
+            self.assertIsNotNone(y_match)
+            rendered.append(
+                (
+                    feature_id_match.group(1),
+                    kind_match.group(1),
+                    float(x_match.group(1)),
+                    float(y_match.group(1)),
+                )
+            )
+
+        self.assertTrue(coastal_feature_ids)
+        self.assertEqual(coastal_feature_ids, {feature_id for feature_id, _kind, _x, _y in rendered})
+        boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+        for feature_id, kind, x, y in rendered:
+            region_id = feature_id.split(":")[0]
+            coast_edges = [
+                (
+                    (pad + a[0] * (width - pad * 2), pad + a[1] * (height - pad * 2)),
+                    (pad + b[0] * (width - pad * 2), pad + b[1] * (height - pad * 2)),
+                )
+                for cell in geometry.micro_cells
+                if cell.region_id == region_id and cell.is_coastal
+                for a, b in boundary_edges.get(cell.micro_id, [])
+            ]
+            self.assertTrue(coast_edges, feature_id)
+            distance = min(_point_segment_distance((x, y), a, b) for a, b in coast_edges)
+            self.assertLessEqual(distance, max_distance, f"{feature_id} {kind} distance={distance:.3f}")
 
     def test_feature_icons_use_earth_tone_category_colors(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)

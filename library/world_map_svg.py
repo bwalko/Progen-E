@@ -48,6 +48,7 @@ class FeatureMapOverlay:
     x: float
     y: float
     etymology: str | None = None
+    source_region_feature_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,35 @@ _FEATURE_COLORS = {
     "settlement_support": "#75684c",
     "landform": "#6b6657",
 }
+
+
+def world_map_zoom_sync_script(svg_var: str, *, map_width: int = 1200) -> str:
+    """Return inline JS that keeps map labels and icons screen-readable while zooming."""
+    return (
+        f"const vb={svg_var}.viewBox.baseVal;const z=Math.max(.001,{map_width}/vb.width);"
+        "const m=Math.max(.88,Math.min(2.05,Math.pow(z,.35)));"
+        f"const rect={svg_var}.getBoundingClientRect();"
+        "const pxu=Math.max(rect.width/vb.width,rect.height/vb.height,.001);"
+        "const maxIcon=0.02*Math.max(rect.width,rect.height)/pxu;"
+        f"{svg_var}.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
+        f"{svg_var}.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
+        f"{svg_var}.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(9.5*m/z)+'px');"
+        f"{svg_var}.querySelectorAll('.feature-label[data-point-x],.settlement-label[data-point-x]').forEach(e=>{{"
+        "const px=+e.dataset.pointX,py=+e.dataset.pointY,dx=+e.dataset.dx||0,dy=+e.dataset.dy||0;"
+        "e.setAttribute('x',px+dx/z);e.setAttribute('y',py+dy/z);});"
+        f"{svg_var}.querySelectorAll('.settlement').forEach(e=>{{"
+        "const b=+e.dataset.baseR||4;const maxR=maxIcon/2;"
+        "e.setAttribute('r',Math.min(maxR,Math.max(2.4,Math.min(7.0,b*m/z))));});"
+        f"{svg_var}.querySelectorAll('.feature').forEach(e=>{{"
+        "const base=+e.dataset.baseSize||((+e.dataset.baseR||3)*2.55);"
+        "const iw=+e.dataset.iconW||512,ih=+e.dataset.iconH||512;"
+        "const x=+e.dataset.pointX||0,y=+e.dataset.pointY||0;"
+        "const size=Math.min(maxIcon,Math.max(3.0,base*m/z));"
+        "const scale=size/Math.max(iw,ih);"
+        "const tx=x-iw*scale/2,ty=y-ih*scale/2;"
+        "const t=`translate(${tx.toFixed(2)} ${ty.toFixed(2)}) scale(${scale.toFixed(5)})`;"
+        "e.querySelectorAll('.feature-fa-underlay,.feature-fa-shape').forEach(p=>p.setAttribute('transform',t));});"
+    )
 
 _FEATURE_CLASS_BY_KIND = {
     "bay": "coast",
@@ -174,6 +204,14 @@ def _terrain_tint(color: str, cell: MicroRegionCell) -> str:
 def _scale(point: Point, width: int, height: int, pad: int) -> tuple[float, float]:
     x, y = point
     return (pad + x * (width - pad * 2), pad + y * (height - pad * 2))
+
+
+def _unscale(point: tuple[float, float], width: int, height: int, pad: int) -> tuple[float, float]:
+    x, y = point
+    return (
+        _clamp((x - pad) / max(1e-9, width - pad * 2), 0.0, 1.0),
+        _clamp((y - pad) / max(1e-9, height - pad * 2), 0.0, 1.0),
+    )
 
 
 def _jagged_segment(
@@ -676,10 +714,13 @@ def _feature_symbol_svg(
     r = radius * (1.10 if named else 1.0)
     icon_name = _feature_icon_name(kind, feature_class)
     icon = FONT_AWESOME_FREE_SOLID.get(icon_name, FONT_AWESOME_FREE_SOLID["location-dot"])
-    path_d, transform = _fontawesome_icon_path(icon=icon, x=x, y=y, size=r * 2.55)
+    base_size = r * 2.55
+    path_d, transform = _fontawesome_icon_path(icon=icon, x=x, y=y, size=base_size)
     return (
         f'<g class="feature {"named-feature " if named else ""}{html.escape(feature_class)}" '
-        f'data-base-r="{r:.1f}" data-icon-name="{html.escape(icon_name)}">'
+        f'data-base-r="{r:.1f}" data-base-size="{base_size:.2f}" '
+        f'data-point-x="{x:.1f}" data-point-y="{y:.1f}" '
+        f'data-icon-name="{html.escape(icon_name)}" data-icon-w="{icon.width:.1f}" data-icon-h="{icon.height:.1f}">'
         f'<g {attrs}>'
         f'<path class="feature-fa-underlay" d="{html.escape(path_d)}" transform="{transform}" />'
         f'<path class="feature-fa-shape" d="{html.escape(path_d)}" transform="{transform}" '
@@ -822,6 +863,63 @@ def _place_marker(
     return (clamped_x, clamped_y)
 
 
+def _place_coastline_marker(
+    geometry: WorldMapGeometry,
+    *,
+    region_id: str,
+    kind: str,
+    x: float,
+    y: float,
+    radius: float,
+    occupied: list[_LabelBox],
+    bounds: tuple[float, float],
+    seed: object,
+    width: int,
+    height: int,
+    pad: int,
+    allowed_polygon: list[tuple[float, float]] | None = None,
+    max_offset: float = 34.0,
+) -> tuple[float, float]:
+    if (kind or "").strip().lower() not in {"harbor", "bay", "coast"}:
+        return _place_marker(
+            x,
+            y,
+            radius,
+            occupied,
+            bounds=bounds,
+            seed=seed,
+            max_offset=max_offset,
+            allowed_polygon=allowed_polygon,
+        )
+
+    def snapped(candidate_x: float, candidate_y: float) -> tuple[float, float]:
+        return _coastline_marker_screen_point(
+            geometry,
+            region_id=region_id,
+            kind=kind,
+            world_point=_unscale((candidate_x, candidate_y), width, height, pad),
+            radius=radius,
+            width=width,
+            height=height,
+            pad=pad,
+            allowed_polygon=allowed_polygon,
+        )
+
+    sx, sy = snapped(x, y)
+    if _claim_marker(occupied, _marker_box(sx, sy, radius), bounds=bounds):
+        return (sx, sy)
+    rng = random.Random(_stable_seed("marker-placement", seed))
+    angles = [i * math.pi / 4.0 for i in range(8)]
+    rng.shuffle(angles)
+    for distance in (8.0, 12.0, 18.0, 24.0, max_offset):
+        for angle in angles:
+            sx, sy = snapped(x + math.cos(angle) * distance, y + math.sin(angle) * distance)
+            if _claim_marker(occupied, _marker_box(sx, sy, radius), bounds=bounds):
+                return (sx, sy)
+    occupied.append(_marker_box(sx, sy, radius))
+    return (sx, sy)
+
+
 def _nearest_point_on_segment(
     point: tuple[float, float],
     a: tuple[float, float],
@@ -928,50 +1026,20 @@ def _coastline_marker_screen_point(
     if (kind or "").strip().lower() not in {"harbor", "bay", "coast"}:
         return _scale(world_point, width, height, pad)
     boundary_edges = _micro_boundary_edges(geometry.micro_cells)
-    best: tuple[float, tuple[float, float], tuple[float, float]] | None = None
+    best: tuple[float, tuple[float, float]] | None = None
     for cell in geometry.micro_cells:
         if cell.region_id != region_id or not cell.is_coastal:
             continue
-        interior = _representative_point_in_polygon(cell.polygon)
         for a, b in boundary_edges.get(cell.micro_id, []):
             coast = _nearest_point_on_segment(world_point, a, b)
             dist2 = (coast[0] - world_point[0]) ** 2 + (coast[1] - world_point[1]) ** 2
-            candidate = (dist2, coast, interior)
+            candidate = (dist2, coast)
             if best is None or candidate < best:
                 best = candidate
     if best is None:
         return _scale(world_point, width, height, pad)
-    _dist2, coast_world, interior_world = best
-    cx, cy = _scale(coast_world, width, height, pad)
-    ix, iy = _scale(interior_world, width, height, pad)
-    dx = ix - cx
-    dy = iy - cy
-    length = math.hypot(dx, dy)
-    if length <= 1e-6:
-        return (cx, cy)
-    inset = radius * 2.35 + 4.0
-    center_fallback: tuple[float, float] | None = None
-    for scale in (1.0, 1.45, 2.0, 2.8, 3.6, 0.72, 0.48):
-        point = (cx + dx / length * inset * scale, cy + dy / length * inset * scale)
-        if not allowed_polygon:
-            return point
-        if _marker_position_allowed(point[0], point[1], radius, allowed_polygon=allowed_polygon):
-            return point
-        if center_fallback is None and _point_in_polygon(point, allowed_polygon):
-            center_fallback = point
-    if center_fallback is not None:
-        return center_fallback
-    if allowed_polygon and _point_in_polygon((ix, iy), allowed_polygon):
-        return (ix, iy)
-    if allowed_polygon:
-        inland = _nearest_screen_point_inside_polygon(
-            (cx, cy),
-            allowed_polygon,
-            min_distance=radius * 2.0 + 3.0,
-        )
-        if inland is not None:
-            return inland
-    return (cx, cy)
+    _dist2, coast_world = best
+    return _scale(coast_world, width, height, pad)
 
 
 def _feature_marker_allowed_polygon(
@@ -1360,6 +1428,9 @@ def _named_feature_overlays_from_local_geography(
                 x=wx,
                 y=wy,
                 etymology=str(feature.get("etymology") or "").strip() or None,
+                source_region_feature_id=(
+                    str(feature.get("source_region_feature_id") or "").strip() or None
+                ),
             )
         )
     return out
@@ -1502,15 +1573,7 @@ def render_world_map_svg(
     """Render generated world geometry to a self-contained SVG string."""
     pad = 36
     zoom_script = (
-        f"const zf=(svg)=>{{const s=svg.viewBox.baseVal;const z=Math.max(.001,{width}/s.width);"
-        "const m=Math.max(.88,Math.min(2.05,Math.pow(z,.35)));"
-        "svg.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
-        "svg.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
-        "svg.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(9.5*m/z)+'px');"
-        "svg.querySelectorAll('.feature-label[data-point-x],.settlement-label[data-point-x]').forEach(e=>{"
-        "const px=+e.dataset.pointX,py=+e.dataset.pointY,dx=+e.dataset.dx||0,dy=+e.dataset.dy||0;"
-        "e.setAttribute('x',px+dx/z);e.setAttribute('y',py+dy/z);});"
-        "svg.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||4;e.setAttribute('r',Math.max(2.4,Math.min(7.0,b*m/z)));});};"
+        f"const zf=(svg)=>{{{world_map_zoom_sync_script('svg', map_width=width)}}};"
     )
     zoom_handlers = (
         f"data-original-viewbox='0 0 {width} {height}' "
@@ -2001,13 +2064,29 @@ def render_world_map_svg(
         ]
     elif overlay_settlements:
         named_ids = {f.feature_id for f in named_feature_overlays}
+        named_source_ids = {
+            f.source_region_feature_id
+            for f in named_feature_overlays
+            if f.source_region_feature_id
+        }
         renderable_features = [
             f
             for f in geometry.features
-            if f.feature_id in named_ids or _feature_is_near_settlement(f, overlay_settlements, max_distance=0.025)
+            if f.feature_id not in named_source_ids
+            and (
+                f.feature_id in named_ids
+                or _feature_is_near_settlement(f, overlay_settlements, max_distance=0.025)
+            )
         ]
     else:
-        renderable_features = list(geometry.features)
+        named_source_ids = {
+            f.source_region_feature_id
+            for f in named_feature_overlays
+            if f.source_region_feature_id
+        }
+        renderable_features = [
+            f for f in geometry.features if f.feature_id not in named_source_ids
+        ]
     sorted_features = sorted(renderable_features, key=lambda f: (-f.importance, f.region_id, f.feature_id))
     drawn_named_ids: set[str] = set()
     for named in named_feature_overlays:
@@ -2036,13 +2115,19 @@ def render_world_map_svg(
             pad=pad,
             allowed_polygon=allowed_polygon,
         )
-        x, y = _place_marker(
-            x,
-            y,
-            radius,
-            occupied_markers,
+        x, y = _place_coastline_marker(
+            geometry,
+            region_id=named.region_id,
+            kind=named.kind,
+            x=x,
+            y=y,
+            radius=radius,
+            occupied=occupied_markers,
             bounds=(width, height),
             seed=(named.feature_id, named.display_name),
+            width=width,
+            height=height,
+            pad=pad,
             max_offset=42.0,
             allowed_polygon=allowed_polygon,
         )
@@ -2050,6 +2135,7 @@ def render_world_map_svg(
             f'data-feature-id="{html.escape(named.feature_id)}" '
             f'data-region-id="{html.escape(named.region_id)}" data-feature-name="{html.escape(named.display_name)}" '
             f'data-feature-kind="{html.escape(named.kind)}" data-feature-etymology="{html.escape(named.etymology or "")}" '
+            f'data-source-region-feature-id="{html.escape(named.source_region_feature_id or "")}" '
             'data-feature-named="1" '
         )
         parts.append(
@@ -2101,13 +2187,19 @@ def render_world_map_svg(
             pad=pad,
             allowed_polygon=allowed_polygon,
         )
-        x, y = _place_marker(
-            x,
-            y,
-            radius,
-            occupied_markers,
+        x, y = _place_coastline_marker(
+            geometry,
+            region_id=feature.region_id,
+            kind=feature.kind,
+            x=x,
+            y=y,
+            radius=radius,
+            occupied=occupied_markers,
             bounds=(width, height),
             seed=(feature.feature_id, feature.label),
+            width=width,
+            height=height,
+            pad=pad,
             max_offset=36.0,
             allowed_polygon=allowed_polygon,
         )

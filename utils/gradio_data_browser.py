@@ -106,7 +106,11 @@ from library.world_map_geometry import (  # noqa: E402
     project_world_point_to_region_footprint,
 )
 from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID  # noqa: E402
-from library.world_map_svg import load_world_map_overlays, render_world_map_svg  # noqa: E402
+from library.world_map_svg import (  # noqa: E402
+    load_world_map_overlays,
+    render_world_map_svg,
+    world_map_zoom_sync_script,
+)
 
 
 def configure_app_logging() -> Path:
@@ -731,14 +735,7 @@ def _render_world_map_html_cached(
         overlay_text = "active and inactive settlements plus polities"
     else:
         overlay_text = "active settlements and polities" if include_overlays else "base geography only"
-    zoom_sync = (
-        "const z=Math.max(.001,1200/s.viewBox.baseVal.width);"
-        "const m=Math.max(.88,Math.min(2.05,Math.pow(z,.35)));"
-        "s.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
-        "s.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
-        "s.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(9.5*m/z)+'px');"
-        "s.querySelectorAll('.settlement').forEach(e=>{const b=+e.dataset.baseR||4;e.setAttribute('r',Math.max(2.4,Math.min(7.0,b*m/z)));});"
-    )
+    zoom_sync = world_map_zoom_sync_script("s")
     controls = (
         '<div class="map-controls">'
         '<button type="button" onclick="const s=this.closest(\'.world-map-card\').querySelector(\'svg\');'
