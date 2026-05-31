@@ -15,7 +15,11 @@ from zlib import crc32
 import numpy as np
 
 from library.generator import generate_person_random
-from library.passive_population import PassiveCohort, promote_passive_candidate_for_marriage
+from library.passive_population import (
+    PassiveCohort,
+    promote_passive_candidate_for_marriage,
+    promote_passive_candidate_for_office,
+)
 from library.random_names import choose_random_first_last
 from library.settlements import SettlementState
 from library.reproduction import (
@@ -37,6 +41,7 @@ KIN_PAIR_RNG_STREAM = 612_047
 PAIRING_EXHAUSTIVE_PAIR_LIMIT = 25_000
 PAIRING_CANDIDATE_ATTEMPTS_PER_PERSON = 8
 PASSIVE_MARRIAGE_PROMOTION_CAP_PER_YEAR = 24
+MIN_DETAILED_RESIDENTS_PER_ACTIVE_SETTLEMENT = 2
 
 _PASSIVE_JOB_FAMILY_SHARES: tuple[tuple[str, float], ...] = (
     ("farm", 0.46),
@@ -785,7 +790,89 @@ def _passive_species_culture_for_settlement(
     if records:
         p = records[0].person
         return (p.species or "human", p.ethnic or "human")
+    latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+    for cohort in ctx.passive_cohorts:
+        if latest_year is None or int(cohort.sim_year) != int(latest_year):
+            continue
+        if (cohort.settlement_id or "").strip() == (settlement_id or "").strip():
+            return (cohort.species or "", cohort.culture or "")
     return "", ""
+
+
+def _generate_detail_floor_person(
+    ctx: SimulationContext,
+    *,
+    year: int,
+    settlement_id: str,
+    gender: str,
+    ordinal: int,
+) -> SimulationPersonRecord:
+    st = ctx.settlements_by_id[settlement_id]
+    species, culture = _passive_species_culture_for_settlement(ctx, settlement_id)
+    rng = random.Random(
+        int(year) * 1_000_003
+        + int(getattr(ctx, "placename_rng_salt", 0)) * 53
+        + crc32(f"{settlement_id}|{gender}|{ordinal}".encode("utf-8"))
+    )
+    age = rng.randint(18, 35)
+    person = generate_person_random(
+        species=species or None,
+        ethnic=culture or None,
+        gender=gender,
+        age=age,
+        simulation_year=int(year),
+        birthplace_region_id=st.region_id,
+        birthplace_settlement_id=settlement_id,
+        simulation_context=ctx,
+        world=ctx.world,
+        db_path=ctx.db_path,
+    )
+    person = _with_founder_parent_names(ctx, person)
+    return ctx.add_person(person=person, is_founder=False)
+
+
+def ensure_detailed_floor_for_active_settlements(
+    ctx: SimulationContext,
+    year: int,
+    *,
+    minimum: int = MIN_DETAILED_RESIDENTS_PER_ACTIVE_SETTLEMENT,
+) -> int:
+    """Keep active cohort settlements from losing all detailed representation."""
+    minimum = max(0, int(minimum))
+    if minimum <= 0:
+        return 0
+    promoted_or_created = 0
+    by_settlement = ctx.current_people_by_settlement()
+    for sid, st in sorted(ctx.settlements_by_id.items()):
+        if (st.status or "").strip().lower() != "active":
+            continue
+        needed = minimum - len(by_settlement.get(sid, ()))
+        if needed <= 0:
+            continue
+        for i in range(needed):
+            gender = "Male" if (i % 2 == 0) else "Female"
+            promoted = promote_passive_candidate_for_office(
+                ctx,
+                year=int(year),
+                settlement_id=sid,
+                min_age=0,
+                reason="settlement_detail_floor",
+                source={"settlement_id": sid, "minimum": minimum},
+            )
+            if promoted is None:
+                promoted = _generate_detail_floor_person(
+                    ctx,
+                    year=int(year),
+                    settlement_id=sid,
+                    gender=gender,
+                    ordinal=i,
+                )
+                ctx._pending_simulation_events[-1][2].update(
+                    {"reason": "settlement_detail_floor", "settlement_id": sid}
+                )
+            promoted_or_created += 1
+        by_settlement = ctx.current_people_by_settlement()
+    return promoted_or_created
 
 
 def _initial_passive_age_count(total: int, age: int) -> int:
@@ -883,7 +970,6 @@ def refresh_passive_background_cohorts(
     if scale <= 0.0 or not ctx.settlements_by_id:
         return 0
     ctx.sync_settlement_resident_counts()
-    detailed_by_settlement = ctx.current_people_by_settlement()
     active_by_region: dict[str, list[str]] = {}
     for sid, st in ctx.settlements_by_id.items():
         if (st.status or "").strip().lower() != "active":
@@ -986,8 +1072,7 @@ def refresh_passive_background_cohorts(
         if not settlement_ids:
             continue
         regional_target = int(round(ctx.effective_regional_population_cap(rid) * scale))
-        detailed_alive = sum(len(detailed_by_settlement.get(sid, ())) for sid in settlement_ids)
-        background_target = max(0, regional_target - detailed_alive)
+        background_target = max(0, regional_target)
         weights = [
             (sid, _passive_settlement_weight(ctx.settlements_by_id[sid], year=year))
             for sid in settlement_ids
@@ -1184,6 +1269,7 @@ def run_population_growth_simulation(
             population_scale=passive_population_scale,
             extra_newborns_by_place=passive_births_by_place,
         )
+        ensure_detailed_floor_for_active_settlements(ctx, year)
         if prof:
             simulation_timing.accumulate("runner.passive_cohorts", tpc() - t0)
 

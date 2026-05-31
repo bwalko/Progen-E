@@ -1602,15 +1602,60 @@ class SimulationContext:
             return 0
         return int(self.alive_census_cache().count_by_settlement.get(sid, 0))
 
+    def latest_passive_cohort_year(self) -> int | None:
+        return max((int(c.sim_year) for c in self.passive_cohorts), default=None)
+
+    def passive_population_counts_by_settlement(self) -> dict[str, int]:
+        """Alive passive people plus latest aggregate cohort counts by settlement."""
+        out: dict[str, int] = {}
+        for rec in self.passive_people.values():
+            p = rec.person
+            y = self.current_year if self.current_year is not None else self.simulation_start_year
+            if p.deathyear is not None and int(p.deathyear) <= int(y):
+                continue
+            sid = (p.current_settlement_id or p.birthplace_settlement_id or "").strip()
+            if sid:
+                out[sid] = out.get(sid, 0) + 1
+        latest_year = self.latest_passive_cohort_year()
+        for cohort in self.passive_cohorts:
+            if latest_year is None or int(cohort.sim_year) != int(latest_year):
+                continue
+            sid = (cohort.settlement_id or "").strip()
+            if sid:
+                out[sid] = out.get(sid, 0) + max(0, int(cohort.population_count))
+        return out
+
+    def passive_population_counts_by_region(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for sid, count in self.passive_population_counts_by_settlement().items():
+            st = self.settlements_by_id.get(sid)
+            rid = (st.region_id if st is not None else sid.split(":", 1)[0]).strip()
+            if rid:
+                out[rid] = out.get(rid, 0) + int(count)
+        return out
+
+    def mixed_population_count_in_settlement(self, settlement_id: str) -> int:
+        sid = (settlement_id or "").strip()
+        if not sid:
+            return 0
+        return self.count_alive_in_settlement(sid) + self.passive_population_counts_by_settlement().get(sid, 0)
+
+    def mixed_population_count_in_region(self, region_id: str) -> int:
+        rid = (region_id or "").strip()
+        if not rid:
+            return 0
+        return self.count_alive_in_region(rid) + self.passive_population_counts_by_region().get(rid, 0)
+
     def sync_settlement_resident_counts(self) -> None:
         by_sid = self.current_people_by_settlement()
+        passive_by_sid = self.passive_population_counts_by_settlement()
         for sid, st in list(self.settlements_by_id.items()):
             if (st.status or "").strip().lower() != "active":
                 self.settlements_by_id[sid] = replace(
                     st, resident_count=0, household_cap=0
                 )
                 continue
-            rc = len(by_sid.get(sid, ()))
+            rc = len(by_sid.get(sid, ())) + int(passive_by_sid.get(sid, 0))
             hh = max(0 if rc <= 0 else 1, int(round(rc / 4.5)))
             self.settlements_by_id[sid] = replace(
                 st, resident_count=rc, household_cap=hh
@@ -2263,7 +2308,7 @@ class SimulationContext:
             if state.region_id not in regions:
                 next_by_id[sid] = state
                 continue
-            rc = self.count_alive_in_settlement(sid)
+            rc = max(0, int(state.resident_count))
             ce = 0 if rc > 0 else int(state.consecutive_empty_years) + 1
             if rc == 0 and roll_abandon_this_year(ce, rng):
                 next_by_id[sid] = replace(

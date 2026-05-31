@@ -34,6 +34,7 @@ from library.config_import import load_all_csvs_into_sqlite
 from library.person import Person
 from library.population_growth_runner import (
     KIN_PAIR_PARENT_CHILD_PROB,
+    ensure_detailed_floor_for_active_settlements,
     generate_population_founder,
     pair_people_by_settlement_then_region,
     refresh_passive_background_cohorts,
@@ -154,6 +155,129 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
         self.assertEqual(sum(first.values()), 600)
         self.assertGreater(len(set(first.values())), 1)
         self.assertNotEqual(sorted(first.values()), [60] * 10)
+
+    def test_passive_background_target_does_not_shrink_as_detailed_people_grow(self) -> None:
+        ctx = SimulationContext(
+            db_path=Path("unused-config.sqlite"),
+            save_db_path=Path("unused-save.sqlite"),
+            world="default",
+            simulation_start_year=START_YEAR,
+            current_year=START_YEAR,
+            settlements_by_id={
+                "region:s1": SettlementState(
+                    region_id="region",
+                    settlement_id="region:s1",
+                    status="active",
+                )
+            },
+        )
+
+        def person(index: int) -> Person:
+            gender = "Male" if index % 2 == 0 else "Female"
+            return Person(
+                first_name=f"Detail{index}",
+                last_name="Resident",
+                gender=gender,
+                ethnic="Human",
+                species="Human",
+                birthyear=START_YEAR - 30,
+                birthplace_region_id="region",
+                birthplace_settlement_id="region:s1",
+                current_settlement_id="region:s1",
+                min_fertility_age=18,
+            )
+
+        for i in range(150):
+            ctx.add_person(person=person(i), is_founder=False)
+        ctx.effective_regional_population_cap = lambda region_id: 400
+
+        refresh_passive_background_cohorts(ctx, START_YEAR)
+
+        self.assertEqual(sum(c.population_count for c in ctx.passive_cohorts), 400)
+
+    def test_settlement_resident_count_includes_passive_cohorts(self) -> None:
+        ctx = SimulationContext(
+            db_path=Path("unused-config.sqlite"),
+            save_db_path=Path("unused-save.sqlite"),
+            world="default",
+            simulation_start_year=START_YEAR,
+            current_year=START_YEAR,
+            settlements_by_id={
+                "region:s1": SettlementState(
+                    region_id="region",
+                    settlement_id="region:s1",
+                    status="active",
+                )
+            },
+        )
+        ctx.add_passive_cohort(
+            PassiveCohort(
+                sim_year=START_YEAR,
+                region_id="region",
+                settlement_id="region:s1",
+                age_band="25",
+                gender="Female",
+                species="Human",
+                culture="Human",
+                job_family="farm",
+                status_bucket="single",
+                population_count=12,
+            )
+        )
+
+        ctx.sync_settlement_resident_counts()
+
+        self.assertEqual(ctx.settlements_by_id["region:s1"].resident_count, 12)
+        self.assertEqual(ctx.mixed_population_count_in_settlement("region:s1"), 12)
+
+    def test_detailed_floor_promotes_from_passive_cohorts(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=START_YEAR,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            sid = "region:s1"
+            ctx.settlements_by_id[sid] = SettlementState(
+                region_id="region",
+                settlement_id=sid,
+                status="active",
+            )
+            ctx.add_passive_cohort(
+                PassiveCohort(
+                    sim_year=START_YEAR,
+                    region_id="region",
+                    settlement_id=sid,
+                    age_band="25",
+                    gender="Female",
+                    species="",
+                    culture="",
+                    job_family="farm",
+                    status_bucket="single",
+                    population_count=2,
+                )
+            )
+
+            created = ensure_detailed_floor_for_active_settlements(ctx, START_YEAR)
+
+            self.assertEqual(created, 2)
+            self.assertEqual(len(ctx.current_people_by_settlement().get(sid, ())), 2)
+            self.assertEqual(sum(c.population_count for c in ctx.passive_cohorts), 0)
+            self.assertTrue(
+                any(
+                    event_type == "passive_person_promoted"
+                    and payload.get("reason") == "settlement_detail_floor"
+                    for _, event_type, payload in ctx._pending_simulation_events
+                )
+            )
 
     def test_passive_cohorts_age_birth_die_and_keep_counts_deterministic(self) -> None:
         ctx = SimulationContext(
