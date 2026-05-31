@@ -12,7 +12,9 @@ from pathlib import Path
 from library.config_import import load_all_csvs_into_sqlite
 from library.ethnic_proto_placewords import (
     EthnicProtoPlacewordLexicon,
+    apply_probabilistic_sound_law_runs,
     generate_feature_name,
+    probabilistic_sound_law_run_count,
     rewind_constructed_toponym_placeholder,
 )
 from library.geography import get_region
@@ -321,6 +323,54 @@ class TestPlacenameGeneration(unittest.TestCase):
                 reverse=True,
             ),
             "akwabheorg",
+        )
+
+    def test_probabilistic_sound_law_run_count_buckets(self) -> None:
+        class FixedRng:
+            def __init__(self, value: float) -> None:
+                self.value = value
+
+            def random(self) -> float:
+                return self.value
+
+        self.assertEqual(probabilistic_sound_law_run_count(FixedRng(0.49)), 0)
+        self.assertEqual(probabilistic_sound_law_run_count(FixedRng(0.50)), 1)
+        self.assertEqual(probabilistic_sound_law_run_count(FixedRng(0.79)), 1)
+        self.assertEqual(probabilistic_sound_law_run_count(FixedRng(0.80)), 2)
+        self.assertEqual(probabilistic_sound_law_run_count(FixedRng(0.94)), 2)
+        self.assertEqual(probabilistic_sound_law_run_count(FixedRng(0.95)), 3)
+
+    def test_probabilistic_sound_law_can_skip_or_repeat(self) -> None:
+        class FixedRng:
+            def __init__(self, value: float) -> None:
+                self.value = value
+
+            def random(self) -> float:
+                return self.value
+
+        self.assertEqual(
+            apply_probabilistic_sound_law_runs(
+                "Akwā-bheorg",
+                rng=FixedRng(0.25),
+                branch="germanic",
+            ),
+            "Akwābheorg",
+        )
+        self.assertEqual(
+            apply_probabilistic_sound_law_runs(
+                "Akwā-bheorg",
+                rng=FixedRng(0.50),
+                branch="germanic",
+            ),
+            "ahwaberk",
+        )
+        self.assertEqual(
+            apply_probabilistic_sound_law_runs(
+                "Akwā-bheorg",
+                rng=FixedRng(0.95),
+                branch="germanic",
+            ),
+            "agwafergh",
         )
 
 

@@ -8,6 +8,10 @@ from pathlib import Path
 import random
 from typing import Any
 
+from library.ethnic_proto_placewords import (
+    apply_probabilistic_sound_law_runs,
+    sound_law_branch_for_ethnic,
+)
 from library.geography import Region
 from library.placenames_lexicon import (
     PlacenameLexicon,
@@ -92,6 +96,18 @@ def _locative_settlement_display(base_name: str, anchor_kind: str, used_names: s
         suffix = "wellby"
     candidate = format_toponym_display(join_tokens(base, suffix))
     return _unique_display_name(candidate, used_names)
+
+
+def _settlement_display_with_sound_law(
+    raw_name: str,
+    *,
+    rng: random.Random,
+    culture: str,
+) -> str:
+    branch = sound_law_branch_for_ethnic(culture)
+    return format_toponym_display(
+        apply_probabilistic_sound_law_runs(raw_name, rng=rng, branch=branch)
+    )
 
 
 def _anchor_feature_for_slot(graph, site_slot: int):
@@ -435,7 +451,11 @@ def generate_settlement_name(
             v2 = row2.pick_settlement_affix_variant(rng)
             dual_display = _compose_dual_affix(v1, v2)
             if dual_display is not None:
-                display = format_toponym_display(dual_display)
+                display = _settlement_display_with_sound_law(
+                    dual_display,
+                    rng=rng,
+                    culture=row1.culture,
+                )
                 etym = _join_etymology_parts(row1.original_meaning, row2.original_meaning)
                 c2 = row2.culture if row2.culture != row1.culture else None
                 cat2 = row2.category if row2.category != row1.category else None
@@ -465,7 +485,11 @@ def generate_settlement_name(
         pool = list(lex.rows)
     row = _pick_row(rng, lex, pool, mapped_weights, cat_w)
     affix = row.pick_settlement_affix_variant(rng)
-    display = format_toponym_display(apply_affix_template(affix, stem))
+    display = _settlement_display_with_sound_law(
+        apply_affix_template(affix, stem),
+        rng=rng,
+        culture=row.culture,
+    )
     etym = _join_etymology_parts(fn_clean, row.original_meaning)
     return GeneratedSettlementName(
         display_name=display,

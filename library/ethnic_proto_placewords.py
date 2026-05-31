@@ -151,6 +151,10 @@ def _ethnic_sound_law_branch(ethnic: str) -> str:
     return "germanic"
 
 
+def sound_law_branch_for_ethnic(ethnic: str) -> str:
+    return _ethnic_sound_law_branch(ethnic)
+
+
 def _normalize_sound_law_branch(branch: str) -> str:
     key = _clean_key(branch)
     if key in {"italic celtic", "italoceltic", "celtic italic"}:
@@ -354,6 +358,30 @@ def rewind_constructed_toponym_placeholder(
     return normalize_placename_stem(smoothed)
 
 
+def probabilistic_sound_law_run_count(rng: random.Random) -> int:
+    """Choose how many language-law passes to apply to a generated place name."""
+    roll = rng.random()
+    if roll < 0.50:
+        return 0
+    if roll < 0.80:
+        return 1
+    if roll < 0.95:
+        return 2
+    return 3
+
+
+def apply_probabilistic_sound_law_runs(
+    text: str,
+    *,
+    rng: random.Random,
+    branch: str = "germanic",
+) -> str:
+    out = normalize_placename_stem(text)
+    for _ in range(probabilistic_sound_law_run_count(rng)):
+        out = rewind_constructed_toponym_placeholder(out, branch=branch)
+    return out
+
+
 def _weighted_ethnic_choice(
     rng: random.Random,
     ethnic_weights: dict[str, float],
@@ -447,7 +475,7 @@ def generate_feature_name(
         meaning = None
         category = None
     display = format_toponym_display(
-        rewind_constructed_toponym_placeholder(compound, branch=branch)
+        apply_probabilistic_sound_law_runs(compound, rng=rng, branch=branch)
     )
     etymology_bits = [
         proto_row.normalized_form,
