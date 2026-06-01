@@ -689,6 +689,22 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             ctx.add_passive_cohort(
                 PassiveCohort(
+                    sim_year=1000,
+                    region_id=detailed.person.birthplace_region_id,
+                    settlement_id=detailed.person.current_settlement_id,
+                    age_band="0-4",
+                    gender="female",
+                    species=detailed.person.species,
+                    culture=detailed.person.ethnic,
+                    job_family="farm",
+                    status_bucket="common",
+                    population_count=70,
+                    birth_count=8,
+                    death_count=0,
+                )
+            )
+            ctx.add_passive_cohort(
+                PassiveCohort(
                     sim_year=1001,
                     region_id=detailed.person.birthplace_region_id,
                     settlement_id=detailed.person.current_settlement_id,
@@ -737,6 +753,12 @@ class TestSaveCheckpoint(unittest.TestCase):
                     WHERE sim_year = 1001 AND age_band = '0-4'
                     """
                 ).fetchone()
+                cohort_year_count = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT sim_year)
+                    FROM simulation_cohorts
+                    """
+                ).fetchone()[0]
             self.assertIn("simulation_people_light", tables)
             self.assertIn("simulation_cohorts", tables)
             self.assertIn("simulation_promotion_log", tables)
@@ -757,6 +779,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertEqual(cohort["population_count"], 80)
             self.assertEqual(cohort["birth_count"], 9)
             self.assertEqual(cohort["death_count"], 1)
+            self.assertEqual(cohort_year_count, 2)
 
             loaded = SimulationContext.create(
                 db_path=cfg,
@@ -780,6 +803,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertEqual(loaded_passive.child_person_ids, (9001, 9002))
             self.assertNotIn(passive.person_id, loaded.current_people_ids)
             self.assertEqual(len(loaded.passive_cohorts), 1)
+            self.assertEqual(loaded.passive_cohorts[0].sim_year, 1001)
             self.assertEqual(loaded.passive_cohorts[0].population_count, 80)
             self.assertGreaterEqual(loaded.next_person_id, passive.person_id + 1)
 

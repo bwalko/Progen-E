@@ -9,13 +9,14 @@ See ``dev_rules/module_map.md``.
 from __future__ import annotations
 
 import math
-import random
+import time
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from library.mind_body import work_trait_values
+from library import simulation_timing
+from library.mind_body import clamp_mind_body_value
 from library.person import Person
 from library.simulation_careers import _household_ids_for_job_move, _residence_settlement_id
 
@@ -43,6 +44,18 @@ CARE_SHORTFALL_CRISIS_CAP = 0.45
 CARE_SHORTFALL_RUN_WEIGHT = 0.55
 
 RNG_STREAM_SHORTFALL = 71_012
+_FAST_RNG_MASK = (1 << 64) - 1
+_FAST_RNG_UNIT_53 = 1.0 / float(1 << 53)
+_FAST_RNG_INCREMENT = 0x9E3779B97F4A7C15
+
+CARE_CAPACITY_TRAIT_WEIGHTS: tuple[tuple[str, float], ...] = (
+    ("empathy", 0.45),
+    ("patience", 0.35),
+    ("nurturance", 0.5),
+    ("temperance", 0.25),
+    ("neurochemical", 0.2),
+    ("physical", 0.15),
+)
 
 # --- Caregiver-duty penalty knobs (used by careers + government) -------------
 # An adult sharing an implicit household with N dependent minors is treated as
@@ -71,18 +84,78 @@ class YearCareIndexes:
     minor_ids_by_household: Mapping[frozenset[int], frozenset[int]]
     household_settlement_id: Mapping[frozenset[int], str]
     grandparent_extras_by_household: Mapping[frozenset[int], frozenset[int]]
+    childcare_duty_factor_by_adult: Mapping[int, float]
     largest_active_settlement_id: str | None
 
 
-def _tick_rng(year: int, salt: int, stream: int) -> random.Random:
-    return random.Random(int(year) * 1_000_003 + int(salt) * 19 + int(stream))
+def _mix64(value: int) -> int:
+    x = int(value) & _FAST_RNG_MASK
+    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & _FAST_RNG_MASK
+    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & _FAST_RNG_MASK
+    return (x ^ (x >> 31)) & _FAST_RNG_MASK
+
+
+class _FastTickRng:
+    __slots__ = ("_state",)
+
+    def __init__(self, seed: int) -> None:
+        self._state = _mix64(seed)
+
+    def random(self) -> float:
+        self._state = _mix64(self._state + _FAST_RNG_INCREMENT)
+        return float(self._state >> 11) * _FAST_RNG_UNIT_53
+
+
+def _tick_rng(year: int, salt: int, stream: int) -> _FastTickRng:
+    return _FastTickRng(int(year) * 1_000_003 + int(salt) * 19 + int(stream))
+
+
+_DEFAULT_TICK_RNG = _tick_rng
+
+
+def _unit_float_from_mixed(value: int) -> float:
+    return float(int(value) >> 11) * _FAST_RNG_UNIT_53
+
+
+def _shortfall_roll_pair(year: int, salt: int, stream: int) -> tuple[float, float]:
+    if _tick_rng is not _DEFAULT_TICK_RNG:
+        rng = _tick_rng(year, salt, stream)
+        return rng.random(), rng.random()
+    state = _mix64(int(year) * 1_000_003 + int(salt) * 19 + int(stream))
+    first = _mix64(state + _FAST_RNG_INCREMENT)
+    second = _mix64(first + _FAST_RNG_INCREMENT)
+    return _unit_float_from_mixed(first), _unit_float_from_mixed(second)
 
 
 def _residence_sid(rec: SimulationPersonRecord) -> str:
     return _residence_settlement_id(rec)
 
 
+def _care_work_trait_value(person: Person, key: str) -> float:
+    mb = person.mind_body or {}
+    if mb:
+        if key in mb:
+            return clamp_mind_body_value(mb.get(key))
+        for k, v in mb.items():
+            if str(k) == key:
+                return clamp_mind_body_value(v)
+
+    genome = person.genome or {}
+    if not genome:
+        return 0.0
+    if key in genome:
+        return clamp_mind_body_value(genome.get(key))
+    for k, v in genome.items():
+        if str(k) == key:
+            return clamp_mind_body_value(v)
+    return 0.0
+
+
 def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     alive_ids: set[int] = set(ctx.current_people_ids)
     minor_ids: list[int] = []
     children_by_parent: dict[int, set[int]] = defaultdict(set)
@@ -91,11 +164,18 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
         for p in (rec.father_id, rec.mother_id):
             if p is not None:
                 children_by_parent[p].add(rec.person_id)
+    if prof:
+        simulation_timing.accumulate("household_care.index.children", tpc() - t0)
+        t0 = tpc()
 
     by_settlement = ctx.current_people_by_settlement()
     for rec in ctx.iter_current_people(sorted_by_id=True):
         if rec.person_id in alive_ids and ctx._person_is_dependent_minor(rec, year):
             minor_ids.append(rec.person_id)
+    minor_id_set = set(minor_ids)
+    if prof:
+        simulation_timing.accumulate("household_care.index.minors", tpc() - t0)
+        t0 = tpc()
 
     frozen_children = {k: frozenset(v) for k, v in children_by_parent.items()}
     frozen_by_settlement = {k: tuple(v) for k, v in by_settlement.items()}
@@ -129,6 +209,8 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
         for child_id in candidate_child_ids:
             if child_id in parent_set:
                 continue
+            if child_id not in minor_id_set:
+                continue
             child = ctx.id_to_record.get(child_id)
             if child is None or child_id not in alive_ids:
                 continue
@@ -139,24 +221,20 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
                 continue
             if not child_parents.issubset(parent_set):
                 continue
-            if ctx._person_is_dependent_minor(child, year):
-                ids.add(int(child_id))
+            ids.add(int(child_id))
         return tuple(sorted(ids))
 
     for rec in ctx.iter_current_people(sorted_by_id=True):
-        if ctx._person_is_dependent_minor(rec, year):
+        if int(rec.person_id) in minor_id_set:
             continue
         hids = indexed_household_ids(rec)
         household_ids_by_adult[int(rec.person_id)] = hids
         hkey = frozenset(hids)
-        household_settlement_id.setdefault(hkey, _household_settlement_id(ctx, hkey))
+        household_settlement_id.setdefault(hkey, _residence_sid(rec))
         n_minors = 0
         minors_for_household = minor_ids_by_household_mut.setdefault(hkey, set())
         for mid in hids:
-            mrec = ctx.id_to_record.get(mid)
-            if mrec is None:
-                continue
-            if ctx._person_is_dependent_minor(mrec, year):
+            if int(mid) in minor_id_set:
                 n_minors += 1
                 minors_for_household.add(int(mid))
         dependent_minor_count_by_adult[int(rec.person_id)] = n_minors
@@ -181,6 +259,9 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
             hkey = frozenset({int(mid)})
             household_settlement_id.setdefault(hkey, msid)
         minor_ids_by_household_mut.setdefault(hkey, set()).add(int(mid))
+    if prof:
+        simulation_timing.accumulate("household_care.index.households", tpc() - t0)
+        t0 = tpc()
 
     minor_ids_by_household = {
         hkey: frozenset(ids) for hkey, ids in minor_ids_by_household_mut.items()
@@ -190,6 +271,32 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
         for hkey, minors in minor_ids_by_household.items()
         if minors
     }
+    if prof:
+        simulation_timing.accumulate("household_care.index.grandparents", tpc() - t0)
+        t0 = tpc()
+    childcare_duty_factor_by_adult: dict[int, float] = {}
+    for adult_id, hids in household_ids_by_adult.items():
+        n = int(dependent_minor_count_by_adult.get(int(adult_id), 0))
+        if n <= 0:
+            childcare_duty_factor_by_adult[int(adult_id)] = 0.0
+            continue
+        raw = 1.0 - math.exp(-CHILD_DUTY_GROWTH * float(n))
+        hkey = frozenset(hids)
+        minors = minor_ids_by_household.get(hkey, frozenset())
+        relief = 0.0
+        if minors:
+            relief = (
+                float(len(grandparent_extras_by_household.get(hkey, frozenset())))
+                * CHILD_DUTY_GRANDPARENT_RELIEF
+            )
+        duty = max(0.0, raw - relief)
+        childcare_duty_factor_by_adult[int(adult_id)] = min(CHILD_DUTY_FACTOR_CAP, duty)
+    if prof:
+        simulation_timing.accumulate("household_care.index.duty", tpc() - t0)
+        t0 = tpc()
+    largest_active_settlement_id = _largest_active_settlement_id(ctx)
+    if prof:
+        simulation_timing.accumulate("household_care.index.largest", tpc() - t0)
     return YearCareIndexes(
         alive_ids=frozenset(alive_ids),
         by_settlement=frozen_by_settlement,
@@ -200,7 +307,8 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
         minor_ids_by_household=minor_ids_by_household,
         household_settlement_id=household_settlement_id,
         grandparent_extras_by_household=grandparent_extras_by_household,
-        largest_active_settlement_id=_largest_active_settlement_id(ctx),
+        childcare_duty_factor_by_adult=childcare_duty_factor_by_adult,
+        largest_active_settlement_id=largest_active_settlement_id,
     )
 
 
@@ -219,19 +327,13 @@ def caregiver_capacity(person: Person, year: int) -> float:
     elif gm == "masculine":
         score += 0.12
 
-    traits = work_trait_values(person)
-
     def band_bonus(key: str, weight: float) -> float:
-        v = float(traits.get(key, 0.0))
+        v = _care_work_trait_value(person, key)
         mag = abs(v)
         return weight * max(0.0, 1.0 - mag / 100.0)
 
-    score += band_bonus("empathy", 0.45)
-    score += band_bonus("patience", 0.35)
-    score += band_bonus("nurturance", 0.5)
-    score += band_bonus("temperance", 0.25)
-    score += band_bonus("neurochemical", 0.2)
-    score += band_bonus("physical", 0.15)
+    for key, weight in CARE_CAPACITY_TRAIT_WEIGHTS:
+        score += band_bonus(key, weight)
 
     age = int(year) - int(person.birthyear)
     mx = person.max_fertility_age
@@ -377,6 +479,10 @@ def childcare_duty_factor(
     """
     if ctx._person_is_dependent_minor(rec, year):
         return 0.0
+    if indexes is not None:
+        cached = indexes.childcare_duty_factor_by_adult.get(int(rec.person_id))
+        if cached is not None:
+            return float(cached)
     n = dependent_minors_in_implicit_household(ctx, rec, year, indexes=indexes)
     if n <= 0:
         return 0.0
@@ -612,45 +718,115 @@ def _process_childcare_shortfalls(
     ctx: SimulationContext,
     year: int,
     household_to_minors: Mapping[frozenset[int], frozenset[int]],
+    indexes: YearCareIndexes | None = None,
 ) -> None:
     """One crisis outcome per household with supply strictly below dependent count."""
     salt = int(ctx.placename_rng_salt)
-    for hkey, minors in sorted(
+    supply_by_person_id: dict[int, float] = {}
+    mortality_victims: set[int] = set()
+    largest = indexes.largest_active_settlement_id if indexes is not None else None
+    current_people_ids = ctx.current_people_ids
+    id_to_record = ctx.id_to_record
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+
+    def supply_for(person_id: int) -> float:
+        pid = int(person_id)
+        if pid in mortality_victims:
+            return 0.0
+        if pid in supply_by_person_id:
+            return supply_by_person_id[pid]
+        if pid not in current_people_ids:
+            supply_by_person_id[pid] = 0.0
+            return 0.0
+        rec = id_to_record.get(pid)
+        if rec is None:
+            supply_by_person_id[pid] = 0.0
+            return 0.0
+        supply = effective_caregiver_supply(ctx, rec, year)
+        supply_by_person_id[pid] = supply
+        return supply
+
+    households = sorted(
         household_to_minors.items(),
         key=lambda kv: min(kv[1]) if kv[1] else 0,
-    ):
+    )
+    if prof:
+        simulation_timing.accumulate("household_care.shortfalls.sort", tpc() - t0)
+        t0 = tpc()
+    checked_households = 0
+    adult_supply_met = 0
+    grandparent_supply_met = 0
+    crisis_events = 0
+    for hkey, minors in households:
         if not minors:
             continue
+        checked_households += 1
         need = len(minors)
+        need_float = float(need)
         supply = 0.0
+        if prof:
+            phase_t0 = tpc()
         for hid in hkey:
-            if hid not in ctx.current_people_ids:
+            if int(hid) in minors:
                 continue
-            hr = ctx.id_to_record.get(hid)
-            if hr is None:
-                continue
-            supply += effective_caregiver_supply(ctx, hr, year)
-        hh_sid = _household_settlement_id(ctx, hkey)
-        for gp in _grandparent_supply_extras(ctx, year, hkey, minors, hh_sid):
-            gr = ctx.id_to_record.get(gp)
-            if gr is None:
-                continue
-            supply += (
-                effective_caregiver_supply(ctx, gr, year) * CARE_GRANDPARENT_SUPPLY_SHARE
+            supply += supply_for(hid)
+            if supply >= need_float:
+                break
+        if prof:
+            simulation_timing.accumulate(
+                "household_care.shortfalls.household_supply", tpc() - phase_t0
             )
+        if supply >= need_float:
+            adult_supply_met += 1
+            continue
+        if prof:
+            phase_t0 = tpc()
+        if indexes is not None:
+            extras = indexes.grandparent_extras_by_household.get(hkey, frozenset())
+        else:
+            hh_sid = _household_settlement_id(ctx, hkey)
+            extras = _grandparent_supply_extras(ctx, year, hkey, minors, hh_sid)
+        for gp in extras:
+            supply += supply_for(gp) * CARE_GRANDPARENT_SUPPLY_SHARE
+            if supply >= need_float:
+                break
+        if prof:
+            simulation_timing.accumulate(
+                "household_care.shortfalls.grandparent_supply", tpc() - phase_t0
+            )
+        if supply >= need_float:
+            grandparent_supply_met += 1
+            continue
+        if prof:
+            phase_t0 = tpc()
         shortfall = float(need) - float(supply)
         if shortfall <= 0.0:
+            if prof:
+                simulation_timing.accumulate(
+                    "household_care.shortfalls.crisis", tpc() - phase_t0
+                )
             continue
-        rng = _tick_rng(year, salt + hash(hkey) % 10_000_007, RNG_STREAM_SHORTFALL)
+        crisis_roll, run_away_roll = _shortfall_roll_pair(
+            year, salt + hash(hkey) % 10_000_007, RNG_STREAM_SHORTFALL
+        )
         p = min(
             CARE_SHORTFALL_CRISIS_CAP,
             CARE_SHORTFALL_CRISIS_BASE * max(1.0, shortfall),
         )
-        if rng.random() >= p:
+        if crisis_roll >= p:
+            if prof:
+                simulation_timing.accumulate(
+                    "household_care.shortfalls.crisis", tpc() - phase_t0
+                )
             continue
+        crisis_events += 1
         victim = min(minors)
-        run_away = rng.random() < CARE_SHORTFALL_RUN_WEIGHT
-        largest = _largest_active_settlement_id(ctx)
+        run_away = run_away_roll < CARE_SHORTFALL_RUN_WEIGHT
+        if largest is None:
+            largest = _largest_active_settlement_id(ctx)
         ctx._record_simulation_event(
             year,
             "household_childcare_shortfall",
@@ -665,7 +841,7 @@ def _process_childcare_shortfalls(
                 "victim_person_id": victim,
             },
         )
-        if run_away and largest:
+        if run_away and largest and victim not in mortality_victims:
             vrec = ctx.id_to_record.get(victim)
             vsid = _residence_sid(vrec) if vrec else ""
             if vsid and vsid != largest:
@@ -680,18 +856,50 @@ def _process_childcare_shortfalls(
                         group_id=f"childcare_shortfall:{victim}:{year}",
                     )
                 except (ValueError, LookupError):
-                    ctx.mark_dead({victim}, deathyear=year)
+                    mortality_victims.add(victim)
         elif run_away and not largest:
-            ctx.mark_dead({victim}, deathyear=year)
+            mortality_victims.add(victim)
         else:
-            ctx.mark_dead({victim}, deathyear=year)
+            mortality_victims.add(victim)
+        if prof:
+            simulation_timing.accumulate(
+                "household_care.shortfalls.crisis", tpc() - phase_t0
+            )
+    if mortality_victims:
+        ctx.mark_dead(mortality_victims, deathyear=year)
+    if prof:
+        simulation_timing.record_gauge(
+            year, "household_care", "shortfall_households_checked", checked_households
+        )
+        simulation_timing.record_gauge(
+            year, "household_care", "shortfall_adult_supply_met", adult_supply_met
+        )
+        simulation_timing.record_gauge(
+            year,
+            "household_care",
+            "shortfall_grandparent_supply_met",
+            grandparent_supply_met,
+        )
+        simulation_timing.record_gauge(
+            year, "household_care", "shortfall_crisis_events", crisis_events
+        )
 
 
 def simulation_household_care_annual_tick(ctx: SimulationContext, year: int) -> None:
     """Yearly batch: partner residence fix, orphan gates + routing, childcare shortfall."""
     y = int(year)
+    prof = simulation_timing.active_for_year(y)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     _reconcile_partner_residence_mismatch(ctx, y)
+    if prof:
+        simulation_timing.accumulate("household_care.partner_reconcile", tpc() - t0)
+        t0 = tpc()
     indexes = ctx.annual_care_indexes(y)
+    if prof:
+        simulation_timing.accumulate("household_care.get_indexes", tpc() - t0)
+        t0 = tpc()
     largest = indexes.largest_active_settlement_id
 
     uncovered: list[int] = []
@@ -705,8 +913,19 @@ def simulation_household_care_annual_tick(ctx: SimulationContext, year: int) -> 
         if gate_b_extended_family_in_settlement(ctx, crec, child_sid, indexes):
             continue
         uncovered.append(mid)
+    if prof:
+        simulation_timing.accumulate("household_care.orphan_gates", tpc() - t0)
+        t0 = tpc()
 
     _route_local_orphans(ctx, y, uncovered, largest)
+    if prof:
+        simulation_timing.accumulate("household_care.route_orphans", tpc() - t0)
+        t0 = tpc()
 
     hh_minors = _collect_household_keys_with_minors(ctx, y, indexes)
-    _process_childcare_shortfalls(ctx, y, hh_minors)
+    if prof:
+        simulation_timing.accumulate("household_care.collect_households", tpc() - t0)
+        t0 = tpc()
+    _process_childcare_shortfalls(ctx, y, hh_minors, indexes=indexes)
+    if prof:
+        simulation_timing.accumulate("household_care.shortfalls", tpc() - t0)

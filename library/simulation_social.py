@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import random
+import time
 from collections import deque
 from typing import TYPE_CHECKING
 
+from library import simulation_timing
 from library.geography import _get_route_edges_by_origin
 from library.mind_body import attractiveness_01 as attractiveness_score
 from library.mind_body import work_trait_values
@@ -169,9 +171,12 @@ def _has_opposite_sex_partner(ctx: SimulationContext, person: Person) -> bool:
 
 def _paramour_impulse_01(person: Person) -> float:
     """Interest in paramour formation: libido raises it; loyalty near ideal suppresses it."""
-    mating = _positive_trait_01(person, "mating drive")
-    loyalty_deviation = _deviation_01(person, "loyalty")
-    disloyal_pull = _negative_trait_01(person, "loyalty")
+    traits = work_trait_values(person)
+    mating_value = float(traits.get("mating drive", 0.0))
+    loyalty = float(traits.get("loyalty", 0.0))
+    mating = _clamp01((100.0 + mating_value) / 200.0)
+    loyalty_deviation = _clamp01(abs(loyalty) / 100.0)
+    disloyal_pull = _clamp01((100.0 - loyalty) / 200.0)
     # Near-ideal loyalty is the main brake. Explicit disloyalty adds extra risk;
     # sycophantic excess is less protective than true commitment.
     loyalty_risk = 0.15 + 0.55 * loyalty_deviation + 0.30 * disloyal_pull
@@ -206,7 +211,23 @@ def _paramour_orientation_multiplier(
 def _paramour_pair_probability(
     a: Person, b: Person, ctx: SimulationContext | None = None
 ) -> float:
-    impulse = (_paramour_impulse_01(a) + _paramour_impulse_01(b)) / 2.0
+    return _paramour_pair_probability_from_impulses(
+        a,
+        b,
+        ctx,
+        _paramour_impulse_01(a),
+        _paramour_impulse_01(b),
+    )
+
+
+def _paramour_pair_probability_from_impulses(
+    a: Person,
+    b: Person,
+    ctx: SimulationContext | None,
+    impulse_a: float,
+    impulse_b: float,
+) -> float:
+    impulse = (float(impulse_a) + float(impulse_b)) / 2.0
     return min(
         0.28,
         PARAMOUR_FORMATION_TRIAL_PROB
@@ -244,10 +265,18 @@ def _person_breakup_stress_01(
     ctx: SimulationContext, rec, partner_id: int, resource_facts=None
 ) -> tuple[float, list[str]]:
     p = rec.person
+    traits = work_trait_values(p)
+
+    def trait(key: str) -> float:
+        return float(traits.get(key, 0.0))
+
+    def deviation(key: str) -> float:
+        return _clamp01(abs(trait(key)) / 100.0)
+
     stress = 0.0
     reasons: list[str] = []
 
-    neuro = _deviation_01(p, "neurochemical")
+    neuro = deviation("neurochemical")
     if neuro >= 0.65:
         stress += 0.11 + 0.15 * neuro
         reasons.append("mental_instability")
@@ -256,7 +285,7 @@ def _person_breakup_stress_01(
         stress += 0.24
         reasons.append("paramour")
 
-    loyalty = _trait(p, "loyalty")
+    loyalty = trait("loyalty")
     if loyalty <= -55.0:
         stress += 0.18
         reasons.append("disloyalty")
@@ -269,14 +298,14 @@ def _person_breakup_stress_01(
         ("honesty", "dishonesty"),
         ("patience", "impatience"),
     ):
-        if _trait(p, key) <= -65.0:
+        if trait(key) <= -65.0:
             stress += 0.07
             reasons.append(reason)
 
-    if _trait(p, "assertiveness") >= 70.0:
+    if trait("assertiveness") >= 70.0:
         stress += 0.05
         reasons.append("domineering_assertiveness")
-    if _trait(p, "temperance") <= -70.0:
+    if trait("temperance") <= -70.0:
         stress += 0.05
         reasons.append("indulgence")
 
@@ -544,7 +573,11 @@ def maybe_promote_paramours_to_partners(
 
 
 def _maybe_form_paramours_one_settlement(
-    ctx: SimulationContext, year: int, rng: random.Random, residents: list[int]
+    ctx: SimulationContext,
+    year: int,
+    rng: random.Random,
+    residents: list[int],
+    impulse_cache: dict[int, float] | None = None,
 ) -> None:
     """Low-rate formation from a bounded yearly contact budget in one settlement."""
     n = len(residents)
@@ -561,7 +594,14 @@ def _maybe_form_paramours_one_settlement(
         trials = _paramour_contact_trial_budget(n, pair_count)
         pairs = _sample_paramour_contact_pairs(residents, trials, rng)
     for ia, ib in pairs:
-        _maybe_form_paramour_pair(ctx, year, rng, ia, ib)
+        _maybe_form_paramour_pair(
+            ctx,
+            year,
+            rng,
+            ia,
+            ib,
+            impulse_cache=impulse_cache,
+        )
 
 
 def _decision_sample_person_ids(
@@ -630,6 +670,8 @@ def _maybe_form_paramour_pair(
     rng: random.Random,
     ia: int,
     ib: int,
+    *,
+    impulse_cache: dict[int, float] | None = None,
 ) -> None:
     ra = ctx.id_to_record.get(ia)
     rb = ctx.id_to_record.get(ib)
@@ -644,7 +686,20 @@ def _maybe_form_paramour_pair(
         return
     if not paramour_pair_eligible(ra, rb, int(year)):
         return
-    formation_probability = _paramour_pair_probability(pa, pb, ctx)
+    if impulse_cache is None:
+        formation_probability = _paramour_pair_probability(pa, pb, ctx)
+    else:
+        if ia not in impulse_cache:
+            impulse_cache[ia] = _paramour_impulse_01(pa)
+        if ib not in impulse_cache:
+            impulse_cache[ib] = _paramour_impulse_01(pb)
+        formation_probability = _paramour_pair_probability_from_impulses(
+            pa,
+            pb,
+            ctx,
+            impulse_cache[ia],
+            impulse_cache[ib],
+        )
     if rng.random() > formation_probability:
         return
     try:
@@ -665,6 +720,7 @@ def _maybe_form_paramour_pair(
 def maybe_form_paramours(ctx: SimulationContext, year: int, rng: random.Random) -> None:
     cols = ctx.alive_person_columns(year)
     candidate_mask = (cols.ages >= PARAMOUR_MIN_SIM_AGE) & (~cols.has_paramour)
+    impulse_cache: dict[int, float] = {}
     for code in sorted(int(c) for c in set(cols.settlement_codes[candidate_mask]) if int(c) != 0):
         sid = cols.settlement_id_by_code.get(code, "")
         sid_mask = candidate_mask & (cols.settlement_codes == code)
@@ -677,7 +733,13 @@ def maybe_form_paramours(ctx: SimulationContext, year: int, rng: random.Random) 
                 scope=f"settlement:{sid}:paramour_contacts",
                 stream=50_001,
             )
-        _maybe_form_paramours_one_settlement(ctx, year, rng, ids)
+        _maybe_form_paramours_one_settlement(
+            ctx,
+            year,
+            rng,
+            ids,
+            impulse_cache=impulse_cache,
+        )
 
 
 def _paired_person_ids(ctx: SimulationContext) -> set[int]:
@@ -879,14 +941,41 @@ def maybe_form_same_sex_couples(
 
 def simulation_social_annual_tick(ctx: SimulationContext, year: int) -> None:
     """Partner breakups, paramour dynamics, and same-sex official couples."""
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     rng = random.Random(
         int(year) * 400_009 + int(ctx.placename_rng_salt) + 1777
     )
     resource_facts = ctx.annual_resource_facts(year)
+    if prof:
+        simulation_timing.accumulate("social.setup", tpc() - t0)
+        t0 = tpc()
     dissolve_invalid_paramours(ctx, year)
+    if prof:
+        simulation_timing.accumulate("social.invalid_paramours", tpc() - t0)
+        t0 = tpc()
     dissolve_distant_paramours(ctx)
+    if prof:
+        simulation_timing.accumulate("social.distant_paramours", tpc() - t0)
+        t0 = tpc()
     maybe_promote_paramours_to_partners(ctx, year, resource_facts=resource_facts)
+    if prof:
+        simulation_timing.accumulate("social.promote_paramours", tpc() - t0)
+        t0 = tpc()
     maybe_end_paramour_relationships(ctx, year, resource_facts=resource_facts)
+    if prof:
+        simulation_timing.accumulate("social.end_paramours", tpc() - t0)
+        t0 = tpc()
     maybe_dissolve_partner_couples(ctx, year, resource_facts=resource_facts)
+    if prof:
+        simulation_timing.accumulate("social.partner_breakups", tpc() - t0)
+        t0 = tpc()
     maybe_form_paramours(ctx, year, rng)
+    if prof:
+        simulation_timing.accumulate("social.form_paramours", tpc() - t0)
+        t0 = tpc()
     maybe_form_same_sex_couples(ctx, year, resource_facts=resource_facts)
+    if prof:
+        simulation_timing.accumulate("social.same_sex_couples", tpc() - t0)

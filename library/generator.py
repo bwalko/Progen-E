@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import random
 import sqlite3
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from library import simulation_timing
 from library.geography import choose_birth_region_id, get_region
 from library.offspring_genome import generate_offspring_genome
 from library.mind_body import attractiveness_01, mind_body_from_genome
@@ -626,6 +628,10 @@ def generate_person_from_birth(
         world=world,
         simulation_context=simulation_context,
     )
+    prof = simulation_timing.active_for_year(current_year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
 
     child_ethnic = _pick_offspring_ethnic(parent_a, parent_b)
     if not child_ethnic:
@@ -639,6 +645,9 @@ def generate_person_from_birth(
         species=child_species, ethnic=child_ethnic, db_path=path
     )
     ethnic_s = (species_row["ethnic"] or "").strip()
+    if prof:
+        simulation_timing.accumulate("births.child.ethnic_species", tpc() - t0)
+        t0 = tpc()
     chosen_gender = choose_gender(gender=gender)
     chosen_stage, chosen_age = choose_life_stage_and_age(
         species_row,
@@ -648,8 +657,14 @@ def generate_person_from_birth(
         world=world,
         elder_skew=elder_skew,
     )
+    if prof:
+        simulation_timing.accumulate("births.child.stage_gender", tpc() - t0)
+        t0 = tpc()
 
     child_genome = generate_offspring_genome(parent_a, parent_b)
+    if prof:
+        simulation_timing.accumulate("births.child.genome", tpc() - t0)
+        t0 = tpc()
     chosen_sexual_nature = choose_sexual_nature(
         child_genome, sexual_nature=sexual_nature, db_path=path
     )
@@ -659,6 +674,9 @@ def generate_person_from_birth(
         gender_mind=gender_mind,
         db_path=path,
     )
+    if prof:
+        simulation_timing.accumulate("births.child.nature_mind", tpc() - t0)
+        t0 = tpc()
 
     chosen_height = choose_mature_height_cm(
         species_row, chosen_gender, height_cm=maturity_height_cm
@@ -678,6 +696,9 @@ def generate_person_from_birth(
     chosen_eyes = _offspring_appearance(
         "eyes", species_row, chosen_gender, parent_a, parent_b, eyes, choose_eyes
     )
+    if prof:
+        simulation_timing.accumulate("births.child.body_appearance", tpc() - t0)
+        t0 = tpc()
 
     resolved_birthplace, resolved_region_id, resolved_settlement_id = _resolve_birthplace(
         birthplace=birthplace,
@@ -697,6 +718,9 @@ def generate_person_from_birth(
         ),
         allow_secondary_settlement_spinoff=allow_secondary_settlement_spinoff,
     )
+    if prof:
+        simulation_timing.accumulate("births.child.birthplace", tpc() - t0)
+        t0 = tpc()
 
     if first_name is not None and last_name is not None:
         first, last = first_name, last_name
@@ -715,6 +739,9 @@ def generate_person_from_birth(
             world=world,
             simulation_context=simulation_context,
         )
+    if prof:
+        simulation_timing.accumulate("births.child.name", tpc() - t0)
+        t0 = tpc()
 
     resolved_birthyear = _resolve_birthyear(
         birthyear=birthyear,
@@ -754,6 +781,8 @@ def generate_person_from_birth(
         max_fertility_age=chosen_max_fertility_age,
         birthyear=resolved_birthyear,
     )
+    if prof:
+        simulation_timing.accumulate("births.child.finish", tpc() - t0)
     child = Person(
         first_name=first,
         last_name=last,

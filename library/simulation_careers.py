@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import heapq
 import random
 import re
 import sqlite3
+import time
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from library.genome_composites import significant_composite_names
-from library.job_economics import JobEconomicsCatalog, normalize_job_catalog_key
+from library import simulation_timing
+from library.genome_composites import significant_composite_names_for_traits
+from library.job_economics import (
+    JobEconomicsCatalog,
+    JobEconomicsParams,
+    normalize_job_catalog_key,
+)
 from library.job_market import JobMarketCatalog, JobMarketParams
 from library.mind_body import attractiveness_01, ensure_full_mind_body, work_trait_values
 from library.personality_interpreter import interpret_genome_personality
@@ -132,6 +139,31 @@ class CareerFitness:
     high_deviation_traits: tuple[str, ...]
     weighted_near_perfect_count: float
     weighted_high_deviation_count: float
+
+
+@dataclass(frozen=True)
+class CareerJobEntry:
+    title: str
+    tier: Literal["common", "premium"]
+    restriction: str | None
+    job_key: str
+    economics: JobEconomicsParams
+    market: JobMarketParams
+    home_compatible: bool
+
+
+@dataclass(frozen=True)
+class CareerGenomeJobOption:
+    trait: str
+    deviation_band: str
+    descriptor: str
+    status_tendency: str
+    leader_quality: str
+    leader_tendency: str
+    society_need: float
+    selfish_desperate: float
+    common_entries: tuple[CareerJobEntry, ...]
+    premium_entries: tuple[CareerJobEntry, ...]
 
 
 @dataclass
@@ -300,14 +332,11 @@ class YearCareerFacts:
             int(rec.person_id): resource_facts.pressure_for(ctx, rec)
             for rec in records
         }
-        from library.simulation_household_care import childcare_duty_factor
-
         care_indexes = ctx.annual_care_indexes(year)
+        duty_by_adult = getattr(care_indexes, "childcare_duty_factor_by_adult", {})
 
         duty_by_person_id = {
-            int(rec.person_id): float(
-                childcare_duty_factor(ctx, rec, year, indexes=care_indexes)
-            )
+            int(rec.person_id): float(duty_by_adult.get(int(rec.person_id), 0.0))
             for rec in records
         }
         return cls(
@@ -354,6 +383,11 @@ def _trait_fitness_weight(trait: str) -> float:
 def career_fitness(person: "Person") -> CareerFitness:
     """Overall 0..1 work fitness from weighted mind/body distance to ideal."""
     traits = work_trait_values(person)
+    return _career_fitness_from_traits(traits)
+
+
+def _career_fitness_from_traits(traits: dict[str, float]) -> CareerFitness:
+    """Overall 0..1 work fitness from precomputed work-trait values."""
     if not traits:
         return CareerFitness(0.5, (), (), 0.0, 0.0)
 
@@ -462,6 +496,7 @@ def job_category_fitness_score(
     career_score: float,
     trait: str,
     deviation_band: str,
+    trait_values: dict[str, float] | None = None,
 ) -> tuple[float, float]:
     """Blend broad work fitness with the selected trait-band match for job events."""
     try:
@@ -469,7 +504,8 @@ def job_category_fitness_score(
     except (TypeError, ValueError):
         general = career_fitness_score(person)
     key = (trait or "").strip()
-    raw = work_trait_values(person).get(key)
+    traits = trait_values if trait_values is not None else work_trait_values(person)
+    raw = traits.get(key)
     trait_score = 0.0
     if raw is not None:
         try:
@@ -563,11 +599,31 @@ def _work_trait_float(person: "Person", key: str) -> float | None:
         return None
 
 
+def _trait_float_from_values(
+    trait_values: dict[str, float], key: str
+) -> float | None:
+    v = trait_values.get(key)
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _female_exception_for_male_only_job(person: "Person") -> bool:
+    return _female_exception_for_male_only_job_with_traits(
+        person, work_trait_values(person)
+    )
+
+
+def _female_exception_for_male_only_job_with_traits(
+    person: "Person", trait_values: dict[str, float]
+) -> bool:
     if (person.gender_mind or "").strip().lower() != "masculine":
         return False
-    md = _work_trait_float(person, MATING_DRIVE_GENOME_KEY)
-    ph = _work_trait_float(person, "physical")
+    md = _trait_float_from_values(trait_values, MATING_DRIVE_GENOME_KEY)
+    ph = _trait_float_from_values(trait_values, "physical")
     if md is None or ph is None:
         return False
     if md > -CROSS_GENDER_MATING_DRIVE_THRESHOLD:
@@ -576,10 +632,18 @@ def _female_exception_for_male_only_job(person: "Person") -> bool:
 
 
 def _male_exception_for_female_only_job(person: "Person") -> bool:
+    return _male_exception_for_female_only_job_with_traits(
+        person, work_trait_values(person)
+    )
+
+
+def _male_exception_for_female_only_job_with_traits(
+    person: "Person", trait_values: dict[str, float]
+) -> bool:
     if (person.gender_mind or "").strip().lower() != "feminine":
         return False
-    md = _work_trait_float(person, MATING_DRIVE_GENOME_KEY)
-    ph = _work_trait_float(person, "physical")
+    md = _trait_float_from_values(trait_values, MATING_DRIVE_GENOME_KEY)
+    ph = _trait_float_from_values(trait_values, "physical")
     if md is None or ph is None:
         return False
     if md > -CROSS_GENDER_MATING_DRIVE_THRESHOLD:
@@ -588,6 +652,16 @@ def _male_exception_for_female_only_job(person: "Person") -> bool:
 
 
 def _job_allowed_for_person(person: "Person", restriction: str | None) -> bool:
+    return _job_allowed_for_person_with_traits(
+        person, restriction, work_trait_values(person)
+    )
+
+
+def _job_allowed_for_person_with_traits(
+    person: "Person",
+    restriction: str | None,
+    trait_values: dict[str, float],
+) -> bool:
     if restriction is None:
         return True
     g = (person.gender or "").strip().lower()
@@ -595,15 +669,32 @@ def _job_allowed_for_person(person: "Person", restriction: str | None) -> bool:
         if g == "male":
             return True
         if g == "female":
-            return _female_exception_for_male_only_job(person)
+            return _female_exception_for_male_only_job_with_traits(person, trait_values)
         return False
     if restriction == "female":
         if g == "female":
             return True
         if g == "male":
-            return _male_exception_for_female_only_job(person)
+            return _male_exception_for_female_only_job_with_traits(person, trait_values)
         return False
     return True
+
+
+def _job_restriction_allowance(
+    person: "Person", trait_values: dict[str, float]
+) -> dict[str | None, bool]:
+    g = (person.gender or "").strip().lower()
+    female_male_job_exception = (
+        g == "female" and _female_exception_for_male_only_job_with_traits(person, trait_values)
+    )
+    male_female_job_exception = (
+        g == "male" and _male_exception_for_female_only_job_with_traits(person, trait_values)
+    )
+    return {
+        None: True,
+        "male": g == "male" or female_male_job_exception,
+        "female": g == "female" or male_female_job_exception,
+    }
 
 
 def _filter_job_entries_for_person(
@@ -661,14 +752,19 @@ def _job_home_childcare_compatible(job_title: str | None, job_family: str | None
     return any(part in jk for part in home_parts)
 
 
-def _cross_gender_job_exception(person: "Person", restriction: str | None) -> bool:
+def _cross_gender_job_exception(
+    person: "Person",
+    restriction: str | None,
+    trait_values: dict[str, float] | None = None,
+) -> bool:
     if restriction is None:
         return False
     g = (person.gender or "").strip().lower()
+    traits = trait_values if trait_values is not None else work_trait_values(person)
     if restriction == "male" and g == "female":
-        return _female_exception_for_male_only_job(person)
+        return _female_exception_for_male_only_job_with_traits(person, traits)
     if restriction == "female" and g == "male":
-        return _male_exception_for_female_only_job(person)
+        return _male_exception_for_female_only_job_with_traits(person, traits)
     return False
 
 
@@ -717,6 +813,69 @@ def _genome_job_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
         except sqlite3.OperationalError:
             return ()
     return tuple({k: r[k] for k in r.keys()} for r in raw)
+
+
+@lru_cache(maxsize=40)
+def _career_job_options_for_era(
+    db_path_s: str, era_key: str
+) -> tuple[CareerGenomeJobOption, ...]:
+    rows = _genome_job_rows(db_path_s)
+    job_col = ERA_JOB_COLUMNS.get(era_key)
+    if not rows or job_col is None:
+        return ()
+    path = Path(db_path_s)
+    economics_catalog = JobEconomicsCatalog.load(path)
+    market_catalog = JobMarketCatalog.load(path)
+    premium_col = ERA_PREMIUM_COLUMNS.get(era_key)
+
+    def build_entries(
+        raw_jobs: object, tier: Literal["common", "premium"]
+    ) -> tuple[CareerJobEntry, ...]:
+        out: list[CareerJobEntry] = []
+        for raw in _split_jobs(raw_jobs):
+            title, restriction = _parse_job_token(raw)
+            if not title:
+                continue
+            market = market_catalog.lookup(title)
+            out.append(
+                CareerJobEntry(
+                    title=title,
+                    tier=tier,
+                    restriction=restriction,
+                    job_key=normalize_job_catalog_key(title),
+                    economics=economics_catalog.lookup(title, era_key, tier=tier),
+                    market=market,
+                    home_compatible=_job_home_childcare_compatible(
+                        title, market.job_family
+                    ),
+                )
+            )
+        return tuple(out)
+
+    options: list[CareerGenomeJobOption] = []
+    for row in rows:
+        trait = str(row.get("trait") or "").strip()
+        if not trait:
+            continue
+        common_entries = build_entries(row.get(job_col), "common")
+        premium_entries = build_entries(row.get(premium_col), "premium") if premium_col else ()
+        if not common_entries and not premium_entries:
+            continue
+        options.append(
+            CareerGenomeJobOption(
+                trait=trait,
+                deviation_band=str(row.get("deviation_band") or "").strip().lower(),
+                descriptor=str(row.get("descriptor") or "").strip(),
+                status_tendency=str(row.get("status_tendency") or "").strip(),
+                leader_quality=str(row.get("leader_quality") or "").strip(),
+                leader_tendency=str(row.get("leader_tendency") or "").strip(),
+                society_need=_row_float(row, "society_need", 0.5),
+                selfish_desperate=_row_float(row, "selfish_desperate", 0.0),
+                common_entries=common_entries,
+                premium_entries=premium_entries,
+            )
+        )
+    return tuple(options)
 
 
 @lru_cache(maxsize=8)
@@ -908,9 +1067,14 @@ def refresh_career_fitness(
     year: int,
     *,
     pressure: float | None = None,
+    trait_values: dict[str, float] | None = None,
 ) -> CareerFitness:
     """Persist current fitness score and log first/material fitness snapshots."""
-    fitness = career_fitness(rec.person)
+    fitness = (
+        _career_fitness_from_traits(trait_values)
+        if trait_values is not None
+        else career_fitness(rec.person)
+    )
     p = resource_pressure_for_person(ctx, rec) if pressure is None else float(pressure)
     prev = rec.person.career_fitness_score
     changed = prev is None or abs(float(prev) - fitness.score) >= 0.005
@@ -1028,6 +1192,7 @@ def _job_market_demand_score(
     current_job_count: int = 0,
     current_family_count: int = 0,
     market: JobMarketParams | None = None,
+    saturation: float | None = None,
 ) -> float:
     jm = market or JobMarketParams(
         "labor", 0.55, 0.20, 0.25, 0.55, "medium", 0.0, 0.0, 0.0, 0.0, 0.60
@@ -1043,11 +1208,15 @@ def _job_market_demand_score(
     if jm.job_family in {"trade", "admin", "knowledge", "prestige", "entertainment"}:
         stability_fit = 0.55 + 0.45 * _clamp(stability, 0.0, 1.0)
     market_need = _clamp(max(need, essential) * 0.72 + luxury * 0.28, 0.0, 1.0)
-    saturation = _saturation_multiplier(
-        current_job_count=current_job_count,
-        current_family_count=current_family_count,
-        settlement_resident_count=settlement_resident_count,
-        market=jm,
+    saturation_score = (
+        _clamp(float(saturation), 0.08, 1.0)
+        if saturation is not None
+        else _saturation_multiplier(
+            current_job_count=current_job_count,
+            current_family_count=current_family_count,
+            settlement_resident_count=settlement_resident_count,
+            market=jm,
+        )
     )
     # Simple, high-need roles exist everywhere. Specialist, prestige, or selfish
     # roles need enough local population and surplus to become a real market.
@@ -1055,7 +1224,7 @@ def _job_market_demand_score(
     complexity_penalty = (1.0 - scale) * (0.18 + 0.36 * (1.0 - need + selfish) / 2.0)
     tier_penalty = (1.0 - scale) * (0.26 if job_tier == "premium" else 0.0)
     score = (
-        market_need * simple_floor * urban_fit * stability_fit * saturation
+        market_need * simple_floor * urban_fit * stability_fit * saturation_score
         - complexity_penalty
         - tier_penalty
     )
@@ -1122,51 +1291,62 @@ def choose_career_assignment(
     unemployment_years: int = 0,
     household_prosperity: float | None = None,
     childcare_duty_factor: float = 0.0,
+    trait_values: dict[str, float] | None = None,
 ) -> CareerAssignment | None:
     """Pick the best available job for the person's skill, market, and desperation."""
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     path = Path(db_path)
-    rows = _genome_job_rows(str(path.resolve()))
-    if not rows:
-        return None
-    catalog = JobEconomicsCatalog.load(path)
-    market_catalog = JobMarketCatalog.load(path)
-    traits = work_trait_values(person)
+    db_path_s = str(path.resolve())
     era_key = (era or "").strip().lower()
-    job_col = ERA_JOB_COLUMNS.get(era_key)
-    premium_col = ERA_PREMIUM_COLUMNS.get(era_key)
-    if job_col is None:
+    options = _career_job_options_for_era(db_path_s, era_key)
+    if not options:
         return None
+    traits = trait_values if trait_values is not None else work_trait_values(person)
+    allowed_by_restriction = _job_restriction_allowance(person, traits)
+    if prof:
+        simulation_timing.accumulate("careers.assignment_setup", tpc() - t0)
+        t0 = tpc()
 
     candidates: list[
         tuple[
-            dict[str, Any],
+            CareerGenomeJobOption,
             float,
-            tuple[tuple[str, str | None], ...],
-            tuple[tuple[str, str | None], ...],
+            tuple[CareerJobEntry, ...],
+            tuple[CareerJobEntry, ...],
         ]
     ] = []
-    for row in rows:
-        trait = str(row.get("trait") or "").strip()
-        if not trait or trait not in traits:
+    for option in options:
+        if option.trait not in traits:
             continue
-        common_entries = _filter_job_entries_for_person(
-            person, _split_jobs(row.get(job_col))
+        common_entries = tuple(
+            entry
+            for entry in option.common_entries
+            if allowed_by_restriction.get(entry.restriction, True)
         )
-        premium_entries = _filter_job_entries_for_person(
-            person,
-            _split_jobs(row.get(premium_col)) if premium_col else (),
+        premium_entries = tuple(
+            entry
+            for entry in option.premium_entries
+            if allowed_by_restriction.get(entry.restriction, True)
         )
         if not common_entries and not premium_entries:
             continue
         score = score_genome_job_row(
-            float(traits[trait]), str(row.get("deviation_band") or "")
+            float(traits[option.trait]), option.deviation_band
         )
         if score <= 0.0:
             continue
-        candidates.append((row, score, common_entries, premium_entries))
+        candidates.append((option, score, common_entries, premium_entries))
 
     if not candidates:
+        if prof:
+            simulation_timing.accumulate("careers.assignment_candidates", tpc() - t0)
         return None
+    if prof:
+        simulation_timing.accumulate("careers.assignment_candidates", tpc() - t0)
+        t0 = tpc()
     rng = random.Random(
         _career_assignment_seed(
             year=year,
@@ -1180,15 +1360,12 @@ def choose_career_assignment(
 
     scored_jobs: list[
         tuple[
-            dict[str, Any],
+            CareerGenomeJobOption,
             float,
-            str,
-            Literal["common", "premium"],
-            str | None,
+            CareerJobEntry,
             float,
             float,
             float,
-            str,
             float,
             float,
         ]
@@ -1199,114 +1376,115 @@ def choose_career_assignment(
         household_prosperity=household_prosperity,
     )
     primary_care_pull = _primary_childcare_pull(person, childcare_duty_factor)
-    for row, trait_score, common_entries, premium_entries in candidates:
-        society_need = _row_float(row, "society_need", 0.5)
-        selfish_desperate = _row_float(row, "selfish_desperate", 0.0)
-        tier_entries: tuple[tuple[str, tuple[tuple[str, str | None], ...]], ...]
+    for option, trait_score, common_entries, premium_entries in candidates:
+        society_need = option.society_need
+        selfish_desperate = option.selfish_desperate
+        tier_entries: tuple[tuple[CareerJobEntry, ...], ...]
         if (prefer_premium and premium_entries) or (not common_entries and premium_entries):
-            tier_entries = (("premium", premium_entries),)
+            tier_entries = (premium_entries,)
         else:
-            tier_entries = (("common", common_entries),)
-        for tier, entries in tier_entries:
-            for job_title, job_restriction in entries:
-                je = catalog.lookup(job_title, era_key, tier=tier)
-                jm = market_catalog.lookup(job_title)
-                home_compatible = _job_home_childcare_compatible(job_title, jm.job_family)
-                if primary_care_pull > 0.0 and not home_compatible:
+            tier_entries = (common_entries,)
+        for entries in tier_entries:
+            for entry in entries:
+                if primary_care_pull > 0.0 and not entry.home_compatible:
                     continue
-                job_key = normalize_job_catalog_key(job_title)
-                job_count = int((current_job_counts or {}).get(job_key, 0))
-                family_count = int((current_family_counts or {}).get(jm.job_family, 0))
+                job_count = int((current_job_counts or {}).get(entry.job_key, 0))
+                family_count = int(
+                    (current_family_counts or {}).get(entry.market.job_family, 0)
+                )
+                saturation = _saturation_multiplier(
+                    current_job_count=job_count,
+                    current_family_count=family_count,
+                    settlement_resident_count=settlement_resident_count,
+                    market=entry.market,
+                )
                 market_demand = _job_market_demand_score(
                     society_need=society_need,
                     selfish_desperate=selfish_desperate,
-                    job_tier=tier,
+                    job_tier=entry.tier,
                     settlement_resident_count=settlement_resident_count,
                     resource_pressure=resource_pressure,
                     market_pull=market_pull,
                     stability=settlement_stability,
                     current_job_count=job_count,
                     current_family_count=family_count,
-                    market=jm,
-                )
-                saturation = _saturation_multiplier(
-                    current_job_count=job_count,
-                    current_family_count=family_count,
-                    settlement_resident_count=settlement_resident_count,
-                    market=jm,
+                    market=entry.market,
+                    saturation=saturation,
                 )
                 weight = _assignment_weight(
                     trait_match=trait_score,
-                    wage_yield=je.wage_yield,
+                    wage_yield=entry.economics.wage_yield,
                     market_demand=market_demand,
                     selfish_desperate=selfish_desperate,
                     desperation=desperation,
                 )
-                if primary_care_pull > 0.0 and home_compatible:
+                if primary_care_pull > 0.0 and entry.home_compatible:
                     weight *= 1.0 + PRIMARY_CHILDCARE_HOME_JOB_WEIGHT * primary_care_pull
                 scored_jobs.append(
                     (
-                        row,
+                        option,
                         trait_score,
-                        job_title,
-                        tier,
-                        job_restriction,
+                        entry,
                         market_demand,
-                        _clamp(float(je.wage_yield) / 1.45, 0.0, 1.0),
+                        _clamp(float(entry.economics.wage_yield) / 1.45, 0.0, 1.0),
                         selfish_desperate,
-                        jm.job_family,
                         saturation,
                         weight,
                     )
                 )
 
     if not scored_jobs:
+        if prof:
+            simulation_timing.accumulate("careers.assignment_score_jobs", tpc() - t0)
         return None
-    scored_jobs.sort(
+    if prof:
+        simulation_timing.accumulate("careers.assignment_score_jobs", tpc() - t0)
+        t0 = tpc()
+    top = heapq.nsmallest(
+        max(1, int(top_n)),
+        scored_jobs,
         key=lambda item: (
-            -item[10],
-            str(item[2]),
-            str(item[0].get("trait") or ""),
-            str(item[0].get("deviation_band") or ""),
-        )
+            -item[7],
+            item[2].title,
+            item[0].trait,
+            item[0].deviation_band,
+        ),
     )
-    top = scored_jobs[: max(1, int(top_n))]
-    weights = [item[10] for item in top]
+    weights = [item[7] for item in top]
     (
-        row,
+        option,
         trait_score,
-        job,
-        job_tier,
-        job_restriction,
+        entry,
         market_demand,
         prosperity_score,
         selfish_desperate,
-        job_family,
         saturation,
         _weight,
     ) = rng.choices(top, weights=weights, k=1)[0]
-    if not job:
+    if not entry.title:
         return None
+    if prof:
+        simulation_timing.accumulate("careers.assignment_top_pick", tpc() - t0)
     return CareerAssignment(
-        job=job,
-        job_tier=job_tier,
+        job=entry.title,
+        job_tier=entry.tier,
         job_era=era_key,
-        trait=str(row.get("trait") or "").strip(),
-        deviation_band=str(row.get("deviation_band") or "").strip().lower(),
-        descriptor=str(row.get("descriptor") or "").strip(),
-        status_tendency=str(row.get("status_tendency") or "").strip(),
-        leader_quality=str(row.get("leader_quality") or "").strip(),
-        leader_tendency=str(row.get("leader_tendency") or "").strip(),
-        job_sex_restriction=job_restriction,
+        trait=option.trait,
+        deviation_band=option.deviation_band,
+        descriptor=option.descriptor,
+        status_tendency=option.status_tendency,
+        leader_quality=option.leader_quality,
+        leader_tendency=option.leader_tendency,
+        job_sex_restriction=entry.restriction,
         cross_gender_job_exception=_cross_gender_job_exception(
-            person, job_restriction
+            person, entry.restriction, trait_values=traits
         ),
-        society_need=_row_float(row, "society_need", 0.5),
+        society_need=option.society_need,
         selfish_desperate=selfish_desperate,
         job_trait_match_score=round(_clamp(trait_score, 0.0, 1.0), 4),
         job_market_demand_score=market_demand,
         job_prosperity_score=round(prosperity_score, 4),
-        job_family=job_family,
+        job_family=entry.market.job_family,
         saturation_score=round(saturation, 4),
         desperation_score=desperation,
     )
@@ -1321,20 +1499,30 @@ def assign_career_if_eligible(
     pressure: float | None = None,
     fitness: CareerFitness | None = None,
     childcare_duty_factor: float | None = None,
+    known_eligible: bool = False,
+    historical_year: int | None = None,
+    era: str | None = None,
+    trait_values: dict[str, float] | None = None,
 ) -> CareerAssignment | None:
     """Assign or rehire an eligible person, returning details if changed."""
     if rec.person.job:
         return None
-    historical_year = ctx.get_historical_year(year)
-    era = resolve_job_era(historical_year)
-    if not _eligible_for_job(rec.person, ctx.db_path, year, era):
+    historical_year = (
+        int(historical_year)
+        if historical_year is not None
+        else ctx.get_historical_year(year)
+    )
+    era = (era or resolve_job_era(historical_year)).strip().lower()
+    if not known_eligible and not _eligible_for_job(rec.person, ctx.db_path, year, era):
         return None
-    materialize_adult_profile(ctx, rec, year)
+    if not known_eligible:
+        materialize_adult_profile(ctx, rec, year)
     pressure = (
         resource_pressure_for_person(ctx, rec) if pressure is None else float(pressure)
     )
+    traits = trait_values if trait_values is not None else work_trait_values(rec.person)
     fitness = (
-        refresh_career_fitness(ctx, rec, year, pressure=pressure)
+        refresh_career_fitness(ctx, rec, year, pressure=pressure, trait_values=traits)
         if fitness is None
         else fitness
     )
@@ -1343,6 +1531,10 @@ def assign_career_if_eligible(
         if childcare_duty_factor is None
         else float(childcare_duty_factor)
     )
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     sid = _residence_settlement_id(rec)
     (
         settlement_pop,
@@ -1351,6 +1543,9 @@ def assign_career_if_eligible(
         current_job_counts,
         current_family_counts,
     ) = _settlement_job_market_snapshot(ctx, sid, market_snapshots)
+    if prof:
+        simulation_timing.accumulate("careers.assignment_market_snapshot", tpc() - t0)
+        t0 = tpc()
     assignment = choose_career_assignment(
         rec.person,
         person_id=rec.person_id,
@@ -1369,22 +1564,35 @@ def assign_career_if_eligible(
         unemployment_years=_unemployment_years(rec.person, year),
         household_prosperity=rec.person.household_prosperity,
         childcare_duty_factor=duty,
+        trait_values=traits,
     )
     if assignment is None:
+        if prof:
+            simulation_timing.accumulate("careers.assignment_choose", tpc() - t0)
         return None
+    if prof:
+        simulation_timing.accumulate("careers.assignment_choose", tpc() - t0)
+        t0 = tpc()
     previous_job = rec.person.last_job
     was_unemployed = rec.person.employment_status == "unemployed"
     unemployment_started = rec.person.unemployment_started_year
     unemployment_years = _unemployment_years(rec.person, year)
-    comp_rows = _genome_composite_rows(str(Path(ctx.db_path).resolve()))
-    comp_labels = significant_composite_names(rec.person, comp_rows)
-    trait_notes = interpret_genome_personality(rec.person, db_path=ctx.db_path)
-    trait_phrases = tuple(n.phrase for n in trait_notes if n.phrase)
+    comp_labels = tuple(rec.person.genome_composite_names or ())
+    if not comp_labels:
+        comp_rows = _genome_composite_rows(str(Path(ctx.db_path).resolve()))
+        comp_labels = significant_composite_names_for_traits(
+            traits, comp_rows
+        )
+    trait_phrases = tuple(rec.person.genome_trait_phrases or ())
+    if not trait_phrases:
+        trait_notes = interpret_genome_personality(rec.person, db_path=ctx.db_path)
+        trait_phrases = tuple(n.phrase for n in trait_notes if n.phrase)
     job_fit_score, job_trait_match_score = job_category_fitness_score(
         rec.person,
         career_score=fitness.score,
         trait=assignment.trait,
         deviation_band=assignment.deviation_band,
+        trait_values=traits,
     )
     rec.person = replace(
         rec.person,
@@ -1457,6 +1665,8 @@ def assign_career_if_eligible(
     )
     if market_snapshots is not None:
         market_snapshots.add_assigned_worker(rec)
+    if prof:
+        simulation_timing.accumulate("careers.assignment_apply", tpc() - t0)
     return assignment
 
 
@@ -1661,12 +1871,20 @@ def maybe_assign_or_rehire(
     pressure: float,
     market_snapshots: YearJobMarketSnapshots | None = None,
     career_facts: YearCareerFacts | None = None,
+    known_eligible: bool = False,
+    historical_year: int | None = None,
+    era: str | None = None,
+    trait_values: dict[str, float] | None = None,
 ) -> bool:
     if rec.person.job:
         return False
-    historical_year = ctx.get_historical_year(year)
-    era = resolve_job_era(historical_year)
-    if not _eligible_for_job(rec.person, ctx.db_path, year, era):
+    historical_year = (
+        int(historical_year)
+        if historical_year is not None
+        else ctx.get_historical_year(year)
+    )
+    era = (era or resolve_job_era(historical_year)).strip().lower()
+    if not known_eligible and not _eligible_for_job(rec.person, ctx.db_path, year, era):
         return False
     unemployment_years = _unemployment_years(rec.person, year)
     p = rehire_probability(fitness.score, pressure, unemployment_years)
@@ -1703,6 +1921,10 @@ def maybe_assign_or_rehire(
             pressure=pressure,
             fitness=fitness,
             childcare_duty_factor=duty,
+            known_eligible=known_eligible,
+            historical_year=historical_year,
+            era=era,
+            trait_values=trait_values,
         )
         if assigned is not None:
             return True
@@ -1924,12 +2146,18 @@ def maybe_migrate_job_seeker_household(
 
 def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
     """Update annual employment state for living people at job-eligible ages."""
-    eligible: list[tuple[SimulationPersonRecord, CareerFitness, float]] = []
+    eligible: list[tuple[SimulationPersonRecord, CareerFitness, float, dict[str, float]]] = []
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     historical_year = ctx.get_historical_year(year)
     era = resolve_job_era(historical_year)
     job_age_cache: dict[tuple[str, str, int | None], int] = {}
     potentially_eligible: list[SimulationPersonRecord] = []
+    current_alive = 0
     for rec in ctx.iter_current_people(sorted_by_id=True):
+        current_alive += 1
         key = (
             (rec.person.species or "").strip(),
             (rec.person.ethnic or "").strip(),
@@ -1949,28 +2177,69 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
             continue
         materialize_adult_profile(ctx, rec, year)
         potentially_eligible.append(rec)
+    if prof:
+        simulation_timing.accumulate("careers.scan_eligible", tpc() - t0)
+        simulation_timing.record_gauge(year, "careers", "current_alive", current_alive)
+        simulation_timing.record_gauge(
+            year, "careers", "potentially_eligible", len(potentially_eligible)
+        )
+        t0 = tpc()
 
     career_facts = YearCareerFacts.build(ctx, year, potentially_eligible)
+    if prof:
+        simulation_timing.accumulate("careers.build_facts", tpc() - t0)
+        t0 = tpc()
     for rec in potentially_eligible:
         pressure = career_facts.pressure_for(ctx, rec)
-        fitness = refresh_career_fitness(ctx, rec, year, pressure=pressure)
-        eligible.append((rec, fitness, pressure))
+        traits = work_trait_values(rec.person)
+        fitness = refresh_career_fitness(
+            ctx, rec, year, pressure=pressure, trait_values=traits
+        )
+        eligible.append((rec, fitness, pressure, traits))
+    if prof:
+        simulation_timing.accumulate("careers.refresh_fitness", tpc() - t0)
+        simulation_timing.record_gauge(year, "careers", "eligible", len(eligible))
+        simulation_timing.record_gauge(
+            year,
+            "careers",
+            "eligible_with_job_before_loss",
+            sum(1 for rec, _fitness, _pressure, _traits in eligible if bool(rec.person.job)),
+        )
+        t0 = tpc()
 
-    for rec, fitness, pressure in eligible:
-        maybe_lose_job(
+    lost_count = 0
+    for rec, fitness, pressure, _traits in eligible:
+        if maybe_lose_job(
             ctx,
             rec,
             year,
             fitness=fitness,
             pressure=pressure,
             career_facts=career_facts,
-        )
+        ):
+            lost_count += 1
+    if prof:
+        simulation_timing.accumulate("careers.job_loss", tpc() - t0)
+        simulation_timing.record_gauge(year, "careers", "job_losses", lost_count)
+        t0 = tpc()
 
     market_snapshots = YearJobMarketSnapshots.build(ctx)
-    for rec, fitness, pressure in eligible:
+    if prof:
+        simulation_timing.accumulate("careers.market_snapshot", tpc() - t0)
+        t0 = tpc()
+    assigned_count = 0
+    assign_skipped_job_lost = 0
+    assign_skipped_employed = 0
+    assign_considered = 0
+    for rec, fitness, pressure, traits in eligible:
         if rec.person.job_lost_year == int(year):
+            assign_skipped_job_lost += 1
             continue
-        maybe_assign_or_rehire(
+        if rec.person.job:
+            assign_skipped_employed += 1
+            continue
+        assign_considered += 1
+        if maybe_assign_or_rehire(
             ctx,
             rec,
             year,
@@ -1978,14 +2247,47 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
             pressure=pressure,
             market_snapshots=market_snapshots,
             career_facts=career_facts,
+            known_eligible=True,
+            historical_year=historical_year,
+            era=era,
+            trait_values=traits,
+        ):
+            assigned_count += 1
+    if prof:
+        simulation_timing.accumulate("careers.assign_rehire", tpc() - t0)
+        simulation_timing.record_gauge(
+            year, "careers", "assign_rehire_considered", assign_considered
         )
+        simulation_timing.record_gauge(
+            year, "careers", "assign_rehire_skipped_employed", assign_skipped_employed
+        )
+        simulation_timing.record_gauge(
+            year, "careers", "assign_rehire_skipped_job_lost", assign_skipped_job_lost
+        )
+        simulation_timing.record_gauge(year, "careers", "assignments", assigned_count)
+        t0 = tpc()
 
-    for rec, fitness, pressure in eligible:
-        maybe_migrate_job_seeker_household(
+    migrated_count = 0
+    for rec, fitness, pressure, _traits in eligible:
+        if maybe_migrate_job_seeker_household(
             ctx,
             rec,
             year,
             fitness=fitness,
             pressure=pressure,
             career_facts=career_facts,
+        ):
+            migrated_count += 1
+    if prof:
+        simulation_timing.accumulate("careers.job_migration", tpc() - t0)
+        simulation_timing.record_gauge(year, "careers", "job_migrations", migrated_count)
+        simulation_timing.record_gauge(
+            year,
+            "careers",
+            "employed_after_tick",
+            sum(
+                1
+                for rec, _fitness, _pressure, _traits in eligible
+                if (rec.person.employment_status or "").strip().lower() == "employed"
+            ),
         )

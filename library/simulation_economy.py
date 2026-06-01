@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from library import simulation_timing
 from library.job_economics import JobEconomicsCatalog, JobEconomicsParams, JobTier
 from library.job_market import JobMarketCatalog, JobMarketParams
 from library.settlements import SettlementState
@@ -55,18 +57,59 @@ def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
-def _leader_candidate(ctx: "SimulationContext", rec: "SimulationPersonRecord") -> bool:
-    from library.simulation_government import person_holds_government_treasury_seat
+def _government_treasury_holder_ids(ctx: "SimulationContext") -> set[int]:
+    """Current officeholders allowed to direct treasury spend."""
+    try:
+        from library.government_catalog import load_government_catalog
+        from library.simulation_government import init_government_state
+
+        init_government_state(ctx)
+        catalog = load_government_catalog(ctx.db_path)
+    except Exception:
+        return set()
+
+    holder_ids: set[int] = set()
+    for seat in getattr(ctx, "gov_office_seats", {}).values():
+        holder_id = seat.holder_person_id
+        if holder_id is None:
+            continue
+        try:
+            title = catalog.title_by_id(seat.title_id)
+        except Exception:
+            continue
+        role = (title.role or "").strip().lower() if title is not None else ""
+        if role in ("head", "court"):
+            holder_ids.add(int(holder_id))
+    return holder_ids
+
+
+def _leader_candidate(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    *,
+    year: int | None = None,
+    care_indexes: object | None = None,
+    treasury_holder_ids: set[int] | None = None,
+) -> bool:
     from library.simulation_household_care import childcare_duty_factor
 
-    if person_holds_government_treasury_seat(ctx, rec.person_id):
-        return True
+    pid = int(rec.person_id)
+    if treasury_holder_ids is not None:
+        if pid in treasury_holder_ids:
+            return True
+    else:
+        from library.simulation_government import person_holds_government_treasury_seat
+
+        if person_holds_government_treasury_seat(ctx, pid):
+            return True
     lq = (rec.person.leader_quality or "").strip().lower()
     lt = (rec.person.leader_tendency or "").strip().lower()
     if lq not in ("strong", "high") and lt not in ("high", "strong"):
         return False
-    y = int(ctx.current_year or 0)
-    duty = childcare_duty_factor(ctx, rec, y, indexes=ctx.annual_care_indexes(y))
+    y = int(year if year is not None else ctx.current_year or 0)
+    if care_indexes is None:
+        care_indexes = ctx.annual_care_indexes(y)
+    duty = childcare_duty_factor(ctx, rec, y, indexes=care_indexes)
     return duty <= LEADER_CHILD_DUTY_EXCLUSION_THRESHOLD
 
 
@@ -225,12 +268,19 @@ def _update_household_prosperity(
 
 def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
     """After careers and household care: pool draws, wages, value-add, tax, leader spend."""
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     catalog = JobEconomicsCatalog.load(ctx.db_path)
     market_catalog = JobMarketCatalog.load(ctx.db_path)
     y = int(year)
     hist = ctx.get_historical_year(y)
     resource_facts = ctx.annual_resource_facts(y)
     care_indexes = ctx.annual_care_indexes(y)
+    if prof:
+        simulation_timing.accumulate("economy.setup", tpc() - t0)
+        t0 = tpc()
 
     # --- Pull pools toward baselines supported by settlement / region pressure ---
     next_settlements: dict[str, SettlementState] = {}
@@ -256,6 +306,9 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
         rid = (st.region_id or "").strip()
         if rid:
             rid_all.add(rid)
+    if prof:
+        simulation_timing.accumulate("economy.settlement_pools", tpc() - t0)
+        t0 = tpc()
 
     for rid in rid_all:
         cap = max(1, int(resource_facts.region_cap.get(rid, 0) or ctx.effective_regional_population_cap(rid)))
@@ -269,12 +322,18 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
         cur = float(ctx.region_prosperity_pool.get(rid, region_target))
         cur = _lerp(cur, region_target, REGION_POOL_TOWARD_BASELINE)
         ctx.region_prosperity_pool[rid] = _clamp(cur, REGION_POOL_MIN, REGION_POOL_MAX)
+    if prof:
+        simulation_timing.accumulate("economy.region_pools", tpc() - t0)
+        t0 = tpc()
 
     # --- Unemployed / no job: baseline wage prosperity for conception hooks ---
     for rec in ctx.iter_current_people(sorted_by_id=True):
         es = (rec.person.employment_status or "").strip().lower()
         if es != "employed" or not (rec.person.job or "").strip():
             rec.person = replace(rec.person, job_prosperity_01=0.08)
+    if prof:
+        simulation_timing.accumulate("economy.unemployed_baseline", tpc() - t0)
+        t0 = tpc()
 
     # Group employed workers by settlement
     by_sid: dict[str, list[SimulationPersonRecord]] = {}
@@ -293,6 +352,9 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
         if (st.status or "").strip().lower() != "active":
             continue
         by_sid.setdefault(sid, []).append(rec)
+    if prof:
+        simulation_timing.accumulate("economy.group_workers", tpc() - t0)
+        t0 = tpc()
 
     for sid, workers in by_sid.items():
         st = ctx.settlements_by_id[sid]
@@ -404,10 +466,17 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
                 REGION_POOL_MIN,
                 REGION_POOL_MAX,
             )
+    if prof:
+        simulation_timing.accumulate("economy.worker_markets", tpc() - t0)
+        t0 = tpc()
 
     _update_household_prosperity(ctx, y, care_indexes=care_indexes)
+    if prof:
+        simulation_timing.accumulate("economy.household_prosperity", tpc() - t0)
+        t0 = tpc()
 
     # --- Leader spending from treasury ---
+    treasury_holder_ids = _government_treasury_holder_ids(ctx)
     for rid in rid_all:
         treasury = float(ctx.region_treasury_balance.get(rid, 0.0))
         if treasury < 0.35:
@@ -419,7 +488,13 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
                 year=y,
                 stream=30_001,
             )
-            if _leader_candidate(ctx, rec)
+            if _leader_candidate(
+                ctx,
+                rec,
+                year=y,
+                care_indexes=care_indexes,
+                treasury_holder_ids=treasury_holder_ids,
+            )
         ]
         if not leaders:
             continue
@@ -467,6 +542,8 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
                 "leader_count": len(leaders),
             },
         )
+    if prof:
+        simulation_timing.accumulate("economy.leader_spend", tpc() - t0)
 
 
 def _clamp01(x: float) -> float:

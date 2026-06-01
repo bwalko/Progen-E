@@ -121,6 +121,49 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
             "population growth should be deterministic for a fixed sim seed",
         )
 
+    def test_alive_census_cache_updates_incrementally_when_person_added(self) -> None:
+        ctx = SimulationContext(
+            db_path=Path("unused-config.sqlite"),
+            save_db_path=Path("unused-save.sqlite"),
+            world="default",
+            simulation_start_year=START_YEAR,
+            current_year=START_YEAR,
+            settlements_by_id={
+                "region:s1": SettlementState(region_id="region", settlement_id="region:s1"),
+                "region:s2": SettlementState(region_id="region", settlement_id="region:s2"),
+            },
+        )
+
+        def person(name: str, sid: str) -> Person:
+            return Person(
+                first_name=name,
+                last_name="Resident",
+                gender="Female",
+                ethnic="Human",
+                species="Human",
+                birthyear=START_YEAR - 20,
+                birthplace_region_id="region",
+                birthplace_settlement_id=sid,
+                current_settlement_id=sid,
+                min_fertility_age=18,
+            )
+
+        first = ctx.add_person(person=person("First", "region:s1"), is_founder=False)
+        cache = ctx.alive_census_cache()
+        ctx._alive_columns_cache = (START_YEAR, object())
+
+        second = ctx.add_person(person=person("Second", "region:s2"), is_founder=False)
+
+        self.assertIs(ctx._alive_census_cache, cache)
+        self.assertIsNone(ctx._alive_columns_cache)
+        self.assertEqual(cache.count_by_region["region"], 2)
+        self.assertEqual(cache.count_by_settlement["region:s1"], 1)
+        self.assertEqual(cache.count_by_settlement["region:s2"], 1)
+        self.assertEqual(
+            [rec.person_id for rec in cache.by_region["region"]],
+            [first.person_id, second.person_id],
+        )
+
     def test_passive_cohort_allocation_varies_between_sibling_settlements(self) -> None:
         def build_allocations() -> dict[str, int]:
             ctx = SimulationContext(
@@ -301,6 +344,7 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
 
         self.assertGreater(first_total, 0)
         self.assertGreater(second_total, 0)
+        self.assertEqual({c.sim_year for c in ctx.passive_cohorts}, {START_YEAR + 1})
         self.assertTrue(any(c.age_band == "0" and c.birth_count > 0 for c in latest))
         self.assertTrue(any(c.death_count > 0 for c in latest))
         self.assertTrue(any(c.age_band == "31" for c in latest))

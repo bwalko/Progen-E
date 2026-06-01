@@ -20,6 +20,7 @@ _DISQUALIFIER_KEYS: tuple[tuple[str, str], ...] = (
     ("disqualifier_1_trait", "disqualifier_1_position"),
     ("disqualifier_2_trait", "disqualifier_2_position"),
 )
+_score_genome_job_row = None
 
 
 def normalize_composite_band(position: str) -> str:
@@ -33,9 +34,13 @@ def normalize_composite_band(position: str) -> str:
 
 
 def _score_trait(genome_value: float, deviation_band: str) -> float:
-    from library.simulation_careers import score_genome_job_row
+    global _score_genome_job_row
+    if _score_genome_job_row is None:
+        from library.simulation_careers import score_genome_job_row
 
-    return score_genome_job_row(genome_value, deviation_band)
+        _score_genome_job_row = score_genome_job_row
+
+    return _score_genome_job_row(genome_value, deviation_band)
 
 
 def composite_row_name(row: dict[str, Any]) -> str:
@@ -110,6 +115,24 @@ def significant_composite_names(
 
     Sorted by score descending, then ``composite_id`` for determinism.
     """
+    from library.mind_body import work_trait_values
+
+    return significant_composite_names_for_traits(
+        work_trait_values(person),
+        rows,
+        threshold=threshold,
+        max_tags=max_tags,
+    )
+
+
+def significant_composite_names_for_traits(
+    trait_values: Mapping[str, float],
+    rows: tuple[dict[str, Any], ...],
+    *,
+    threshold: float = GENOME_COMPOSITE_MIN_SCORE,
+    max_tags: int = GENOME_COMPOSITE_MAX_TAGS,
+) -> tuple[str, ...]:
+    """Trait-map variant of :func:`significant_composite_names` for hot paths."""
     thr = float(threshold)
     cap = max(0, int(max_tags))
     ranked: list[tuple[float, str, str]] = []
@@ -118,7 +141,7 @@ def significant_composite_names(
         label = composite_row_name(row)
         if not cid or not label:
             continue
-        s = score_composite_row(person, row)
+        s = score_composite_row_for_traits(trait_values, row)
         if s is None or s < thr:
             continue
         ranked.append((float(s), cid, label))

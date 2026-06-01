@@ -67,6 +67,10 @@ class PassiveCohort:
     status_bucket: str = ""
 
 
+PassiveMarriageCandidateIndex = dict[tuple[str, str], list[tuple[int, int, PassiveCohort]]]
+PassiveOfficeCandidateIndex = dict[tuple[str, str], list[tuple[int, int, PassiveCohort]]]
+
+
 def normalize_passive_gender(gender: str | None, *, fallback: str = "Male") -> str:
     raw = (gender or "").strip().lower()
     if raw.startswith("f"):
@@ -139,27 +143,49 @@ def promote_passive_candidate_for_office(
     min_age: int = 16,
     reason: str = "office_selection",
     source: dict[str, Any] | None = None,
+    candidate_index: PassiveOfficeCandidateIndex | None = None,
 ) -> Any | None:
     """Promote one adult from the latest aggregate cohort snapshot for an office."""
-    latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
-    if latest_year is None:
-        return None
     sid = (settlement_id or "").strip()
     rid = (region_id or "").strip()
     candidates: list[tuple[int, int, PassiveCohort]] = []
-    for idx, cohort in enumerate(ctx.passive_cohorts):
-        if int(cohort.sim_year) != latest_year:
-            continue
-        if int(cohort.population_count) <= 0:
-            continue
-        if sid and (cohort.settlement_id or "").strip() != sid:
-            continue
-        if rid and (cohort.region_id or "").strip() != rid:
-            continue
-        age = _age_from_band(cohort.age_band)
-        if age < int(min_age):
-            continue
-        candidates.append((age, idx, cohort))
+    if candidate_index is not None:
+        if sid:
+            source_candidates = candidate_index.get(("settlement", sid), ())
+        elif rid:
+            source_candidates = candidate_index.get(("region", rid), ())
+        else:
+            source_candidates = candidate_index.get(("all", ""), ())
+        latest_year = int(
+            getattr(ctx, "_passive_office_candidate_index_latest_year", int(year))
+        )
+        for age, idx, cohort in source_candidates:
+            if int(cohort.population_count) <= 0:
+                continue
+            if sid and (cohort.settlement_id or "").strip() != sid:
+                continue
+            if rid and (cohort.region_id or "").strip() != rid:
+                continue
+            if age < int(min_age):
+                continue
+            candidates.append((age, idx, cohort))
+    else:
+        latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+        if latest_year is None:
+            return None
+        for idx, cohort in enumerate(ctx.passive_cohorts):
+            if int(cohort.sim_year) != latest_year:
+                continue
+            if int(cohort.population_count) <= 0:
+                continue
+            if sid and (cohort.settlement_id or "").strip() != sid:
+                continue
+            if rid and (cohort.region_id or "").strip() != rid:
+                continue
+            age = _age_from_band(cohort.age_band)
+            if age < int(min_age):
+                continue
+            candidates.append((age, idx, cohort))
     if not candidates:
         return None
     seed = _stable_seed(
@@ -178,6 +204,14 @@ def promote_passive_candidate_for_office(
     age, cohort_index, cohort = rng.choice(candidates)
     updated = replace(cohort, population_count=int(cohort.population_count) - 1)
     ctx.passive_cohorts[cohort_index] = updated
+    if candidate_index is not None:
+        _update_passive_office_candidate_index(
+            candidate_index,
+            cohort_index=cohort_index,
+            age=age,
+            cohort=cohort,
+            updated=updated,
+        )
     birthyear = int(year) - int(age)
     family_facts = _synthesize_family_facts_for_cohort(
         ctx,
@@ -214,6 +248,85 @@ def promote_passive_candidate_for_office(
     )
 
 
+def build_passive_office_candidate_index(ctx: Any) -> PassiveOfficeCandidateIndex:
+    """Index latest passive cohorts for repeated office-promotion lookups."""
+    latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+    if latest_year is None:
+        return {}
+    setattr(ctx, "_passive_office_candidate_index_latest_year", int(latest_year))
+    out: PassiveOfficeCandidateIndex = {}
+    for idx, cohort in enumerate(ctx.passive_cohorts):
+        if int(cohort.sim_year) != latest_year:
+            continue
+        if int(cohort.population_count) <= 0:
+            continue
+        age = _age_from_band(cohort.age_band)
+        entry = (age, idx, cohort)
+        out.setdefault(("all", ""), []).append(entry)
+        rid = (cohort.region_id or "").strip()
+        if rid:
+            out.setdefault(("region", rid), []).append(entry)
+        sid = (cohort.settlement_id or "").strip()
+        if sid:
+            out.setdefault(("settlement", sid), []).append(entry)
+    return out
+
+
+def _update_passive_office_candidate_index(
+    candidate_index: PassiveOfficeCandidateIndex,
+    *,
+    cohort_index: int,
+    age: int,
+    cohort: PassiveCohort,
+    updated: PassiveCohort,
+) -> None:
+    keys = [("all", "")]
+    rid = (cohort.region_id or "").strip()
+    if rid:
+        keys.append(("region", rid))
+    sid = (cohort.settlement_id or "").strip()
+    if sid:
+        keys.append(("settlement", sid))
+    for key in keys:
+        bucket = candidate_index.get(key)
+        if bucket is None:
+            continue
+        for pos, (_age, idx, _cohort) in enumerate(bucket):
+            if idx != int(cohort_index):
+                continue
+            if int(updated.population_count) > 0:
+                bucket[pos] = (int(age), int(cohort_index), updated)
+            else:
+                bucket.pop(pos)
+            break
+
+
+def build_passive_marriage_candidate_index(ctx: Any) -> PassiveMarriageCandidateIndex:
+    """Index latest single adult passive cohorts by settlement and normalized gender."""
+    latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+    if latest_year is None:
+        return {}
+    setattr(ctx, "_passive_marriage_candidate_index_latest_year", int(latest_year))
+    out: PassiveMarriageCandidateIndex = {}
+    for idx, cohort in enumerate(ctx.passive_cohorts):
+        if int(cohort.sim_year) != latest_year:
+            continue
+        if int(cohort.population_count) <= 0:
+            continue
+        status = (cohort.status_bucket or "").strip().lower()
+        if status in {"child", "partnered"}:
+            continue
+        age = _age_from_band(cohort.age_band)
+        sid = (cohort.settlement_id or "").strip()
+        if not sid:
+            continue
+        gender = normalize_passive_gender(cohort.gender, fallback="")
+        if not gender:
+            continue
+        out.setdefault((sid, gender), []).append((age, idx, cohort))
+    return out
+
+
 def promote_passive_candidate_for_marriage(
     ctx: Any,
     *,
@@ -224,33 +337,47 @@ def promote_passive_candidate_for_marriage(
     min_age: int = 16,
     reason: str = "marriage_into_detailed_family",
     source: dict[str, Any] | None = None,
+    candidate_index: PassiveMarriageCandidateIndex | None = None,
 ) -> Any | None:
     """Promote one single adult from aggregate cohorts as a detailed spouse."""
-    latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
-    if latest_year is None:
-        return None
     wanted_gender = normalize_passive_gender(gender)
     sid = (settlement_id or "").strip()
     rid = (region_id or "").strip()
     candidates: list[tuple[int, int, PassiveCohort]] = []
-    for idx, cohort in enumerate(ctx.passive_cohorts):
-        if int(cohort.sim_year) != latest_year:
-            continue
-        if int(cohort.population_count) <= 0:
-            continue
-        if sid and (cohort.settlement_id or "").strip() != sid:
-            continue
-        if rid and (cohort.region_id or "").strip() != rid:
-            continue
-        if normalize_passive_gender(cohort.gender, fallback="") != wanted_gender:
-            continue
-        status = (cohort.status_bucket or "").strip().lower()
-        if status in {"child", "partnered"}:
-            continue
-        age = _age_from_band(cohort.age_band)
-        if age < int(min_age):
-            continue
-        candidates.append((age, idx, cohort))
+    if candidate_index is not None and sid:
+        for age, idx, cohort in candidate_index.get((sid, wanted_gender), ()):
+            if int(cohort.population_count) <= 0:
+                continue
+            if rid and (cohort.region_id or "").strip() != rid:
+                continue
+            if age < int(min_age):
+                continue
+            candidates.append((age, idx, cohort))
+        latest_year = int(
+            getattr(ctx, "_passive_marriage_candidate_index_latest_year", int(year))
+        )
+    else:
+        latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+        if latest_year is None:
+            return None
+        for idx, cohort in enumerate(ctx.passive_cohorts):
+            if int(cohort.sim_year) != latest_year:
+                continue
+            if int(cohort.population_count) <= 0:
+                continue
+            if sid and (cohort.settlement_id or "").strip() != sid:
+                continue
+            if rid and (cohort.region_id or "").strip() != rid:
+                continue
+            if normalize_passive_gender(cohort.gender, fallback="") != wanted_gender:
+                continue
+            status = (cohort.status_bucket or "").strip().lower()
+            if status in {"child", "partnered"}:
+                continue
+            age = _age_from_band(cohort.age_band)
+            if age < int(min_age):
+                continue
+            candidates.append((age, idx, cohort))
     if not candidates:
         return None
     seed = _stable_seed(
@@ -271,6 +398,17 @@ def promote_passive_candidate_for_marriage(
     age, cohort_index, cohort = rng.choice(candidates)
     updated = replace(cohort, population_count=int(cohort.population_count) - 1)
     ctx.passive_cohorts[cohort_index] = updated
+    if candidate_index is not None and sid:
+        bucket = candidate_index.get((sid, wanted_gender))
+        if bucket is not None:
+            for pos, (_age, idx, _cohort) in enumerate(bucket):
+                if idx != cohort_index:
+                    continue
+                if int(updated.population_count) > 0:
+                    bucket[pos] = (age, cohort_index, updated)
+                else:
+                    bucket.pop(pos)
+                break
     birthyear = int(year) - int(age)
     person = PassivePerson(
         name="",

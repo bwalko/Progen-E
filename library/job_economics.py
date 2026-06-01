@@ -6,6 +6,7 @@ import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -96,99 +97,7 @@ class JobEconomicsCatalog:
 
     @classmethod
     def load(cls, db_path: Path | str) -> JobEconomicsCatalog:
-        path = Path(db_path)
-        bases: dict[str, JobEconomicsParams] = {}
-        base_star: JobEconomicsParams | None = None
-        dev: dict[tuple[str, str], dict[str, float | None]] = {}
-        legacy: dict[tuple[str, str], JobEconomicsParams] = {}
-
-        if not path.is_file():
-            return cls(
-                _bases=bases,
-                _base_star=None,
-                _dev=dev,
-                _legacy_rows=None,
-            )
-        with closing(sqlite3.connect(str(path.resolve()))) as conn:
-            conn.row_factory = sqlite3.Row
-            try:
-                info = conn.execute("PRAGMA table_info(job_economics)").fetchall()
-                col_names = {str(r[1]) for r in info}
-            except sqlite3.OperationalError:
-                return cls(
-                    _bases=bases,
-                    _base_star=None,
-                    _dev=dev,
-                    _legacy_rows=None,
-                )
-            if "job_key" not in col_names:
-                return cls(
-                    _bases=bases,
-                    _base_star=None,
-                    _dev=dev,
-                    _legacy_rows=None,
-                )
-            has_row_kind = "row_kind" in col_names
-            try:
-                db_rows = conn.execute("SELECT * FROM job_economics").fetchall()
-            except sqlite3.OperationalError:
-                return cls(
-                    _bases=bases,
-                    _base_star=None,
-                    _dev=dev,
-                    _legacy_rows=None,
-                )
-
-        if not has_row_kind:
-            for r in db_rows:
-                jk = normalize_job_catalog_key(str(r["job_key"] or ""))
-                era = str(r["era"] or "").strip().lower()
-                if not jk or not era:
-                    continue
-                legacy[(jk, era)] = JobEconomicsParams(
-                    pool_draw=_parse_abs_field(r["pool_draw"]),
-                    wage_yield=_parse_abs_field(r["wage_yield"]),
-                    value_add=_parse_abs_field(r["value_add"]),
-                    tax_rate=_parse_abs_field(r["tax_rate"]),
-                )
-            return cls(_bases={}, _base_star=None, _dev={}, _legacy_rows=legacy)
-
-        for r in db_rows:
-            jk = normalize_job_catalog_key(str(r["job_key"] or ""))
-            era = str(r["era"] or "").strip().lower()
-            if not jk or not era:
-                continue
-            rk_raw = r["row_kind"] if "row_kind" in r.keys() else None
-            rk = str(rk_raw or "deviation").strip().lower()
-            if rk == "base":
-                if jk != "*":
-                    continue
-                params = JobEconomicsParams(
-                    pool_draw=_parse_abs_field(r["pool_draw"], 0.25),
-                    wage_yield=_parse_abs_field(r["wage_yield"], 0.35),
-                    value_add=_parse_abs_field(r["value_add"], 0.30),
-                    tax_rate=_parse_abs_field(r["tax_rate"], 0.08),
-                )
-                if era == "*":
-                    base_star = params
-                else:
-                    bases[era] = params
-                continue
-            if rk != "deviation":
-                continue
-            dev[(jk, era)] = {
-                "pool_draw": _parse_mul_field(r["pool_draw"]),
-                "wage_yield": _parse_mul_field(r["wage_yield"]),
-                "value_add": _parse_mul_field(r["value_add"]),
-                "tax_rate": _parse_mul_field(r["tax_rate"]),
-            }
-
-        return cls(
-            _bases=bases,
-            _base_star=base_star,
-            _dev=dev,
-            _legacy_rows=None,
-        )
+        return _load_catalog(str(Path(db_path).resolve()))
 
     def _base_for_era(self, era: str) -> JobEconomicsParams:
         e = (era or "").strip().lower() or "modern"
@@ -238,11 +147,9 @@ class JobEconomicsCatalog:
     ) -> JobEconomicsParams:
         rows = self._legacy_rows or {}
         jk = normalize_job_catalog_key(job_title or "")
-        if not jk:
-            return DEFAULT_PREMIUM if tier == "premium" else DEFAULT_COMMON
         e = (era or "").strip().lower()
-        if not e:
-            e = "modern"
+        if not jk or not e:
+            return DEFAULT_PREMIUM if tier == "premium" else DEFAULT_COMMON
         if (jk, e) in rows:
             return rows[(jk, e)]
         if (jk, "*") in rows:
@@ -252,3 +159,100 @@ class JobEconomicsCatalog:
         if ("*", "*") in rows:
             return rows[("*", "*")]
         return DEFAULT_PREMIUM if tier == "premium" else DEFAULT_COMMON
+
+
+@lru_cache(maxsize=8)
+def _load_catalog(db_path_s: str) -> JobEconomicsCatalog:
+    path = Path(db_path_s)
+    bases: dict[str, JobEconomicsParams] = {}
+    base_star: JobEconomicsParams | None = None
+    dev: dict[tuple[str, str], dict[str, float | None]] = {}
+    legacy: dict[tuple[str, str], JobEconomicsParams] = {}
+
+    if not path.is_file():
+        return JobEconomicsCatalog(
+            _bases=bases,
+            _base_star=None,
+            _dev=dev,
+            _legacy_rows=None,
+        )
+    with closing(sqlite3.connect(str(path.resolve()))) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            info = conn.execute("PRAGMA table_info(job_economics)").fetchall()
+            col_names = {str(r[1]) for r in info}
+        except sqlite3.OperationalError:
+            return JobEconomicsCatalog(
+                _bases=bases,
+                _base_star=None,
+                _dev=dev,
+                _legacy_rows=None,
+            )
+        if "job_key" not in col_names:
+            return JobEconomicsCatalog(
+                _bases=bases,
+                _base_star=None,
+                _dev=dev,
+                _legacy_rows=None,
+            )
+        has_row_kind = "row_kind" in col_names
+        try:
+            db_rows = conn.execute("SELECT * FROM job_economics").fetchall()
+        except sqlite3.OperationalError:
+            return JobEconomicsCatalog(
+                _bases=bases,
+                _base_star=None,
+                _dev=dev,
+                _legacy_rows=None,
+            )
+
+    if not has_row_kind:
+        for r in db_rows:
+            jk = normalize_job_catalog_key(str(r["job_key"] or ""))
+            era = str(r["era"] or "").strip().lower()
+            if not jk or not era:
+                continue
+            legacy[(jk, era)] = JobEconomicsParams(
+                pool_draw=_parse_abs_field(r["pool_draw"]),
+                wage_yield=_parse_abs_field(r["wage_yield"]),
+                value_add=_parse_abs_field(r["value_add"]),
+                tax_rate=_parse_abs_field(r["tax_rate"]),
+            )
+        return JobEconomicsCatalog(_bases={}, _base_star=None, _dev={}, _legacy_rows=legacy)
+
+    for r in db_rows:
+        jk = normalize_job_catalog_key(str(r["job_key"] or ""))
+        era = str(r["era"] or "").strip().lower()
+        if not jk or not era:
+            continue
+        rk_raw = r["row_kind"] if "row_kind" in r.keys() else None
+        rk = str(rk_raw or "deviation").strip().lower()
+        if rk == "base":
+            if jk != "*":
+                continue
+            params = JobEconomicsParams(
+                pool_draw=_parse_abs_field(r["pool_draw"], 0.25),
+                wage_yield=_parse_abs_field(r["wage_yield"], 0.35),
+                value_add=_parse_abs_field(r["value_add"], 0.30),
+                tax_rate=_parse_abs_field(r["tax_rate"], 0.08),
+            )
+            if era == "*":
+                base_star = params
+            else:
+                bases[era] = params
+            continue
+        if rk != "deviation":
+            continue
+        dev[(jk, era)] = {
+            "pool_draw": _parse_mul_field(r["pool_draw"]),
+            "wage_yield": _parse_mul_field(r["wage_yield"]),
+            "value_add": _parse_mul_field(r["value_add"]),
+            "tax_rate": _parse_mul_field(r["tax_rate"]),
+        }
+
+    return JobEconomicsCatalog(
+        _bases=bases,
+        _base_star=base_star,
+        _dev=dev,
+        _legacy_rows=None,
+    )

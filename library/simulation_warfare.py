@@ -756,41 +756,52 @@ def decay_alliance_loyalty(ctx: "SimulationContext", rng: random.Random) -> None
     ctx.gov_alliances = out
 
 
-def roll_marriage_alliances(ctx: "SimulationContext", year: int, rng: random.Random) -> None:
+def roll_marriage_alliances(
+    ctx: "SimulationContext",
+    year: int,
+    rng: random.Random,
+    *,
+    catalog: GovernmentCatalog | None = None,
+) -> None:
     """Link allied polities when heirs of rulers marry (simplified)."""
     from library.polity import AllianceState
 
+    if catalog is None:
+        catalog = load_government_catalog(ctx.db_path)
+    head_seats = []
+    head_seats_by_holder: dict[int, list] = {}
+    for seat in ctx.gov_office_seats.values():
+        if seat.holder_person_id is None:
+            continue
+        title = catalog.title_by_id(seat.title_id)
+        if title is None or (title.role or "").strip().lower() != "head":
+            continue
+        head_seats.append(seat)
+        head_seats_by_holder.setdefault(int(seat.holder_person_id), []).append(seat)
+
     heads: list[tuple[int, int]] = []
-    for s in ctx.gov_office_seats.values():
-        t = load_government_catalog(ctx.db_path).title_by_id(s.title_id)
-        if t is None or (t.role or "").strip().lower() != "head":
-            continue
-        if s.holder_person_id is None:
-            continue
+    for s in head_seats:
         rec = ctx.id_to_record.get(s.holder_person_id)
         if rec is None or rec.person.partner_person_id is None:
             continue
-        partner = ctx.id_to_record.get(rec.person.partner_person_id)
-        if partner is None:
-            continue
-        for s2 in ctx.gov_office_seats.values():
-            if s2.seat_id == s.seat_id or s2.holder_person_id != partner.person_id:
-                continue
-            t2 = load_government_catalog(ctx.db_path).title_by_id(s2.title_id)
-            if t2 is None or (t2.role or "").strip().lower() != "head":
+        partner_id = int(rec.person.partner_person_id)
+        for s2 in head_seats_by_holder.get(partner_id, ()):
+            if s2.seat_id == s.seat_id:
                 continue
             if s2.polity_id == s.polity_id:
                 continue
             heads.append((s.polity_id, s2.polity_id))
+
+    existing_marriage_alliances = {
+        (min(a.polity_a_id, a.polity_b_id), max(a.polity_a_id, a.polity_b_id))
+        for a in ctx.gov_alliances
+        if a.until_sim_year is None and a.kind == "marriage"
+    }
     for a_id, b_id in heads:
         if rng.random() > 0.06:
             continue
-        if any(
-            x.until_sim_year is None
-            and {x.polity_a_id, x.polity_b_id} == {a_id, b_id}
-            and x.kind == "marriage"
-            for x in ctx.gov_alliances
-        ):
+        alliance_key = (min(a_id, b_id), max(a_id, b_id))
+        if alliance_key in existing_marriage_alliances:
             continue
         aid = ctx.next_gov_alliance_id
         ctx.next_gov_alliance_id += 1
@@ -805,6 +816,7 @@ def roll_marriage_alliances(ctx: "SimulationContext", year: int, rng: random.Ran
                 loyalty_score=0.85,
             )
         )
+        existing_marriage_alliances.add(alliance_key)
         ctx._record_simulation_event(
             year,
             "dynastic_marriage_alliance",

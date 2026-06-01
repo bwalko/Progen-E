@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import random
 import sqlite3
+import time
+from heapq import nlargest
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from library import simulation_timing
 from library import government_checkpoint as gov_ckpt
 from library.geography import population_scale_for_world
 from library.government_catalog import (
@@ -22,8 +25,8 @@ from library.government_catalog import (
     resolve_government_era,
 )
 from library.leadership import (
-    leadership_index,
-    military_quality_index,
+    government_candidate_composite_rows,
+    leadership_and_military_indexes,
 )
 from library.place_namer import (
     REGION_RENAME_DOMINANT_CITY_HYSTERESIS_YEARS,
@@ -36,7 +39,10 @@ from library.place_namer import (
     region_geographic_label,
     region_label_after_dominant_city,
 )
-from library.passive_population import promote_passive_candidate_for_office
+from library.passive_population import (
+    build_passive_office_candidate_index,
+    promote_passive_candidate_for_office,
+)
 from library.polity import (
     AllianceState,
     DynastyState,
@@ -68,14 +74,127 @@ GOV_CHILD_DUTY_MERIT_WEIGHT = 0.55
 GOV_CHILD_DUTY_HEAD_WEIGHT = 0.45
 
 
+def _gov_profile_count(
+    ctx: "SimulationContext", year: int, metric: str, value: int | float = 1
+) -> None:
+    if not simulation_timing.active_for_year(year):
+        return
+    counts = getattr(ctx, "_gov_profile_counts", None)
+    if counts is None:
+        counts = {}
+        setattr(ctx, "_gov_profile_counts", counts)
+    counts[str(metric)] = float(counts.get(str(metric), 0.0)) + float(value)
+
+
 def _childcare_duty_factor_safe(
     ctx: "SimulationContext", rec, year: int
 ) -> float:
     """Look up caregiver duty factor without taking a hard dep at module import."""
-    from library.simulation_household_care import childcare_duty_factor
-
     y = int(year)
-    return float(childcare_duty_factor(ctx, rec, y, indexes=ctx.annual_care_indexes(y)))
+    indexes = getattr(ctx, "_gov_care_indexes", None)
+    if indexes is None:
+        indexes = ctx.annual_care_indexes(y)
+    duty_by_adult = getattr(indexes, "childcare_duty_factor_by_adult", {})
+    return float(duty_by_adult.get(int(rec.person_id), 0.0))
+
+
+def _government_candidate_facts(
+    ctx: "SimulationContext",
+    rec,
+    *,
+    composite_rows: tuple,
+    year: int,
+) -> tuple[float, float, float, int, int, float]:
+    """Per-year reusable office-candidate facts: leadership, military, cfs, age, male, duty."""
+    y = int(year)
+    pid = int(rec.person_id)
+    cache = getattr(ctx, "_gov_candidate_fact_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(ctx, "_gov_candidate_fact_cache", cache)
+    key = (y, pid)
+    cached = cache.get(key)
+    if cached is not None:
+        _gov_profile_count(ctx, y, "candidate_fact_cache_hits")
+        return cached
+    _gov_profile_count(ctx, y, "candidate_fact_cache_misses")
+    prof = simulation_timing.active_for_year(y)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+    li, mi = leadership_and_military_indexes(
+        rec.person, composite_rows=composite_rows
+    )
+    cf = _cfs_safe(rec.person)
+    age = y - int(rec.person.birthyear)
+    male = 1 if (rec.person.gender or "").strip() == "Male" else 0
+    if prof:
+        simulation_timing.accumulate("government.candidate_facts.composites", tpc() - t0)
+        t0 = tpc()
+    duty = _childcare_duty_factor_safe(ctx, rec, y)
+    if prof:
+        simulation_timing.accumulate("government.candidate_facts.duty", tpc() - t0)
+    facts = (li, mi, cf, age, male, duty)
+    cache[key] = facts
+    return facts
+
+
+def _government_scored_candidate_pool(
+    ctx: "SimulationContext",
+    records,
+    *,
+    title: TitleRow,
+    composite_rows: tuple,
+    year: int,
+) -> tuple[tuple[float, int], ...]:
+    """Score title-eligible candidates once per year/title/sample."""
+    y = int(year)
+    record_ids = tuple(int(rec.person_id) for rec in records if rec is not None)
+    cache = getattr(ctx, "_gov_scored_candidate_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(ctx, "_gov_scored_candidate_cache", cache)
+    key = (y, str(title.title_id), record_ids)
+    cached = cache.get(key)
+    if cached is not None:
+        _gov_profile_count(ctx, y, "scored_pool_cache_hits")
+        return cached
+    _gov_profile_count(ctx, y, "scored_pool_cache_misses")
+    _gov_profile_count(ctx, y, "scored_pool_records", len(record_ids))
+    rule = (title.selection_rule or "").lower()
+    min_age = int(title.min_age)
+    min_li = float(title.min_leadership_index)
+    min_mi = float(title.min_military_quality_index)
+    min_cf = float(title.min_career_fitness)
+    male_weight = float(title.male_weight)
+    scored: list[tuple[float, int]] = []
+    prof = simulation_timing.active_for_year(y)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+    for rec in records:
+        if rec is None or rec.person.deathyear is not None:
+            continue
+        li, mi, cf, age, male_code, duty = _government_candidate_facts(
+            ctx, rec, composite_rows=composite_rows, year=y
+        )
+        if age < min_age or li < min_li or mi < min_mi or cf < min_cf:
+            continue
+        gender_weight = male_weight if male_code else (1.0 - male_weight)
+        if "election" in rule or "merit" in rule:
+            base = li * 0.55 + cf * 0.35 + mi * 0.10
+        elif "appointment" in rule:
+            base = cf * 0.55 + li * 0.35
+        else:
+            base = li
+        duty_mult = max(0.0, 1.0 - GOV_CHILD_DUTY_MERIT_WEIGHT * duty)
+        scored.append((base * gender_weight * duty_mult, int(rec.person_id)))
+    if prof:
+        simulation_timing.accumulate("government.scored_pool.loop", tpc() - t0)
+    _gov_profile_count(ctx, y, "scored_pool_candidates", len(scored))
+    cached = tuple(scored)
+    cache[key] = cached
+    return cached
 
 
 def init_government_state(ctx: "SimulationContext") -> None:
@@ -104,13 +223,25 @@ def vacate_seat(
     year: int,
     *,
     end_reason: str,
+    conn: sqlite3.Connection | None = None,
 ) -> None:
     old = seat.holder_person_id
     if old is None:
         return
     w = ctx.world.strip()
-    with _open_save(ctx.save_db_path) as conn:
-        gov_ckpt.ensure_government_schema(conn)
+    if conn is None:
+        with _open_save(ctx.save_db_path) as own_conn:
+            gov_ckpt.ensure_government_schema(own_conn)
+            gov_ckpt.close_office_holding(
+                own_conn,
+                world=w,
+                seat_id=seat.seat_id,
+                holder_person_id=old,
+                end_sim_year=year,
+                end_reason=end_reason,
+            )
+            own_conn.commit()
+    else:
         gov_ckpt.close_office_holding(
             conn,
             world=w,
@@ -118,8 +249,8 @@ def vacate_seat(
             holder_person_id=old,
             end_sim_year=year,
             end_reason=end_reason,
+            ensure_schema=False,
         )
-        conn.commit()
     ctx.gov_office_seats[seat.seat_id] = replace(
         seat,
         holder_person_id=None,
@@ -136,18 +267,29 @@ def assign_holder(
     *,
     display_job: str,
     term_expires: int | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> None:
     w = ctx.world.strip()
-    with _open_save(ctx.save_db_path) as conn:
-        gov_ckpt.ensure_government_schema(conn)
+    if conn is None:
+        with _open_save(ctx.save_db_path) as own_conn:
+            gov_ckpt.ensure_government_schema(own_conn)
+            gov_ckpt.append_office_holding(
+                own_conn,
+                world=w,
+                seat_id=seat.seat_id,
+                holder_person_id=person_id,
+                start_sim_year=year,
+            )
+            own_conn.commit()
+    else:
         gov_ckpt.append_office_holding(
             conn,
             world=w,
             seat_id=seat.seat_id,
             holder_person_id=person_id,
             start_sim_year=year,
+            ensure_schema=False,
         )
-        conn.commit()
     ctx.gov_office_seats[seat.seat_id] = replace(
         seat,
         holder_person_id=person_id,
@@ -221,11 +363,10 @@ def _pick_head_candidate_in_region(
     pref = float(head_title.male_weight) if head_title is not None else 0.5
 
     def head_score(rec) -> tuple[float, float, int]:
-        li = leadership_index(rec.person, composite_rows=composite_rows)
-        cf = _cfs_safe(rec.person)
-        male = 1 if (rec.person.gender or "").strip() == "Male" else 0
+        li, _mi, cf, _age, male, duty = _government_candidate_facts(
+            ctx, rec, composite_rows=composite_rows, year=eff_year
+        )
         boost = pref * male + (1.0 - pref) * (1 - male)
-        duty = _childcare_duty_factor_safe(ctx, rec, eff_year)
         duty_mult = max(0.0, 1.0 - GOV_CHILD_DUTY_HEAD_WEIGHT * duty)
         return (li * boost * duty_mult, cf, -rec.person_id)
 
@@ -268,11 +409,10 @@ def _pick_head_candidate_in_settlement(
     pref = float(head_title.male_weight) if head_title is not None else 0.5
 
     def head_score(rec) -> tuple[float, float, int]:
-        li = leadership_index(rec.person, composite_rows=composite_rows)
-        cf = _cfs_safe(rec.person)
-        male = 1 if (rec.person.gender or "").strip() == "Male" else 0
+        li, _mi, cf, _age, male, duty = _government_candidate_facts(
+            ctx, rec, composite_rows=composite_rows, year=eff_year
+        )
         boost = pref * male + (1.0 - pref) * (1 - male)
-        duty = _childcare_duty_factor_safe(ctx, rec, eff_year)
         duty_mult = max(0.0, 1.0 - GOV_CHILD_DUTY_HEAD_WEIGHT * duty)
         return (li * boost * duty_mult, cf, -rec.person_id)
 
@@ -591,13 +731,20 @@ def _bootstrap_polities_for_region(
     )
 
 
+def _holder_counts_currently_in_office(ctx: "SimulationContext") -> dict[int, int]:
+    """Person ids that occupy one or more seats (merit, hereditary, or head)."""
+    counts: dict[int, int] = {}
+    for seat in ctx.gov_office_seats.values():
+        if seat.holder_person_id is None:
+            continue
+        pid = int(seat.holder_person_id)
+        counts[pid] = counts.get(pid, 0) + 1
+    return counts
+
+
 def _holder_ids_currently_in_office(ctx: "SimulationContext") -> set[int]:
     """Person ids that already occupy any seat (merit, hereditary, or head)."""
-    return {
-        int(s.holder_person_id)
-        for s in ctx.gov_office_seats.values()
-        if s.holder_person_id is not None
-    }
+    return set(_holder_counts_currently_in_office(ctx))
 
 
 def _fill_merit_or_election(
@@ -609,8 +756,19 @@ def _fill_merit_or_election(
     composite_rows: tuple,
     era_key: str,
     rng: random.Random,
-) -> None:
-    already_holding = _holder_ids_currently_in_office(ctx)
+    conn: sqlite3.Connection | None = None,
+    already_holding: set[int] | None = None,
+    passive_office_index=None,
+) -> int | None:
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+    if already_holding is None:
+        already_holding = _holder_ids_currently_in_office(ctx)
+    if prof:
+        simulation_timing.accumulate("government.fill.holder_set", tpc() - t0)
+        t0 = tpc()
     if seat.scope_settlement_id:
         records = ctx.decision_sample_people_in_settlement(
             seat.scope_settlement_id,
@@ -625,39 +783,34 @@ def _fill_merit_or_election(
             scope=f"seat:{int(seat.seat_id)}",
             stream=20_100,
         )
-    scored: list[tuple[float, int]] = []
-    for rec in records:
-        pid = int(rec.person_id)
-        if int(pid) in already_holding:
-            continue
-        if rec is None or rec.person.deathyear is not None:
-            continue
-        age = year - int(rec.person.birthyear)
-        if age < int(title.min_age):
-            continue
-        li = leadership_index(rec.person, composite_rows=composite_rows)
-        mi = military_quality_index(rec.person, composite_rows=composite_rows)
-        cf = _cfs_safe(rec.person)
-        if li < float(title.min_leadership_index):
-            continue
-        if mi < float(title.min_military_quality_index):
-            continue
-        if cf < float(title.min_career_fitness):
-            continue
-        male = (rec.person.gender or "").strip() == "Male"
-        mw = float(title.male_weight)
-        w = mw if male else (1.0 - mw)
-        rule = (title.selection_rule or "").lower()
-        if "election" in rule or "merit" in rule:
-            base = li * 0.55 + cf * 0.35 + mi * 0.10
-        elif "appointment" in rule:
-            base = cf * 0.55 + li * 0.35
-        else:
-            base = li
-        duty = _childcare_duty_factor_safe(ctx, rec, year)
-        duty_mult = max(0.0, 1.0 - GOV_CHILD_DUTY_MERIT_WEIGHT * duty)
-        scored.append((base * w * duty_mult, pid))
-    if not scored:
+    if prof:
+        simulation_timing.accumulate("government.fill.sample", tpc() - t0)
+        t0 = tpc()
+    if prof:
+        score_start = t0
+    scored_pool = _government_scored_candidate_pool(
+        ctx,
+        records,
+        title=title,
+        composite_rows=composite_rows,
+        year=year,
+    )
+    if prof:
+        simulation_timing.accumulate("government.fill.score_pool", tpc() - t0)
+        t0 = tpc()
+    top = nlargest(
+        8,
+        (
+            (score, pid)
+            for score, pid in scored_pool
+            if int(pid) not in already_holding
+        ),
+    )
+    if prof:
+        simulation_timing.accumulate("government.fill.score_top", tpc() - t0)
+        simulation_timing.accumulate("government.fill.score", tpc() - score_start)
+        t0 = tpc()
+    if not top:
         promoted = promote_passive_candidate_for_office(
             ctx,
             year=year,
@@ -672,22 +825,44 @@ def _fill_merit_or_election(
                 "title_id": title.title_id,
                 "polity_id": int(seat.polity_id),
             },
+            candidate_index=passive_office_index,
         )
         if promoted is None:
-            return
+            if prof:
+                simulation_timing.accumulate("government.fill.passive_promote", tpc() - t0)
+            return None
         pick = int(promoted.person_id)
         disp = display_title_name(title, era_key)
         term = year + int(title.term_years) if title.term_years else None
-        assign_holder(ctx, seat, pick, year, display_job=disp, term_expires=term)
-        return
-    scored.sort(reverse=True)
-    top = scored[: min(8, len(scored))]
+        assign_holder(
+            ctx,
+            seat,
+            pick,
+            year,
+            display_job=disp,
+            term_expires=term,
+            conn=conn,
+        )
+        if prof:
+            simulation_timing.accumulate("government.fill.passive_promote", tpc() - t0)
+        return pick
     pick = rng.choice([t[1] for t in top])
     disp = display_title_name(title, era_key)
     term = None
     if title.term_years:
         term = year + int(title.term_years)
-    assign_holder(ctx, seat, pick, year, display_job=disp, term_expires=term)
+    assign_holder(
+        ctx,
+        seat,
+        pick,
+        year,
+        display_job=disp,
+        term_expires=term,
+        conn=conn,
+    )
+    if prof:
+        simulation_timing.accumulate("government.fill.assign", tpc() - t0)
+    return pick
 
 
 _TIER_LABEL_BY_TYPE: dict[str, str] = {
@@ -1027,6 +1202,11 @@ def _maybe_split_vassal(
 
 
 def _reap_dead_holders(ctx: "SimulationContext", year: int) -> None:
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+    dead_holder_seats: list[OfficeSeatState] = []
     for seat in list(ctx.gov_office_seats.values()):
         if seat.holder_person_id is None:
             continue
@@ -1034,7 +1214,26 @@ def _reap_dead_holders(ctx: "SimulationContext", year: int) -> None:
         if rec is None or rec.person.deathyear is None:
             continue
         if int(rec.person.deathyear) <= year:
-            vacate_seat(ctx, seat, year, end_reason="death")
+            dead_holder_seats.append(seat)
+    if prof:
+        simulation_timing.accumulate("government.reap_dead_holders.scan", tpc() - t0)
+    if not dead_holder_seats:
+        return
+    if prof:
+        t0 = tpc()
+    with _open_save(ctx.save_db_path) as conn:
+        gov_ckpt.ensure_government_schema(conn)
+        for seat in dead_holder_seats:
+            current = ctx.gov_office_seats.get(seat.seat_id, seat)
+            if current.holder_person_id is None:
+                continue
+            rec = ctx.id_to_record.get(current.holder_person_id)
+            if rec is None or rec.person.deathyear is None or int(rec.person.deathyear) > year:
+                continue
+            vacate_seat(ctx, current, year, end_reason="death", conn=conn)
+        conn.commit()
+    if prof:
+        simulation_timing.accumulate("government.reap_dead_holders.vacate", tpc() - t0)
 
 
 def _succession_tick(
@@ -1119,23 +1318,109 @@ def _succession_tick(
 
 
 def _term_expiry(
-    ctx: "SimulationContext", year: int, catalog: GovernmentCatalog, composite_rows: tuple
+    ctx: "SimulationContext",
+    year: int,
+    catalog: GovernmentCatalog,
+    composite_rows: tuple,
+    *,
+    passive_office_index=None,
 ) -> None:
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     era_key = __import__(
         "library.simulation_careers", fromlist=["resolve_job_era"]
     ).resolve_job_era(ctx.get_historical_year(year))
+    expired = []
     for seat in list(ctx.gov_office_seats.values()):
         if seat.holder_person_id is None or seat.term_expires_sim_year is None:
             continue
         if year < int(seat.term_expires_sim_year):
             continue
-        t = catalog.title_by_id(seat.title_id)
-        vacate_seat(ctx, seat, year, end_reason="term_expiry")
-        if t is not None:
-            rng = random.Random(year * 9973 + seat.seat_id)
-            _fill_merit_or_election(
-                ctx, year, seat, t, catalog, composite_rows, era_key, rng
+        expired.append(seat)
+    if prof:
+        simulation_timing.accumulate("government.term_expiry.scan", tpc() - t0)
+    if not expired:
+        return
+    expired_count = 0
+    if prof:
+        t0 = tpc()
+    holder_counts = _holder_counts_currently_in_office(ctx)
+    already_holding = set(holder_counts)
+    if prof:
+        simulation_timing.accumulate("government.term_expiry.holder_index", tpc() - t0)
+    if prof:
+        t0 = tpc()
+    with _open_save(ctx.save_db_path) as conn:
+        gov_ckpt.ensure_government_schema(conn)
+        if prof:
+            simulation_timing.accumulate("government.term_expiry.open", tpc() - t0)
+        for seat in expired:
+            if prof:
+                t0 = tpc()
+            current = ctx.gov_office_seats.get(seat.seat_id, seat)
+            if current.holder_person_id is None:
+                if prof:
+                    simulation_timing.accumulate("government.term_expiry.check", tpc() - t0)
+                continue
+            if current.term_expires_sim_year is None or year < int(current.term_expires_sim_year):
+                if prof:
+                    simulation_timing.accumulate("government.term_expiry.check", tpc() - t0)
+                continue
+            seat = current
+            expired_count += 1
+            t = catalog.title_by_id(seat.title_id)
+            if prof:
+                simulation_timing.accumulate("government.term_expiry.check", tpc() - t0)
+                t0 = tpc()
+            old_holder = (
+                int(seat.holder_person_id)
+                if seat.holder_person_id is not None
+                else None
             )
+            vacate_seat(ctx, seat, year, end_reason="term_expiry", conn=conn)
+            if old_holder is not None:
+                remaining = int(holder_counts.get(old_holder, 0)) - 1
+                if remaining > 0:
+                    holder_counts[old_holder] = remaining
+                else:
+                    holder_counts.pop(old_holder, None)
+                    already_holding.discard(old_holder)
+            if prof:
+                simulation_timing.accumulate("government.term_expiry.vacate", tpc() - t0)
+            if t is not None:
+                if prof:
+                    t0 = tpc()
+                rng = random.Random(year * 9973 + seat.seat_id)
+                new_holder = _fill_merit_or_election(
+                    ctx,
+                    year,
+                    seat,
+                    t,
+                    catalog,
+                    composite_rows,
+                    era_key,
+                    rng,
+                    conn=conn,
+                    already_holding=already_holding,
+                    passive_office_index=passive_office_index,
+                )
+                if new_holder is not None:
+                    holder_counts[int(new_holder)] = (
+                        int(holder_counts.get(int(new_holder), 0)) + 1
+                    )
+                    already_holding.add(int(new_holder))
+                if prof:
+                    simulation_timing.accumulate("government.term_expiry.refill", tpc() - t0)
+        if prof:
+            t0 = tpc()
+        conn.commit()
+        if prof:
+            simulation_timing.accumulate("government.term_expiry.commit", tpc() - t0)
+    simulation_timing.record_gauge(
+        year, "government", "term_expired_seats", expired_count
+    )
 
 
 def _fill_vacancies(
@@ -1146,7 +1431,9 @@ def _fill_vacancies(
     composite_rows: tuple,
     era_key: str,
     rng: random.Random,
+    passive_office_index=None,
 ) -> None:
+    vacancies: list[tuple[OfficeSeatState, TitleRow]] = []
     for seat in list(ctx.gov_office_seats.values()):
         if seat.holder_person_id is not None:
             continue
@@ -1156,7 +1443,36 @@ def _fill_vacancies(
         rule = (t.selection_rule or "").lower()
         if "primogeniture" in rule or "salic" in rule:
             continue
-        _fill_merit_or_election(ctx, year, seat, t, catalog, composite_rows, era_key, rng)
+        vacancies.append((seat, t))
+    if not vacancies:
+        return
+    holder_counts = _holder_counts_currently_in_office(ctx)
+    already_holding = set(holder_counts)
+    with _open_save(ctx.save_db_path) as conn:
+        gov_ckpt.ensure_government_schema(conn)
+        for seat, t in vacancies:
+            current = ctx.gov_office_seats.get(seat.seat_id, seat)
+            if current.holder_person_id is not None:
+                continue
+            new_holder = _fill_merit_or_election(
+                ctx,
+                year,
+                current,
+                t,
+                catalog,
+                composite_rows,
+                era_key,
+                rng,
+                conn=conn,
+                already_holding=already_holding,
+                passive_office_index=passive_office_index,
+            )
+            if new_holder is not None:
+                holder_counts[int(new_holder)] = (
+                    int(holder_counts.get(int(new_holder), 0)) + 1
+                )
+                already_holding.add(int(new_holder))
+        conn.commit()
 
 
 _VASSAL_EXTINCTION_GRACE_YEARS = 5
@@ -1193,6 +1509,7 @@ def _ensure_settlement_offices(
     era_key: str,
     rng: random.Random,
     population_scale: float,
+    conn: sqlite3.Connection | None = None,
 ) -> None:
     """Size population-scaled per-settlement merit seats (``settlement_leader`` etc.).
 
@@ -1235,6 +1552,7 @@ def _ensure_settlement_offices(
                         rng=rng,
                         population_scale=population_scale,
                         seats_index=seats_index,
+                        conn=conn,
                     )
         elif settlements:
             for sid in settlements:
@@ -1249,6 +1567,7 @@ def _ensure_settlement_offices(
                     rng=rng,
                     population_scale=population_scale,
                     seats_index=seats_index,
+                    conn=conn,
                 )
 
 
@@ -1264,6 +1583,7 @@ def _ensure_settlement_offices_for_sid(
     rng: random.Random,
     population_scale: float,
     seats_index: dict[tuple[int, str, str], int],
+    conn: sqlite3.Connection | None = None,
 ) -> None:
     state = ctx.settlements_by_id.get(sid)
     if state is None or (state.status or "").strip().lower() != "active":
@@ -1295,7 +1615,7 @@ def _ensure_settlement_offices_for_sid(
             )
             ctx.gov_office_seats[seat_id] = seat
             _fill_merit_or_election(
-                ctx, year, seat, t, catalog, composite_rows, era_key, rng
+                ctx, year, seat, t, catalog, composite_rows, era_key, rng, conn=conn
             )
         seats_index[(int(pol.polity_id), str(t.title_id), sid)] = needed
 
@@ -1562,6 +1882,10 @@ def _suzerain_inherit_extinct_vassal(ctx: "SimulationContext", year: int) -> Non
 
 
 def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> None:
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     init_government_state(ctx)
     try:
         catalog = load_government_catalog(ctx.db_path)
@@ -1574,12 +1898,28 @@ def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> No
         return
     if pick_primary_polity_type(catalog, era) is None:
         return
-    composite_rows = load_genome_composite_rows(ctx.db_path)
+    composite_rows = government_candidate_composite_rows(
+        load_genome_composite_rows(ctx.db_path)
+    )
     era_key = __import__(
         "library.simulation_careers", fromlist=["resolve_job_era"]
     ).resolve_job_era(hy)
     rng = random.Random(y * 1_000_003 + hash(ctx.world) % 999_983 + int(ctx.placename_rng_salt))
     pop_scale = population_scale_for_world(ctx.world, db_path=ctx.db_path)
+    ctx._gov_candidate_fact_cache = {}
+    ctx._gov_scored_candidate_cache = {}
+    ctx._gov_care_indexes = ctx.annual_care_indexes(y)
+    if prof:
+        ctx._gov_profile_counts = {}
+    if prof:
+        simulation_timing.accumulate("government.setup", tpc() - t0)
+        simulation_timing.record_gauge(
+            y, "government", "polities", len(getattr(ctx, "gov_polities", {}))
+        )
+        simulation_timing.record_gauge(
+            y, "government", "office_seats", len(getattr(ctx, "gov_office_seats", {}))
+        )
+        t0 = tpc()
 
     cols = ctx.alive_person_columns(y)
     regions_with_people = {
@@ -1587,6 +1927,12 @@ def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> No
         for code in set(cols.region_codes)
         if int(code) != 0 and int(code) in cols.region_id_by_code
     }
+    if prof:
+        simulation_timing.accumulate("government.alive_region_scan", tpc() - t0)
+        simulation_timing.record_gauge(
+            y, "government", "regions_with_people", len(regions_with_people)
+        )
+        t0 = tpc()
 
     for rid in sorted(regions_with_people):
         n_alive = ctx.count_alive_in_region(rid)
@@ -1606,6 +1952,9 @@ def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> No
             rng=rng,
             population_scale=pop_scale,
         )
+    if prof:
+        simulation_timing.accumulate("government.bootstrap_regions", tpc() - t0)
+        t0 = tpc()
 
     _maybe_promote_polity(
         ctx,
@@ -1616,6 +1965,9 @@ def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> No
         era_key=era_key,
         population_scale=pop_scale,
     )
+    if prof:
+        simulation_timing.accumulate("government.promote_polity", tpc() - t0)
+        t0 = tpc()
     _maybe_split_vassal(
         ctx,
         y,
@@ -1624,33 +1976,120 @@ def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> No
         rng=rng,
         population_scale=pop_scale,
     )
+    if prof:
+        simulation_timing.accumulate("government.split_vassal", tpc() - t0)
+        t0 = tpc()
 
-    _ensure_settlement_offices(
+    with _open_save(ctx.save_db_path) as conn:
+        gov_ckpt.ensure_government_schema(conn)
+        _ensure_settlement_offices(
+            ctx,
+            y,
+            catalog=catalog,
+            composite_rows=composite_rows,
+            era_key=era_key,
+            rng=rng,
+            population_scale=pop_scale,
+            conn=conn,
+        )
+        conn.commit()
+    if prof:
+        simulation_timing.accumulate("government.ensure_settlement_offices", tpc() - t0)
+        simulation_timing.record_gauge(
+            y,
+            "government",
+            "office_seats_after_ensure",
+            len(getattr(ctx, "gov_office_seats", {})),
+        )
+        t0 = tpc()
+    _maybe_name_regions_and_polities(ctx, y, catalog=catalog, rng=rng)
+    if prof:
+        simulation_timing.accumulate("government.naming", tpc() - t0)
+        t0 = tpc()
+    _reap_dead_holders(ctx, y)
+    if prof:
+        simulation_timing.accumulate("government.reap_dead_holders", tpc() - t0)
+        t0 = tpc()
+    _succession_tick(
+        ctx, y, catalog=catalog, composite_rows=composite_rows, era_key=era_key, rng=rng
+    )
+    if prof:
+        simulation_timing.accumulate("government.succession", tpc() - t0)
+        t0 = tpc()
+    passive_office_index = build_passive_office_candidate_index(ctx)
+    if prof:
+        simulation_timing.accumulate("government.passive_office_index", tpc() - t0)
+        t0 = tpc()
+    _term_expiry(
+        ctx,
+        y,
+        catalog,
+        composite_rows,
+        passive_office_index=passive_office_index,
+    )
+    # Term expiry records exclusive inner phases.
+    if prof:
+        t0 = tpc()
+    _fill_vacancies(
         ctx,
         y,
         catalog=catalog,
         composite_rows=composite_rows,
         era_key=era_key,
         rng=rng,
-        population_scale=pop_scale,
+        passive_office_index=passive_office_index,
     )
-    _maybe_name_regions_and_polities(ctx, y, catalog=catalog, rng=rng)
-    _reap_dead_holders(ctx, y)
-    _succession_tick(
-        ctx, y, catalog=catalog, composite_rows=composite_rows, era_key=era_key, rng=rng
-    )
-    _term_expiry(ctx, y, catalog, composite_rows)
-    _fill_vacancies(ctx, y, catalog=catalog, composite_rows=composite_rows, era_key=era_key, rng=rng)
+    if prof:
+        simulation_timing.accumulate("government.fill_vacancies", tpc() - t0)
+        simulation_timing.record_gauge(
+            y,
+            "government",
+            "vacant_office_seats",
+            sum(
+                1
+                for s in getattr(ctx, "gov_office_seats", {}).values()
+                if s.holder_person_id is None
+            ),
+        )
+        t0 = tpc()
 
     import library.simulation_warfare as war
 
     war.simulation_warfare_annual_tick(
         ctx, y, catalog=catalog, composite_rows=composite_rows, rng=rng
     )
+    if prof:
+        simulation_timing.accumulate("government.warfare", tpc() - t0)
+        t0 = tpc()
+    if prof:
+        alliance_start = t0
     war.decay_alliance_loyalty(ctx, rng)
-    war.roll_marriage_alliances(ctx, y, rng)
+    if prof:
+        simulation_timing.accumulate("government.alliances.decay", tpc() - t0)
+        t0 = tpc()
+    war.roll_marriage_alliances(ctx, y, rng, catalog=catalog)
+    if prof:
+        simulation_timing.accumulate("government.alliances.marriage", tpc() - t0)
+        simulation_timing.accumulate("government.alliances", tpc() - alliance_start)
+        t0 = tpc()
     _suzerain_inherit_extinct_vassal(ctx, y)
     _dissolve_landless_polities(ctx, y)
+    if prof:
+        simulation_timing.accumulate("government.cleanup", tpc() - t0)
+        simulation_timing.record_gauge(
+            y,
+            "government",
+            "candidate_fact_cache_size",
+            len(getattr(ctx, "_gov_candidate_fact_cache", {})),
+        )
+        simulation_timing.record_gauge(
+            y,
+            "government",
+            "scored_candidate_cache_size",
+            len(getattr(ctx, "_gov_scored_candidate_cache", {})),
+        )
+        for metric, value in sorted(getattr(ctx, "_gov_profile_counts", {}).items()):
+            simulation_timing.record_gauge(y, "government", metric, value)
 
 
 def vacate_government_holders_not_in_ram(ctx: "SimulationContext") -> None:

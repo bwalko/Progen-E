@@ -15,6 +15,75 @@ from library.world_time import set_world_current_year
 
 
 class TestWorkingSetCheckpoint(unittest.TestCase):
+    def test_finalize_persists_current_year_between_checkpoint_years(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="finalize_year",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                p = generate_person_random(simulation_context=ctx, simulation_year=1000)
+                ctx.add_person(person=p, is_founder=True)
+                ctx.current_year = 1001
+
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="finalize_year",
+                world="default",
+                start_year=None,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as resumed:
+                self.assertEqual(resumed.current_year, 1001)
+
+    def test_resume_context_uses_saved_simulation_start_year(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="resume_start",
+                world="default",
+                start_year=1,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                p = generate_person_random(simulation_context=ctx, simulation_year=1)
+                ctx.add_person(person=p, is_founder=True)
+                ctx.current_year = 2
+                set_world_current_year(
+                    current_year=2,
+                    config_db_path=cfg,
+                    save_db_path=sav,
+                    world="default",
+                )
+                checkpoint_simulation_to_save(ctx)
+
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="resume_start",
+                world="default",
+                start_year=None,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as resumed:
+                self.assertEqual(resumed.simulation_start_year, 1)
+                self.assertEqual(resumed.current_year, 2)
+                self.assertEqual(resumed.get_historical_year(2), 1001)
+
     def test_ancient_dead_row_stays_in_sqlite_not_in_ram(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)

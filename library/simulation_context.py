@@ -231,6 +231,7 @@ class SimulationContext:
     _annual_care_indexes_cache: tuple[int, Any] | None = field(default=None, repr=False)
     _annual_resource_facts_cache: tuple[int, Any] | None = field(default=None, repr=False)
     _world_map_geometry_cache: WorldMapGeometry | None = field(default=None, repr=False)
+    _regional_base_cap_cache: dict[str, int] = field(default_factory=dict, repr=False)
     _species_life_stage_rows_cache: tuple[
         str, dict[tuple[str, str], Mapping[str, Any]]
     ] | None = field(default=None, repr=False)
@@ -341,12 +342,12 @@ class SimulationContext:
                 world=world,
             )
         else:
-            _, current_y = ensure_world_state(
+            saved_start_y, current_y = ensure_world_state(
                 config_db_path=resolved_config,
                 save_db_path=resolved_save,
                 world=world,
             )
-            simulation_start = configured_start_year
+            simulation_start = int(saved_start_y)
 
         run_store_dir = resolved_config.parent / "temp" / f"simulation_run_{uuid4().hex}"
         file_store = SimulationFileStore(
@@ -490,6 +491,35 @@ class SimulationContext:
         """Drop per-year shared indexes after population, residence, or relationship changes."""
         self._annual_care_indexes_cache = None
         self._annual_resource_facts_cache = None
+
+    @staticmethod
+    def _append_alive_census_record(
+        records: list[SimulationPersonRecord], rec: SimulationPersonRecord
+    ) -> None:
+        """Keep cached census buckets in person-id order after an incremental add."""
+        if not records or int(records[-1].person_id) <= int(rec.person_id):
+            records.append(rec)
+            return
+        insert_at = len(records)
+        while insert_at > 0 and int(records[insert_at - 1].person_id) > int(rec.person_id):
+            insert_at -= 1
+        records.insert(insert_at, rec)
+
+    def _add_record_to_alive_census_cache(self, rec: SimulationPersonRecord) -> None:
+        """Increment the alive census cache for a newly current person when it exists."""
+        cached = self._alive_census_cache
+        if cached is None or int(rec.person_id) not in self.current_people_ids:
+            return
+        sid = self._residence_settlement_id(rec)
+        if sid:
+            self._append_alive_census_record(cached.by_settlement.setdefault(sid, []), rec)
+            cached.count_by_settlement[sid] = (
+                int(cached.count_by_settlement.get(sid, 0)) + 1
+            )
+        rid = self._residence_region_id(rec)
+        if rid:
+            self._append_alive_census_record(cached.by_region.setdefault(rid, []), rec)
+            cached.count_by_region[rid] = int(cached.count_by_region.get(rid, 0)) + 1
 
     def annual_care_indexes(self, year: int):
         """Shared per-year household/care indexes for modules that need family facts."""
@@ -663,7 +693,8 @@ class SimulationContext:
         self.people.append(rec)
         self.id_to_record[rec.person_id] = rec
         self.current_people_ids.add(rec.person_id)
-        self.invalidate_alive_census_cache()
+        self._add_record_to_alive_census_cache(rec)
+        self.invalidate_alive_columns_cache()
         event_type = "founder_created" if is_founder else "birth"
         if self.file_store is not None:
             self.file_store.append_person(
@@ -751,7 +782,8 @@ class SimulationContext:
         if person.deathyear is None or int(person.deathyear) > int(year):
             self.current_people_ids.add(rec.person_id)
         self.next_person_id = max(int(self.next_person_id), int(rec.person_id) + 1)
-        self.invalidate_alive_census_cache()
+        self._add_record_to_alive_census_cache(rec)
+        self.invalidate_alive_columns_cache()
         if self.file_store is not None:
             self.file_store.append_person(
                 {
@@ -1589,8 +1621,11 @@ class SimulationContext:
     def effective_regional_population_cap(self, region_id: str) -> int:
         """Time-varying soft cap: config ``carrying_capacity`` × per-region multiplier (≥ 1)."""
         rid = (region_id or "").strip()
-        region = get_region(rid, world=self.world, db_path=self.db_path)
-        base = max(0, int(region.carrying_capacity))
+        base = self._regional_base_cap_cache.get(rid)
+        if base is None:
+            region = get_region(rid, world=self.world, db_path=self.db_path)
+            base = max(0, int(region.carrying_capacity))
+            self._regional_base_cap_cache[rid] = base
         if base <= 0:
             base = 5000
         m = float(self.region_effective_cap_multiplier.get(rid, 1.0))
@@ -1671,6 +1706,18 @@ class SimulationContext:
 
     def active_settlements_in_region(self, region_id: str) -> list[SettlementState]:
         rid = (region_id or "").strip()
+        if self.settlements_by_id and not self.settlement_ids_by_region:
+            self.rebuild_settlement_region_index()
+        indexed_ids = self.settlement_ids_by_region.get(rid)
+        if indexed_ids is not None:
+            out = [
+                st
+                for sid in indexed_ids
+                if (st := self.settlements_by_id.get(sid)) is not None
+                and (st.status or "").strip().lower() == "active"
+            ]
+            out.sort(key=lambda s: (s.site_slot, s.founded_sim_year or 0))
+            return out
         out = [
             st
             for st in self.settlements_by_id.values()
@@ -2021,10 +2068,19 @@ class SimulationContext:
         if cap_eff <= 0 or census >= cap_eff:
             self.spinoff_pending_families_by_region.pop(rid, None)
             return rid, mother_settlement_id
-        act = self.active_settlements_in_region(rid)
-        if len(act) < 1:
-            return rid, mother_settlement_id
         mother_sid = (mother_settlement_id or "").strip()
+        if mother_sid:
+            mother_st = self.settlements_by_id.get(mother_sid)
+            if (
+                mother_st is None
+                or mother_st.region_id != rid
+                or (mother_st.status or "").strip().lower() != "active"
+            ):
+                return rid, mother_settlement_id
+        else:
+            act = self.active_settlements_in_region(rid)
+            if len(act) < 1:
+                return rid, mother_settlement_id
         mp = self.count_alive_in_settlement(mother_sid) if mother_sid else 0
         min_pop = max(1, int(self.spinoff_min_mother_settlement_population))
         if mp < min_pop:
@@ -2105,8 +2161,7 @@ class SimulationContext:
         if prof:
             t0 = tpc()
         simulation_careers_annual_tick(self, year)
-        if prof:
-            simulation_timing.accumulate("summary.careers", tpc() - t0)
+        # Careers has its own exclusive inner profile phases.
         if prof:
             t0 = tpc()
         simulation_migration_annual_tick(self, year)
@@ -2133,8 +2188,7 @@ class SimulationContext:
         if prof:
             t0 = tpc()
         simulation_government_annual_tick(self, year)
-        if prof:
-            simulation_timing.accumulate("summary.government", tpc() - t0)
+        # Government has its own exclusive inner profile phases.
         from library.simulation_economy import simulation_economy_annual_tick
 
         if prof:
@@ -2216,19 +2270,9 @@ class SimulationContext:
             if prof:
                 simulation_timing.accumulate("file_store.flush_if_due", tpc() - t0)
         if persist_to_save:
-            full_snapshot = self._should_checkpoint_snapshot(year)
-            if prof:
-                t0 = tpc()
             checkpoint_simulation_to_save(
-                self, full_snapshot=full_snapshot
+                self, full_snapshot=self._should_checkpoint_snapshot(year)
             )
-            if prof:
-                phase = (
-                    "checkpoint.full_snapshot"
-                    if full_snapshot
-                    else "checkpoint.events_meta"
-                )
-                simulation_timing.accumulate(phase, tpc() - t0)
 
     def finalize_run(self) -> None:
         """Persist simulation state to ``save.sqlite`` and flush optional file store.
@@ -2247,9 +2291,17 @@ class SimulationContext:
         if prof:
             simulation_timing.accumulate("finalize.import_run_store_events", tpc() - t0)
             t0 = tpc()
+        if self.current_year is not None:
+            set_world_current_year(
+                current_year=int(self.current_year),
+                config_db_path=self.db_path,
+                save_db_path=self.save_db_path,
+                world=self.world,
+            )
+            if prof:
+                simulation_timing.accumulate("finalize.set_world_year", tpc() - t0)
+                t0 = tpc()
         checkpoint_simulation_to_save(self, full_snapshot=True)
-        if prof:
-            simulation_timing.accumulate("finalize.checkpoint_full_snapshot", tpc() - t0)
         if self.file_store is not None:
             if prof:
                 t0 = tpc()

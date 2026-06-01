@@ -17,6 +17,7 @@ import numpy as np
 from library.generator import generate_person_random
 from library.passive_population import (
     PassiveCohort,
+    build_passive_marriage_candidate_index,
     promote_passive_candidate_for_marriage,
     promote_passive_candidate_for_office,
 )
@@ -463,6 +464,10 @@ def _pair_from_records(
     year: int,
     paired_ids: set[int],
 ) -> None:
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     eligible_males = [
         r
         for r in records
@@ -479,6 +484,9 @@ def _pair_from_records(
         and r.person_id not in paired_ids
         and _is_mature(r, year)
     ]
+    if prof:
+        simulation_timing.accumulate("pairing.collect_eligible", tpc() - t0)
+        t0 = tpc()
     remaining_females = list(eligible_females)
     pair_count = len(eligible_males) * len(remaining_females)
     bounded = pair_count > PAIRING_EXHAUSTIVE_PAIR_LIMIT
@@ -518,6 +526,8 @@ def _pair_from_records(
         paired_ids.add(a_id)
         paired_ids.add(b_id)
         remaining_females.remove(female)
+    if prof:
+        simulation_timing.accumulate("pairing.match_loop", tpc() - t0)
 
 
 def _opposite_binary_gender(gender: str | None) -> str | None:
@@ -535,6 +545,14 @@ def _promote_passive_spouses_for_unpaired_detailed(
     by_settlement: dict[str, list[SimulationPersonRecord]],
     paired_ids: set[int],
 ) -> None:
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+    candidate_index = build_passive_marriage_candidate_index(ctx)
+    if prof:
+        simulation_timing.accumulate("pairing.passive_promote.index", tpc() - t0)
+        t0 = tpc()
     promotions = 0
     for sid in sorted(by_settlement.keys()):
         st = ctx.settlements_by_id.get(sid)
@@ -542,6 +560,8 @@ def _promote_passive_spouses_for_unpaired_detailed(
         records = sorted(by_settlement[sid], key=lambda rec: int(rec.person_id))
         for rec in records:
             if promotions >= PASSIVE_MARRIAGE_PROMOTION_CAP_PER_YEAR:
+                if prof:
+                    simulation_timing.accumulate("pairing.passive_promote.scan", tpc() - t0)
                 return
             if rec.is_founder or rec.person_id in paired_ids or not _is_mature(rec, year):
                 continue
@@ -560,6 +580,7 @@ def _promote_passive_spouses_for_unpaired_detailed(
                     "detailed_person_id": int(rec.person_id),
                     "detailed_settlement_id": sid,
                 },
+                candidate_index=candidate_index,
             )
             if promoted is None:
                 continue
@@ -570,6 +591,8 @@ def _promote_passive_spouses_for_unpaired_detailed(
             paired_ids.add(rec.person_id)
             paired_ids.add(promoted.person_id)
             promotions += 1
+    if prof:
+        simulation_timing.accumulate("pairing.passive_promote.scan", tpc() - t0)
 
 
 def pair_people_by_settlement_then_region(
@@ -582,9 +605,19 @@ def pair_people_by_settlement_then_region(
     New pairs are opposite-sex only (one mature male, one mature female per pair).
     Same-sex official couples are formed in ``library.simulation_social`` instead.
     """
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     paired_ids = {pid for pair in ctx.couples for pid in pair}
+    if prof:
+        simulation_timing.accumulate("pairing.paired_ids", tpc() - t0)
+        t0 = tpc()
     for sid in sorted(by_settlement.keys()):
         _pair_from_records(ctx, by_settlement[sid], year, paired_ids)
+    if prof:
+        simulation_timing.accumulate("pairing.settlement_phase", tpc() - t0)
+        t0 = tpc()
 
     by_region: dict[str, list[SimulationPersonRecord]] = {}
     for sid in sorted(by_settlement.keys()):
@@ -600,11 +633,19 @@ def pair_people_by_settlement_then_region(
         for rec in records:
             if rec.person_id not in paired_ids:
                 by_region.setdefault(rid, []).append(rec)
+    if prof:
+        simulation_timing.accumulate("pairing.region_build", tpc() - t0)
+        t0 = tpc()
 
     for rid in sorted(by_region.keys()):
         _pair_from_records(ctx, by_region[rid], year, paired_ids)
+    if prof:
+        simulation_timing.accumulate("pairing.region_phase", tpc() - t0)
+        t0 = tpc()
 
     _promote_passive_spouses_for_unpaired_detailed(ctx, year, by_settlement, paired_ids)
+    if prof:
+        simulation_timing.accumulate("pairing.passive_promote", tpc() - t0)
 
 
 def births_by_settlement(
@@ -627,17 +668,43 @@ def births_by_settlement(
     births_count = 0
     cap = int(detailed_active_soft_cap) if detailed_active_soft_cap else None
     rng = random.Random(year * 1_000_003 + sim_seed)
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+    mothers_by_settlement: list[tuple[str, list[SimulationPersonRecord]]] = []
+    candidate_mothers = 0
     for sid in sorted(by_settlement.keys()):
         mothers_this_year = [
             r
             for r in by_settlement[sid]
             if (r.person.gender or "").strip() == "Female"
         ]
+        candidate_mothers += len(mothers_this_year)
+        mothers_by_settlement.append((sid, mothers_this_year))
+    if prof:
+        simulation_timing.accumulate("births.scan_mothers", tpc() - t0)
+        simulation_timing.record_gauge(
+            year, "births", "candidate_mothers", candidate_mothers
+        )
+    eligible_mothers = 0
+    partnered_mothers = 0
+    conception_successes = 0
+    passive_births = 0
+    detailed_births = 0
+    for sid, mothers_this_year in mothers_by_settlement:
         for rec in mothers_this_year:
+            if prof:
+                t0 = tpc()
             if not _eligible_for_birth(rec, year):
+                if prof:
+                    simulation_timing.accumulate("births.eligibility_partner", tpc() - t0)
                 continue
             if rec.person.last_birth_event_year == year:
+                if prof:
+                    simulation_timing.accumulate("births.eligibility_partner", tpc() - t0)
                 continue
+            eligible_mothers += 1
             candidates: list[int] = []
             pid = rec.person.partner_person_id
             mid = rec.person.paramour_person_id
@@ -650,18 +717,33 @@ def births_by_settlement(
                 if mr is not None and _eligible_for_birth(mr, year):
                     candidates.append(mid)
             if not candidates:
+                if prof:
+                    simulation_timing.accumulate("births.eligibility_partner", tpc() - t0)
                 continue
+            partnered_mothers += 1
             father_id = rng.choice(candidates)
             father = ctx.id_to_record[father_id]
+            if prof:
+                simulation_timing.accumulate("births.eligibility_partner", tpc() - t0)
+                t0 = tpc()
             pressure = resource_pressure_for_person(
                 ctx, rec, resource_facts=resource_facts
             )
+            if prof:
+                simulation_timing.accumulate("births.resource_pressure", tpc() - t0)
+                t0 = tpc()
             p_try = annual_conception_probability(
                 rec.person, father.person, pressure=pressure
             )
             crng = conception_rng(year, sim_seed, rec.person_id, father_id)
             if crng.random() >= p_try:
+                if prof:
+                    simulation_timing.accumulate("births.conception_roll", tpc() - t0)
                 continue
+            conception_successes += 1
+            if prof:
+                simulation_timing.accumulate("births.conception_roll", tpc() - t0)
+                t0 = tpc()
             if cap is not None and len(ctx.current_people_ids) + births_count >= cap:
                 sid_birth = rec.person.current_settlement_id or rec.person.birthplace_settlement_id or sid
                 st = ctx.settlements_by_id.get(str(sid_birth))
@@ -679,10 +761,16 @@ def births_by_settlement(
                 if passive_births_by_place is not None:
                     passive_births_by_place[key] = passive_births_by_place.get(key, 0) + 1
                 rec.person = replace(rec.person, last_birth_event_year=year)
+                passive_births += 1
+                if prof:
+                    simulation_timing.accumulate("births.passive_births", tpc() - t0)
                 continue
             surname_convention = ctx.surname_convention_for_parents(
                 father.person_id, rec.person_id
             )
+            if prof:
+                simulation_timing.accumulate("births.surname_convention", tpc() - t0)
+                t0 = tpc()
             children = having_sex_birth_event(
                 father.person,
                 rec.person,
@@ -696,9 +784,13 @@ def births_by_settlement(
                 mother_person_id=rec.person_id,
                 surname_convention=surname_convention,
             )
+            if prof:
+                simulation_timing.accumulate("births.generate_children", tpc() - t0)
             if not children:
                 continue
             rec.person = replace(rec.person, last_birth_event_year=year)
+            if prof:
+                t0 = tpc()
             for child in children:
                 ctx.add_person(
                     person=child,
@@ -707,6 +799,17 @@ def births_by_settlement(
                     mother_id=rec.person_id,
                 )
                 births_count += 1
+                detailed_births += 1
+            if prof:
+                simulation_timing.accumulate("births.add_person", tpc() - t0)
+    if prof:
+        simulation_timing.record_gauge(year, "births", "eligible_mothers", eligible_mothers)
+        simulation_timing.record_gauge(year, "births", "partnered_mothers", partnered_mothers)
+        simulation_timing.record_gauge(
+            year, "births", "conception_successes", conception_successes
+        )
+        simulation_timing.record_gauge(year, "births", "passive_births", passive_births)
+        simulation_timing.record_gauge(year, "births", "detailed_births", detailed_births)
     return births_count
 
 
@@ -955,10 +1058,14 @@ def refresh_passive_background_cohorts(
     person event loops. The first year seeds each active settlement from regional
     carrying capacity; later years age the previous passive snapshot forward.
     """
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
     scale = max(0.0, float(population_scale))
     extra_newborns_by_place = extra_newborns_by_place or {}
     if scale <= 0.0 and extra_newborns_by_place:
-        next_cohorts = [c for c in ctx.passive_cohorts if int(c.sim_year) != int(year)]
+        next_cohorts: list[PassiveCohort] = []
         total = _append_passive_newborn_cohorts(
             ctx,
             year,
@@ -967,7 +1074,10 @@ def refresh_passive_background_cohorts(
         )
         ctx.passive_cohorts = next_cohorts
         return total
-    if scale <= 0.0 or not ctx.settlements_by_id:
+    if scale <= 0.0:
+        ctx.passive_cohorts = []
+        return 0
+    if not ctx.settlements_by_id:
         return 0
     ctx.sync_settlement_resident_counts()
     active_by_region: dict[str, list[str]] = {}
@@ -979,13 +1089,17 @@ def refresh_passive_background_cohorts(
         sids.sort()
 
     previous_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+    if prof:
+        simulation_timing.accumulate("passive.setup", tpc() - t0)
+        t0 = tpc()
     if previous_year is not None:
-        next_cohorts: list[PassiveCohort] = [
-            c for c in ctx.passive_cohorts if int(c.sim_year) != int(year)
-        ]
+        next_cohorts: list[PassiveCohort] = []
         total_background = 0
         births_by_place: dict[tuple[str, str, str, str], int] = {}
         previous = [c for c in ctx.passive_cohorts if int(c.sim_year) == previous_year]
+        if prof:
+            simulation_timing.accumulate("passive.previous_select", tpc() - t0)
+            t0 = tpc()
         for cohort in previous:
             if (cohort.settlement_id or "") not in ctx.settlements_by_id:
                 continue
@@ -1033,6 +1147,9 @@ def refresh_passive_background_cohorts(
                         death_count=deaths,
                     )
                 )
+        if prof:
+            simulation_timing.accumulate("passive.evolve_existing", tpc() - t0)
+            t0 = tpc()
         for (rid, sid, species, culture), births in sorted(births_by_place.items()):
             if births <= 0:
                 continue
@@ -1057,6 +1174,9 @@ def refresh_passive_background_cohorts(
                         birth_count=count,
                     )
                 )
+        if prof:
+            simulation_timing.accumulate("passive.background_births", tpc() - t0)
+            t0 = tpc()
         ctx.passive_cohorts = next_cohorts
         total_background += _append_passive_newborn_cohorts(
             ctx,
@@ -1064,10 +1184,14 @@ def refresh_passive_background_cohorts(
             extra_newborns_by_place or {},
             next_cohorts=ctx.passive_cohorts,
         )
+        if prof:
+            simulation_timing.accumulate("passive.detailed_overflow_births", tpc() - t0)
         return total_background
 
-    next_cohorts = [c for c in ctx.passive_cohorts if int(c.sim_year) != int(year)]
+    next_cohorts: list[PassiveCohort] = []
     total_background = 0
+    if prof:
+        t0 = tpc()
     for rid, settlement_ids in sorted(active_by_region.items()):
         if not settlement_ids:
             continue
@@ -1121,6 +1245,9 @@ def refresh_passive_background_cohorts(
                                 population_count=count,
                             )
                         )
+    if prof:
+        simulation_timing.accumulate("passive.seed_initial", tpc() - t0)
+        t0 = tpc()
     ctx.passive_cohorts = next_cohorts
     if extra_newborns_by_place:
         total_background += _append_passive_newborn_cohorts(
@@ -1129,6 +1256,8 @@ def refresh_passive_background_cohorts(
             extra_newborns_by_place,
             next_cohorts=ctx.passive_cohorts,
         )
+    if prof:
+        simulation_timing.accumulate("passive.seed_newborns", tpc() - t0)
     return total_background
 
 
@@ -1140,36 +1269,56 @@ def _append_passive_newborn_cohorts(
     next_cohorts: list[PassiveCohort],
 ) -> int:
     total = 0
-    for (rid, sid, species, culture), births in sorted(newborns_by_place.items()):
-        if births <= 0:
-            continue
+    positive_births = [
+        (key, int(births))
+        for key, births in sorted(newborns_by_place.items())
+        if int(births) > 0
+    ]
+    if not positive_births:
+        return 0
+
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    if prof:
+        t0 = tpc()
+    merge_index: dict[tuple[str, str, str, str, str], int] = {}
+    for i, cohort in enumerate(next_cohorts):
+        if (
+            int(cohort.sim_year) == int(year)
+            and str(cohort.age_band or "") == "0"
+            and str(cohort.job_family or "") == "dependent"
+            and str(cohort.status_bucket or "") == "child"
+        ):
+            key = (
+                str(cohort.region_id or ""),
+                str(cohort.settlement_id or ""),
+                str(cohort.gender or ""),
+                str(cohort.species or ""),
+                str(cohort.culture or ""),
+            )
+            merge_index.setdefault(key, i)
+    if prof:
+        simulation_timing.accumulate("passive.newborn_merge_index", tpc() - t0)
+        t0 = tpc()
+
+    for (rid, sid, species, culture), births in positive_births:
         total += int(births)
         male_births = int(births) // 2
         female_births = int(births) - male_births
         for gender, count in (("Male", male_births), ("Female", female_births)):
             if count <= 0:
                 continue
-            merged = False
-            for i, cohort in enumerate(next_cohorts):
-                if (
-                    int(cohort.sim_year) == int(year)
-                    and str(cohort.region_id or "") == str(rid)
-                    and str(cohort.settlement_id or "") == str(sid)
-                    and str(cohort.age_band or "") == "0"
-                    and str(cohort.gender or "") == str(gender)
-                    and str(cohort.species or "") == str(species)
-                    and str(cohort.culture or "") == str(culture)
-                    and str(cohort.job_family or "") == "dependent"
-                    and str(cohort.status_bucket or "") == "child"
-                ):
-                    next_cohorts[i] = replace(
-                        cohort,
-                        population_count=int(cohort.population_count) + int(count),
-                        birth_count=int(cohort.birth_count) + int(count),
-                    )
-                    merged = True
-                    break
-            if not merged:
+            key = (str(rid), str(sid), str(gender), str(species), str(culture))
+            cohort_index = merge_index.get(key)
+            if cohort_index is not None:
+                cohort = next_cohorts[cohort_index]
+                next_cohorts[cohort_index] = replace(
+                    cohort,
+                    population_count=int(cohort.population_count) + int(count),
+                    birth_count=int(cohort.birth_count) + int(count),
+                )
+            else:
+                merge_index[key] = len(next_cohorts)
                 next_cohorts.append(
                     PassiveCohort(
                         sim_year=int(year),
@@ -1185,7 +1334,133 @@ def _append_passive_newborn_cohorts(
                         birth_count=count,
                     )
                 )
+    if prof:
+        simulation_timing.accumulate("passive.newborn_merge_apply", tpc() - t0)
     return total
+
+
+def _record_profile_scale_snapshot(
+    ctx: SimulationContext,
+    year: int,
+    label: str,
+) -> None:
+    """Record scale counters alongside late-year phase timings."""
+    if not simulation_timing.active_for_year(year):
+        return
+    latest_cohort_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
+    latest_cohort_rows = sum(
+        1
+        for c in ctx.passive_cohorts
+        if latest_cohort_year is not None and int(c.sim_year) == latest_cohort_year
+    )
+    latest_cohort_alive = sum(
+        int(c.population_count)
+        for c in ctx.passive_cohorts
+        if latest_cohort_year is not None and int(c.sim_year) == latest_cohort_year
+    )
+    try:
+        save_size = int(Path(ctx.save_db_path).stat().st_size)
+    except OSError:
+        save_size = 0
+
+    detailed_alive = len(ctx.current_people_ids)
+    metrics = {
+        "detailed_alive": detailed_alive,
+        "detailed_ram_people": len(ctx.people),
+        "detailed_ram_dead": max(0, len(ctx.people) - detailed_alive),
+        "passive_people": len(ctx.passive_people),
+        "passive_cohort_rows_ram": len(ctx.passive_cohorts),
+        "latest_passive_cohort_year": latest_cohort_year or 0,
+        "latest_passive_cohort_rows": latest_cohort_rows,
+        "latest_passive_cohort_alive": latest_cohort_alive,
+        "settlements": len(ctx.settlements_by_id),
+        "couples": len(ctx.couples),
+        "paramours": len(ctx.paramours),
+        "pending_events": len(getattr(ctx, "_pending_simulation_events", ())),
+        "save_size_bytes": save_size,
+    }
+    for metric, value in metrics.items():
+        simulation_timing.record_gauge(year, label, metric, value)
+
+
+def _run_population_growth_year_loop(
+    ctx: SimulationContext,
+    *,
+    sim_seed: int,
+    start_year: int,
+    duration_years: int,
+    passive_population_scale: float,
+    detailed_active_soft_cap: int | None,
+    progress_callback: Callable[[int], None] | None,
+) -> None:
+    end_exclusive = int(start_year) + int(duration_years)
+    for year in range(int(start_year), end_exclusive):
+        ctx.current_year = year
+        ctx.apply_pending_settlement_moves(year)
+        births_count = 0
+        passive_births_by_place: dict[tuple[str, str, str, str], int] = {}
+        prof = simulation_timing.active_for_year(year)
+        tpc = time.perf_counter
+
+        if prof:
+            t0 = tpc()
+        people_by_settlement = ctx.current_people_by_settlement()
+        if prof:
+            simulation_timing.accumulate("runner.group_current_by_settlement", tpc() - t0)
+            t0 = tpc()
+        pair_people_by_settlement_then_region(ctx, year, people_by_settlement)
+        if prof:
+            simulation_timing.accumulate("runner.pairing", tpc() - t0)
+
+        if prof:
+            t0 = tpc()
+        resource_facts = ctx.annual_resource_facts(year)
+        if prof:
+            simulation_timing.accumulate("births.resource_facts", tpc() - t0)
+            t0 = tpc()
+        births_count = births_by_settlement(
+            ctx,
+            year,
+            sim_seed=sim_seed,
+            by_settlement=people_by_settlement,
+            resource_facts=resource_facts,
+            detailed_active_soft_cap=detailed_active_soft_cap,
+            passive_births_by_place=passive_births_by_place,
+        )
+        # Births has its own exclusive inner profile phases.
+
+        if prof:
+            t0 = tpc()
+        mortality_rates = apply_annual_mortality(ctx, year)
+        if prof:
+            simulation_timing.accumulate("runner.mortality", tpc() - t0)
+
+        if prof:
+            t0 = tpc()
+        refresh_passive_background_cohorts(
+            ctx,
+            year,
+            population_scale=passive_population_scale,
+            extra_newborns_by_place=passive_births_by_place,
+        )
+        ensure_detailed_floor_for_active_settlements(ctx, year)
+        if prof:
+            simulation_timing.accumulate("runner.passive_cohorts", tpc() - t0)
+
+        persist_to_save = ctx._should_checkpoint_snapshot(year)
+        _record_profile_scale_snapshot(ctx, year, "before_summary")
+        ctx.record_year_summary(
+            year=year,
+            births_count=births_count,
+            deaths_count=int(mortality_rates["deaths_count"]),
+            mortality_rates=mortality_rates,
+            persist_to_save=persist_to_save,
+        )
+        _record_profile_scale_snapshot(ctx, year, "after_summary")
+        if progress_callback is not None and (
+            persist_to_save or year == end_exclusive - 1
+        ):
+            progress_callback(year)
 
 
 def run_population_growth_simulation(
@@ -1225,69 +1500,61 @@ def run_population_growth_simulation(
         female_rec = ctx.add_person(person=female, is_founder=True)
         ctx.add_couple(male_rec.person_id, female_rec.person_id)
 
-    end_exclusive = start_year + duration_years
-    for year in range(start_year, end_exclusive):
-        ctx.current_year = year
-        ctx.apply_pending_settlement_moves(year)
-        births_count = 0
-        passive_births_by_place: dict[tuple[str, str, str, str], int] = {}
-        prof = simulation_timing.active_for_year(year)
-        tpc = time.perf_counter
-
-        if prof:
-            t0 = tpc()
-        people_by_settlement = ctx.current_people_by_settlement()
-        pair_people_by_settlement_then_region(ctx, year, people_by_settlement)
-        if prof:
-            simulation_timing.accumulate("runner.pairing", tpc() - t0)
-
-        if prof:
-            t0 = tpc()
-        births_count = births_by_settlement(
-            ctx,
-            year,
-            sim_seed=sim_seed,
-            by_settlement=people_by_settlement,
-            resource_facts=ctx.annual_resource_facts(year),
-            detailed_active_soft_cap=detailed_active_soft_cap,
-            passive_births_by_place=passive_births_by_place,
-        )
-        if prof:
-            simulation_timing.accumulate("runner.births", tpc() - t0)
-
-        if prof:
-            t0 = tpc()
-        mortality_rates = apply_annual_mortality(ctx, year)
-        if prof:
-            simulation_timing.accumulate("runner.mortality", tpc() - t0)
-
-        if prof:
-            t0 = tpc()
-        refresh_passive_background_cohorts(
-            ctx,
-            year,
-            population_scale=passive_population_scale,
-            extra_newborns_by_place=passive_births_by_place,
-        )
-        ensure_detailed_floor_for_active_settlements(ctx, year)
-        if prof:
-            simulation_timing.accumulate("runner.passive_cohorts", tpc() - t0)
-
-        persist_to_save = ctx._should_checkpoint_snapshot(year)
-        ctx.record_year_summary(
-            year=year,
-            births_count=births_count,
-            deaths_count=int(mortality_rates["deaths_count"]),
-            mortality_rates=mortality_rates,
-            persist_to_save=persist_to_save,
-        )
-        if progress_callback is not None and (
-            persist_to_save or year == end_exclusive - 1
-        ):
-            progress_callback(year)
+    _run_population_growth_year_loop(
+        ctx,
+        sim_seed=sim_seed,
+        start_year=start_year,
+        duration_years=duration_years,
+        passive_population_scale=passive_population_scale,
+        detailed_active_soft_cap=detailed_active_soft_cap,
+        progress_callback=progress_callback,
+    )
 
     if print_timing_report:
         simulation_timing.print_report_if_configured()
+
+
+def continue_population_growth_simulation(
+    ctx: SimulationContext,
+    *,
+    sim_seed: int,
+    duration_years: int,
+    passive_population_scale: float = 1.0,
+    detailed_active_soft_cap: int | None = None,
+    progress_callback: Callable[[int], None] | None = None,
+    print_timing_report: bool = True,
+) -> int:
+    """Continue an already-loaded save without adding founders.
+
+    Returns the first simulation year processed by this continuation.
+    """
+    if not ctx.people and not ctx.passive_people and not ctx.passive_cohorts:
+        raise ValueError("Cannot resume population simulation without a loaded save.")
+    current_year = (
+        int(ctx.current_year)
+        if ctx.current_year is not None
+        else int(ctx.simulation_start_year)
+    )
+    resume_start_year = current_year + 1
+    random.seed(sim_seed)
+    np.random.seed(int(sim_seed) % (2**32))
+    simulation_timing.configure_profile_window(
+        start_year=resume_start_year, duration_years=duration_years
+    )
+
+    _run_population_growth_year_loop(
+        ctx,
+        sim_seed=sim_seed,
+        start_year=resume_start_year,
+        duration_years=duration_years,
+        passive_population_scale=passive_population_scale,
+        detailed_active_soft_cap=detailed_active_soft_cap,
+        progress_callback=progress_callback,
+    )
+
+    if print_timing_report:
+        simulation_timing.print_report_if_configured()
+    return resume_start_year
 
 
 def write_population_growth_report_files(

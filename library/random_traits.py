@@ -96,7 +96,13 @@ def choose_species_row(
       (even when its `rate` is 0).
     """
     path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-    rows = list(_species_rows(str(path.resolve())))
+    path_s = str(path.resolve())
+    if species is not None and ethnic is not None:
+        rows = list(_species_rows_for_exact_key(path_s, species.strip(), ethnic.strip()))
+        if len(rows) == 1:
+            return rows[0]
+    else:
+        rows = list(_species_rows(path_s))
     if species is not None:
         s = species.strip()
         rows = [r for r in rows if str(r["species"] or "").strip() == s]
@@ -138,6 +144,18 @@ def _species_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
     finally:
         conn.close()
     return rows
+
+
+@lru_cache(maxsize=256)
+def _species_rows_for_exact_key(
+    db_path_s: str, species: str, ethnic: str
+) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        r
+        for r in _species_rows(db_path_s)
+        if str(r["species"] or "").strip() == species
+        and str(r["ethnic"] or "").strip() == ethnic
+    )
 
 
 @lru_cache(maxsize=8)
@@ -320,8 +338,13 @@ def _sample_categorical(dist: dict[str, float]) -> str:
     s = sum(ws)
     if s <= 0:
         return keys[0]
-    ws = [w / s for w in ws]
-    return random.choices(keys, weights=ws, k=1)[0]
+    r = random.random() * s
+    acc = 0.0
+    for key, weight in zip(keys, ws):
+        acc += weight
+        if r <= acc:
+            return key
+    return keys[-1]
 
 
 @lru_cache(maxsize=8)
@@ -341,6 +364,30 @@ def _sexual_nature_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
 
 
 @lru_cache(maxsize=8)
+def _sexual_nature_definitions(
+    db_path_s: str,
+) -> tuple[tuple[str, tuple[tuple[str, float], ...]], ...]:
+    rows = _sexual_nature_rows(db_path_s)
+    if not rows:
+        return ()
+    trait_cols = _trait_columns_from_definition_row(rows[0])
+    out: list[tuple[str, tuple[tuple[str, float], ...]]] = []
+    for row in rows:
+        key = str(row["type"] or "").strip().lower()
+        if not key:
+            continue
+        terms: list[tuple[str, float]] = []
+        for col in trait_cols:
+            mode = str(row[col] or "").strip().lower()
+            if mode == "value":
+                terms.append((col, 1.0))
+            elif mode == "inverse":
+                terms.append((col, -1.0))
+        out.append((key, tuple(terms)))
+    return tuple(out)
+
+
+@lru_cache(maxsize=8)
 def _gender_mind_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
     path = Path(db_path_s)
     conn = _connect(path)
@@ -354,6 +401,43 @@ def _gender_mind_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
         return tuple({k: r[k] for k in r.keys()} for r in raw)
     finally:
         conn.close()
+
+
+@lru_cache(maxsize=8)
+def _gender_mind_definitions(
+    db_path_s: str,
+) -> tuple[tuple[str, tuple[tuple[str, float], ...]], ...]:
+    rows = _gender_mind_rows(db_path_s)
+    if not rows:
+        return ()
+    trait_cols = _trait_columns_from_definition_row(rows[0])
+    out: list[tuple[str, tuple[tuple[str, float], ...]]] = []
+    for row in rows:
+        key = str(row["type"] or "").strip().lower()
+        if not key:
+            continue
+        terms: list[tuple[str, float]] = []
+        for col in trait_cols:
+            mode = str(row[col] or "").strip().lower()
+            if mode == "value":
+                terms.append((col, 1.0))
+            elif mode == "inverse":
+                terms.append((col, -1.0))
+        out.append((key, tuple(terms)))
+    return tuple(out)
+
+
+def _score_compiled_definition(
+    genome: dict[str, float], terms: tuple[tuple[str, float], ...]
+) -> float:
+    total = 0.0
+    n = 0
+    for trait, sign in terms:
+        if trait not in genome:
+            continue
+        total += float(genome[trait]) * float(sign)
+        n += 1
+    return total / max(n, 1)
 
 
 def choose_sexual_nature(
@@ -375,16 +459,13 @@ def choose_sexual_nature(
     if sexual_nature is not None:
         return str(sexual_nature).strip().lower()
     path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-    rows = _sexual_nature_rows(str(path.resolve()))
-    if not rows:
+    definitions = _sexual_nature_definitions(str(path.resolve()))
+    if not definitions:
         return "heterosexual"
-    trait_cols = _trait_columns_from_definition_row(rows[0])
-    scores: dict[str, float] = {}
-    for row in rows:
-        key = str(row["type"] or "").strip().lower()
-        if not key:
-            continue
-        scores[key] = _aggregate_definition_score(genome, row, trait_cols)
+    scores = {
+        key: _score_compiled_definition(genome, terms)
+        for key, terms in definitions
+    }
     if not scores:
         return "heterosexual"
     pr = prior if prior is not None else SEXUAL_NATURE_PRIOR
@@ -408,18 +489,15 @@ def choose_gender_mind(
     if gender_mind is not None:
         return str(gender_mind).strip().lower()
     path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-    rows = _gender_mind_rows(str(path.resolve()))
     fallback = "feminine" if gender.strip() == "Female" else "masculine"
     opposite = "masculine" if fallback == "feminine" else "feminine"
-    if not rows:
+    definitions = _gender_mind_definitions(str(path.resolve()))
+    if not definitions:
         return fallback
-    trait_cols = _trait_columns_from_definition_row(rows[0])
-    scores: dict[str, float] = {}
-    for row in rows:
-        key = str(row["type"] or "").strip().lower()
-        if not key:
-            continue
-        scores[key] = _aggregate_definition_score(genome, row, trait_cols)
+    scores = {
+        key: _score_compiled_definition(genome, terms)
+        for key, terms in definitions
+    }
     if not scores:
         return fallback
     prior = {fallback: 0.9, opposite: 0.1}

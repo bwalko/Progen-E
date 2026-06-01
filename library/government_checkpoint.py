@@ -753,8 +753,10 @@ def append_office_holding(
     seat_id: int,
     holder_person_id: int,
     start_sim_year: int,
+    ensure_schema: bool = True,
 ) -> int:
-    ensure_government_schema(conn)
+    if ensure_schema:
+        ensure_government_schema(conn)
     cur = conn.cursor()
     cur.execute(
         """
@@ -775,8 +777,10 @@ def close_office_holding(
     holder_person_id: int,
     end_sim_year: int,
     end_reason: str,
+    ensure_schema: bool = True,
 ) -> None:
-    ensure_government_schema(conn)
+    if ensure_schema:
+        ensure_government_schema(conn)
     conn.execute(
         """
         UPDATE simulation_office_holdings

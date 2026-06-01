@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
+import time
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import asdict, replace
@@ -15,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from library import simulation_timing
 from library.mind_body import mind_body_from_genome
 from library.passive_population import PassiveCohort, PassivePerson, PassivePersonRecord
 from library.person import Person
@@ -129,6 +131,22 @@ _PERSON_EXTENSION_KEYS: tuple[str, ...] = (
     "genome_composite_names",
     "genome_trait_phrases",
 )
+
+
+def _profile_t0(year: int | None = None) -> float | None:
+    if not simulation_timing.enabled():
+        return None
+    if year is not None and not simulation_timing.active_for_year(year):
+        return None
+    return time.perf_counter()
+
+
+def _profile_accumulate(phase: str, t0: float | None) -> float | None:
+    if t0 is None:
+        return None
+    now = time.perf_counter()
+    simulation_timing.accumulate(phase, now - t0)
+    return now
 
 
 def person_belongs_in_working_ram(
@@ -456,6 +474,8 @@ def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_simulation_people_alive
         ON simulation_people (is_alive);
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_deathyear
+        ON simulation_people (deathyear);
         CREATE INDEX IF NOT EXISTS idx_simulation_people_birthyear
         ON simulation_people (birthyear);
         CREATE INDEX IF NOT EXISTS idx_simulation_people_current_settlement
@@ -2205,6 +2225,14 @@ def flush_pending_simulation_events(ctx: "SimulationContext") -> None:
     pending = ctx._pending_simulation_events
     if not pending:
         return
+    year = int(ctx.current_year if ctx.current_year is not None else ctx.simulation_start_year)
+    simulation_timing.record_gauge(
+        year,
+        "checkpoint",
+        "flushed_events",
+        len(pending),
+    )
+    t0 = _profile_t0(year)
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         append_simulation_event_rows(
@@ -2214,6 +2242,7 @@ def flush_pending_simulation_events(ctx: "SimulationContext") -> None:
             verbose_payloads=bool(getattr(ctx, "verbose_event_logging", False)),
         )
         conn.commit()
+    _profile_accumulate("checkpoint.flush_events", t0)
     pending.clear()
 
 
@@ -2223,6 +2252,9 @@ def flush_simulation_meta_checkpoint(ctx: "SimulationContext") -> None:
     Used when ``checkpoint_simulation_to_save(..., full_snapshot=False)`` so runs that
     flush events between sparse full snapshots still save resume-relevant meta.
     """
+    t0 = _profile_t0(
+        int(ctx.current_year if ctx.current_year is not None else ctx.simulation_start_year)
+    )
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         cur = conn.cursor()
@@ -2285,6 +2317,7 @@ def flush_simulation_meta_checkpoint(ctx: "SimulationContext") -> None:
             (WORLD_MAP_SEED_META_KEY, _ctx_world_map_seed(ctx)),
         )
         conn.commit()
+    _profile_accumulate("checkpoint.meta_only", t0)
 
 
 def maybe_import_run_store_events_csv(ctx: "SimulationContext") -> None:
@@ -2886,12 +2919,28 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
     After a successful commit, long-dead persons are dropped from RAM (see
     :func:`prune_ancient_dead_from_ram`).
     """
+    year = int(ctx.current_year if ctx.current_year is not None else ctx.simulation_start_year)
+    simulation_timing.record_gauge(year, "checkpoint", "snapshot_people_rows", len(ctx.people))
+    simulation_timing.record_gauge(
+        year,
+        "checkpoint",
+        "snapshot_passive_people_rows",
+        len(getattr(ctx, "passive_people", {})),
+    )
+    simulation_timing.record_gauge(
+        year,
+        "checkpoint",
+        "snapshot_passive_cohort_rows",
+        len(getattr(ctx, "passive_cohorts", [])),
+    )
+    t0 = _profile_t0(year)
     with _open_save(ctx.save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         cur = conn.cursor()
         cur.execute("DELETE FROM simulation_regions")
         cur.execute("DELETE FROM simulation_couples")
         cur.execute("DELETE FROM simulation_paramours")
+        t0 = _profile_accumulate("checkpoint.snapshot_prepare", t0)
 
         alive = ctx.current_people_ids
         trait_slots = _trait_slots_for_checkpoint(ctx)
@@ -2932,6 +2981,7 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 """,
                 values,
             )
+        t0 = _profile_accumulate("checkpoint.snapshot_people", t0)
 
         passive_column_names = (
             "person_id",
@@ -2970,6 +3020,7 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 """,
                 _passive_person_values(conn, rec),
             )
+        t0 = _profile_accumulate("checkpoint.snapshot_passive_people", t0)
 
         cohort_column_names = (
             "sim_year",
@@ -2995,6 +3046,7 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 """,
                 _passive_cohort_values(conn, cohort),
             )
+        t0 = _profile_accumulate("checkpoint.snapshot_passive_cohorts", t0)
 
         by_region: dict[str, list[SettlementState]] = defaultdict(list)
         for settlement_id, st in ctx.settlements_by_id.items():
@@ -3076,6 +3128,7 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                     ),
                 ),
             )
+        t0 = _profile_accumulate("checkpoint.snapshot_settlements_regions", t0)
 
         for i, (a_id, b_id) in enumerate(ctx.couples):
             convention = getattr(ctx, "surname_conventions_by_pair", {}).get(
@@ -3104,10 +3157,12 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 """,
                 (i, a_id, b_id, convention),
             )
+        t0 = _profile_accumulate("checkpoint.snapshot_relationships", t0)
 
         from library.government_checkpoint import checkpoint_government as _checkpoint_gov
 
         _checkpoint_gov(ctx, cur)
+        t0 = _profile_accumulate("checkpoint.snapshot_government", t0)
 
         cur.execute(
             """
@@ -3167,8 +3222,12 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             """,
             (WORLD_MAP_SEED_META_KEY, _ctx_world_map_seed(ctx)),
         )
+        t0 = _profile_accumulate("checkpoint.snapshot_meta", t0)
         conn.commit()
+        t0 = _profile_accumulate("checkpoint.commit", t0)
+    t0 = _profile_t0(year)
     prune_ancient_dead_from_ram(ctx)
+    _profile_accumulate("checkpoint.prune_dead_ram", t0)
 
 
 def checkpoint_simulation_to_save(
@@ -3233,7 +3292,15 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         )
 
         people_rows = conn.execute(
-            "SELECT * FROM simulation_people ORDER BY person_id",
+            """
+            SELECT *
+            FROM simulation_people
+            WHERE is_alive = 1
+               OR deathyear IS NULL
+               OR deathyear >= ?
+            ORDER BY person_id
+            """,
+            (int(reference_year) - int(retention),),
         ).fetchall()
         region_ids_by_key = {
             int(r["region_key"]): str(r["region_id"])
@@ -3288,6 +3355,12 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             id_to[pid] = rec
             if int(row["is_alive"]):
                 alive.add(pid)
+        simulation_timing.record_gauge(
+            reference_year,
+            "checkpoint_load",
+            "selected_detailed_people_rows",
+            len(people_rows),
+        )
 
         for row in conn.execute(
             "SELECT * FROM simulation_people_light ORDER BY person_id"
@@ -3302,20 +3375,31 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                 ),
             )
 
-        for row in conn.execute(
-            """
-            SELECT *
-            FROM simulation_cohorts
-            ORDER BY sim_year, region_key, settlement_key, age_band, gender
-            """
-        ).fetchall():
-            passive_cohorts.append(
-                _passive_cohort_from_checkpoint_row(
-                    row,
-                    region_ids_by_key=region_ids_by_key,
-                    settlement_ids_by_key=settlement_ids_by_key,
+        latest_cohort_row = conn.execute(
+            "SELECT MAX(sim_year) AS sim_year FROM simulation_cohorts",
+        ).fetchone()
+        latest_cohort_year = (
+            int(latest_cohort_row["sim_year"])
+            if latest_cohort_row is not None and latest_cohort_row["sim_year"] is not None
+            else None
+        )
+        if latest_cohort_year is not None:
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM simulation_cohorts
+                WHERE sim_year = ?
+                ORDER BY region_key, settlement_key, age_band, gender
+                """,
+                (latest_cohort_year,),
+            ).fetchall():
+                passive_cohorts.append(
+                    _passive_cohort_from_checkpoint_row(
+                        row,
+                        region_ids_by_key=region_ids_by_key,
+                        settlement_ids_by_key=settlement_ids_by_key,
+                    )
                 )
-            )
 
         settle_rows = conn.execute(
             "SELECT * FROM simulation_settlements_readable",

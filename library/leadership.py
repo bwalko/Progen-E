@@ -41,6 +41,22 @@ _JUDICIAL_FAMILIES: frozenset[str] = frozenset(
     }
 )
 
+_GOVERNMENT_CANDIDATE_FAMILIES: frozenset[str] = (
+    _GOVERNANCE_FAMILIES | _MILITARY_FAMILIES
+)
+
+
+def government_candidate_composite_rows(
+    rows: tuple[dict[str, Any], ...]
+) -> tuple[dict[str, Any], ...]:
+    """Rows needed by government candidate leadership and military scoring."""
+    return tuple(
+        row
+        for row in rows
+        if str(row.get("composite_family") or "").strip()
+        in _GOVERNMENT_CANDIDATE_FAMILIES
+    )
+
 
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, float(x)))
@@ -134,6 +150,54 @@ def military_quality_index(person: "Person", *, composite_rows: tuple[dict[str, 
     cfs = float(person.career_fitness_score) if person.career_fitness_score is not None else 0.5
     raw = _clamp01(0.50 * base + 0.20 * _clamp01(cfs) + 0.30 * blend)
     return _clamp01(raw * _life_stage_multiplier(person.life_stage))
+
+
+def leadership_and_military_indexes(
+    person: "Person", *, composite_rows: tuple[dict[str, Any], ...]
+) -> tuple[float, float]:
+    """Return governance and military fitness while sharing trait materialization."""
+    traits = work_trait_values(person)
+    life_mult = _life_stage_multiplier(person.life_stage)
+    cfs = float(person.career_fitness_score) if person.career_fitness_score is not None else 0.5
+    cfs = _clamp01(cfs)
+
+    leadership_base = _max_composite_family_score(
+        traits, composite_rows, _GOVERNANCE_FAMILIES
+    )
+    leadership_blend = _trait_blend(
+        person.mind_body,
+        {
+            "assertiveness": 2.0,
+            "civics": 2.0,
+            "ambition": 2.0,
+            "persuasion": 1.5,
+            "courage": 1.0,
+            "justice": 1.0,
+        },
+    )
+    leadership = _clamp01(
+        _clamp01(0.55 * leadership_base + 0.20 * cfs + 0.25 * leadership_blend)
+        * life_mult
+    )
+
+    military_base = _max_composite_family_score(
+        traits, composite_rows, _MILITARY_FAMILIES
+    )
+    military_blend = _trait_blend(
+        person.mind_body,
+        {
+            "physical": 2.0,
+            "courage": 2.0,
+            "assertiveness": 1.5,
+            "discipline": 1.5,
+            "resilience": 1.0,
+        },
+    )
+    military = _clamp01(
+        _clamp01(0.50 * military_base + 0.20 * cfs + 0.30 * military_blend)
+        * life_mult
+    )
+    return leadership, military
 
 
 def civic_quality_index(person: "Person", *, composite_rows: tuple[dict[str, Any], ...]) -> float:

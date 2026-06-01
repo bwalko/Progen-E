@@ -313,8 +313,16 @@ def _last_name_pool(conn: sqlite3.Connection, *, ethnic: str) -> list[tuple[str,
 def _pick_weighted_name(pool: list[tuple[str, int]]) -> str:
     if not pool:
         raise LookupError("empty name pool")
-    names, weights = zip(*pool)
-    return random.choices(names, weights=weights, k=1)[0]
+    total = sum(max(0, int(weight)) for _name, weight in pool)
+    if total <= 0:
+        raise LookupError("empty name pool")
+    r = random.uniform(0, float(total))
+    acc = 0.0
+    for name, weight in pool:
+        acc += max(0, int(weight))
+        if r <= acc:
+            return name
+    return pool[-1][0]
 
 
 def _tokenize_geography_example(cell: object) -> list[str]:
@@ -745,6 +753,9 @@ def choose_random_first_last_from_birth(
     father_last = str(father_last_name or "").strip()
     if mode == "lookup" and father_last:
         markers = _toponym_marker_tokens(str(path.resolve()))
+        parts = re.split(r"[\s\-]+", father_last.strip()) if father_last else []
+        if not markers or not any(part.casefold().strip() in markers for part in parts):
+            return first, father_last
         allowed = _allowed_place_strings_for_person(
             birthplace=bp,
             birthplace_region_id=birthplace_region_id,
@@ -752,7 +763,6 @@ def choose_random_first_last_from_birth(
             world=world,
             db_path=path,
         )
-        parts = re.split(r"[\s\-]+", father_last.strip()) if father_last else []
         dropped = False
         rebuilt: list[str] = []
         for part in parts:

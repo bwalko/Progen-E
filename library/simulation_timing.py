@@ -15,6 +15,7 @@ from dataclasses import dataclass
 _profile_from_year: int | None = None
 _profile_year_count: int = 0
 _sums: dict[str, float] = defaultdict(float)
+_gauges: list["ProfileGauge"] = []
 
 
 @dataclass(frozen=True)
@@ -32,9 +33,18 @@ class ProfileSnapshot:
     phases: tuple[ProfilePhase, ...]
 
 
+@dataclass(frozen=True)
+class ProfileGauge:
+    year: int
+    label: str
+    metric: str
+    value: float
+
+
 def configure_profile_window(*, start_year: int, duration_years: int) -> None:
-    global _profile_from_year, _profile_year_count, _sums
+    global _profile_from_year, _profile_year_count, _sums, _gauges
     _sums.clear()
+    _gauges.clear()
     raw = os.environ.get("HISTORY_SIM_PROFILE_LAST_N_YEARS")
     if raw is None or str(raw).strip() == "":
         _profile_from_year = None
@@ -57,6 +67,26 @@ def enabled() -> bool:
 
 def accumulate(phase: str, seconds: float) -> None:
     _sums[phase] += float(seconds)
+
+
+def record_gauge(year: int, label: str, metric: str, value: int | float) -> None:
+    """Record a numeric scale metric for profiled years."""
+    if not active_for_year(year):
+        return
+    _gauges.append(
+        ProfileGauge(
+            year=int(year),
+            label=str(label),
+            metric=str(metric),
+            value=float(value),
+        )
+    )
+
+
+def gauge_rows_if_configured() -> tuple[ProfileGauge, ...]:
+    if _profile_from_year is None:
+        return ()
+    return tuple(_gauges)
 
 
 def snapshot_if_configured() -> ProfileSnapshot | None:

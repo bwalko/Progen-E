@@ -12,6 +12,30 @@ from library.random_traits import GENOME_MAX_MAGNITUDE
 _DIGIT_POSITION_WEIGHTS: tuple[float, ...] = (55.0, 30.0, 10.0, 5.0)
 
 
+def _weighted_digit_position() -> int:
+    r = random.random() * 100.0
+    if r < 55.0:
+        return 0
+    if r < 85.0:
+        return 1
+    if r < 95.0:
+        return 2
+    return 3
+
+
+def _weighted_remaining_position(exclude: int) -> int:
+    total = 100.0 - _DIGIT_POSITION_WEIGHTS[int(exclude)]
+    r = random.random() * total
+    acc = 0.0
+    for i, weight in enumerate(_DIGIT_POSITION_WEIGHTS):
+        if i == int(exclude):
+            continue
+        acc += weight
+        if r < acc:
+            return i
+    return 3 if int(exclude) != 3 else 2
+
+
 def _split_magnitude_digits(mag: float) -> list[int]:
     """Four base-10 digits for ``mag`` on [0, GENOME_MAX_MAGNITUDE], thousands first."""
     capped = min(float(mag), GENOME_MAX_MAGNITUDE)
@@ -27,14 +51,8 @@ def _two_digits_from_parent_trait_value(value: float | None) -> tuple[int, int]:
     mag = abs(round(float(value), 2))
     mag = min(mag, GENOME_MAX_MAGNITUDE)
     digits = _split_magnitude_digits(mag)
-    pos1 = random.choices(
-        range(4),
-        weights=list(_DIGIT_POSITION_WEIGHTS),
-        k=1,
-    )[0]
-    remaining = [i for i in range(4) if i != pos1]
-    w_rem = [_DIGIT_POSITION_WEIGHTS[i] for i in remaining]
-    pos2 = random.choices(remaining, weights=w_rem, k=1)[0]
+    pos1 = _weighted_digit_position()
+    pos2 = _weighted_remaining_position(pos1)
     return digits[pos1], digits[pos2]
 
 

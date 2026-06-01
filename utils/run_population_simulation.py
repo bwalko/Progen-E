@@ -13,17 +13,19 @@ Also writes the canonical report files next to ``unit_test/test_population_growt
 Examples::
 
     python utils/run_population_simulation.py --years 400
+    python utils/run_population_simulation.py --resume --years 10 --profile-last-years 10
     python utils/run_population_simulation.py --years 100 --world-id default
     python utils/run_population_simulation.py --years 100 --starting-couples 25 --seed 12345
 
 Environment (optional):
 
-- ``SIM_STORE_FLUSH_BATCH_YEARS`` (default ``50``)
+- ``SIM_STORE_FLUSH_BATCH_YEARS`` (default ``10``)
 - ``POPULATION_GROWTH_SIM_SEED`` — fixed seed; otherwise a random seed is chosen and stored in env
 - ``HISTORY_SIM_RESET_WORLD`` — if ``1``/``true``, deletes ``save.sqlite`` before create (full wipe)
 - ``HISTORY_SIM_PROFILE_LAST_N_YEARS`` — profile only the last N simulation years
 - After each run, appends one TSV row to ``unit_test/population_sim_timing.tsv`` (wall time, seed, flush batch, alive count) for trend tracking. Set ``POPULATION_SIM_SKIP_TIMING_LOG=1`` to disable.
-- When late-year profiling is enabled, appends phase rows to ``unit_test/population_sim_profile.tsv``.
+- When late-year profiling is enabled, appends phase rows to ``unit_test/population_sim_profile.tsv``
+  and scale counters to ``unit_test/population_sim_scale.tsv``.
 - ``--verbose-event-logging`` keeps duplicate place slugs in event payload JSON for
   debugging-heavy runs; normal runs store those through compact integer columns.
 """
@@ -44,6 +46,7 @@ if str(_ROOT) not in sys.path:
 import library.simulation_context as sc  # noqa: E402
 from library import simulation_timing  # noqa: E402
 from library.population_growth_runner import (  # noqa: E402
+    continue_population_growth_simulation,
     resolve_population_sim_seed,
     run_population_growth_simulation,
     write_population_growth_report_files,
@@ -60,6 +63,7 @@ _PEOPLE_JSON_PATH = _REPORT_DIR / "population_growth_simulation_people.json"
 _PLACES_GEO_PATH = _REPORT_DIR / "population_growth_simulation_places_geo.json"
 _TIMING_LOG_PATH = _REPORT_DIR / "population_sim_timing.tsv"
 _PROFILE_LOG_PATH = _REPORT_DIR / "population_sim_profile.tsv"
+_SCALE_LOG_PATH = _REPORT_DIR / "population_sim_scale.tsv"
 
 
 def _append_population_sim_timing_row(
@@ -121,6 +125,38 @@ def _append_population_sim_profile_rows(
             )
 
 
+def _append_population_sim_scale_rows(
+    *,
+    path: Path,
+    iso_ts: str,
+    years: int,
+    world_id: str,
+    sim_seed: int,
+    flush: int,
+    starting_couples: int,
+    mode: str,
+    alive_end: int,
+    gauges: tuple[simulation_timing.ProfileGauge, ...],
+) -> None:
+    """Append one row per profiled scale metric."""
+    if not gauges:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = (
+        "iso_timestamp\tyears\tworld_id\tsim_seed\tflush_batch_years\t"
+        "starting_couples\tmode\talive_end\tgauge_year\tlabel\tmetric\tvalue\n"
+    )
+    if not path.exists():
+        path.write_text(header, encoding="utf-8")
+    with path.open("a", encoding="utf-8") as f:
+        for gauge in gauges:
+            f.write(
+                f"{iso_ts}\t{years}\t{world_id}\t{sim_seed}\t{flush}\t"
+                f"{starting_couples}\t{mode}\t{alive_end}\t{gauge.year}\t"
+                f"{gauge.label}\t{gauge.metric}\t{gauge.value:.6f}\n"
+            )
+
+
 def _elapsed_hhmmss(seconds: float) -> str:
     total = max(0, int(seconds))
     hours, rem = divmod(total, 3600)
@@ -136,6 +172,11 @@ def _parse_args() -> argparse.Namespace:
         default=100,
         metavar="N",
         help="Simulation length in years (default: 100)",
+    )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continue the existing save.sqlite from world_state.current_year + 1; does not reseed founders or clear checkpoints.",
     )
     p.add_argument(
         "--world-id",
@@ -183,6 +224,11 @@ def _parse_args() -> argparse.Namespace:
         help="Do not append to unit_test/population_sim_timing.tsv.",
     )
     p.add_argument(
+        "--skip-report-files",
+        action="store_true",
+        help="Do not rewrite the canonical report/json files after the run.",
+    )
+    p.add_argument(
         "--progress",
         action="store_true",
         help="Print SIM_PROGRESS lines after each yearly save for streaming UIs.",
@@ -216,8 +262,10 @@ def _parse_args() -> argparse.Namespace:
     args = p.parse_args()
     if args.years < 1:
         p.error("--years must be >= 1")
-    if args.starting_couples < 1:
-        p.error("--starting-couples must be >= 1")
+    if args.resume and args.reset_world:
+        p.error("--resume cannot be combined with --reset-world")
+    if args.starting_couples < (0 if args.resume else 1):
+        p.error("--starting-couples must be >= 1 for fresh runs")
     if args.flush_batch_years is not None and args.flush_batch_years < 1:
         p.error("--flush-batch-years must be >= 1")
     if args.passive_population_scale < 0:
@@ -260,6 +308,8 @@ def main() -> None:
     )
 
     t0 = time.perf_counter()
+    mode = "resume" if args.resume else "fresh"
+    actual_start_year = int(args.start_year)
     end_year = int(args.start_year) + int(args.years) - 1
 
     def _print_progress(year: int) -> None:
@@ -274,37 +324,60 @@ def main() -> None:
     with sc.SimulationContext.create(
         world_id=args.world_id.strip(),
         world="default",
-        start_year=int(args.start_year),
+        start_year=None if args.resume else int(args.start_year),
         placename_rng_salt=sim_seed,
         verbose_event_logging=bool(args.verbose_event_logging),
     ) as ctx:
-        run_population_growth_simulation(
+        soft_cap = (
+            int(args.detailed_active_soft_cap)
+            if int(args.detailed_active_soft_cap) > 0
+            else None
+        )
+        if args.resume:
+            actual_start_year = (
+                int(ctx.current_year)
+                if ctx.current_year is not None
+                else int(ctx.simulation_start_year)
+            ) + 1
+            end_year = actual_start_year + int(args.years) - 1
+            actual_start_year = continue_population_growth_simulation(
+                ctx,
+                sim_seed=sim_seed,
+                duration_years=int(args.years),
+                passive_population_scale=float(args.passive_population_scale),
+                detailed_active_soft_cap=soft_cap,
+                progress_callback=_print_progress,
+                print_timing_report=False,
+            )
+        else:
+            actual_start_year = int(args.start_year)
+            end_year = actual_start_year + int(args.years) - 1
+            run_population_growth_simulation(
+                ctx,
+                sim_seed=sim_seed,
+                start_year=actual_start_year,
+                duration_years=int(args.years),
+                starting_couples=int(args.starting_couples),
+                passive_population_scale=float(args.passive_population_scale),
+                detailed_active_soft_cap=soft_cap,
+                progress_callback=_print_progress,
+                print_timing_report=False,
+            )
+        end_year = actual_start_year + int(args.years) - 1
+
+    if not args.skip_report_files:
+        write_population_growth_report_files(
             ctx,
             sim_seed=sim_seed,
-            start_year=int(args.start_year),
+            start_year=actual_start_year,
             duration_years=int(args.years),
-            starting_couples=int(args.starting_couples),
-            passive_population_scale=float(args.passive_population_scale),
-            detailed_active_soft_cap=(
-                int(args.detailed_active_soft_cap)
-                if int(args.detailed_active_soft_cap) > 0
-                else None
-            ),
-            progress_callback=_print_progress,
-            print_timing_report=False,
+            output_path=_OUTPUT_PATH,
+            people_json_path=_PEOPLE_JSON_PATH,
+            places_geo_path=_PLACES_GEO_PATH,
         )
-
-    write_population_growth_report_files(
-        ctx,
-        sim_seed=sim_seed,
-        start_year=int(args.start_year),
-        duration_years=int(args.years),
-        output_path=_OUTPUT_PATH,
-        people_json_path=_PEOPLE_JSON_PATH,
-        places_geo_path=_PLACES_GEO_PATH,
-    )
     simulation_timing.print_report_if_configured()
     profile_snapshot = simulation_timing.snapshot_if_configured()
+    profile_gauges = simulation_timing.gauge_rows_if_configured()
 
     elapsed = time.perf_counter() - t0
     alive_end = len(ctx.current_people_ids)
@@ -328,7 +401,7 @@ def main() -> None:
             world_id=str(args.world_id).strip(),
             sim_seed=int(sim_seed),
             flush=flush,
-            starting_couples=int(args.starting_couples),
+            starting_couples=0 if args.resume else int(args.starting_couples),
             alive_end=alive_end,
         )
         print(f"timing_log_appended={_TIMING_LOG_PATH.resolve()}")
@@ -340,11 +413,25 @@ def main() -> None:
                 world_id=str(args.world_id).strip(),
                 sim_seed=int(sim_seed),
                 flush=flush,
-                starting_couples=int(args.starting_couples),
+                starting_couples=0 if args.resume else int(args.starting_couples),
                 alive_end=alive_end,
                 snapshot=profile_snapshot,
             )
             print(f"profile_log_appended={_PROFILE_LOG_PATH.resolve()}")
+        if profile_gauges:
+            _append_population_sim_scale_rows(
+                path=_SCALE_LOG_PATH,
+                iso_ts=iso_ts,
+                years=int(args.years),
+                world_id=str(args.world_id).strip(),
+                sim_seed=int(sim_seed),
+                flush=flush,
+                starting_couples=0 if args.resume else int(args.starting_couples),
+                mode=mode,
+                alive_end=alive_end,
+                gauges=profile_gauges,
+            )
+            print(f"scale_log_appended={_SCALE_LOG_PATH.resolve()}")
     candidates = sorted(
         (_ROOT / "worlds" / args.world_id / "temp").glob("simulation_run_*/yearly_summary.csv"),
         key=lambda path: path.stat().st_mtime,
@@ -352,11 +439,13 @@ def main() -> None:
     )
     yearly = candidates[0] if candidates else None
     print(
-        f"store_flush_batch_years={flush} | years={args.years} | "
-        f"start_year={args.start_year} | starting_couples={args.starting_couples} | "
+        f"store_flush_batch_years={flush} | mode={mode} | years={args.years} | "
+        f"start_year={actual_start_year} | "
+        f"starting_couples={0 if args.resume else args.starting_couples} | "
         f"detailed_active_soft_cap={args.detailed_active_soft_cap} | "
         f"detailed_alive={alive_end} | passive_cohort_alive={passive_cohort_alive} | "
-        f"wrote {_OUTPUT_PATH} in {elapsed:.2f}s"
+        f"report_files={'skipped' if args.skip_report_files else _OUTPUT_PATH} | "
+        f"elapsed={elapsed:.2f}s"
     )
     if yearly is not None:
         yp = yearly.resolve()
