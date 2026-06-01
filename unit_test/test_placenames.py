@@ -12,6 +12,7 @@ from pathlib import Path
 from library.config_import import load_all_csvs_into_sqlite
 from library.ethnic_proto_placewords import (
     EthnicProtoPlacewordLexicon,
+    _apply_surface_sound_laws,
     apply_probabilistic_sound_law_runs,
     generate_feature_name,
     probabilistic_sound_law_run_count,
@@ -303,7 +304,7 @@ class TestPlacenameGeneration(unittest.TestCase):
                 "Akwā-bheorg",
                 branch="germanic",
             ),
-            "ahwaberk",
+            "awaberk",
         )
         self.assertEqual(
             rewind_constructed_toponym_placeholder(
@@ -362,7 +363,7 @@ class TestPlacenameGeneration(unittest.TestCase):
                 rng=FixedRng(0.50),
                 branch="germanic",
             ),
-            "ahwaberk",
+            "awaberk",
         )
         self.assertEqual(
             apply_probabilistic_sound_law_runs(
@@ -370,8 +371,54 @@ class TestPlacenameGeneration(unittest.TestCase):
                 rng=FixedRng(0.95),
                 branch="germanic",
             ),
-            "agwafergh",
+            "awaferk",
         )
+
+    def test_surface_sound_laws_apply_common_repairs(self) -> None:
+        self.assertEqual(
+            _apply_surface_sound_laws("stanburg", branch="germanic", reverse=False),
+            "stamburk",
+        )
+        self.assertEqual(
+            _apply_surface_sound_laws("brgford", branch="germanic", reverse=False),
+            "bregfort",
+        )
+        self.assertEqual(
+            _apply_surface_sound_laws("akile", branch="germanic", reverse=False),
+            "achil",
+        )
+        self.assertEqual(
+            _apply_surface_sound_laws("lupeton", branch="italic_celtic", reverse=False),
+            "lubedon",
+        )
+        self.assertEqual(
+            _apply_surface_sound_laws("werbh", branch="germanic", reverse=False),
+            "werf",
+        )
+
+    def test_surface_sound_laws_reduce_mutated_clusters(self) -> None:
+        class FixedRng:
+            def __init__(self, value: float) -> None:
+                self.value = value
+
+            def random(self) -> float:
+                return self.value
+
+        one_pass = rewind_constructed_toponym_placeholder(
+            "Diddericwerf",
+            branch="germanic",
+        )
+        self.assertEqual(one_pass, "titteriwerf")
+
+        repeated = apply_probabilistic_sound_law_runs(
+            "Diddericwerf",
+            rng=FixedRng(0.95),
+            branch="germanic",
+        )
+        self.assertEqual(repeated, "thideriwerf")
+        self.assertLessEqual(len(repeated), len("Diddericwerf"))
+        for cluster in ("thth", "dhdh", "ghw", "bhw", "dhw", "bh", "dh", "gh"):
+            self.assertNotIn(cluster, repeated)
 
 
 class TestLocalGeography(unittest.TestCase):

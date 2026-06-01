@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 import random
+import re
 import sqlite3
 import unicodedata
 
@@ -328,6 +329,223 @@ def _smooth_ie_toponym(text: str, *, branch: str, reverse: bool) -> str:
     return out
 
 
+_DISPLAY_VOWELS = frozenset("aeiouy")
+_DISPLAY_CONSONANTS = frozenset("bcdfghjklmnpqrstvwxz")
+_ROUGH_CLUSTER_PATTERNS = (
+    "thth",
+    "dhdh",
+    "ghgh",
+    "bhbh",
+    "shsh",
+    "chch",
+    "ghw",
+    "bhw",
+    "dhw",
+    "hth",
+)
+
+
+def _collapse_repeated_sound_chunks(text: str) -> str:
+    """Apply haplology-like cleanup to repeated generated sound chunks."""
+    out = text
+    for chunk in ("th", "dh", "gh", "bh", "hw", "sh", "ch"):
+        doubled = chunk + chunk
+        while doubled in out:
+            out = out.replace(doubled, chunk)
+    # Generated forms can produce triple letters at morpheme boundaries; real
+    # spelling traditions usually reduce those before names become display forms.
+    out = re.sub(r"([a-z])\1{2,}", r"\1", out)
+    return out
+
+
+def _apply_boundary_assimilation(text: str) -> str:
+    """Blend common compound seams after morphemes have been glued together."""
+    out = text
+    out = re.sub(r"n(?=[pbm])", "m", out)
+    out = out.replace("nm", "m")
+    out = out.replace("td", "t").replace("dt", "t")
+    out = out.replace("kg", "g").replace("gk", "k")
+    out = out.replace("pb", "b").replace("bp", "p")
+    return out
+
+
+def _apply_intervocalic_lenition(text: str, *, branch: str) -> str:
+    """Soften stops between vowels for a broad inherited-name feel."""
+    vowels = "aeiouy"
+    out = text
+    if branch == "italic_celtic":
+        out = re.sub(rf"([{vowels}])p([{vowels}])", r"\1b\2", out)
+        out = re.sub(rf"([{vowels}])t([{vowels}])", r"\1d\2", out)
+        out = re.sub(rf"([{vowels}])[kc]([{vowels}])", r"\1g\2", out)
+    elif branch == "germanic" and len(out) >= 9:
+        out = re.sub(rf"([{vowels}])p([{vowels}])", r"\1v\2", out)
+        out = re.sub(rf"([{vowels}])t([{vowels}])", r"\1d\2", out)
+        out = re.sub(rf"([{vowels}])k([{vowels}])", r"\1g\2", out)
+    return out
+
+
+def _apply_palatalization(text: str, *, branch: str) -> str:
+    """Palatalize velars before front vowels in broad branch-specific ways."""
+    out = text
+    if branch == "italic_celtic":
+        out = re.sub(r"sk(?=[eiy])", "sh", out)
+        out = re.sub(r"[kc](?=[eiy])", "ch", out)
+        out = re.sub(r"g(?=[eiy])", "j", out)
+    elif branch == "germanic":
+        out = re.sub(r"sk(?=[eiy])", "sh", out)
+        out = re.sub(r"k(?=[iy])", "ch", out)
+    return out
+
+
+def _simplify_final_clusters(text: str, *, branch: str) -> str:
+    """Simplify hard word-final clusters and raw aspirate notation."""
+    out = text
+    if branch == "germanic":
+        out = re.sub(r"bh$", "f", out)
+        out = re.sub(r"dh$", "t", out)
+        out = re.sub(r"gh$", "k", out)
+    elif branch == "italic_celtic":
+        out = re.sub(r"[bdg]h$", lambda m: m.group(0)[0], out)
+    out = re.sub(r"([lrnm])gh(?=$)", r"\1g", out)
+    out = re.sub(r"([bcdfghjklmnpqrstvwxz])\1(?=$)", r"\1", out)
+    out = re.sub(r"(nd|nt)t$", r"\1", out)
+    out = re.sub(r"(st|sk|sp)t$", r"\1", out)
+    return out
+
+
+def _simplify_display_aspirates(text: str, *, branch: str) -> str:
+    """Convert internal aspirate notation into readable surface spelling."""
+    out = text
+    if branch == "germanic":
+        out = out.replace("ghw", "gw").replace("bhw", "bw").replace("dhw", "dw")
+        out = re.sub(r"(?<!^)hw", "w", out)
+        out = out.replace("bh", "b").replace("dh", "d")
+        out = re.sub(r"gh(?=[bcdfghjklmnpqrstvwxz]|$)", "g", out)
+    elif branch == "italic_celtic":
+        out = out.replace("bh", "b").replace("dh", "d").replace("gh", "g")
+    return out
+
+
+def _apply_final_devoicing(text: str, *, branch: str) -> str:
+    """Use Germanic-style coda devoicing where that branch is requested."""
+    if branch != "germanic":
+        return text
+    final_map = {"b": "p", "d": "t", "g": "k", "v": "f", "z": "s"}
+    if text[-1:] in final_map:
+        return text[:-1] + final_map[text[-1]]
+    return text
+
+
+def _apply_cluster_epenthesis(text: str, *, branch: str) -> str:
+    """Break remaining four-consonant piles with a small support vowel."""
+    support = "e" if branch == "germanic" else "a"
+    out = text
+    for _ in range(3):
+        match = re.search(r"[bcdfghjklmnpqrstvwxz]{4,}", out)
+        if match is None:
+            break
+        cluster = match.group(0)
+        split = 3 if cluster.startswith(("str", "spr", "skr", "scr")) else 2
+        insert_at = match.start() + min(split, len(cluster) - 1)
+        out = out[:insert_at] + support + out[insert_at:]
+    return out
+
+
+def _simplify_hard_clusters(text: str) -> str:
+    """Reduce consonant piles produced by repeated synthetic sound-law passes."""
+    out = text
+    out = out.replace("thth", "th")
+    out = out.replace("dhdh", "dh")
+    out = out.replace("ghgh", "gh")
+    out = out.replace("bhbh", "bh")
+    out = out.replace("hth", "th")
+    out = out.replace("thith", "tith")
+    out = out.replace("dhidh", "didh")
+    out = out.replace("titterih", "titteri")
+    # Prefer a pronounceable liquid/nasal + stop cluster over raw h-clusters.
+    out = re.sub(r"([lrnm])gh(?=[bcdfghjklmnpqrstvwxz]|$)", r"\1g", out)
+    out = re.sub(r"([lrnm])h(?=[bcdfghjklmnpqrstvwxz])", r"\1", out)
+    return out
+
+
+def _apply_weak_vowel_erosion(text: str) -> str:
+    """Gentle syncope/apocope for long constructed toponyms.
+
+    This deliberately avoids aggressive vowel deletion: it trims final weak
+    endings and removes only an interior weak vowel that would not create a
+    four-consonant pile.
+    """
+    out = text
+    if len(out) >= 12:
+        out = out.replace("eo", "e")
+        out = out.replace("io", "i")
+        out = out.replace("iy", "i")
+    if len(out) > 5 and out[-1:] in {"a", "e", "o"} and out[-2:-1] not in _DISPLAY_VOWELS:
+        out = out[:-1]
+    if len(out) < 14:
+        return out
+
+    chars = list(out)
+    vowel_count = sum(1 for ch in chars if ch in "aeiou")
+    removed = False
+    for i in range(2, len(chars) - 2):
+        ch = chars[i]
+        if ch not in {"e", "i", "u"} or vowel_count <= 2:
+            continue
+        if chars[i - 1] not in _DISPLAY_CONSONANTS or chars[i + 1] not in _DISPLAY_CONSONANTS:
+            continue
+        candidate = "".join(chars[:i] + chars[i + 1 :])
+        if _max_consonant_run(candidate) > 3:
+            continue
+        chars.pop(i)
+        removed = True
+        break
+    return "".join(chars) if removed else out
+
+
+def _max_consonant_run(text: str) -> int:
+    longest = 0
+    current = 0
+    for ch in text:
+        if ch in _DISPLAY_CONSONANTS:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def _toponym_roughness_score(text: str) -> int:
+    low = normalize_placename_stem(text).casefold()
+    score = 0
+    for pattern in _ROUGH_CLUSTER_PATTERNS:
+        score += low.count(pattern) * 3
+    run = _max_consonant_run(low)
+    if run > 3:
+        score += (run - 3) * 2
+    score += low.count("bh") + low.count("dh") + low.count("gh")
+    score += max(0, len(low) - 18)
+    return score
+
+
+def _apply_surface_sound_laws(text: str, *, branch: str, reverse: bool) -> str:
+    """High-level phonological cleanup common across many naming histories."""
+    if reverse:
+        return text
+    out = _collapse_repeated_sound_chunks(text)
+    out = _apply_boundary_assimilation(out)
+    out = _apply_intervocalic_lenition(out, branch=branch)
+    out = _apply_palatalization(out, branch=branch)
+    out = _simplify_hard_clusters(out)
+    out = _simplify_final_clusters(out, branch=branch)
+    out = _simplify_display_aspirates(out, branch=branch)
+    out = _apply_final_devoicing(out, branch=branch)
+    out = _apply_weak_vowel_erosion(out)
+    out = _apply_cluster_epenthesis(out, branch=branch)
+    out = _collapse_repeated_sound_chunks(out)
+    return out
+
+
 def rewind_constructed_toponym_placeholder(
     text: str,
     *,
@@ -335,27 +553,37 @@ def rewind_constructed_toponym_placeholder(
     shift: int | None = None,
     reverse: bool = False,
 ) -> str:
-    """Apply the current IE modulo-4 placename sound law.
+    """Apply the current IE modulo-4 placename sound law plus surface repairs.
 
     ``branch="germanic"`` uses the modulo shift ``M_future = (M + 1) % 4``
     over labial/dental/velar stop rows, with ``kw`` rendered as ``hw``.
     ``branch="italic_celtic"`` keeps voiceless stops stable while merging PIE
     voiced aspirates into voiced stops, with ``kw`` rendered as Latin-like
     ``qu``. ``reverse=True`` walks the Germanic-style matrix backward for
-    ancient-name reconstruction.
+    ancient-name reconstruction. Forward display forms also get broad
+    boundary assimilation, lenition, palatalization, haplology, cluster
+    simplification, weak-vowel erosion, epenthesis, final devoicing, and
+    aspirate spelling cleanup so repeated passes do not preserve raw internal
+    notation.
     """
+    normalized_branch = _normalize_sound_law_branch(branch)
     shifted = _apply_ie_consonant_shift(
         text,
-        branch=_normalize_sound_law_branch(branch),
+        branch=normalized_branch,
         shift=shift,
         reverse=reverse,
     )
     smoothed = _smooth_ie_toponym(
         shifted,
-        branch=_normalize_sound_law_branch(branch),
+        branch=normalized_branch,
         reverse=reverse,
     )
-    return normalize_placename_stem(smoothed)
+    repaired = _apply_surface_sound_laws(
+        smoothed,
+        branch=normalized_branch,
+        reverse=reverse,
+    )
+    return normalize_placename_stem(repaired)
 
 
 def probabilistic_sound_law_run_count(rng: random.Random) -> int:
@@ -377,8 +605,15 @@ def apply_probabilistic_sound_law_runs(
     branch: str = "germanic",
 ) -> str:
     out = normalize_placename_stem(text)
+    original = out
     for _ in range(probabilistic_sound_law_run_count(rng)):
-        out = rewind_constructed_toponym_placeholder(out, branch=branch)
+        candidate = rewind_constructed_toponym_placeholder(out, branch=branch)
+        if (
+            len(candidate) > max(len(original) + 2, int(len(original) * 1.18))
+            or _toponym_roughness_score(candidate) > _toponym_roughness_score(out) + 1
+        ):
+            break
+        out = candidate
     return out
 
 
