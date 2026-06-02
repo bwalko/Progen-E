@@ -13,7 +13,7 @@ Reference for integrating and testing full simulation runs (`SimulationContext`)
 
 Ensure the world directory and `temp/` exist before a run; [`ensure_world_directories`](../library/world_bootstrap.py) does this (`SimulationContext.create` calls it).
 
-`save.sqlite` schema v4 is single-world and uses compact checkpoint rows: runtime tables do **not** include a `world` column, common `Person` fields live in typed `simulation_people` columns, and `person_json` keeps compact extension payload such as genome/mind-body arrays keyed through `config/genome_save_columns.csv`. `simulation_events` keeps sparse `payload_json` detail but also stores common query keys (`primary_person_id`, `secondary_person_id`, `settlement_id`, `region_id`) plus `simulation_event_people(event_id, person_id, role)` for person timelines. The folder path (`worlds/<id>/`) is the world identity. The immutable `config.sqlite` tables still keep their `world` column because they are imported from shared CSV config.
+`save.sqlite` schema v7 is single-world and uses compact checkpoint rows: runtime tables do **not** include a `world` column, common `Person` fields live in typed `simulation_people` columns, and `person_json` keeps compact extension payload such as genome/mind-body arrays keyed through `config/genome_save_columns.csv`. `simulation_events` keeps sparse `payload_json` detail but also stores common query keys (`primary_person_id`, `secondary_person_id`, `settlement_id`, `region_id`), `simulation_event_people(event_id, person_id, role)` for person timelines, and `simulation_event_moves` / `simulation_event_moves_readable` for normalized `settlement_moved` route details. The folder path (`worlds/<id>/`) is the world identity. The immutable `config.sqlite` tables still keep their `world` column because they are imported from shared CSV config.
 
 ## Reset world for tests
 
@@ -57,5 +57,5 @@ Foundation specs can be passed explicitly as `FoundationColonySpec` or left defa
 - **Residence movement is implemented.** `Person.current_settlement_id` is mutable residence, while `birthplace_*` fields stay immutable for genealogy.
 - Resource-pressure migration runs from `record_year_summary` through `library.simulation_migration.simulation_migration_annual_tick`.
 - Job-seeker migration can move households during the careers tick.
-- Move events are logged as `settlement_moved` in `simulation_events`; payloads include fields such as `from_region_id`, `to_region_id`, `cross_region`, and `move_reason`.
+- Move events are logged as `settlement_moved` in `simulation_events`; normal runs store route details in `simulation_event_moves` and expose readable `from_region_id`, `to_region_id`, `cross_region`, and `move_reason` through `simulation_event_moves_readable`. Verbose event logging keeps those fields in `payload_json` too.
 - Cross-region coupling can happen indirectly after residence changes and social ticks; tune or extend that behavior in the social/migration modules rather than treating movement as absent.

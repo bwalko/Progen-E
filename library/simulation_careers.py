@@ -1376,6 +1376,11 @@ def choose_career_assignment(
         household_prosperity=household_prosperity,
     )
     primary_care_pull = _primary_childcare_pull(person, childcare_duty_factor)
+    job_counts = current_job_counts or {}
+    family_counts = current_family_counts or {}
+    saturation_cache: dict[tuple[str, str, str], float] = {}
+    market_demand_cache: dict[tuple[str, str, float, float], float] = {}
+    prosperity_cache: dict[str, float] = {}
     for option, trait_score, common_entries, premium_entries in candidates:
         society_need = option.society_need
         selfish_desperate = option.selfish_desperate
@@ -1388,29 +1393,52 @@ def choose_career_assignment(
             for entry in entries:
                 if primary_care_pull > 0.0 and not entry.home_compatible:
                     continue
-                job_count = int((current_job_counts or {}).get(entry.job_key, 0))
-                family_count = int(
-                    (current_family_counts or {}).get(entry.market.job_family, 0)
+                saturation_key = (
+                    entry.job_key,
+                    entry.market.job_family,
+                    entry.market.saturation_curve,
                 )
-                saturation = _saturation_multiplier(
-                    current_job_count=job_count,
-                    current_family_count=family_count,
-                    settlement_resident_count=settlement_resident_count,
-                    market=entry.market,
+                saturation = saturation_cache.get(saturation_key)
+                if saturation is None:
+                    job_count = int(job_counts.get(entry.job_key, 0))
+                    family_count = int(family_counts.get(entry.market.job_family, 0))
+                    saturation = _saturation_multiplier(
+                        current_job_count=job_count,
+                        current_family_count=family_count,
+                        settlement_resident_count=settlement_resident_count,
+                        market=entry.market,
+                    )
+                    saturation_cache[saturation_key] = saturation
+                demand_key = (
+                    entry.job_key,
+                    entry.tier,
+                    float(society_need),
+                    float(selfish_desperate),
                 )
-                market_demand = _job_market_demand_score(
-                    society_need=society_need,
-                    selfish_desperate=selfish_desperate,
-                    job_tier=entry.tier,
-                    settlement_resident_count=settlement_resident_count,
-                    resource_pressure=resource_pressure,
-                    market_pull=market_pull,
-                    stability=settlement_stability,
-                    current_job_count=job_count,
-                    current_family_count=family_count,
-                    market=entry.market,
-                    saturation=saturation,
-                )
+                market_demand = market_demand_cache.get(demand_key)
+                if market_demand is None:
+                    job_count = int(job_counts.get(entry.job_key, 0))
+                    family_count = int(family_counts.get(entry.market.job_family, 0))
+                    market_demand = _job_market_demand_score(
+                        society_need=society_need,
+                        selfish_desperate=selfish_desperate,
+                        job_tier=entry.tier,
+                        settlement_resident_count=settlement_resident_count,
+                        resource_pressure=resource_pressure,
+                        market_pull=market_pull,
+                        stability=settlement_stability,
+                        current_job_count=job_count,
+                        current_family_count=family_count,
+                        market=entry.market,
+                        saturation=saturation,
+                    )
+                    market_demand_cache[demand_key] = market_demand
+                prosperity_score = prosperity_cache.get(entry.job_key)
+                if prosperity_score is None:
+                    prosperity_score = _clamp(
+                        float(entry.economics.wage_yield) / 1.45, 0.0, 1.0
+                    )
+                    prosperity_cache[entry.job_key] = prosperity_score
                 weight = _assignment_weight(
                     trait_match=trait_score,
                     wage_yield=entry.economics.wage_yield,
@@ -1426,7 +1454,7 @@ def choose_career_assignment(
                         trait_score,
                         entry,
                         market_demand,
-                        _clamp(float(entry.economics.wage_yield) / 1.45, 0.0, 1.0),
+                        prosperity_score,
                         selfish_desperate,
                         saturation,
                         weight,

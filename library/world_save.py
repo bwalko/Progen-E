@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 6
+SAVE_SCHEMA_VERSION = 7
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 
@@ -69,6 +69,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_paramours",
     "simulation_events",
     "simulation_event_people",
+    "simulation_event_moves",
     "simulation_regions",
     "simulation_settlements",
     "simulation_polities",
@@ -291,7 +292,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
             f"save.sqlite schema version {version} is newer than supported "
             f"version {SAVE_SCHEMA_VERSION}"
         )
-    if version not in (0, 3, 4, 5, SAVE_SCHEMA_VERSION):
+    if version not in (0, 3, 4, 5, 6, SAVE_SCHEMA_VERSION):
         raise RuntimeError(
             f"save.sqlite schema version {version} needs a migration before "
             f"this code can open it"
@@ -639,6 +640,25 @@ _EVENT_PAYLOAD_META_KEYS: tuple[str, ...] = (
     "event_origin",
 )
 
+_EVENT_MOVE_DETAIL_KEYS: frozenset[str] = frozenset(
+    {
+        "year",
+        "person_id",
+        "moved_person_id",
+        "moved_person_ids",
+        "from_settlement_id",
+        "to_settlement_id",
+        "from_region_id",
+        "to_region_id",
+        "cross_region",
+        "move_reason",
+        "requested_year",
+        "planned_apply_year",
+        "source_event",
+        "group_id",
+    }
+)
+
 _EVENT_ORIGINS: frozenset[str] = frozenset({"generated", "inferred", "backfilled"})
 
 
@@ -745,6 +765,107 @@ def _event_common_columns(payload: dict) -> tuple[int | None, int | None, str | 
     )
 
 
+def _coerce_event_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y"}
+
+
+def _coerce_event_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _event_move_person_ids(payload: dict) -> list[int]:
+    ids: list[int] = []
+    seen: set[int] = set()
+
+    def add(value: object) -> None:
+        pid = _coerce_event_person_id(value)
+        if pid is None or pid in seen:
+            return
+        seen.add(pid)
+        ids.append(pid)
+
+    add(payload.get("person_id"))
+    add(payload.get("moved_person_id"))
+    for pid in _coerce_event_person_id_list(payload.get("moved_person_ids")):
+        add(pid)
+    return ids
+
+
+def _event_optional_text(payload: dict, key: str) -> str | None:
+    value = payload.get(key)
+    text = str(value or "").strip()
+    return text or None
+
+
+def _insert_simulation_event_move_rows(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    event_type: str,
+    payload: dict,
+) -> None:
+    if str(event_type or "").strip() != "settlement_moved":
+        return
+    moved_ids = _event_move_person_ids(payload)
+    if not moved_ids:
+        return
+    from_region_id = _event_optional_text(payload, "from_region_id")
+    to_region_id = _event_optional_text(payload, "to_region_id")
+    from_settlement_key = _lookup_or_insert_settlement_key(
+        conn,
+        _event_optional_text(payload, "from_settlement_id"),
+        from_region_id,
+    )
+    to_settlement_key = _lookup_or_insert_settlement_key(
+        conn,
+        _event_optional_text(payload, "to_settlement_id"),
+        to_region_id,
+    )
+    from_region_key = _lookup_or_insert_region_key(conn, from_region_id)
+    to_region_key = _lookup_or_insert_region_key(conn, to_region_id)
+    move_reason = _event_optional_text(payload, "move_reason")
+    requested_year = _coerce_event_int(payload.get("requested_year"))
+    planned_apply_year = _coerce_event_int(payload.get("planned_apply_year"))
+    source_event = _event_optional_text(payload, "source_event")
+    group_id = _event_optional_text(payload, "group_id")
+    cross_region = 1 if _coerce_event_bool(payload.get("cross_region")) else 0
+    for moved_person_id in moved_ids:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO simulation_event_moves (
+                event_id, moved_person_id, from_settlement_key, to_settlement_key,
+                from_region_key, to_region_key, cross_region, move_reason,
+                requested_year, planned_apply_year, source_event, group_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(event_id),
+                int(moved_person_id),
+                from_settlement_key,
+                to_settlement_key,
+                from_region_key,
+                to_region_key,
+                cross_region,
+                move_reason,
+                requested_year,
+                planned_apply_year,
+                source_event,
+                group_id,
+            ),
+        )
+
+
 def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -765,6 +886,21 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
             person_id INTEGER NOT NULL,
             role TEXT NOT NULL DEFAULT 'related',
             PRIMARY KEY (event_id, person_id, role)
+        );
+        CREATE TABLE IF NOT EXISTS simulation_event_moves (
+            event_id INTEGER NOT NULL,
+            moved_person_id INTEGER NOT NULL,
+            from_settlement_key INTEGER,
+            to_settlement_key INTEGER,
+            from_region_key INTEGER,
+            to_region_key INTEGER,
+            cross_region INTEGER NOT NULL DEFAULT 0,
+            move_reason TEXT,
+            requested_year INTEGER,
+            planned_apply_year INTEGER,
+            source_event TEXT,
+            group_id TEXT,
+            PRIMARY KEY (event_id, moved_person_id)
         );
         """
     )
@@ -793,9 +929,16 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
         ON simulation_events (region_key);
         CREATE INDEX IF NOT EXISTS idx_simulation_event_people_person
         ON simulation_event_people (person_id, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_moves_person
+        ON simulation_event_moves (moved_person_id, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_moves_to_settlement
+        ON simulation_event_moves (to_settlement_key, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_moves_to_region
+        ON simulation_event_moves (to_region_key, event_id);
         """
     )
     _backfill_simulation_event_people(conn)
+    _backfill_simulation_event_moves(conn)
 
 
 def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
@@ -859,6 +1002,31 @@ def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
             VALUES (?, '1')
             """,
             (EVENT_PEOPLE_BACKFILLED_META_KEY,),
+        )
+
+
+def _backfill_simulation_event_moves(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT e.id, e.event_type, e.payload_json
+        FROM simulation_events e
+        LEFT JOIN simulation_event_moves m ON m.event_id = e.id
+        WHERE e.event_type = 'settlement_moved'
+          AND m.event_id IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _insert_simulation_event_move_rows(
+            conn,
+            event_id=int(row["id"]),
+            event_type=str(row["event_type"] or ""),
+            payload=payload,
         )
 
 
@@ -1195,6 +1363,7 @@ def _write_rebuilt_save_sqlite(
                 else:
                     _copy_common_table_columns_from_attached_source(conn, table)
             _backfill_simulation_event_people(conn)
+            _backfill_simulation_event_moves(conn)
             _stamp_save_schema_version(conn, int(target_schema_version))
             conn.commit()
         finally:
@@ -1655,6 +1824,34 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = e.settlement_key
         LEFT JOIN simulation_region_lookup rl ON rl.region_key = e.region_key;
 
+        CREATE VIEW IF NOT EXISTS simulation_event_moves_readable AS
+        SELECT
+            m.event_id,
+            e.sim_year,
+            e.event_type,
+            m.moved_person_id,
+            from_sl.settlement_id AS from_settlement_id,
+            to_sl.settlement_id AS to_settlement_id,
+            from_rl.region_id AS from_region_id,
+            to_rl.region_id AS to_region_id,
+            m.cross_region,
+            m.move_reason,
+            m.requested_year,
+            m.planned_apply_year,
+            m.source_event,
+            m.group_id,
+            e.created_at
+        FROM simulation_event_moves m
+        JOIN simulation_events e ON e.id = m.event_id
+        LEFT JOIN simulation_settlement_lookup from_sl
+            ON from_sl.settlement_key = m.from_settlement_key
+        LEFT JOIN simulation_settlement_lookup to_sl
+            ON to_sl.settlement_key = m.to_settlement_key
+        LEFT JOIN simulation_region_lookup from_rl
+            ON from_rl.region_key = m.from_region_key
+        LEFT JOIN simulation_region_lookup to_rl
+            ON to_rl.region_key = m.to_region_key;
+
         CREATE VIEW IF NOT EXISTS simulation_people_light_readable AS
         SELECT
             p.person_id,
@@ -1860,6 +2057,7 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_couples")
         conn.execute("DELETE FROM simulation_paramours")
         conn.execute("DELETE FROM simulation_meta")
+        conn.execute("DELETE FROM simulation_event_moves")
         conn.execute("DELETE FROM simulation_event_people")
         conn.execute("DELETE FROM simulation_events")
         from library import government_checkpoint as _gov_ckpt
@@ -2177,7 +2375,11 @@ def append_simulation_event_rows(
         settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
         region_key = _lookup_or_insert_region_key(conn, region_id)
         event_origin = _event_origin_from_payload(payload)
-        stored_payload = dict(payload) if verbose_payloads else _compact_event_payload(payload)
+        stored_payload = (
+            dict(payload)
+            if verbose_payloads
+            else _compact_event_payload(event_type, payload)
+        )
         cur.execute(
             """
             INSERT INTO simulation_events (
@@ -2207,16 +2409,25 @@ def append_simulation_event_rows(
                 """,
                 (event_id, person_id, role),
             )
+        _insert_simulation_event_move_rows(
+            conn,
+            event_id=event_id,
+            event_type=event_type,
+            payload=payload,
+        )
 
 
-def _compact_event_payload(payload: dict) -> dict:
+def _compact_event_payload(event_type: str, payload: dict) -> dict:
     """Drop place slugs duplicated by normalized event columns for normal runs."""
+    drop_keys: set[str] = set(_EVENT_SETTLEMENT_KEYS)
+    drop_keys.update(_EVENT_REGION_KEYS)
+    drop_keys.update(_EVENT_PAYLOAD_META_KEYS)
+    if str(event_type or "").strip() == "settlement_moved":
+        drop_keys.update(_EVENT_MOVE_DETAIL_KEYS)
     return {
         str(k): v
         for k, v in payload.items()
-        if str(k) not in _EVENT_SETTLEMENT_KEYS
-        and str(k) not in _EVENT_REGION_KEYS
-        and str(k) not in _EVENT_PAYLOAD_META_KEYS
+        if str(k) not in drop_keys
     }
 
 

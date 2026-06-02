@@ -50,6 +50,15 @@
   - settlement and arbitrary point projection stay inside the declared authored-region footprint
   - debug SVG output includes the noisy map, river, and overlay layers
 
+### Completed World Map Polish Pass
+
+- Switched the visible SVG region-boundary layer from anonymous micro-edge snippets to dissolved authored-region footprints:
+  - one data-rich `region-boundary` path per configured region
+  - boundary paths reuse the region cells aggregated from same-region micro-cells
+  - the dissolved boundary layer renders under coast and lake styling so coastline/water presentation stays authoritative
+- Preserved micro-edge segments for terrain blending, hillshade, and coast rendering.
+- Confirmed explicit ocean and lake water-cell layers remain part of the SVG/debug test surface.
+
 ## Scale Population Simulation Toward Millions
 
 ### Completed Performance Work
@@ -76,6 +85,11 @@
   - decision samples are seeded by year, scope, world, and run salt so results are reproducible
   - implemented first targets: government candidate pools, treasury leader-spend choices, warfare/usurpation candidates, settlement social contact/couple candidate pools
   - future behavior pools should keep using this pattern while exact accounting paths stay unsampled
+
+- Tuned resource-pressure migration for the default 5% population scale:
+  - raised `MIGRATION_MAX_OUTFLOW_SHARE` from `0.045` to `0.08` so highly over-cap regions relieve pressure faster
+  - capped planned migration representatives by the surplus above `MIGRATION_PRESSURE_THRESHOLD × effective_cap` so mild pressure does not over-drain below the target
+  - added regression coverage for both high-pressure outflow and near-threshold surplus behavior
 
 - Refactored household/care duty hot paths:
   - `childcare_duty_factor`
@@ -198,6 +212,20 @@
 - Checkpoint save/load now roundtrips passive people and cohorts.
 - Passive people share the global `person_id` sequence but do **not** enter `current_people_ids`, detailed alive counts, social contact loops, government candidate pools, migration loops, or other detailed-person event thresholds.
 - Added regression tests for passive-person/cohort roundtrips, inferred event provenance, and passive people staying out of detailed alive counts.
+
+### Completed Save Schema v7 Movement Event Normalization
+
+- Added `simulation_event_moves` for high-volume `settlement_moved` details:
+  - moved person id
+  - from/to settlement keys
+  - from/to region keys
+  - cross-region flag
+  - move reason
+  - deferred-move request/apply years and source/group labels
+- Added `simulation_event_moves_readable` so movement history can be inspected without rehydrating JSON payloads.
+- New `settlement_moved` writes populate the normalized move table and compact duplicate movement detail out of normal `payload_json`.
+- Verbose event logging still preserves raw self-contained movement payloads for debugging runs.
+- Schema ensure/rebuild can backfill movement rows from older raw/verbose `settlement_moved` payloads when the route detail is still present.
 
 ### Completed Hybrid Mixed-Mode Population Pass
 

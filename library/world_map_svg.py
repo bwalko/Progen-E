@@ -1144,6 +1144,28 @@ def _cell_bbox(cell: RegionCell) -> tuple[float, float, float, float]:
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _dissolved_region_boundary_paths(
+    cells: list[RegionCell],
+    *,
+    width: int,
+    height: int,
+    pad: int,
+) -> list[str]:
+    paths: list[str] = []
+    for cell in cells:
+        if len(cell.polygon) < 3:
+            continue
+        scaled = [_scale(p, width, height, pad) for p in cell.polygon]
+        d = _poly_path(scaled)
+        if not d:
+            continue
+        paths.append(
+            f'<path class="region-boundary" data-region-id="{html.escape(cell.region_id)}" '
+            f'd="{d}" fill="none" />'
+        )
+    return paths
+
+
 def _micro_edge_segments(
     micro_cells: list[MicroRegionCell],
 ) -> tuple[
@@ -1690,7 +1712,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:butt}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -1769,7 +1791,7 @@ def render_world_map_svg(
         parts.append("</g>")
 
     if geometry.micro_cells:
-        region_edges, coast_edges, blend_edges = _micro_edge_segments(geometry.micro_cells)
+        _region_edges, coast_edges, blend_edges = _micro_edge_segments(geometry.micro_cells)
         noisy_edge_paths = (
             _build_micro_noisy_edge_paths(
                 geometry.micro_cells,
@@ -1871,6 +1893,19 @@ def render_world_map_svg(
                         f'fill="{color}" opacity="{opacity:.3f}" />'
                     )
                 parts.append("</g>")
+        boundary_paths = _dissolved_region_boundary_paths(
+            geometry.cells,
+            width=width,
+            height=height,
+            pad=pad,
+        )
+        if boundary_paths:
+            parts.append(
+                '<g class="region-boundary-layer dissolved-region-boundaries" '
+                'data-boundary-source="dissolved-region-cell" opacity="0.12">'
+            )
+            parts.extend(boundary_paths)
+            parts.append("</g>")
         coast_paths = _stitched_noisy_paths(
             _stitch_edge_chains(coast_edges),
             noisy_edge_paths,
@@ -1906,15 +1941,6 @@ def render_world_map_svg(
                     f'd="{_poly_path(scaled)}" fill="{_water_cell_fill(water)}" opacity="0.82" />'
                 )
             parts.append("</g>")
-        for a, b in region_edges:
-            pts = (
-                _oriented_noisy_edge_path(noisy_edge_paths, a, b, width=width, height=height, pad=pad)
-                if noisy_edges
-                else [_scale(a, width, height, pad), _scale(b, width, height, pad)]
-            )
-            parts.append(
-                f'<path class="region-boundary" d="{_line_path(pts)}" fill="none" opacity="0.10" />'
-            )
     else:
         for cell in geometry.cells:
             scaled = [_scale(p, width, height, pad) for p in cell.polygon]

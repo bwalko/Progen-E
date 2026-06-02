@@ -10,11 +10,43 @@ from unittest.mock import Mock, patch
 
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
+from library.person import Person
 from library.simulation_context import SimulationContext
-from library.simulation_migration import simulation_migration_annual_tick
+from library.simulation_migration import (
+    MIGRATION_MAX_OUTFLOW_SHARE,
+    MIGRATION_PRESSURE_THRESHOLD,
+    simulation_migration_annual_tick,
+)
 
 
 class TestSimulationMigration(unittest.TestCase):
+    def _add_simple_adults(
+        self,
+        ctx: SimulationContext,
+        *,
+        count: int,
+        region_id: str,
+        settlement_id: str,
+        year: int,
+    ) -> None:
+        for i in range(int(count)):
+            gender = "Male" if i % 2 == 0 else "Female"
+            ctx.add_person(
+                person=Person(
+                    first_name=f"Adult{i}",
+                    last_name=region_id,
+                    gender=gender,
+                    ethnic="Human",
+                    species="Human",
+                    birthyear=int(year) - 30,
+                    birthplace_region_id=region_id,
+                    birthplace_settlement_id=settlement_id,
+                    current_settlement_id=settlement_id,
+                    min_fertility_age=18,
+                ),
+                is_founder=False,
+            )
+
     def test_record_year_summary_calls_migration_annual_tick(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
@@ -118,7 +150,7 @@ class TestSimulationMigration(unittest.TestCase):
                 self.assertEqual(sample.get("from_region_id"), "aeria_north")
                 self.assertIn(
                     sample.get("to_region_id"),
-                    ("aeria_granite_range", "aeria_westwater_river"),
+                    ("aeria_granite_range", "aeria_westwater_river", "aeria_port"),
                 )
 
     def test_spinoff_requires_multiple_colonist_families(self) -> None:
@@ -254,6 +286,85 @@ class TestSimulationMigration(unittest.TestCase):
                     (pa.current_settlement_id or ""),
                     (pb.current_settlement_id or ""),
                 )
+
+    def test_high_pressure_uses_tuned_outflow_share(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=5,
+                flush_run_store=False,
+            ) as ctx:
+                origin = ctx.ensure_active_settlement_for_region("aeria_north")
+                ctx.ensure_active_settlement_for_region("aeria_granite_range")
+                ctx.ensure_active_settlement_for_region("aeria_westwater_river")
+                self._add_simple_adults(
+                    ctx,
+                    count=1600,
+                    region_id="aeria_north",
+                    settlement_id=origin.settlement_id,
+                    year=1000,
+                )
+
+                simulation_migration_annual_tick(ctx, 1000)
+
+                planned = [
+                    payload
+                    for _year, event_type, payload in ctx._pending_simulation_events
+                    if event_type == "settlement_move_planned"
+                ]
+                self.assertEqual(
+                    len(planned),
+                    int(1600 * MIGRATION_MAX_OUTFLOW_SHARE),
+                )
+                self.assertGreater(len(planned), int(1600 * 0.045))
+
+    def test_near_threshold_migration_does_not_overshoot_surplus(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=6,
+                flush_run_store=False,
+            ) as ctx:
+                origin = ctx.ensure_active_settlement_for_region("aeria_north")
+                ctx.ensure_active_settlement_for_region("aeria_granite_range")
+                ctx.ensure_active_settlement_for_region("aeria_westwater_river")
+                cap = ctx.effective_regional_population_cap("aeria_north")
+                population = int(cap * MIGRATION_PRESSURE_THRESHOLD) + 22
+                self._add_simple_adults(
+                    ctx,
+                    count=population,
+                    region_id="aeria_north",
+                    settlement_id=origin.settlement_id,
+                    year=1000,
+                )
+
+                simulation_migration_annual_tick(ctx, 1000)
+
+                planned = [
+                    payload
+                    for _year, event_type, payload in ctx._pending_simulation_events
+                    if event_type == "settlement_move_planned"
+                ]
+                self.assertLessEqual(len(planned), 22)
+                self.assertLess(len(planned), int(population * MIGRATION_MAX_OUTFLOW_SHARE))
 
 
 if __name__ == "__main__":

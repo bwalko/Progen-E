@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import TYPE_CHECKING
 
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 # Ratio of census / effective_cap above which out-migration is considered.
 MIGRATION_PRESSURE_THRESHOLD = 0.88
 # Trials scale with excess pressure; capped as a share of regional population per year.
-MIGRATION_MAX_OUTFLOW_SHARE = 0.045
+MIGRATION_MAX_OUTFLOW_SHARE = 0.08
 MIGRATION_TRIALS_PER_EXCESS_PRESSURE = 3.2
 # Random walk on effective-cap multiplier (applied to config carrying_capacity).
 _CAP_DRIFT_LOW = 0.993
@@ -160,7 +161,14 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
         if pressure < MIGRATION_PRESSURE_THRESHOLD:
             continue
         excess = max(0.0, pressure - MIGRATION_PRESSURE_THRESHOLD)
-        trial_cap = max(1, int(pop * MIGRATION_MAX_OUTFLOW_SHARE))
+        surplus_above_threshold = max(
+            1,
+            int(math.ceil(float(pop) - float(cap) * MIGRATION_PRESSURE_THRESHOLD)),
+        )
+        trial_cap = min(
+            surplus_above_threshold,
+            max(1, int(pop * MIGRATION_MAX_OUTFLOW_SHARE)),
+        )
         trials = min(
             trial_cap,
             max(0, int(pop * excess * MIGRATION_TRIALS_PER_EXCESS_PRESSURE)),

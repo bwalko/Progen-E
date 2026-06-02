@@ -36,6 +36,8 @@ from library.population_growth_runner import (
     KIN_PAIR_PARENT_CHILD_PROB,
     ensure_detailed_floor_for_active_settlements,
     generate_population_founder,
+    _migration_arrivals_by_settlement_from_events,
+    _promote_passive_context_for_migration_arrivals,
     pair_people_by_settlement_then_region,
     refresh_passive_background_cohorts,
     run_population_growth_simulation,
@@ -524,6 +526,86 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
                     for _, event_type, payload in ctx._pending_simulation_events
                 )
             )
+
+    def test_migration_arrival_promotes_passive_context_person(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=START_YEAR,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                origin = ctx.ensure_active_settlement_for_region("aeria_north")
+                dest = ctx.ensure_active_settlement_for_region("aeria_granite_range")
+                migrant = ctx.add_person(
+                    person=Person(
+                        first_name="Moving",
+                        last_name="Detailed",
+                        gender="Male",
+                        ethnic="Human",
+                        species="Human",
+                        birthyear=START_YEAR - 30,
+                        birthplace_region_id=origin.region_id,
+                        birthplace_settlement_id=origin.settlement_id,
+                        current_settlement_id=origin.settlement_id,
+                        min_fertility_age=18,
+                    ),
+                    is_founder=False,
+                )
+                ctx.add_passive_cohort(
+                    PassiveCohort(
+                        sim_year=START_YEAR - 1,
+                        region_id=dest.region_id,
+                        settlement_id=dest.settlement_id,
+                        age_band="30",
+                        gender="Female",
+                        species="",
+                        culture="",
+                        job_family="trade",
+                        status_bucket="single",
+                        population_count=2,
+                    )
+                )
+                ctx.queue_person_move_to_settlement(
+                    migrant.person_id,
+                    dest.settlement_id,
+                    move_reason="resource_pressure_migration",
+                    requested_year=START_YEAR - 1,
+                    apply_year=START_YEAR,
+                )
+
+                event_start = len(ctx._pending_simulation_events)
+                ctx.apply_pending_settlement_moves(START_YEAR)
+                arrivals = _migration_arrivals_by_settlement_from_events(
+                    ctx._pending_simulation_events[event_start:]
+                )
+                promoted_count = _promote_passive_context_for_migration_arrivals(
+                    ctx, START_YEAR, arrivals
+                )
+
+                self.assertEqual(arrivals, {dest.settlement_id: 1})
+                self.assertEqual(promoted_count, 1)
+                self.assertEqual(ctx.passive_cohorts[0].population_count, 1)
+                promoted = [
+                    payload
+                    for _year, event_type, payload in ctx._pending_simulation_events
+                    if event_type == "passive_person_promoted"
+                    and payload.get("reason") == "migration_into_focal_settlement"
+                ]
+                self.assertEqual(len(promoted), 1)
+                promoted_id = int(promoted[0]["person_id"])
+                self.assertIn(promoted_id, ctx.current_people_ids)
+                self.assertEqual(
+                    ctx.id_to_record[promoted_id].person.current_settlement_id,
+                    dest.settlement_id,
+                )
 
     def test_pairing_skips_parent_child_when_other_partner_exists(self) -> None:
         ctx = SimulationContext(

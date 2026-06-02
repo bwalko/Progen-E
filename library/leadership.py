@@ -5,7 +5,10 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Any, Mapping
 
-from library.genome_composites import score_composite_row_for_traits
+from library.genome_composites import (
+    normalize_composite_band,
+    score_composite_row_for_traits,
+)
 from library.mind_body import work_trait_values
 
 if TYPE_CHECKING:
@@ -44,6 +47,18 @@ _JUDICIAL_FAMILIES: frozenset[str] = frozenset(
 _GOVERNMENT_CANDIDATE_FAMILIES: frozenset[str] = (
     _GOVERNANCE_FAMILIES | _MILITARY_FAMILIES
 )
+_COMPONENT_KEYS: tuple[tuple[str, str], ...] = (
+    ("component_1_trait", "component_1_position"),
+    ("component_2_trait", "component_2_position"),
+    ("component_3_trait", "component_3_position"),
+)
+_DISQUALIFIER_KEYS: tuple[tuple[str, str], ...] = (
+    ("disqualifier_1_trait", "disqualifier_1_position"),
+    ("disqualifier_2_trait", "disqualifier_2_position"),
+)
+_CompiledGovRow = tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]
+_compiled_gov_row_cache: dict[int, tuple[tuple[dict[str, Any], ...], tuple[_CompiledGovRow, ...]]] = {}
+_score_genome_job_row = None
 
 
 def government_candidate_composite_rows(
@@ -76,6 +91,93 @@ def _max_composite_family_score(
         if s is not None and math.isfinite(s):
             best = max(best, float(s))
     return _clamp01(best)
+
+
+def _score_trait_fast(genome_value: float, deviation_band: str) -> float:
+    global _score_genome_job_row
+    if _score_genome_job_row is None:
+        from library.simulation_careers import score_genome_job_row
+
+        _score_genome_job_row = score_genome_job_row
+    return _score_genome_job_row(genome_value, deviation_band)
+
+
+def _compile_government_candidate_rows(
+    rows: tuple[dict[str, Any], ...],
+) -> tuple[_CompiledGovRow, ...]:
+    key = id(rows)
+    cached = _compiled_gov_row_cache.get(key)
+    if cached is not None and cached[0] is rows:
+        return cached[1]
+    if len(_compiled_gov_row_cache) > 8:
+        _compiled_gov_row_cache.clear()
+
+    compiled: list[_CompiledGovRow] = []
+    for row in rows:
+        fam = str(row.get("composite_family") or "").strip()
+        if fam not in _GOVERNMENT_CANDIDATE_FAMILIES:
+            continue
+        components: list[tuple[str, str]] = []
+        for trait_key, pos_key in _COMPONENT_KEYS:
+            trait = str(row.get(trait_key) or "").strip()
+            if not trait:
+                continue
+            band = normalize_composite_band(str(row.get(pos_key) or ""))
+            components.append((trait, band))
+        if not components:
+            continue
+        disqualifiers: list[tuple[str, str]] = []
+        for trait_key, pos_key in _DISQUALIFIER_KEYS:
+            trait = str(row.get(trait_key) or "").strip()
+            if not trait:
+                continue
+            band = normalize_composite_band(str(row.get(pos_key) or ""))
+            disqualifiers.append((trait, band))
+        compiled.append((fam, tuple(components), tuple(disqualifiers)))
+    out = tuple(compiled)
+    _compiled_gov_row_cache[key] = (rows, out)
+    return out
+
+
+def _score_compiled_composite(
+    trait_values: Mapping[str, float],
+    components: tuple[tuple[str, str], ...],
+    disqualifiers: tuple[tuple[str, str], ...],
+) -> float | None:
+    if not trait_values or not components:
+        return None
+    prod = 1.0
+    for trait, band in components:
+        if trait not in trait_values:
+            return None
+        prod *= _clamp01(_score_trait_fast(float(trait_values[trait]), band))
+    final = prod ** (1.0 / len(components))
+    for trait, band in disqualifiers:
+        if trait not in trait_values:
+            continue
+        d = _clamp01(_score_trait_fast(float(trait_values[trait]), band))
+        final *= 1.0 - d
+    if not math.isfinite(final):
+        return None
+    return _clamp01(final)
+
+
+def _max_government_candidate_scores(
+    trait_values: Mapping[str, float],
+    rows: tuple[dict[str, Any], ...],
+) -> tuple[float, float]:
+    leadership_best = 0.0
+    military_best = 0.0
+    for fam, components, disqualifiers in _compile_government_candidate_rows(rows):
+        s = _score_compiled_composite(trait_values, components, disqualifiers)
+        if s is None or not math.isfinite(s):
+            continue
+        score = float(s)
+        if fam in _GOVERNANCE_FAMILIES:
+            leadership_best = max(leadership_best, score)
+        if fam in _MILITARY_FAMILIES:
+            military_best = max(military_best, score)
+    return _clamp01(leadership_best), _clamp01(military_best)
 
 
 def _trait_blend(
@@ -161,8 +263,8 @@ def leadership_and_military_indexes(
     cfs = float(person.career_fitness_score) if person.career_fitness_score is not None else 0.5
     cfs = _clamp01(cfs)
 
-    leadership_base = _max_composite_family_score(
-        traits, composite_rows, _GOVERNANCE_FAMILIES
+    leadership_base, military_base = _max_government_candidate_scores(
+        traits, composite_rows
     )
     leadership_blend = _trait_blend(
         person.mind_body,
@@ -180,9 +282,6 @@ def leadership_and_military_indexes(
         * life_mult
     )
 
-    military_base = _max_composite_family_score(
-        traits, composite_rows, _MILITARY_FAMILIES
-    )
     military_blend = _trait_blend(
         person.mind_body,
         {

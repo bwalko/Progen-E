@@ -4,5 +4,4 @@ Prioritized follow-ups for the History Project simulation stack. Operational hab
 
 ## Medium priority
 
-1. **Tune migration under 5% capacity**  
-   See [dev_rules/migration_tuning.md](dev_rules/migration_tuning.md). Short path: reload config if needed → `python utils/run_population_simulation.py --years N` → `python utils/util_print_alive_by_year.py` on `yearly_summary.csv` → adjust `MIGRATION_*` in `library/simulation_migration.py` one knob at a time (prefer fixed-seed reruns to compare).
+No medium-priority follow-ups are queued here right now.

@@ -7,11 +7,10 @@ The first polygonal terrain pass is done. `library.world_map_geometry` now build
 Remaining map work:
 
 1. Tune terrain classification, elevation gradients, river density, river mouth shape, and moisture spread against generated SVGs from multiple map seeds.
-2. Replace summary/aggregate region boundaries with cleaner dissolved boundaries where adjacent micro-cells share the same authored region.
-3. Add explicit lakes and ocean/water cells instead of treating all non-land as only background water.
-4. Decide whether to keep the current dependency-light micro-cell graph or introduce a reusable Delaunay/corner graph if a stable dependency is worth it.
-5. Persist or export richer map debug data when tuning needs more than the current SVG/data attributes expose.
-6. Add map-seed comparison fixtures or golden-light tests once the visual style settles enough to make regressions meaningful.
+2. Tune the explicit lake and ocean cell styling against generated SVGs from multiple map seeds.
+3. Decide whether to keep the current dependency-light micro-cell graph or introduce a reusable Delaunay/corner graph if a stable dependency is worth it.
+4. Persist or export richer map debug data when tuning needs more than the current SVG/data attributes expose.
+5. Add map-seed comparison fixtures or golden-light tests once the visual style settles enough to make regressions meaningful.
 
 ## Scale Population Simulation Toward Millions
 
@@ -37,9 +36,9 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 - File size: about 2.25GB.
 - `simulation_events`: 3,262,904 rows; `payload_json` is about 1.05GB of text.
 - `simulation_people`: 319,939 rows; `person_json` is about 640MB of text.
-- Save schema v2/v3/v4/v5/v6 already removed save-side `world` columns, flattened common `Person` fields into typed columns, compacted genome/mind-body payloads, added normalized event-person links, normalized common place IDs, and added the first hybrid passive/cohort tables. See `TODONE.md`.
+- Save schema v2/v3/v4/v5/v6/v7 already removed save-side `world` columns, flattened common `Person` fields into typed columns, compacted genome/mind-body payloads, added normalized event-person links, normalized common place IDs, added the first hybrid passive/cohort tables, and normalized `settlement_moved` route detail. See `TODONE.md`.
 - Remaining bigger wins are likely:
-  - continue moving high-volume event detail out of JSON when a specific event family proves hot;
+  - continue moving high-volume event detail out of JSON when another specific event family proves hot;
   - use `simulation_people_light` / `simulation_cohorts` for background population instead of creating every background person as a full `Person`;
   - keep JSON only for sparse detail or extension fields.
 - Keep human-readable inspection as a first-class need. Prefer readable views, browser helpers, or a future derived `world.sqlite` over making the canonical save easy to inspect only by storing long JSON keys everywhere.
@@ -102,7 +101,7 @@ Initial foundation already exists:
 - `SimulationContext.passive_cohorts`
 - `SimulationContext.add_passive_person(...)`
 - `SimulationContext.add_passive_cohort(...)`
-- save schema v6 tables/views:
+- save tables/views introduced in schema v6:
   - `simulation_people_light`
   - `simulation_people_light_readable`
   - `simulation_cohorts`
@@ -120,13 +119,15 @@ Hybrid background cohort generation now exists in the canonical population runne
 
 Office selection can now promote one passive adult into detailed simulation when no detailed candidate is available. Promotion synthesizes a full `Person` from passive facts and records inferred/backfilled events.
 
+Migration arrivals can now promote a small capped number of passive adult residents in the destination settlement into detailed simulation for local context (`migration_into_focal_settlement`), before pairing runs for that year.
+
 Yearly summaries now split detailed alive, passive-person alive, aggregate-cohort alive, aggregate partnered cohorts, mixed-mode alive, passive births, and passive deaths.
 
 `utils/run_mixed_mode_scale_smoke.py` now exercises aggregate passive/cohort evolution at 100K, 1M, and 10M targets without materializing millions of detailed people. It writes `temp/mixed_mode_scale_smoke.tsv`.
 
 `utils/run_mixed_mode_calibration.py` now runs the full population runner at 100K, 1M, and 10M mixed-mode targets with bounded detailed samples and aggregate settlement seeding. It writes `temp/mixed_mode_calibration.tsv`.
 
-Longer 10-year full mixed-mode calibration now runs comfortably on local hardware and preserves the configured target closely after passive fertility tuning. Still missing: additional promotion triggers such as migration into a focal settlement, user inspection, and narrative spotlighting.
+Longer 10-year full mixed-mode calibration now runs comfortably on local hardware and preserves the configured target closely after passive fertility tuning. Still missing: additional promotion triggers such as user inspection and narrative spotlighting.
 
 ### Detailed Population Fraction
 
@@ -221,4 +222,4 @@ Important invariant:
 
 1. Use late-year profiling to confirm the next hot path for ~15K active people.
 2. Get 15K active people / 10 late years under 5 minutes.
-3. Add another passive-to-detailed promotion trigger such as marriage into a detailed family, migration into a focal settlement, user inspection, or narrative spotlighting.
+3. Add another passive-to-detailed promotion trigger such as user inspection or narrative spotlighting.

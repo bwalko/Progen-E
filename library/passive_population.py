@@ -248,6 +248,31 @@ def promote_passive_candidate_for_office(
     )
 
 
+def promote_passive_candidate_for_settlement_context(
+    ctx: Any,
+    *,
+    year: int,
+    settlement_id: str,
+    min_age: int = 16,
+    reason: str = "settlement_context",
+    source: dict[str, Any] | None = None,
+    candidate_index: PassiveOfficeCandidateIndex | None = None,
+) -> Any | None:
+    """Promote one adult aggregate resident because a settlement needs detail."""
+    sid = (settlement_id or "").strip()
+    if not sid:
+        return None
+    return promote_passive_candidate_for_office(
+        ctx,
+        year=int(year),
+        settlement_id=sid,
+        min_age=int(min_age),
+        reason=reason,
+        source=source,
+        candidate_index=candidate_index,
+    )
+
+
 def build_passive_office_candidate_index(ctx: Any) -> PassiveOfficeCandidateIndex:
     """Index latest passive cohorts for repeated office-promotion lookups."""
     latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)

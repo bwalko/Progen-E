@@ -606,6 +606,183 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertEqual(verbose_payload["region_id"], rid2)
             self.assertEqual(verbose_payload["settlement_id"], sid2)
 
+    def test_settlement_move_details_are_normalized_and_compacted(self) -> None:
+        random.seed(17)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="moves",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            rec = ctx.add_person(
+                person=generate_person_random(
+                    simulation_context=ctx, simulation_year=1000
+                ),
+                is_founder=True,
+            )
+            from_sid = str(
+                rec.person.current_settlement_id or rec.person.birthplace_settlement_id or ""
+            )
+            from_rid = str(rec.person.birthplace_region_id or "")
+            to_rid = "aeria_granite_range" if from_rid != "aeria_granite_range" else "aeria_north"
+            target = ctx.ensure_active_settlement_for_region(to_rid)
+
+            ctx.move_person_to_settlement(
+                rec.person_id,
+                target.settlement_id,
+                move_reason="storage_probe",
+                requested_year=1000,
+                planned_apply_year=1001,
+                source_event="save_test",
+                group_id="move:1",
+            )
+            checkpoint_simulation_to_save(ctx, full_snapshot=False)
+
+            with sqlite3.connect(sav) as conn:
+                conn.row_factory = sqlite3.Row
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                row = conn.execute(
+                    """
+                    SELECT e.primary_person_id, er.settlement_id AS event_settlement_id,
+                           er.region_id AS event_region_id, e.payload_json,
+                           m.moved_person_id, m.from_settlement_id, m.to_settlement_id,
+                           m.from_region_id, m.to_region_id, m.cross_region,
+                           m.move_reason, m.requested_year, m.planned_apply_year,
+                           m.source_event, m.group_id
+                    FROM simulation_events e
+                    JOIN simulation_events_readable er ON er.id = e.id
+                    JOIN simulation_event_moves_readable m ON m.event_id = e.id
+                    WHERE e.event_type = 'settlement_moved'
+                    ORDER BY e.id DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                link_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM simulation_event_people
+                    WHERE event_id = (
+                        SELECT id FROM simulation_events
+                        WHERE event_type = 'settlement_moved'
+                        ORDER BY id DESC
+                        LIMIT 1
+                    )
+                      AND person_id = ?
+                    """,
+                    (rec.person_id,),
+                ).fetchone()[0]
+
+            self.assertIsNotNone(row)
+            self.assertEqual(int(row["primary_person_id"]), rec.person_id)
+            self.assertEqual(int(row["moved_person_id"]), rec.person_id)
+            self.assertEqual(str(row["event_settlement_id"]), target.settlement_id)
+            self.assertEqual(str(row["event_region_id"]), to_rid)
+            self.assertEqual(str(row["from_settlement_id"]), from_sid)
+            self.assertEqual(str(row["to_settlement_id"]), target.settlement_id)
+            self.assertEqual(str(row["from_region_id"]), from_rid)
+            self.assertEqual(str(row["to_region_id"]), to_rid)
+            self.assertEqual(int(row["cross_region"]), 1)
+            self.assertEqual(str(row["move_reason"]), "storage_probe")
+            self.assertEqual(int(row["requested_year"]), 1000)
+            self.assertEqual(int(row["planned_apply_year"]), 1001)
+            self.assertEqual(str(row["source_event"]), "save_test")
+            self.assertEqual(str(row["group_id"]), "move:1")
+            self.assertEqual(json.loads(str(row["payload_json"])), {})
+            self.assertGreaterEqual(int(link_count), 1)
+
+    def test_v6_settlement_move_payload_backfills_to_event_moves(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with sqlite3.connect(sav) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '6')
+                    """
+                )
+                conn.execute("PRAGMA user_version = 6")
+                conn.execute(
+                    """
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        primary_person_id INTEGER,
+                        secondary_person_id INTEGER,
+                        settlement_key INTEGER,
+                        region_key INTEGER,
+                        event_origin TEXT NOT NULL DEFAULT 'generated',
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        sim_year, event_type, payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        1002,
+                        "settlement_moved",
+                        json.dumps(
+                            {
+                                "person_id": 42,
+                                "from_settlement_id": "aeria_north:settlement:1",
+                                "to_settlement_id": "aeria_granite_range:settlement:1",
+                                "from_region_id": "aeria_north",
+                                "to_region_id": "aeria_granite_range",
+                                "cross_region": True,
+                                "move_reason": "resource_pressure_migration",
+                            },
+                            separators=(",", ":"),
+                        ),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+                ensure_checkpoint_schema(conn)
+
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                row = conn.execute(
+                    """
+                    SELECT moved_person_id, from_settlement_id, to_settlement_id,
+                           from_region_id, to_region_id, cross_region, move_reason
+                    FROM simulation_event_moves_readable
+                    WHERE event_type = 'settlement_moved'
+                    """
+                ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(int(row["moved_person_id"]), 42)
+            self.assertEqual(str(row["from_settlement_id"]), "aeria_north:settlement:1")
+            self.assertEqual(
+                str(row["to_settlement_id"]),
+                "aeria_granite_range:settlement:1",
+            )
+            self.assertEqual(str(row["from_region_id"]), "aeria_north")
+            self.assertEqual(str(row["to_region_id"]), "aeria_granite_range")
+            self.assertEqual(int(row["cross_region"]), 1)
+            self.assertEqual(str(row["move_reason"]), "resource_pressure_migration")
+
     def test_inferred_event_origin_is_stored_outside_compact_payload(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)

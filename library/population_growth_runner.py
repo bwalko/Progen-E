@@ -18,8 +18,10 @@ from library.generator import generate_person_random
 from library.passive_population import (
     PassiveCohort,
     build_passive_marriage_candidate_index,
+    build_passive_office_candidate_index,
     promote_passive_candidate_for_marriage,
     promote_passive_candidate_for_office,
+    promote_passive_candidate_for_settlement_context,
 )
 from library.random_names import choose_random_first_last
 from library.settlements import SettlementState
@@ -42,6 +44,11 @@ KIN_PAIR_RNG_STREAM = 612_047
 PAIRING_EXHAUSTIVE_PAIR_LIMIT = 25_000
 PAIRING_CANDIDATE_ATTEMPTS_PER_PERSON = 8
 PASSIVE_MARRIAGE_PROMOTION_CAP_PER_YEAR = 24
+PASSIVE_MIGRATION_CONTEXT_PROMOTION_CAP_PER_YEAR = 12
+PASSIVE_MIGRATION_CONTEXT_PROMOTION_CAP_PER_SETTLEMENT = 2
+PASSIVE_MIGRATION_CONTEXT_REASONS: frozenset[str] = frozenset(
+    {"resource_pressure_migration", "job_seeker_migration"}
+)
 MIN_DETAILED_RESIDENTS_PER_ACTIVE_SETTLEMENT = 2
 
 _PASSIVE_JOB_FAMILY_SHARES: tuple[tuple[str, float], ...] = (
@@ -978,6 +985,74 @@ def ensure_detailed_floor_for_active_settlements(
     return promoted_or_created
 
 
+def _migration_arrivals_by_settlement_from_events(
+    events: list[tuple[int | None, str, dict]],
+) -> dict[str, int]:
+    arrivals: dict[str, int] = {}
+    for _event_year, event_type, payload in events:
+        if event_type != "settlement_moved":
+            continue
+        reason = str(payload.get("move_reason") or "").strip()
+        if reason not in PASSIVE_MIGRATION_CONTEXT_REASONS:
+            continue
+        sid = str(payload.get("to_settlement_id") or "").strip()
+        if not sid:
+            continue
+        arrivals[sid] = arrivals.get(sid, 0) + 1
+    return arrivals
+
+
+def _promote_passive_context_for_migration_arrivals(
+    ctx: SimulationContext,
+    year: int,
+    arrivals_by_settlement: dict[str, int],
+    *,
+    detailed_active_soft_cap: int | None = None,
+) -> int:
+    if not arrivals_by_settlement:
+        return 0
+    cap = max(0, int(PASSIVE_MIGRATION_CONTEXT_PROMOTION_CAP_PER_YEAR))
+    if cap <= 0:
+        return 0
+    soft_cap = int(detailed_active_soft_cap) if detailed_active_soft_cap else None
+    candidate_index = build_passive_office_candidate_index(ctx)
+    promotions = 0
+    for sid, arrival_count in sorted(
+        arrivals_by_settlement.items(), key=lambda item: (-int(item[1]), item[0])
+    ):
+        if promotions >= cap:
+            break
+        st = ctx.settlements_by_id.get(sid)
+        if st is None or (st.status or "").strip().lower() != "active":
+            continue
+        per_settlement = min(
+            int(arrival_count),
+            PASSIVE_MIGRATION_CONTEXT_PROMOTION_CAP_PER_SETTLEMENT,
+            cap - promotions,
+        )
+        for _ in range(max(0, per_settlement)):
+            if soft_cap is not None and len(ctx.current_people_ids) >= soft_cap:
+                return promotions
+            promoted = promote_passive_candidate_for_settlement_context(
+                ctx,
+                year=int(year),
+                settlement_id=sid,
+                min_age=16,
+                reason="migration_into_focal_settlement",
+                source={
+                    "settlement_id": sid,
+                    "region_id": st.region_id,
+                    "arrival_count": int(arrival_count),
+                    "trigger_move_reasons": sorted(PASSIVE_MIGRATION_CONTEXT_REASONS),
+                },
+                candidate_index=candidate_index,
+            )
+            if promoted is None:
+                break
+            promotions += 1
+    return promotions
+
+
 def _initial_passive_age_count(total: int, age: int) -> int:
     if total <= 0:
         return 0
@@ -1396,11 +1471,32 @@ def _run_population_growth_year_loop(
     end_exclusive = int(start_year) + int(duration_years)
     for year in range(int(start_year), end_exclusive):
         ctx.current_year = year
+        move_event_start = len(ctx._pending_simulation_events)
         ctx.apply_pending_settlement_moves(year)
+        migration_arrivals = _migration_arrivals_by_settlement_from_events(
+            ctx._pending_simulation_events[move_event_start:]
+        )
         births_count = 0
         passive_births_by_place: dict[tuple[str, str, str, str], int] = {}
         prof = simulation_timing.active_for_year(year)
         tpc = time.perf_counter
+
+        if prof:
+            t0 = tpc()
+        promoted_for_migration = _promote_passive_context_for_migration_arrivals(
+            ctx,
+            year,
+            migration_arrivals,
+            detailed_active_soft_cap=detailed_active_soft_cap,
+        )
+        if prof:
+            simulation_timing.accumulate("runner.migration_context_promote", tpc() - t0)
+            simulation_timing.record_gauge(
+                year,
+                "passive_promotion",
+                "migration_context_promotions",
+                promoted_for_migration,
+            )
 
         if prof:
             t0 = tpc()

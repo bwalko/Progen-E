@@ -548,7 +548,23 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn('class="terrain-texture"', svg)
         self.assertIn('class="terrain-shade', svg)
         self.assertIn('class="region-boundary"', svg)
+        self.assertIn('class="region-boundary-layer dissolved-region-boundaries"', svg)
+        self.assertIn('data-boundary-source="dissolved-region-cell"', svg)
         self.assertIn(".region-boundary{stroke:#151b2d", svg)
+        boundary_paths = re.findall(
+            r'<path class="region-boundary" data-region-id="([^"]+)"',
+            svg,
+        )
+        self.assertEqual(
+            sorted(boundary_paths),
+            sorted(cell.region_id for cell in geometry.cells),
+        )
+        self.assertEqual(svg.count('class="region-boundary"'), len(geometry.cells))
+        self.assertNotIn('<path class="region-boundary" d="', svg)
+        self.assertLess(
+            svg.index('class="region-boundary-layer dissolved-region-boundaries"'),
+            svg.index('<path class="coast-line"'),
+        )
         self.assertIn(".coast-line{stroke:#1d2938", svg)
         self.assertIn('class="coast-shelf"', svg)
         self.assertIn('class="coast-beach"', svg)
