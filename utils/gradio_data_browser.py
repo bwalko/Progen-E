@@ -1517,6 +1517,87 @@ def _current_year(con: sqlite3.Connection, world: str) -> int | None:
     return int(row["current_year"]) if row and row["current_year"] is not None else None
 
 
+def _people_browser_source_sql(con: sqlite3.Connection) -> tuple[str, list[str]]:
+    columns = _table_columns(con, "simulation_people")
+    projected = set(columns)
+    select_parts = ["p.*"]
+    joins: list[str] = []
+    if (
+        "birthplace_region_id" not in projected
+        and "birthplace_region_key" in projected
+        and _has_table(con, "simulation_region_lookup")
+    ):
+        select_parts.append("br.region_id as birthplace_region_id")
+        joins.append("left join simulation_region_lookup br on br.region_key = p.birthplace_region_key")
+        projected.add("birthplace_region_id")
+    if (
+        "birthplace_settlement_id" not in projected
+        and "birthplace_settlement_key" in projected
+        and _has_table(con, "simulation_settlement_lookup")
+    ):
+        select_parts.append("bs.settlement_id as birthplace_settlement_id")
+        joins.append("left join simulation_settlement_lookup bs on bs.settlement_key = p.birthplace_settlement_key")
+        projected.add("birthplace_settlement_id")
+    if (
+        "current_settlement_id" not in projected
+        and "current_settlement_key" in projected
+        and _has_table(con, "simulation_settlement_lookup")
+    ):
+        select_parts.append("cs.settlement_id as current_settlement_id")
+        joins.append("left join simulation_settlement_lookup cs on cs.settlement_key = p.current_settlement_key")
+        projected.add("current_settlement_id")
+    if not joins:
+        return "simulation_people", columns
+    joined = "\n            ".join(joins)
+    return (
+        f"""(
+                select {", ".join(select_parts)}
+                from simulation_people p
+                {joined}
+            ) simulation_people""",
+        sorted(projected),
+    )
+
+
+def _people_browser_search_sql(columns: Iterable[str]) -> tuple[str, int]:
+    searchable = [
+        column
+        for column in (
+            "person_json",
+            "first_name",
+            "last_name",
+            "current_settlement_id",
+            "birthplace_settlement_id",
+            "birthplace_region_id",
+            "birthplace",
+            "job",
+        )
+        if column in columns
+    ]
+    if not searchable:
+        return "1 = 0", 0
+    return " or ".join(f"{_quote_identifier(column)} like ?" for column in searchable), len(searchable)
+
+
+def _people_browser_home_sort_sql(columns: Iterable[str], people_has_compact_columns: bool) -> str:
+    if people_has_compact_columns:
+        place_columns = [
+            column
+            for column in ("current_settlement_id", "birthplace_settlement_id", "birthplace")
+            if column in columns
+        ]
+        if place_columns:
+            return f"coalesce({', '.join(_quote_identifier(column) for column in place_columns)}) collate nocase"
+        return "person_id"
+    return (
+        "coalesce("
+        "json_extract(person_json, '$.current_settlement_id'), "
+        "json_extract(person_json, '$.birthplace_settlement_id'), "
+        "json_extract(person_json, '$.birthplace')"
+        ") collate nocase"
+    )
+
+
 def load_people_browser(
     world: str,
     search: str,
@@ -1543,6 +1624,7 @@ def load_people_browser(
     params: list[object] = []
     with _connect_readonly(path) as con:
         people_columns = _table_columns(con, "simulation_people")
+        people_source_sql, people_source_columns = _people_browser_source_sql(con)
         people_has_world = "world" in people_columns
         people_has_compact_columns = "birthyear" in people_columns
     age_sql = (
@@ -1559,11 +1641,9 @@ def load_people_browser(
         clauses.append("is_alive = 0")
     if search:
         if people_has_compact_columns:
-            clauses.append(
-                "(person_json like ? or first_name like ? or last_name like ? "
-                "or current_settlement_id like ? or birthplace like ?)"
-            )
-            params.extend([f"%{search}%"] * 5)
+            search_sql, search_param_count = _people_browser_search_sql(people_source_columns)
+            clauses.append(f"({search_sql})")
+            params.extend([f"%{search}%"] * search_param_count)
         else:
             clauses.append("person_json like ?")
             params.append(f"%{search}%")
@@ -1589,7 +1669,7 @@ def load_people_browser(
         "Gender": "gender collate nocase" if people_has_compact_columns else "json_extract(person_json, '$.gender') collate nocase",
         "Species": "species collate nocase" if people_has_compact_columns else "json_extract(person_json, '$.species') collate nocase",
         "Ethnic": "ethnic collate nocase" if people_has_compact_columns else "json_extract(person_json, '$.ethnic') collate nocase",
-        "Home": "coalesce(current_settlement_id, birthplace) collate nocase" if people_has_compact_columns else "coalesce(json_extract(person_json, '$.current_settlement_id'), json_extract(person_json, '$.birthplace')) collate nocase",
+        "Home": _people_browser_home_sort_sql(people_source_columns, people_has_compact_columns),
     }
     direction = "asc" if sort_dir == "Ascending" else "desc"
     order_sql_default = sort_map.get("Age" or "", "is_alive desc, person_id desc")
@@ -1616,14 +1696,14 @@ def load_people_browser(
         rows = con.execute(
             f"""
             select *
-            from simulation_people
+            from {people_source_sql}
             where {where_sql}
             order by {order_clause}
             {limit_sql}
             """,
             query_params,
         ).fetchall()
-        total = con.execute(f"select count(*) as n from simulation_people where {where_sql}", params).fetchone()["n"]
+        total = con.execute(f"select count(*) as n from {people_source_sql} where {where_sql}", params).fetchone()["n"]
 
     headers = [
         "Name",
@@ -2172,7 +2252,7 @@ def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -
             event_people_params.append(world)
         return con.execute(
             f"""
-            select e.sim_year, e.event_type, e.payload_json
+            select e.id as event_id, e.sim_year, e.event_type, e.payload_json
             from simulation_events e
             where exists (
                 select 1
@@ -2187,7 +2267,7 @@ def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -
         ).fetchall()
     return con.execute(
         f"""
-        select sim_year, event_type, payload_json
+        select id as event_id, sim_year, event_type, payload_json
         from simulation_events
         {world_clause} (
             json_extract(payload_json, '$.person_id') = ?
@@ -2405,6 +2485,102 @@ def _person_list_html(
     return shown
 
 
+def _event_id(event: sqlite3.Row) -> int | None:
+    for key in ("event_id", "id"):
+        if key not in event.keys():
+            continue
+        try:
+            return int(event[key])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _event_move_payload(
+    con: sqlite3.Connection,
+    event: sqlite3.Row,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> dict[str, object]:
+    event_id = _event_id(event)
+    if event_id is None or not _has_relation(con, "simulation_event_moves_readable"):
+        return payload
+    try:
+        rows = con.execute(
+            """
+            select *
+            from simulation_event_moves_readable
+            where event_id = ?
+            order by
+              case when moved_person_id = ? then 0 else 1 end,
+              moved_person_id
+            """,
+            (event_id, focus_person_id),
+        ).fetchall()
+    except sqlite3.Error:
+        return payload
+    if not rows:
+        return payload
+
+    merged = dict(payload)
+    first = rows[0]
+    for key in (
+        "moved_person_id",
+        "from_settlement_id",
+        "to_settlement_id",
+        "from_region_id",
+        "to_region_id",
+        "move_reason",
+    ):
+        if merged.get(key) in (None, "") and key in first.keys():
+            merged[key] = first[key]
+    if not isinstance(merged.get("moved_person_ids"), list):
+        merged["moved_person_ids"] = [row["moved_person_id"] for row in rows if row["moved_person_id"] is not None]
+    return merged
+
+
+def _event_murder_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> str:
+    killer_id = payload.get("killer_person_id") or payload.get("perpetrator_person_id") or payload.get("person_id")
+    victim_id = payload.get("victim_person_id") or payload.get("target_person_id")
+    killer = _short_person_for_event(con, world, killer_id, focus_person_id)
+    victim = _short_person_for_event(con, world, victim_id, focus_person_id)
+    incident_kind = str(payload.get("incident_kind") or "").strip().replace("_", " ")
+    motive = str(payload.get("motive") or "").strip().replace("_", " ")
+    context = [part for part in (incident_kind, f"motive: {motive}" if motive else "") if part]
+    tail = f"; {'; '.join(context)}" if context else ""
+    if _same_person_id(victim_id, focus_person_id):
+        return f"{victim} was killed by {killer}{tail}."
+    if _same_person_id(killer_id, focus_person_id):
+        return f"{killer} killed {victim}{tail}."
+    return f"{killer} killed {victim}{tail}."
+
+
+def _event_murder_sentence_html(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> str:
+    killer_id = payload.get("killer_person_id") or payload.get("perpetrator_person_id") or payload.get("person_id")
+    victim_id = payload.get("victim_person_id") or payload.get("target_person_id")
+    killer = _short_person_html_for_event(con, world, killer_id, focus_person_id)
+    victim = _short_person_html_for_event(con, world, victim_id, focus_person_id)
+    incident_kind = html.escape(str(payload.get("incident_kind") or "").strip().replace("_", " "))
+    motive = html.escape(str(payload.get("motive") or "").strip().replace("_", " "))
+    context = [part for part in (incident_kind, f"motive: {motive}" if motive else "") if part]
+    tail = f"; {'; '.join(context)}" if context else ""
+    if _same_person_id(victim_id, focus_person_id):
+        return f"{victim} was killed by {killer}{tail}."
+    if _same_person_id(killer_id, focus_person_id):
+        return f"{killer} killed {victim}{tail}."
+    return f"{killer} killed {victim}{tail}."
+
+
 def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, focus_person_id: object) -> str:
     payload = _load_json_object(event["payload_json"])
     event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
@@ -2479,7 +2655,12 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         span = f" after {years} unemployed year{'s' if years != 1 else ''}" if years is not None else ""
         return f"{person} found work as {new_job}{span}."
 
+    if event_type == "murder":
+        return _event_murder_sentence(con, world, payload, focus_person_id)
+
     if event_type in {"settlement_moved", "job_seeker_migration"}:
+        if event_type == "settlement_moved":
+            payload = _event_move_payload(con, event, payload, focus_person_id)
         from_place = _settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or "unknown")
         to_place = _settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or "unknown")
         reason = str(payload.get("move_reason") or event_type).replace("_", " ")
@@ -2645,7 +2826,12 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         span = f" after {years} unemployed year{'s' if years != 1 else ''}" if years is not None else ""
         return f"{person} found work as {new_job}{span}."
 
+    if event_type == "murder":
+        return _event_murder_sentence_html(con, world, payload, focus_person_id)
+
     if event_type in {"settlement_moved", "job_seeker_migration"}:
+        if event_type == "settlement_moved":
+            payload = _event_move_payload(con, event, payload, focus_person_id)
         from_place = html.escape(_settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or "unknown"))
         to_place = html.escape(_settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or "unknown"))
         reason = html.escape(str(payload.get("move_reason") or event_type).replace("_", " "))
@@ -2733,6 +2919,262 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
     if other_id is not None:
         return f"{event_label}: {person} and {_short_person_html_for_event(con, world, other_id, focus_person_id)}."
     return f"{event_label}: {person}."
+
+
+def _event_year(event: sqlite3.Row) -> int | None:
+    try:
+        return int(event["sim_year"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _history_open_end_year(person: dict[str, object], current_year: int | None) -> int | None:
+    try:
+        deathyear = person.get("deathyear")
+        return int(deathyear) if deathyear is not None else current_year
+    except (TypeError, ValueError):
+        return current_year
+
+
+def _history_year_range(start_year: object, end_year: object) -> str:
+    start = str(start_year) if start_year not in (None, "") else "unknown"
+    end = str(end_year) if end_year not in (None, "") else "present"
+    return f"{start}-{end}"
+
+
+def _job_history_entries(
+    events: list[sqlite3.Row],
+    person: dict[str, object],
+    current_year: int | None,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    open_entry: dict[str, object] | None = None
+    open_end_year = _history_open_end_year(person, current_year)
+
+    def close_open(year: int | None) -> None:
+        nonlocal open_entry
+        if open_entry is None:
+            return
+        open_entry["end_year"] = year if year is not None else open_end_year
+        entries.append(open_entry)
+        open_entry = None
+
+    for event in events:
+        event_type = str(event["event_type"] or "").strip()
+        payload = _load_json_object(event["payload_json"])
+        year = _event_year(event)
+        if event_type == "job_assigned":
+            close_open(year)
+            job = str(payload.get("job") or "work").strip() or "work"
+            open_entry = {"start_year": year, "end_year": None, "label": job}
+        elif event_type == "job_lost":
+            if open_entry is not None and str(open_entry.get("label") or "") != "Unemployed":
+                close_open(year)
+        elif event_type == "unemployment_started":
+            if open_entry is not None and str(open_entry.get("label") or "") != "Unemployed":
+                close_open(year)
+            if open_entry is None:
+                open_entry = {"start_year": year, "end_year": None, "label": "Unemployed"}
+        elif event_type == "unemployment_ended":
+            if open_entry is not None and str(open_entry.get("label") or "") == "Unemployed":
+                close_open(year)
+
+    close_open(open_end_year)
+    if entries:
+        return entries
+
+    job = str(person.get("job") or "").strip()
+    if job:
+        return [
+            {
+                "start_year": person.get("job_assigned_year"),
+                "end_year": open_end_year,
+                "label": job,
+            }
+        ]
+    if str(person.get("employment_status") or "").strip() == "unemployed":
+        return [
+            {
+                "start_year": person.get("unemployment_started_year"),
+                "end_year": open_end_year,
+                "label": "Unemployed",
+            }
+        ]
+    return []
+
+
+def _relationship_other_person_id(payload: dict[str, object], focus_person_id: object) -> object:
+    person_a = payload.get("person_a_id")
+    person_b = payload.get("person_b_id")
+    if _same_person_id(person_a, focus_person_id) and person_b not in (None, ""):
+        return person_b
+    if _same_person_id(person_b, focus_person_id) and person_a not in (None, ""):
+        return person_a
+    return None
+
+
+def _merge_adjacent_relationship_entries(entries: list[dict[str, object]]) -> list[dict[str, object]]:
+    merged: list[dict[str, object]] = []
+    for entry in entries:
+        if not merged:
+            merged.append(dict(entry))
+            continue
+        prev = merged[-1]
+        if str(prev.get("person_id")) != str(entry.get("person_id")):
+            merged.append(dict(entry))
+            continue
+        try:
+            prev_end = int(prev["end_year"]) if prev.get("end_year") is not None else None
+            next_start = int(entry["start_year"]) if entry.get("start_year") is not None else None
+        except (TypeError, ValueError):
+            merged.append(dict(entry))
+            continue
+        if prev_end is None or next_start is None or next_start > prev_end + 1:
+            merged.append(dict(entry))
+            continue
+        next_end = entry.get("end_year")
+        try:
+            if next_end is not None and (prev_end is None or int(next_end) > prev_end):
+                prev["end_year"] = next_end
+        except (TypeError, ValueError):
+            prev["end_year"] = next_end
+    return merged
+
+
+def _relationship_history_entries(
+    events: list[sqlite3.Row],
+    focus_person_id: object,
+    person: dict[str, object],
+    current_year: int | None,
+    *,
+    formed_types: set[str],
+    ended_types: set[str],
+    current_person_key: str,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    open_entries: dict[str, dict[str, object]] = {}
+    open_end_year = _history_open_end_year(person, current_year)
+
+    def close_entry(other_id: object, year: int | None) -> None:
+        key = str(other_id)
+        entry = open_entries.pop(key, None)
+        if entry is None:
+            entries.append({"start_year": None, "end_year": year, "person_id": other_id})
+            return
+        entry["end_year"] = year if year is not None else open_end_year
+        entries.append(entry)
+
+    for event in events:
+        event_type = str(event["event_type"] or "").strip()
+        if event_type not in formed_types and event_type not in ended_types:
+            continue
+        payload = _load_json_object(event["payload_json"])
+        other_id = _relationship_other_person_id(payload, focus_person_id)
+        if other_id is None:
+            continue
+        year = _event_year(event)
+        if event_type in formed_types:
+            for existing_id in list(open_entries):
+                close_entry(existing_id, year)
+            open_entries[str(other_id)] = {
+                "start_year": year,
+                "end_year": None,
+                "person_id": other_id,
+            }
+        else:
+            close_entry(other_id, year)
+
+    for other_id in list(open_entries):
+        close_entry(other_id, open_end_year)
+
+    if entries:
+        return _merge_adjacent_relationship_entries(entries)
+
+    current_other_id = person.get(current_person_key)
+    if current_other_id not in (None, ""):
+        return [{"start_year": None, "end_year": open_end_year, "person_id": current_other_id}]
+    return []
+
+
+def _history_entries_for_person(
+    events: list[sqlite3.Row],
+    person_id: object,
+    person: dict[str, object],
+    current_year: int | None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    jobs = _job_history_entries(events, person, current_year)
+    partners = _relationship_history_entries(
+        events,
+        person_id,
+        person,
+        current_year,
+        formed_types={"couple_formed", "same_sex_couple_formed"},
+        ended_types={"couple_dissolved"},
+        current_person_key="partner_person_id",
+    )
+    paramours = _relationship_history_entries(
+        events,
+        person_id,
+        person,
+        current_year,
+        formed_types={"paramour_formed"},
+        ended_types={"paramour_ended"},
+        current_person_key="paramour_person_id",
+    )
+    return jobs, partners, paramours
+
+
+def _job_history_items_html(entries: list[dict[str, object]]) -> list[str]:
+    if not entries:
+        return ['<div class="relation muted">No recorded job history</div>']
+    return [
+        '<div class="relation">'
+        f'<strong>{html.escape(_history_year_range(entry.get("start_year"), entry.get("end_year")))}</strong><br>'
+        f'{html.escape(str(entry.get("label") or "Unknown"))}'
+        '</div>'
+        for entry in entries
+    ]
+
+
+def _relationship_history_items_html(
+    con: sqlite3.Connection,
+    world: str,
+    entries: list[dict[str, object]],
+    empty_text: str,
+) -> list[str]:
+    if not entries:
+        return [f'<div class="relation muted">{html.escape(empty_text)}</div>']
+    return [
+        '<div class="relation">'
+        f'<strong>{html.escape(_history_year_range(entry.get("start_year"), entry.get("end_year")))}</strong><br>'
+        f'{_person_link_html(con, world, entry.get("person_id"))}'
+        '</div>'
+        for entry in entries
+    ]
+
+
+def _job_history_lines(entries: list[dict[str, object]]) -> list[str]:
+    if not entries:
+        return ["- No recorded job history."]
+    return [
+        f"- {_history_year_range(entry.get('start_year'), entry.get('end_year'))}: {entry.get('label') or 'Unknown'}"
+        for entry in entries
+    ]
+
+
+def _relationship_history_lines(
+    con: sqlite3.Connection,
+    world: str,
+    entries: list[dict[str, object]],
+    empty_text: str,
+) -> list[str]:
+    if not entries:
+        return [f"- {empty_text}."]
+    return [
+        f"- {_history_year_range(entry.get('start_year'), entry.get('end_year'))}: "
+        f"{_person_link_text(con, world, entry.get('person_id'))}"
+        for entry in entries
+    ]
 
 
 def _genome_labels(con: sqlite3.Connection) -> dict[str, sqlite3.Row]:
@@ -2905,6 +3347,25 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         child_items = ['<div class="relation muted">No recorded children</div>']
 
     events = _person_event_rows(con, world, row["person_id"])
+    job_history, partner_history, paramour_history = _history_entries_for_person(
+        events,
+        row["person_id"],
+        person,
+        current_year,
+    )
+    job_items = _job_history_items_html(job_history)
+    partner_items = _relationship_history_items_html(
+        con,
+        world,
+        partner_history,
+        "No recorded partner history",
+    )
+    paramour_items = _relationship_history_items_html(
+        con,
+        world,
+        paramour_history,
+        "No recorded paramour history",
+    )
     event_items: list[str] = []
     for event in events:
         sentence = _event_sentence_html(con, world, event, row["person_id"])
@@ -3016,6 +3477,18 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         <h3 id="person-{row['person_id']}-children" class="section-title">Children</h3>
         <div class="relation-list">{''.join(child_items)}</div>
       </section>
+      <section aria-labelledby="person-{row['person_id']}-job-history">
+        <h3 id="person-{row['person_id']}-job-history" class="section-title">Job History</h3>
+        <div class="relation-list">{''.join(job_items)}</div>
+      </section>
+      <section aria-labelledby="person-{row['person_id']}-partner-history">
+        <h3 id="person-{row['person_id']}-partner-history" class="section-title">Partner History</h3>
+        <div class="relation-list">{''.join(partner_items)}</div>
+      </section>
+      <section aria-labelledby="person-{row['person_id']}-paramour-history">
+        <h3 id="person-{row['person_id']}-paramour-history" class="section-title">Paramour History</h3>
+        <div class="relation-list">{''.join(paramour_items)}</div>
+      </section>
       <section aria-labelledby="person-{row['person_id']}-events">
         <h3 id="person-{row['person_id']}-events" class="section-title">Events</h3>
         <div class="relation-list">{''.join(event_items)}</div>
@@ -3078,6 +3551,25 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     ] or ["- No recorded children."]
 
     events = _person_event_rows(con, world, row["person_id"])
+    job_history, partner_history, paramour_history = _history_entries_for_person(
+        events,
+        row["person_id"],
+        person,
+        current_year,
+    )
+    job_history_lines = _job_history_lines(job_history)
+    partner_history_lines = _relationship_history_lines(
+        con,
+        world,
+        partner_history,
+        "No recorded partner history",
+    )
+    paramour_history_lines = _relationship_history_lines(
+        con,
+        world,
+        paramour_history,
+        "No recorded paramour history",
+    )
     event_lines: list[str] = []
     for event in events:
         event_lines.append(f"- {event['sim_year']}: {_event_sentence(con, world, event, row['person_id'])}")
@@ -3117,6 +3609,15 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             "",
             "Children:",
             *child_lines,
+            "",
+            "Job History:",
+            *job_history_lines,
+            "",
+            "Partner History:",
+            *partner_history_lines,
+            "",
+            "Paramour History:",
+            *paramour_history_lines,
             "",
             "Genome highlights:",
             "Values are signed deviations from ideal. Zero is the ideal center; traits close to zero are exceptional strengths, while large positive or negative values are stronger deviations.",
