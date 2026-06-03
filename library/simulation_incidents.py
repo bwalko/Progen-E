@@ -17,11 +17,16 @@ if TYPE_CHECKING:
 
 
 INCIDENT_ADULT_MIN_AGE = 16
-MURDER_BASE_SETTLEMENT_CHANCE = 0.0032
-MURDER_SETTLEMENT_CHANCE_CAP = 0.02
-MURDER_PROPENSITY_THRESHOLD = 0.30
+MURDER_BASE_SETTLEMENT_CHANCE = 0.0040
+MURDER_TARGET_PER_10K_PER_YEAR = 4.0
+MURDER_ANNUAL_CAP_HEADROOM = 2.0
+MURDER_RATE_CONTEXT_MULTIPLIER = 1.0
+MURDER_SETTLEMENT_CHANCE_CAP = 0.30
+MURDER_PROPENSITY_THRESHOLD = 0.24
 MURDER_SETTLEMENT_SAMPLE_CAP = 250
-MURDER_MAX_EVENTS_PER_YEAR = 2
+MURDER_SETTLEMENT_TRIAL_POPULATION = 250
+MURDER_MAX_SETTLEMENT_TRIALS = 24
+MURDER_MAX_EVENTS_PER_YEAR = 24
 MURDER_RNG_STREAM = 610_019
 MURDER_SAMPLE_STREAM = 610_021
 THEFT_BASE_SETTLEMENT_CHANCE = 0.0075
@@ -312,6 +317,29 @@ def _weighted_choice(
     return rng.choices(items, weights=weights, k=1)[0]
 
 
+def _murder_annual_event_cap(
+    settlements: list[tuple[str, list["SimulationPersonRecord"]]],
+) -> int:
+    population = sum(len(residents) for _settlement_id, residents in settlements)
+    if population <= 0:
+        return 0
+    target = (
+        population
+        * max(0.0, float(MURDER_TARGET_PER_10K_PER_YEAR))
+        / 10_000.0
+    )
+    cap = int(target * max(0.0, float(MURDER_ANNUAL_CAP_HEADROOM)) + 0.999999)
+    return max(1, min(int(MURDER_MAX_EVENTS_PER_YEAR), cap))
+
+
+def _murder_settlement_trial_count(residents: list["SimulationPersonRecord"]) -> int:
+    if not residents:
+        return 0
+    pop_per_trial = max(1, int(MURDER_SETTLEMENT_TRIAL_POPULATION))
+    trials = (len(residents) + pop_per_trial - 1) // pop_per_trial
+    return max(1, min(int(MURDER_MAX_SETTLEMENT_TRIALS), trials))
+
+
 def _relationship_motive(
     killer: "SimulationPersonRecord", victim: "SimulationPersonRecord"
 ) -> tuple[str, float]:
@@ -525,12 +553,21 @@ def _maybe_murder_in_settlement(
     propensities = {rec.person_id: violent_actor_propensity(rec) for rec in adults}
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 80.0, 0.05, 1.0)
+    population_rate_chance = (
+        max(0.0, float(MURDER_TARGET_PER_10K_PER_YEAR))
+        / 10_000.0
+        * min(len(adults), max(1, int(MURDER_SETTLEMENT_TRIAL_POPULATION)))
+    )
     chance = min(
         MURDER_SETTLEMENT_CHANCE_CAP,
         MURDER_BASE_SETTLEMENT_CHANCE
         * (0.35 + population_factor)
         * (1.0 + scarcity * 3.0)
-        * (0.35 + max_propensity * 2.5),
+        * (0.35 + max_propensity * 2.5)
+        + population_rate_chance
+        * MURDER_RATE_CONTEXT_MULTIPLIER
+        * (0.50 + max_propensity * 2.0)
+        * (1.0 + scarcity * 1.5),
     )
     if rng.random() >= chance:
         return None
@@ -1420,11 +1457,14 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     public_virtue_count = 0
     knowledge_culture_count = 0
     settlements = sorted(ctx.current_people_by_settlement().items())
+    murder_event_limit = _murder_annual_event_cap(settlements)
     if prof:
         simulation_timing.accumulate("incidents.setup", tpc() - t0)
         t0 = tpc()
     for settlement_id, residents in settlements:
-        if murder_count < MURDER_MAX_EVENTS_PER_YEAR:
+        for _trial in range(_murder_settlement_trial_count(residents)):
+            if murder_count >= murder_event_limit:
+                break
             incident = _maybe_murder_in_settlement(
                 ctx,
                 y,
@@ -1433,10 +1473,11 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 rng=rng,
                 already_dead=dead_ids,
             )
-            if incident is not None:
-                _record_murder_incident(ctx, y, incident)
-                dead_ids.add(int(incident.victim.person_id))
-                murder_count += 1
+            if incident is None:
+                continue
+            _record_murder_incident(ctx, y, incident)
+            dead_ids.add(int(incident.victim.person_id))
+            murder_count += 1
         if property_crime_count < THEFT_MAX_EVENTS_PER_YEAR:
             property_crime = _maybe_property_crime_in_settlement(
                 ctx,

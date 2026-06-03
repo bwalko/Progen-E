@@ -15,6 +15,8 @@ from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
 from library.simulation_context import SimulationContext
 from library.simulation_incidents import (
+    _murder_annual_event_cap,
+    _murder_settlement_trial_count,
     knowledge_culture_propensity,
     property_crime_propensity,
     public_virtue_propensity,
@@ -183,6 +185,13 @@ class TestSimulationIncidents(unittest.TestCase):
             birthplace_settlement_id=settlement_id,
         )
         return ctx.add_person(person=person, is_founder=True)
+
+    def test_murder_population_rate_helpers_scale_above_review_sample_cap(self) -> None:
+        residents = [object()] * 20_000
+        settlements = [("large_city", residents)]
+
+        self.assertEqual(_murder_settlement_trial_count(residents), 24)
+        self.assertGreaterEqual(_murder_annual_event_cap(settlements), 16)
 
     def test_violent_actor_propensity_separates_extreme_and_stable_genomes(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -374,6 +383,54 @@ class TestSimulationIncidents(unittest.TestCase):
             self.assertEqual(
                 str(row["prose_variant_key"]),
                 "violent_crime_record.rumored.default",
+            )
+
+    def test_forced_murder_tick_allows_population_scaled_multiple_events(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            settlement.food_pressure = 2.0
+            self._add_adult(
+                ctx,
+                genome=VIOLENT_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id="aeria_north",
+            )
+            for idx in range(5):
+                self._add_adult(
+                    ctx,
+                    genome=PEACEFUL_GENOME,
+                    gender="Female" if idx % 2 else "Male",
+                    settlement_id=settlement.settlement_id,
+                    region_id="aeria_north",
+                )
+            ctx._pending_simulation_events.clear()
+
+            with patch("library.simulation_incidents.MURDER_BASE_SETTLEMENT_CHANCE", 1.0), patch(
+                "library.simulation_incidents.MURDER_SETTLEMENT_CHANCE_CAP", 1.0
+            ), patch("library.simulation_incidents.MURDER_PROPENSITY_THRESHOLD", 0.2), patch(
+                "library.simulation_incidents.MURDER_TARGET_PER_10K_PER_YEAR", 10000.0
+            ), patch("library.simulation_incidents.MURDER_SETTLEMENT_TRIAL_POPULATION", 2), patch(
+                "library.simulation_incidents.MURDER_MAX_EVENTS_PER_YEAR", 3
+            ):
+                simulation_incidents_annual_tick(ctx, 1001)
+
+            murder_events = [
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "murder"
+            ]
+            victim_ids = {int(event["victim_person_id"]) for event in murder_events}
+            self.assertEqual(len(murder_events), 3)
+            self.assertEqual(len(victim_ids), 3)
+            self.assertEqual(
+                sum(
+                    1
+                    for rec in ctx.id_to_record.values()
+                    if rec.person.deathyear == 1001
+                ),
+                3,
             )
 
     def test_forced_murder_tick_skips_stable_low_risk_adults(self) -> None:

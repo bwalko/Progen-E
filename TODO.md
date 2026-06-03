@@ -455,15 +455,20 @@ Initial tuning/report pass now exists:
 - The first fixed-seed scratch sample used:
   `python utils/run_population_simulation.py --world-id event_tuning_sample --reset-world --years 80 --starting-couples 80 --seed 20260603 --skip-report-files --skip-timing-log --passive-population-scale 0 --detailed-active-soft-cap 0`
 - Final sample report:
-  - total events: 15,109;
-  - total records: 15,109;
-  - save size: about 15.0 MB;
-  - tracked incident counts: `murder` 1, `property_crime` 2,
-    `affair_scandal` 2, `public_virtue` 6, `knowledge_culture` 4;
-  - memory lifecycle counts included 33 still-lost records, 3 original records
-    in `rediscovered` state, and 3 linked `event_rediscovered` factual events.
+  - total events: 18,213;
+  - total records: 18,213;
+  - save size: about 18.1 MB;
+  - tracked incident counts: `murder` 6, `property_crime` 3,
+    `affair_scandal` 2, `public_virtue` 6, `knowledge_culture` 3;
+  - memory lifecycle counts included 39 still-lost records, 2 original records
+    in `rediscovered` state, and 2 linked `event_rediscovered` factual events.
 - Rate/gate tuning now makes all five vertical slices show up in an 80-year
   review sample without flooding the save.
+- Murder was retuned after a 200-year larger run reported only 85 murders among
+  about 119,000 deaths. The current detailed-population target is about 4
+  murders per 10,000 people per year, with population-scaled settlement trials
+  and a population-scaled annual cap so 15,000-20,000 detailed people can
+  produce historically plausible multi-murder years.
 - Normal simulation now runs an automatic memory-aging/loss/rediscovery tick
   after the annual save checkpoint. It reviews a deterministic bounded shard of
   old event-memory records, marks some ordinary in-world records `lost`, and can

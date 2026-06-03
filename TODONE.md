@@ -414,12 +414,18 @@
   - Final sample command used `event_tuning_sample`, 80 years, 80 starting
     couples, seed `20260603`, no passive background population, and no canonical
     report overwrite.
-  - Final sample produced 15,109 factual events / 15,109 records in an about
-    15.0 MB save.
-  - Tracked incident counts were: `murder` 1, `property_crime` 2,
-    `affair_scandal` 2, `public_virtue` 6, and `knowledge_culture` 4.
-  - The same sample showed 33 still-lost records, 3 original records in
-    `rediscovered` state, and 3 linked factual `event_rediscovered` rows.
+  - Final sample produced 18,213 factual events / 18,213 records in an about
+    18.1 MB save.
+  - Tracked incident counts were: `murder` 6, `property_crime` 3,
+    `affair_scandal` 2, `public_virtue` 6, and `knowledge_culture` 3.
+  - The same sample showed 39 still-lost records, 2 original records in
+    `rediscovered` state, and 2 linked factual `event_rediscovered` rows.
+  - Murder was retuned after a larger 200-year run produced 85 murders, far
+    below the rough historical-criminology target of about 3-5 murders per
+    10,000 people per year. The generator now uses an explicit detailed
+    population target of 4 murders per 10,000 people per year, population-scaled
+    settlement trials, and a population-scaled annual cap while still requiring
+    a sufficiently high violent-actor propensity candidate.
   - The report now makes zero-count incident slices explicit instead of hiding
     them by omission.
 - Added the first automatic event-memory lifecycle:
