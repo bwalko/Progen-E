@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -168,27 +169,31 @@ def _load_placename_rows(db_path_s: str) -> tuple[PlacenameRow, ...]:
         raise FileNotFoundError(
             f"Database not found: {path}. Run: python utils/util_load_config.py --world default"
         )
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            """
-            SELECT "Culture", "Category", "Original Meaning", "Affix",
-                   "Archaic Affix"
-            FROM placenames
-            """
-        ).fetchall()
-        archaic_col = True
-    except sqlite3.OperationalError:
-        rows = conn.execute(
-            """
-            SELECT "Culture", "Category", "Original Meaning", "Affix"
-            FROM placenames
-            """
-        ).fetchall()
-        archaic_col = False
-    finally:
-        conn.close()
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = [
+                {str(k): row[k] for k in row.keys()}
+                for row in conn.execute(
+                    """
+                    SELECT "Culture", "Category", "Original Meaning", "Affix",
+                           "Archaic Affix"
+                    FROM placenames
+                    """
+                )
+            ]
+            archaic_col = True
+        except sqlite3.OperationalError:
+            rows = [
+                {str(k): row[k] for k in row.keys()}
+                for row in conn.execute(
+                    """
+                    SELECT "Culture", "Category", "Original Meaning", "Affix"
+                    FROM placenames
+                    """
+                )
+            ]
+            archaic_col = False
 
     out: list[PlacenameRow] = []
     for r in rows:

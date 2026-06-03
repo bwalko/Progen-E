@@ -98,12 +98,42 @@ SETTLEMENT_BROWSER_HEADERS = [
     "Founded",
     "Top Jobs",
 ]
+HISTORY_VIEW_CHOICES = [
+    "Admin Truth",
+    "Public Chronicle",
+    "Rumors",
+    "Lost History",
+    "Rediscoveries",
+]
+HISTORY_BROWSER_HEADERS = [
+    "Year",
+    "Event ID",
+    "Record ID",
+    "Event Type",
+    "Visibility",
+    "Record Type",
+    "Template",
+    "Prose",
+    "Admin Summary",
+]
+HISTORY_SUMMARY_HEADERS = ["Section", "Key", "Count", "Value"]
 
 from library.world_map_geometry import (  # noqa: E402
     WorldMapGeometry,
     build_world_map_geometry,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
+)
+from library.event_history_report import (  # noqa: E402
+    INCIDENT_EVENT_TYPES,
+    build_event_history_report,
+)
+from library.event_prose import (  # noqa: E402
+    EventAdminSummary,
+    EventRecordProse,
+    load_admin_event_summaries,
+    load_event_record_prose_rows,
+    load_public_chronicle_prose,
 )
 from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID  # noqa: E402
 from library.world_map_svg import (  # noqa: E402
@@ -975,6 +1005,276 @@ def run_select_query(world: str, db_kind: str, sql: str, limit: object) -> tuple
         rows = cur.fetchall()
         headers = [desc[0] for desc in cur.description or []]
     return _dataframe(rows, headers), f"Returned {len(rows)} rows from {path.name}."
+
+
+def _history_event_type_filter(event_type_text: object) -> set[str] | None:
+    text = str(event_type_text or "").strip()
+    if not text or text.lower() == "all":
+        return None
+    parts = [part.strip() for part in re.split(r"[,;\s]+", text) if part.strip()]
+    return set(parts) if parts else None
+
+
+def _history_admin_row(summary: EventAdminSummary) -> dict[str, object]:
+    return {
+        "Year": summary.sim_year,
+        "Event ID": summary.event_id,
+        "Record ID": "",
+        "Event Type": summary.event_type,
+        "Visibility": "admin_truth",
+        "Record Type": "factual_event",
+        "Template": summary.template_key,
+        "Prose": summary.prose,
+        "Admin Summary": summary.prose,
+    }
+
+
+def _history_record_row(row: EventRecordProse) -> dict[str, object]:
+    return {
+        "Year": row.sim_year,
+        "Event ID": row.event_id,
+        "Record ID": row.record_id,
+        "Event Type": row.event_type,
+        "Visibility": row.visibility_state,
+        "Record Type": row.record_type,
+        "Template": row.prose_variant_key,
+        "Prose": row.public_prose,
+        "Admin Summary": row.admin_summary,
+    }
+
+
+def _history_empty_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=HISTORY_BROWSER_HEADERS)
+
+
+def _history_summary_empty_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=HISTORY_SUMMARY_HEADERS)
+
+
+def _tracked_incident_summary_rows(report: object) -> list[dict[str, object]]:
+    counts = {row.keys[0]: row.count for row in report.event_counts_by_type}
+    return [
+        {
+            "Section": "Tracked Incidents",
+            "Key": event_type,
+            "Count": int(counts.get(event_type, 0)),
+            "Value": "",
+        }
+        for event_type in sorted(INCIDENT_EVENT_TYPES)
+    ]
+
+
+def _history_summary_rows(report: object) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = [
+        {
+            "Section": "Overview",
+            "Key": "total_events",
+            "Count": int(report.total_events),
+            "Value": "",
+        },
+        {
+            "Section": "Overview",
+            "Key": "total_records",
+            "Count": int(report.total_records),
+            "Value": "",
+        },
+    ]
+    if report.save_size_bytes is not None:
+        rows.append(
+            {
+                "Section": "Overview",
+                "Key": "save_size_bytes",
+                "Count": int(report.save_size_bytes),
+                "Value": "",
+            }
+        )
+    rows.extend(_tracked_incident_summary_rows(report))
+    for row in sorted(report.event_counts_by_type, key=lambda item: (-item.count, item.keys)):
+        rows.append(
+            {
+                "Section": "Event Types",
+                "Key": row.keys[0],
+                "Count": int(row.count),
+                "Value": "",
+            }
+        )
+    for row in sorted(report.visibility_counts, key=lambda item: (item.keys, item.count)):
+        rows.append(
+            {
+                "Section": "Visibility",
+                "Key": " / ".join(row.keys),
+                "Count": int(row.count),
+                "Value": "",
+            }
+        )
+    for metric in sorted(report.metric_summaries, key=lambda item: (item.event_type, item.metric)):
+        rows.append(
+            {
+                "Section": "Metrics",
+                "Key": f"{metric.event_type} {metric.metric}",
+                "Count": int(metric.count),
+                "Value": (
+                    f"avg={metric.average:.4f} "
+                    f"min={metric.minimum:.4f} max={metric.maximum:.4f}"
+                ),
+            }
+        )
+    return rows
+
+
+def load_history_summary(world: str) -> tuple[gr.Dataframe, str]:
+    if not world:
+        return _history_summary_empty_frame(), "Choose a world."
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _history_summary_empty_frame(), f"{path} is missing. Run a simulation first."
+
+    with _connect_readonly(path) as con:
+        if not _has_relation(con, "simulation_events_readable"):
+            return (
+                _history_summary_empty_frame(),
+                "No simulation_events_readable view found. Ensure or rebuild the save schema.",
+            )
+        if not _has_relation(con, "simulation_event_records_readable"):
+            return (
+                _history_summary_empty_frame(),
+                "No simulation_event_records_readable view found. Ensure or rebuild the save schema.",
+            )
+        saved_world = _resolve_saved_world(con, world)
+        report = build_event_history_report(con, save_path=path, sample_limit=0)
+
+    rows = _history_summary_rows(report)
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(rows)} history summary rows "
+        f"| events={report.total_events} records={report.total_records}{saved_world_note}."
+    )
+    return _dataframe(rows, HISTORY_SUMMARY_HEADERS), status
+
+
+def _load_history_records_for_view(
+    con: sqlite3.Connection,
+    view: str,
+    *,
+    event_types: set[str] | None,
+    search: str,
+    limit: int,
+    offset: int,
+) -> list[EventRecordProse]:
+    if view == "Public Chronicle":
+        return load_public_chronicle_prose(
+            con,
+            event_types=event_types,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+    if view == "Rumors":
+        return load_event_record_prose_rows(
+            con,
+            visibility_states={"rumored"},
+            event_types=event_types,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+    if view == "Lost History":
+        return load_event_record_prose_rows(
+            con,
+            visibility_states={"lost"},
+            event_types=event_types,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+    if view == "Rediscoveries":
+        fetch_limit = min(MAX_LIMIT, limit + offset)
+        rows = load_event_record_prose_rows(
+            con,
+            visibility_states={"rediscovered"},
+            event_types=event_types,
+            search=search,
+            limit=fetch_limit,
+            offset=0,
+        )
+        if event_types is None or "event_rediscovered" in event_types:
+            rows.extend(
+                load_event_record_prose_rows(
+                    con,
+                    event_types={"event_rediscovered"},
+                    search=search,
+                    limit=fetch_limit,
+                    offset=0,
+                )
+            )
+        rows.sort(key=lambda row: (row.sim_year, row.event_id, row.record_id))
+        return rows[offset : offset + limit]
+    return []
+
+
+def load_history_browser(
+    world: str,
+    view: str,
+    event_type_text: object,
+    search: str,
+    limit: object,
+    offset: object,
+) -> tuple[gr.Dataframe, str]:
+    selected = view if view in HISTORY_VIEW_CHOICES else "Public Chronicle"
+    if not world:
+        return _history_empty_frame(), "Choose a world."
+    row_limit = _safe_int(limit, 100, 1, 500)
+    row_offset = _safe_int(offset, 0, 0, 10_000_000)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _history_empty_frame(), f"{path} is missing. Run a simulation first."
+
+    event_types = _history_event_type_filter(event_type_text)
+    with _connect_readonly(path) as con:
+        if not _has_relation(con, "simulation_events_readable"):
+            return (
+                _history_empty_frame(),
+                "No simulation_events_readable view found. Ensure or rebuild the save schema.",
+            )
+        if selected != "Admin Truth" and not _has_relation(
+            con, "simulation_event_records_readable"
+        ):
+            return (
+                _history_empty_frame(),
+                "No simulation_event_records_readable view found. Ensure or rebuild the save schema.",
+            )
+        saved_world = _resolve_saved_world(con, world)
+        if selected == "Admin Truth":
+            summaries = load_admin_event_summaries(
+                con,
+                event_types=event_types,
+                search=search,
+                limit=row_limit,
+                offset=row_offset,
+            )
+            values = [_history_admin_row(summary) for summary in summaries]
+        else:
+            record_rows = _load_history_records_for_view(
+                con,
+                selected,
+                event_types=event_types,
+                search=search,
+                limit=row_limit,
+                offset=row_offset,
+            )
+            values = [_history_record_row(row) for row in record_rows]
+
+    filter_bits: list[str] = [selected]
+    if event_types:
+        filter_bits.append("types=" + ", ".join(sorted(event_types)))
+    if search:
+        filter_bits.append(f"search={search!r}")
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} history rows at offset {row_offset} "
+        f"| filters: {', '.join(filter_bits)}{saved_world_note}."
+    )
+    return _dataframe(values, HISTORY_BROWSER_HEADERS), status
 
 
 def _load_json_object(raw: object) -> dict[str, object]:
@@ -5618,6 +5918,40 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         label="Map Detail Sheet",
                     )
 
+        with gr.Tab("History"):
+            with gr.Row(elem_classes=["world-browser"]):
+                history_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                history_view = gr.Radio(
+                    HISTORY_VIEW_CHOICES,
+                    value="Public Chronicle",
+                    label="View",
+                )
+                history_event_type = gr.Textbox(
+                    value="",
+                    label="Event Type",
+                    placeholder="All, murder, property_crime...",
+                )
+                history_limit = gr.Number(value=100, label="Limit", precision=0)
+                history_offset = gr.Number(value=0, label="Offset", precision=0)
+            history_search = gr.Textbox(
+                label="Search History",
+                placeholder="Event type, place, payload value, visibility, source...",
+            )
+            history_load = gr.Button("Load History", variant="primary")
+            history_status = gr.Textbox(label="Status", interactive=False)
+            history_table = gr.Dataframe(
+                label="History Rows",
+                interactive=False,
+                wrap=True,
+            )
+            history_summary_load = gr.Button("Load Summary")
+            history_summary_status = gr.Textbox(label="Summary Status", interactive=False)
+            history_summary_table = gr.Dataframe(
+                label="History Summary",
+                interactive=False,
+                wrap=True,
+            )
+
         with gr.Tab("Raw Data Browser"):
             with gr.Tab("SQLite"):
                 with gr.Row():
@@ -5767,6 +6101,22 @@ def build_app(default_world: str = "default") -> gr.Blocks:
         for map_input in map_inputs:
             map_input.change(render_world_map_with_detail_reset, map_inputs, map_outputs)
         map_open_button.click(render_world_map_selection_detail, [map_world, map_open_selection], map_sheet)
+        history_inputs = [
+            history_world,
+            history_view,
+            history_event_type,
+            history_search,
+            history_limit,
+            history_offset,
+        ]
+        history_outputs = [history_table, history_status]
+        history_load.click(load_history_browser, history_inputs, history_outputs)
+        history_search.submit(load_history_browser, history_inputs, history_outputs)
+        history_summary_load.click(
+            load_history_summary,
+            [history_world],
+            [history_summary_table, history_summary_status],
+        )
         world.change(refresh_sqlite_tables, [world, db_kind], [table, sqlite_status])
         db_kind.change(refresh_sqlite_tables, [world, db_kind], [table, sqlite_status])
         sqlite_load.click(

@@ -17,7 +17,7 @@ Use this when adjusting out-migration under the engine’s soft regional caps. A
 1. Refresh config SQLite after CSV edits: `python utils/util_load_config.py --world default` (and optional `python utils/util_check_config_sqlite_vs_csv.py --world default`).
 2. Run a multi-year population scenario against the real world DB, e.g. `python utils/run_population_simulation.py --years 200` (see [`utils/run_population_simulation.py`](../utils/run_population_simulation.py) for env vars such as `POPULATION_GROWTH_SIM_SEED`, `HISTORY_SIM_RESET_WORLD`).
 3. Inspect aggregate growth: `python utils/util_print_alive_by_year.py` pointing at the run’s `yearly_summary.csv` (see script `--help`).
-4. If you need move-level detail, query `save.sqlite` `simulation_event_moves_readable` joined to `simulation_events` by `event_id` (or filter the view directly by `event_type = 'settlement_moved'`). Schema v7 normalizes `moved_person_id`, `from_settlement_id`, `to_settlement_id`, `from_region_id`, `to_region_id`, `cross_region`, and `move_reason` (`resource_pressure_migration`) out of normal `payload_json`.
+4. If you need move-level detail, query `save.sqlite` `simulation_event_moves_readable` joined to `simulation_events` by `event_id` (or filter the view directly by `event_type = 'settlement_moved'`). Schema v7+ normalizes `moved_person_id`, `from_settlement_id`, `to_settlement_id`, `from_region_id`, `to_region_id`, `cross_region`, and `move_reason` (`resource_pressure_migration`) out of normal `payload_json`.
 
 Change one constant at a time, re-run a fixed-seed scenario, and compare `yearly_summary.csv` and regional population proxies before/after.
 

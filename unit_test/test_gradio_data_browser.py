@@ -13,6 +13,12 @@ if "gradio" not in sys.modules and importlib.util.find_spec("gradio") is None:
 
 import utils.gradio_data_browser as gdb
 from library.config_import import load_all_csvs_into_sqlite
+from library.world_save import (
+    append_simulation_event_rows,
+    ensure_checkpoint_schema,
+    mark_event_record_lost,
+    rediscover_event_record,
+)
 from library.world_map_geometry import MicroRegionCell, RegionCell, WorldMapGeometry
 from library.world_map_svg import load_world_map_overlays
 from utils.gradio_data_browser import (
@@ -605,6 +611,24 @@ def _event_row(con: sqlite3.Connection, event_type: str, payload: dict[str, obje
     ).fetchone()
 
 
+def _insert_compact_person(
+    con: sqlite3.Connection,
+    person_id: int,
+    first_name: str,
+    last_name: str,
+) -> None:
+    con.execute(
+        """
+        insert into simulation_people (
+            person_id, is_founder, is_alive, first_name, last_name,
+            gender, ethnic, species, birthyear, person_json
+        )
+        values (?, 1, 1, ?, ?, 'female', 'human', 'human', 970, '{}')
+        """,
+        (person_id, first_name, last_name),
+    )
+
+
 def _genome_row(con: sqlite3.Connection) -> sqlite3.Row:
     return con.execute(
         """
@@ -644,6 +668,272 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 con.close()
             except sqlite3.ProgrammingError:
                 pass
+
+    def _history_table_rows(self, table: dict[str, object]) -> list[dict[str, object]]:
+        headers = list(table["headers"])  # type: ignore[index]
+        return [dict(zip(headers, row)) for row in table["value"]]  # type: ignore[index]
+
+    def test_history_browser_loads_public_rumor_and_lost_views(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Tara", "Stone")
+                _insert_compact_person(con, 2, "Pell", "Ash")
+                _insert_compact_person(con, 3, "Ira", "Marsh")
+                _insert_compact_person(con, 4, "Lio", "Dawn")
+                birth_id, _, _ = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            1001,
+                            "birth",
+                            {
+                                "person_id": 4,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1002,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 1,
+                                "target_person_id": 2,
+                                "incident_kind": "storehouse_robbery",
+                                "motive": "scarcity",
+                                "loss_value": 0.18,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1003,
+                            "public_virtue",
+                            {
+                                "benefactor_person_id": 3,
+                                "beneficiary_person_id": 4,
+                                "incident_kind": "heroic_rescue",
+                                "motive": "mercy",
+                                "relief_value": 0.12,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                mark_event_record_lost(con, birth_id, lost_year=1040)
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                public_table, public_status = gdb.load_history_browser(
+                    "default", "Public Chronicle", "", "", 50, 0
+                )
+                rumor_table, _ = gdb.load_history_browser(
+                    "default", "Rumors", "", "", 50, 0
+                )
+                lost_table, lost_status = gdb.load_history_browser(
+                    "default", "Lost History", "", "", 50, 0
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        public_rows = self._history_table_rows(public_table)
+        rumor_rows = self._history_table_rows(rumor_table)
+        lost_rows = self._history_table_rows(lost_table)
+        self.assertEqual(public_table["headers"], gdb.HISTORY_BROWSER_HEADERS)
+        self.assertEqual(
+            [row["Event Type"] for row in public_rows],
+            ["property_crime", "public_virtue"],
+        )
+        self.assertIn("Public Chronicle", public_status)
+        self.assertEqual([row["Event Type"] for row in rumor_rows], ["property_crime"])
+        self.assertEqual(rumor_rows[0]["Visibility"], "rumored")
+        self.assertIn("Market talk", rumor_rows[0]["Prose"])
+        self.assertEqual([row["Event Type"] for row in lost_rows], ["birth"])
+        self.assertEqual(lost_rows[0]["Visibility"], "lost")
+        self.assertIn("No living chronicle preserved", lost_rows[0]["Prose"])
+        self.assertIn("Lost History", lost_status)
+
+    def test_history_browser_loads_admin_truth_search_and_rediscoveries(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 10, "Lio", "Reed")
+                _insert_compact_person(con, 41, "Sera", "Archivist")
+                original_event_id = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            990,
+                            "birth",
+                            {
+                                "person_id": 10,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        )
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )[0]
+                mark_event_record_lost(con, original_event_id, lost_year=1040)
+                rediscover_event_record(
+                    con,
+                    original_event_id,
+                    rediscovered_year=1100,
+                    source_person_id=41,
+                    source_institution_id="temple_ledger",
+                    preserving_settlement_id="aeria_north:settlement:1",
+                    confidence=0.82,
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                admin_table, admin_status = gdb.load_history_browser(
+                    "default", "Admin Truth", "event_rediscovered", "", 50, 0
+                )
+                rediscovery_table, rediscovery_status = gdb.load_history_browser(
+                    "default", "Rediscoveries", "", "", 50, 0
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        admin_rows = self._history_table_rows(admin_table)
+        rediscovery_rows = self._history_table_rows(rediscovery_table)
+        self.assertEqual([row["Event Type"] for row in admin_rows], ["event_rediscovered"])
+        self.assertEqual(admin_rows[0]["Visibility"], "admin_truth")
+        self.assertIn(str(original_event_id), admin_rows[0]["Prose"])
+        self.assertIn("Admin Truth", admin_status)
+        self.assertEqual(
+            [row["Event Type"] for row in rediscovery_rows],
+            ["birth", "event_rediscovered"],
+        )
+        self.assertEqual(rediscovery_rows[0]["Visibility"], "rediscovered")
+        self.assertIn("later hand recovered", rediscovery_rows[0]["Prose"])
+        self.assertIn("Lio Reed", rediscovery_rows[0]["Prose"])
+        self.assertIn(str(original_event_id), rediscovery_rows[1]["Prose"])
+        self.assertIn("Rediscoveries", rediscovery_status)
+
+    def test_history_summary_exposes_report_counts_and_lifecycle_visibility(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Tara", "Stone")
+                _insert_compact_person(con, 2, "Pell", "Ash")
+                _insert_compact_person(con, 3, "Ira", "Marsh")
+                _insert_compact_person(con, 4, "Lio", "Dawn")
+                birth_id, _crime_id, _virtue_id = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "birth",
+                            {
+                                "person_id": 4,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1001,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 1,
+                                "target_person_id": 2,
+                                "historical_importance": 0.33,
+                                "loss_value": 0.12,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1002,
+                            "public_virtue",
+                            {
+                                "benefactor_person_id": 3,
+                                "beneficiary_person_id": 4,
+                                "historical_importance": 0.44,
+                                "relief_value": 0.2,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                mark_event_record_lost(con, birth_id, lost_year=1040)
+                rediscover_event_record(
+                    con,
+                    birth_id,
+                    rediscovered_year=1100,
+                    source_institution_id="temple_ledger",
+                    preserving_settlement_id="aeria_north:settlement:1",
+                    confidence=0.82,
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                summary_table, summary_status = gdb.load_history_summary("default")
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        rows = self._history_table_rows(summary_table)
+        by_section_key = {(row["Section"], row["Key"]): row for row in rows}
+        self.assertEqual(summary_table["headers"], gdb.HISTORY_SUMMARY_HEADERS)
+        self.assertEqual(by_section_key[("Overview", "total_events")]["Count"], 4)
+        self.assertEqual(by_section_key[("Tracked Incidents", "murder")]["Count"], 0)
+        self.assertEqual(
+            by_section_key[("Tracked Incidents", "property_crime")]["Count"], 1
+        )
+        self.assertEqual(
+            by_section_key[
+                ("Visibility", "birth / lineage_memory / rediscovered")
+            ]["Count"],
+            1,
+        )
+        self.assertEqual(
+            by_section_key[
+                (
+                    "Visibility",
+                    "event_rediscovered / rediscovery_record / public_known",
+                )
+            ]["Count"],
+            1,
+        )
+        self.assertIn(
+            "avg=0.3300",
+            by_section_key[("Metrics", "property_crime historical_importance")][
+                "Value"
+            ],
+        )
+        self.assertIn("history summary rows", summary_status)
 
     def test_job_event_fitness_uses_event_payload_not_current_person_score(self) -> None:
         con = _memory_save()

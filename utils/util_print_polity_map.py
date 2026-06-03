@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -28,7 +29,7 @@ from library.world_save import ensure_checkpoint_schema
 
 
 def _print_map(save_path: Path) -> None:
-    with sqlite3.connect(save_path) as conn:
+    with closing(sqlite3.connect(save_path)) as conn:
         conn.row_factory = sqlite3.Row
         ensure_checkpoint_schema(conn)
         rows = conn.execute(

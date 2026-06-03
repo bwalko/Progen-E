@@ -18,13 +18,18 @@ from library.simulation_context import SimulationContext
 from library.world_save import (
     SAVE_SCHEMA_VERSION,
     REGION_EFFECTIVE_CAP_MULTIPLIER_META_KEY,
+    append_simulation_event_rows,
     checkpoint_simulation_to_save,
     clear_world_checkpoint,
     ensure_checkpoint_schema,
     ensure_checkpoint_schema_for_file,
+    mark_event_record_lost,
     parse_region_effective_cap_multipliers,
     rebuild_save_sqlite_for_schema_upgrade,
+    rediscover_event_record,
     save_schema_version,
+    seal_event_record,
+    mark_event_record_rumored,
     try_load_simulation_checkpoint,
 )
 
@@ -54,7 +59,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 "genome": {},
                 "mind_body": {},
             }
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS world_state (
@@ -118,7 +123,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             out = rebuild_save_sqlite_for_schema_upgrade(sav, output_path=rebuilt)
             self.assertEqual(out, rebuilt)
 
-            with sqlite3.connect(rebuilt) as conn:
+            with closing(sqlite3.connect(rebuilt)) as conn:
                 self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
                 self.assertEqual(
                     conn.execute("SELECT COUNT(*) FROM world_state").fetchone()[0],
@@ -158,7 +163,7 @@ class TestSaveCheckpoint(unittest.TestCase):
     def test_v3_events_backfill_to_normalized_event_people(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             sav = Path(td) / "save.sqlite"
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 conn.row_factory = sqlite3.Row
                 conn.execute(
                     """
@@ -237,6 +242,373 @@ class TestSaveCheckpoint(unittest.TestCase):
                     str(event["settlement_id"]), "aeria_north:settlement:1"
                 )
 
+    def test_appended_events_create_default_memory_records(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "paramour_formed",
+                            {
+                                "person_a_id": 1,
+                                "person_b_id": 2,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1001,
+                            "office_succession",
+                            {
+                                "holder_person_id": 3,
+                                "previous_holder_id": 4,
+                                "seat_id": 7,
+                            },
+                        ),
+                        (
+                            1002,
+                            "career_fitness_updated",
+                            {"person_id": 5, "fitness_score": 0.71},
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+
+                rows = {
+                    str(r["event_type"]): r
+                    for r in conn.execute(
+                        """
+                        SELECT event_type, record_type, visibility_state,
+                               confidence, preserving_settlement_id,
+                               preserving_region_id, public_actor_person_id,
+                               prose_variant_key
+                        FROM simulation_event_records_readable
+                        ORDER BY event_id
+                        """
+                    )
+                }
+
+            self.assertEqual(
+                str(rows["paramour_formed"]["record_type"]), "household_secret"
+            )
+            self.assertEqual(
+                str(rows["paramour_formed"]["visibility_state"]), "private_known"
+            )
+            self.assertEqual(
+                str(rows["paramour_formed"]["preserving_settlement_id"]),
+                "aeria_north:settlement:1",
+            )
+            self.assertEqual(
+                str(rows["paramour_formed"]["preserving_region_id"]), "aeria_north"
+            )
+            self.assertEqual(int(rows["paramour_formed"]["public_actor_person_id"]), 1)
+            self.assertEqual(
+                str(rows["paramour_formed"]["prose_variant_key"]),
+                "household_secret.private_known.default",
+            )
+            self.assertEqual(
+                str(rows["office_succession"]["record_type"]), "court_chronicle"
+            )
+            self.assertEqual(
+                str(rows["office_succession"]["visibility_state"]), "public_known"
+            )
+            self.assertEqual(
+                str(rows["career_fitness_updated"]["record_type"]), "admin_note"
+            )
+            self.assertEqual(
+                str(rows["career_fitness_updated"]["visibility_state"]), "admin_known"
+            )
+            self.assertEqual(float(rows["career_fitness_updated"]["confidence"]), 1.0)
+
+    def test_event_record_visibility_state_transitions(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                event_id = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [(1000, "death", {"person_id": 11})],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )[0]
+
+                mark_event_record_lost(conn, event_id, lost_year=1010)
+                lost = conn.execute(
+                    """
+                    SELECT visibility_state, lost_year, prose_variant_key
+                    FROM simulation_event_records_readable
+                    WHERE event_id = ?
+                    """,
+                    (event_id,),
+                ).fetchone()
+                self.assertEqual(str(lost["visibility_state"]), "lost")
+                self.assertEqual(int(lost["lost_year"]), 1010)
+                self.assertEqual(
+                    str(lost["prose_variant_key"]),
+                    "mortuary_memory.lost.default",
+                )
+
+                seal_event_record(
+                    conn,
+                    event_id,
+                    sealed_year=1011,
+                    source_institution_id="ducal_archive",
+                )
+                sealed = conn.execute(
+                    """
+                    SELECT visibility_state, lost_year, source_institution_id,
+                           prose_variant_key
+                    FROM simulation_event_records_readable
+                    WHERE event_id = ?
+                    """,
+                    (event_id,),
+                ).fetchone()
+                self.assertEqual(str(sealed["visibility_state"]), "sealed")
+                self.assertEqual(int(sealed["lost_year"]), 1010)
+                self.assertEqual(str(sealed["source_institution_id"]), "ducal_archive")
+                self.assertEqual(
+                    str(sealed["prose_variant_key"]),
+                    "mortuary_memory.sealed.default",
+                )
+
+                mark_event_record_rumored(
+                    conn,
+                    event_id,
+                    rumor_year=1012,
+                    confidence=0.37,
+                    source_person_id=21,
+                    distortion={"public_cause": "wolf attack", "true_cause_hidden": True},
+                )
+                rumored = conn.execute(
+                    """
+                    SELECT visibility_state, known_since_year, confidence,
+                           source_person_id, distortion_json, prose_variant_key
+                    FROM simulation_event_records_readable
+                    WHERE event_id = ?
+                    """,
+                    (event_id,),
+                ).fetchone()
+            self.assertEqual(str(rumored["visibility_state"]), "rumored")
+            self.assertEqual(int(rumored["known_since_year"]), 1000)
+            self.assertAlmostEqual(float(rumored["confidence"]), 0.37)
+            self.assertEqual(int(rumored["source_person_id"]), 21)
+            self.assertEqual(
+                json.loads(str(rumored["distortion_json"])),
+                {"public_cause": "wolf attack", "true_cause_hidden": True},
+            )
+            self.assertEqual(
+                str(rumored["prose_variant_key"]), "mortuary_memory.rumored.default"
+            )
+
+    def test_rediscover_event_record_updates_memory_and_logs_event(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                original_event_id = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "birth",
+                            {
+                                "person_id": 31,
+                                "settlement_id": "aeria_north:settlement:1",
+                            },
+                        )
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )[0]
+                mark_event_record_lost(conn, original_event_id, lost_year=1040)
+
+                rediscovery_event_id = rediscover_event_record(
+                    conn,
+                    original_event_id,
+                    rediscovered_year=1100,
+                    source_person_id=41,
+                    source_institution_id="temple_ledger",
+                    preserving_settlement_id="aeria_north:settlement:1",
+                    confidence=0.82,
+                    distortion={"date_uncertain": True},
+                )
+
+                original = conn.execute(
+                    """
+                    SELECT visibility_state, lost_year, rediscovered_year,
+                           confidence, source_person_id, source_institution_id,
+                           preserving_settlement_id, preserving_region_id,
+                           distortion_json, prose_variant_key
+                    FROM simulation_event_records_readable
+                    WHERE event_id = ?
+                    """,
+                    (original_event_id,),
+                ).fetchone()
+                rediscovery = conn.execute(
+                    """
+                    SELECT e.sim_year, e.event_type, e.primary_person_id,
+                           er.settlement_id, er.region_id, e.payload_json
+                    FROM simulation_events e
+                    JOIN simulation_events_readable er ON er.id = e.id
+                    WHERE e.id = ?
+                    """,
+                    (rediscovery_event_id,),
+                ).fetchone()
+                rediscovery_record = conn.execute(
+                    """
+                    SELECT record_type, visibility_state, prose_variant_key
+                    FROM simulation_event_records_readable
+                    WHERE event_id = ?
+                    """,
+                    (rediscovery_event_id,),
+                ).fetchone()
+
+            self.assertIsNotNone(rediscovery_event_id)
+            self.assertEqual(str(original["visibility_state"]), "rediscovered")
+            self.assertEqual(int(original["lost_year"]), 1040)
+            self.assertEqual(int(original["rediscovered_year"]), 1100)
+            self.assertAlmostEqual(float(original["confidence"]), 0.82)
+            self.assertEqual(int(original["source_person_id"]), 41)
+            self.assertEqual(str(original["source_institution_id"]), "temple_ledger")
+            self.assertEqual(
+                str(original["preserving_settlement_id"]), "aeria_north:settlement:1"
+            )
+            self.assertEqual(str(original["preserving_region_id"]), "aeria_north")
+            self.assertEqual(
+                json.loads(str(original["distortion_json"])),
+                {"date_uncertain": True},
+            )
+            self.assertEqual(
+                str(original["prose_variant_key"]),
+                "lineage_memory.rediscovered.default",
+            )
+            self.assertEqual(int(rediscovery["sim_year"]), 1100)
+            self.assertEqual(str(rediscovery["event_type"]), "event_rediscovered")
+            self.assertEqual(int(rediscovery["primary_person_id"]), 41)
+            self.assertEqual(
+                str(rediscovery["settlement_id"]), "aeria_north:settlement:1"
+            )
+            self.assertEqual(str(rediscovery["region_id"]), "aeria_north")
+            payload = json.loads(str(rediscovery["payload_json"]))
+            self.assertEqual(int(payload["original_event_id"]), original_event_id)
+            self.assertEqual(str(payload["original_record_key"]), "default")
+            self.assertEqual(str(rediscovery_record["record_type"]), "rediscovery_record")
+            self.assertEqual(
+                str(rediscovery_record["visibility_state"]), "public_known"
+            )
+            self.assertEqual(
+                str(rediscovery_record["prose_variant_key"]),
+                "rediscovery_record.public_known.default",
+            )
+
+    def test_v7_events_backfill_to_default_memory_records(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '7')
+                    """
+                )
+                conn.execute("PRAGMA user_version = 7")
+                conn.execute(
+                    """
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        primary_person_id INTEGER,
+                        secondary_person_id INTEGER,
+                        settlement_key INTEGER,
+                        region_key INTEGER,
+                        event_origin TEXT NOT NULL DEFAULT 'generated',
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                events = [
+                    (
+                        1000,
+                        "birth",
+                        {
+                            "person_id": 1,
+                            "settlement_id": "aeria_north:settlement:1",
+                            "region_id": "aeria_north",
+                        },
+                    ),
+                    (1001, "death", {"person_id": 2}),
+                    (1002, "career_fitness_updated", {"person_id": 3}),
+                ]
+                for sim_year, event_type, payload in events:
+                    conn.execute(
+                        """
+                        INSERT INTO simulation_events (
+                            sim_year, event_type, payload_json, created_at
+                        )
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            sim_year,
+                            event_type,
+                            json.dumps(payload, separators=(",", ":")),
+                            "2026-01-01T00:00:00+00:00",
+                        ),
+                    )
+
+                ensure_checkpoint_schema(conn)
+
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                rows = {
+                    str(r["event_type"]): r
+                    for r in conn.execute(
+                        """
+                        SELECT event_type, record_type, visibility_state,
+                               preserving_settlement_id, preserving_region_id,
+                               public_actor_person_id, public_victim_person_id
+                        FROM simulation_event_records_readable
+                        ORDER BY event_id
+                        """
+                    )
+                }
+
+            self.assertEqual(str(rows["birth"]["record_type"]), "lineage_memory")
+            self.assertEqual(str(rows["birth"]["visibility_state"]), "private_known")
+            self.assertEqual(
+                str(rows["birth"]["preserving_settlement_id"]),
+                "aeria_north:settlement:1",
+            )
+            self.assertEqual(str(rows["birth"]["preserving_region_id"]), "aeria_north")
+            self.assertEqual(int(rows["birth"]["public_actor_person_id"]), 1)
+            self.assertEqual(str(rows["death"]["record_type"]), "mortuary_memory")
+            self.assertEqual(str(rows["death"]["visibility_state"]), "public_known")
+            self.assertIsNone(rows["death"]["public_actor_person_id"])
+            self.assertEqual(int(rows["death"]["public_victim_person_id"]), 2)
+            self.assertEqual(
+                str(rows["career_fitness_updated"]["record_type"]), "admin_note"
+            )
+            self.assertEqual(
+                str(rows["career_fitness_updated"]["visibility_state"]), "admin_known"
+            )
+
     def test_checkpoint_roundtrip_one_person(self) -> None:
         random.seed(42)
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -257,7 +629,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 p = generate_person_random(simulation_context=ctx, simulation_year=1000)
                 ctx.add_person(person=p, is_founder=True)
                 checkpoint_simulation_to_save(ctx)
-                with sqlite3.connect(sav) as conn:
+                with closing(sqlite3.connect(sav)) as conn:
                     person_row = conn.execute(
                         """
                         SELECT first_name, last_name, birthyear, person_json
@@ -462,7 +834,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 is_founder=True,
             )
             checkpoint_simulation_to_save(ctx, full_snapshot=False)
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 ev = conn.execute(
                     "SELECT COUNT(*) FROM simulation_events",
                 ).fetchone()[0]
@@ -471,7 +843,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 ).fetchone()[0]
             self.assertGreaterEqual(int(ev), 1)
             self.assertEqual(int(pe), 0)
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 link_count = conn.execute(
                     """
                     SELECT COUNT(*)
@@ -529,7 +901,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             checkpoint_simulation_to_save(compact, full_snapshot=True)
 
-            with sqlite3.connect(compact_sav) as conn:
+            with closing(sqlite3.connect(compact_sav)) as conn:
                 conn.row_factory = sqlite3.Row
                 people_cols = {r["name"] for r in conn.execute("PRAGMA table_info(simulation_people)")}
                 event = conn.execute(
@@ -594,7 +966,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 },
             )
             checkpoint_simulation_to_save(verbose, full_snapshot=False)
-            with sqlite3.connect(verbose_sav) as conn:
+            with closing(sqlite3.connect(verbose_sav)) as conn:
                 payload_json = conn.execute(
                     """
                     SELECT payload_json
@@ -647,7 +1019,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             checkpoint_simulation_to_save(ctx, full_snapshot=False)
 
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 conn.row_factory = sqlite3.Row
                 self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
                 row = conn.execute(
@@ -702,7 +1074,7 @@ class TestSaveCheckpoint(unittest.TestCase):
     def test_v6_settlement_move_payload_backfills_to_event_moves(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             sav = Path(td) / "save.sqlite"
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 conn.row_factory = sqlite3.Row
                 conn.execute(
                     """
@@ -806,7 +1178,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             checkpoint_simulation_to_save(ctx, full_snapshot=False)
 
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
                     """
@@ -903,7 +1275,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             checkpoint_simulation_to_save(ctx, full_snapshot=True)
 
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
                     """
@@ -1008,7 +1380,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             ctx.region_effective_cap_multiplier["aeria_north"] = 0.33
             expected_next = str(ctx.next_person_id)
             checkpoint_simulation_to_save(ctx, full_snapshot=False)
-            with sqlite3.connect(sav) as conn:
+            with closing(sqlite3.connect(sav)) as conn:
                 row = conn.execute(
                     """
                     SELECT meta_value FROM simulation_meta
@@ -1157,7 +1529,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 self.assertGreater(len(ctx.gov_polities), 0)
                 polity_ids_first = set(ctx.gov_polities.keys())
                 checkpoint_simulation_to_save(ctx, full_snapshot=True)
-                with sqlite3.connect(sav) as conn:
+                with closing(sqlite3.connect(sav)) as conn:
                     n = conn.execute(
                         "SELECT COUNT(*) FROM simulation_polities",
                     ).fetchone()[0]

@@ -2175,7 +2175,9 @@ class SimulationContext:
         # After social: partnerships and paramours resolved for the year; jobs and
         # migration already updated residence. Household care runs next so implicit
         # households match final settlements before orphan routing and childcare math.
-        # Economy runs last so wages and pooled draws use final residence.
+        # Incidents run after household pressure and before government so deaths can
+        # affect office succession in the same year. Economy runs last so wages and
+        # pooled draws use final residence.
         from library.simulation_household_care import simulation_household_care_annual_tick
 
         if prof:
@@ -2183,6 +2185,13 @@ class SimulationContext:
         simulation_household_care_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.household_care", tpc() - t0)
+        from library.simulation_incidents import simulation_incidents_annual_tick
+
+        if prof:
+            t0 = tpc()
+        simulation_incidents_annual_tick(self, year)
+        if prof:
+            simulation_timing.accumulate("summary.incidents", tpc() - t0)
         from library.simulation_government import simulation_government_annual_tick
 
         if prof:
@@ -2273,6 +2282,19 @@ class SimulationContext:
             checkpoint_simulation_to_save(
                 self, full_snapshot=self._should_checkpoint_snapshot(year)
             )
+            from library.event_memory_lifecycle import (
+                event_memory_lifecycle_annual_tick_for_save,
+            )
+
+            if prof:
+                t0 = tpc()
+            event_memory_lifecycle_annual_tick_for_save(
+                self.save_db_path,
+                year=year,
+                world=self.world,
+            )
+            if prof:
+                simulation_timing.accumulate("summary.event_memory_lifecycle", tpc() - t0)
 
     def finalize_run(self) -> None:
         """Persist simulation state to ``save.sqlite`` and flush optional file store.

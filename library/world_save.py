@@ -10,7 +10,7 @@ import json
 import sqlite3
 import time
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,9 +34,10 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 7
+SAVE_SCHEMA_VERSION = 8
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
+EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
 
 _SAVE_REBUILD_SOURCE_SCHEMA = "source_db"
 
@@ -70,6 +71,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_events",
     "simulation_event_people",
     "simulation_event_moves",
+    "simulation_event_records",
     "simulation_regions",
     "simulation_settlements",
     "simulation_polities",
@@ -292,7 +294,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
             f"save.sqlite schema version {version} is newer than supported "
             f"version {SAVE_SCHEMA_VERSION}"
         )
-    if version not in (0, 3, 4, 5, 6, SAVE_SCHEMA_VERSION):
+    if version not in (0, 3, 4, 5, 6, 7, SAVE_SCHEMA_VERSION):
         raise RuntimeError(
             f"save.sqlite schema version {version} needs a migration before "
             f"this code can open it"
@@ -604,6 +606,16 @@ _EVENT_PERSON_SCALAR_ROLES: dict[str, str] = {
     "child_id": "child",
     "father_id": "father",
     "mother_id": "mother",
+    "killer_person_id": "killer",
+    "perpetrator_person_id": "perpetrator",
+    "accused_person_id": "accused",
+    "betrayed_partner_person_id": "betrayed_partner",
+    "paramour_person_id": "paramour",
+    "benefactor_person_id": "benefactor",
+    "beneficiary_person_id": "beneficiary",
+    "creator_person_id": "creator",
+    "patron_person_id": "patron",
+    "target_person_id": "target",
     "victim_person_id": "victim",
     "purseholder_person_id": "purseholder",
     "moved_person_id": "moved",
@@ -618,6 +630,9 @@ _EVENT_PERSON_LIST_ROLES: dict[str, str] = {
     "dependent_minor_ids": "dependent_minor",
     "moved_person_ids": "moved",
     "child_ids": "child",
+    "witness_person_ids": "witness",
+    "suspect_person_ids": "suspect",
+    "betrayed_partner_person_ids": "betrayed_partner",
 }
 
 _EVENT_SETTLEMENT_KEYS: tuple[str, ...] = (
@@ -866,6 +881,395 @@ def _insert_simulation_event_move_rows(
         )
 
 
+_PUBLIC_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "founder_created",
+        "death",
+        "settlement_move_planned",
+        "settlement_move_dropped",
+        "settlement_moved",
+        "polity_promoted",
+        "polity_split_vassal",
+        "polity_named",
+        "polity_dissolved",
+        "office_selection",
+        "office_succession",
+        "campaign_started",
+        "campaign_ended",
+        "battle_fought",
+        "dynastic_marriage_alliance",
+    }
+)
+
+_PRIVATE_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "birth",
+        "couple_formed",
+        "couple_dissolved",
+        "same_sex_couple_formed",
+        "job_assigned",
+        "job_lost",
+        "unemployment_started",
+        "unemployment_ended",
+        "job_seeker_migration",
+        "household_childcare_shortfall",
+        "household_prosperity_crisis",
+        "partner_residence_reconciled",
+    }
+)
+
+_SECRET_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
+    {"paramour_formed", "paramour_ended"}
+)
+
+_ADMIN_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "career_fitness_updated",
+        "settlement_job_market_effect",
+        "place_debug_probe",
+    }
+)
+
+_EVENT_RECORD_VISIBILITY_STATES: frozenset[str] = frozenset(
+    {
+        "admin_known",
+        "public_known",
+        "private_known",
+        "rumored",
+        "sealed",
+        "lost",
+        "rediscovered",
+        "misattributed",
+    }
+)
+
+
+def _event_record_kind_for_type(
+    event_type: str, event_origin: str
+) -> tuple[str, str, float]:
+    """Return ``(record_type, visibility_state, confidence)`` for a default memory row."""
+    et = str(event_type or "").strip()
+    origin = str(event_origin or "").strip().lower()
+    if (
+        origin in {"inferred", "backfilled"}
+        or et.startswith("promotion_backfill_")
+        or et in _ADMIN_RECORD_EVENT_TYPES
+    ):
+        return "admin_note", "admin_known", 0.75 if origin != "generated" else 1.0
+    if et == "event_rediscovered":
+        return "rediscovery_record", "public_known", 1.0
+    if et in {"murder", "feud_killing"}:
+        return "violent_crime_record", "rumored", 0.55
+    if et in {"property_crime", "theft", "fraud", "extortion"}:
+        return "property_crime_record", "rumored", 0.5
+    if et in {"affair_scandal", "affair_exposed", "disputed_parentage"}:
+        return "scandal_record", "rumored", 0.55
+    if et in {"public_virtue", "heroic_rescue", "public_mercy"}:
+        return "public_virtue_record", "public_known", 0.85
+    if et in {"knowledge_culture", "invention", "discovery", "legal_precedent"}:
+        return "knowledge_record", "public_known", 0.8
+    if et in _SECRET_RECORD_EVENT_TYPES:
+        return "household_secret", "private_known", 1.0
+    if et == "birth":
+        return "lineage_memory", "private_known", 1.0
+    if et == "death":
+        return "mortuary_memory", "public_known", 1.0
+    if et.startswith("office_") or et.startswith("polity_"):
+        return "court_chronicle", "public_known", 1.0
+    if (
+        et.startswith("campaign_")
+        or et.startswith("battle_")
+        or et.startswith("dynastic_")
+    ):
+        return "war_chronicle", "public_known", 1.0
+    if et.startswith("settlement_"):
+        return "settlement_chronicle", "public_known", 1.0
+    if et.startswith("job_") or et.startswith("unemployment_"):
+        return "work_record", "private_known", 1.0
+    if et.startswith("household_") or et in _PRIVATE_RECORD_EVENT_TYPES:
+        return "household_memory", "private_known", 1.0
+    if et in _PUBLIC_RECORD_EVENT_TYPES:
+        return "public_chronicle", "public_known", 1.0
+    return "event_memory", "private_known", 1.0
+
+
+def _event_record_public_people(
+    event_type: str,
+    primary_person_id: int | None,
+    secondary_person_id: int | None,
+) -> tuple[int | None, int | None]:
+    et = str(event_type or "").strip()
+    if et == "death":
+        return None, primary_person_id
+    if et in {"household_childcare_shortfall", "household_prosperity_crisis"}:
+        return None, primary_person_id
+    return primary_person_id, secondary_person_id
+
+
+def _insert_default_event_record_row(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    event_type: str,
+    sim_year: int | None,
+    primary_person_id: int | None,
+    secondary_person_id: int | None,
+    settlement_key: int | None,
+    region_key: int | None,
+    event_origin: str,
+    created_at: str,
+) -> None:
+    record_type, visibility_state, confidence = _event_record_kind_for_type(
+        event_type, event_origin
+    )
+    public_actor, public_victim = _event_record_public_people(
+        event_type, primary_person_id, secondary_person_id
+    )
+    prose_variant_key = f"{record_type}.{visibility_state}.default"
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO simulation_event_records (
+            event_id, record_key, record_type, visibility_state,
+            known_since_year, confidence, preserving_settlement_key,
+            preserving_region_key, public_actor_person_id,
+            public_victim_person_id, prose_variant_key, created_at, updated_at
+        )
+        VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(event_id),
+            record_type,
+            visibility_state,
+            sim_year,
+            float(confidence),
+            settlement_key,
+            region_key,
+            public_actor,
+            public_victim,
+            prose_variant_key,
+            created_at,
+            created_at,
+        ),
+    )
+
+
+def _event_record_row(
+    conn: sqlite3.Connection, event_id: int, record_key: str
+) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM simulation_event_records
+        WHERE event_id = ? AND record_key = ?
+        """,
+        (int(event_id), str(record_key or "default").strip() or "default"),
+    ).fetchone()
+    if row is None:
+        raise ValueError(
+            f"event record not found for event_id={int(event_id)} "
+            f"record_key={str(record_key or 'default').strip() or 'default'}"
+        )
+    return row
+
+
+def _event_record_distortion_json(distortion: dict | None) -> str | None:
+    if distortion is None:
+        return None
+    if not isinstance(distortion, dict):
+        raise TypeError("distortion must be a dict or None")
+    return json.dumps(distortion, sort_keys=True, separators=(",", ":"))
+
+
+def _event_record_state_update(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    record_key: str = "default",
+    visibility_state: str,
+    sim_year: int | None = None,
+    confidence: float | None = None,
+    source_person_id: int | None = None,
+    source_institution_id: str | None = None,
+    preserving_settlement_id: str | None = None,
+    preserving_region_id: str | None = None,
+    public_actor_person_id: int | None = None,
+    public_victim_person_id: int | None = None,
+    distortion: dict | None = None,
+    set_lost_year: bool = False,
+    set_rediscovered_year: bool = False,
+) -> None:
+    state = str(visibility_state or "").strip().lower()
+    if state not in _EVENT_RECORD_VISIBILITY_STATES:
+        raise ValueError(f"unknown event-record visibility state: {visibility_state!r}")
+    key = str(record_key or "default").strip() or "default"
+    row = _event_record_row(conn, int(event_id), key)
+    now = _utc_now_iso()
+    updates: dict[str, object] = {
+        "visibility_state": state,
+        "updated_at": now,
+        "prose_variant_key": f"{row['record_type']}.{state}.default",
+    }
+    if sim_year is not None:
+        if row["known_since_year"] is None:
+            updates["known_since_year"] = int(sim_year)
+        if set_lost_year:
+            updates["lost_year"] = int(sim_year)
+        if set_rediscovered_year:
+            updates["rediscovered_year"] = int(sim_year)
+    if confidence is not None:
+        updates["confidence"] = max(0.0, min(1.0, float(confidence)))
+    if source_person_id is not None:
+        updates["source_person_id"] = int(source_person_id)
+    if source_institution_id is not None:
+        text = str(source_institution_id).strip()
+        updates["source_institution_id"] = text or None
+    if preserving_settlement_id is not None or preserving_region_id is not None:
+        region_hint = str(preserving_region_id or "").strip()
+        settlement_hint = str(preserving_settlement_id or "").strip()
+        if not region_hint and ":" in settlement_hint:
+            region_hint = settlement_hint.split(":", 1)[0].strip()
+        updates["preserving_region_key"] = _lookup_or_insert_region_key(
+            conn, region_hint
+        )
+        updates["preserving_settlement_key"] = _lookup_or_insert_settlement_key(
+            conn, settlement_hint, region_hint
+        )
+    if public_actor_person_id is not None:
+        updates["public_actor_person_id"] = int(public_actor_person_id)
+    if public_victim_person_id is not None:
+        updates["public_victim_person_id"] = int(public_victim_person_id)
+    if distortion is not None:
+        updates["distortion_json"] = _event_record_distortion_json(distortion)
+    assignments = ", ".join(f"{_quote_identifier(k)} = ?" for k in updates)
+    conn.execute(
+        f"""
+        UPDATE simulation_event_records
+        SET {assignments}
+        WHERE event_id = ? AND record_key = ?
+        """,
+        (*updates.values(), int(event_id), key),
+    )
+
+
+def mark_event_record_lost(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    lost_year: int,
+    record_key: str = "default",
+) -> None:
+    """Mark an in-world event record as no longer actively remembered."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="lost",
+        sim_year=int(lost_year),
+        set_lost_year=True,
+    )
+
+
+def seal_event_record(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    sealed_year: int | None = None,
+    record_key: str = "default",
+    source_institution_id: str | None = None,
+) -> None:
+    """Hide a record in-world without losing its preserving institution/archive."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="sealed",
+        sim_year=sealed_year,
+        source_institution_id=source_institution_id,
+    )
+
+
+def mark_event_record_rumored(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    rumor_year: int | None = None,
+    record_key: str = "default",
+    confidence: float = 0.45,
+    source_person_id: int | None = None,
+    distortion: dict | None = None,
+) -> None:
+    """Turn a preserved/private record into an uncertain public or local rumor."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="rumored",
+        sim_year=rumor_year,
+        confidence=confidence,
+        source_person_id=source_person_id,
+        distortion=distortion,
+    )
+
+
+def rediscover_event_record(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    rediscovered_year: int,
+    world: str = "default",
+    record_key: str = "default",
+    source_person_id: int | None = None,
+    source_institution_id: str | None = None,
+    preserving_settlement_id: str | None = None,
+    preserving_region_id: str | None = None,
+    confidence: float = 0.85,
+    distortion: dict | None = None,
+    create_event: bool = True,
+) -> int | None:
+    """Mark a lost/hidden record as rediscovered and optionally log that discovery."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="rediscovered",
+        sim_year=int(rediscovered_year),
+        confidence=confidence,
+        source_person_id=source_person_id,
+        source_institution_id=source_institution_id,
+        preserving_settlement_id=preserving_settlement_id,
+        preserving_region_id=preserving_region_id,
+        distortion=distortion,
+        set_rediscovered_year=True,
+    )
+    if not create_event:
+        return None
+    payload: dict[str, object] = {
+        "original_event_id": int(event_id),
+        "original_record_key": str(record_key or "default").strip() or "default",
+        "confidence": max(0.0, min(1.0, float(confidence))),
+    }
+    if source_person_id is not None:
+        payload["source_person_id"] = int(source_person_id)
+    if source_institution_id is not None:
+        payload["source_institution_id"] = str(source_institution_id).strip()
+    region_hint = str(preserving_region_id or "").strip()
+    settlement_hint = str(preserving_settlement_id or "").strip()
+    if not region_hint and ":" in settlement_hint:
+        region_hint = settlement_hint.split(":", 1)[0].strip()
+    if settlement_hint:
+        payload["settlement_id"] = settlement_hint
+    if region_hint:
+        payload["region_id"] = region_hint
+    if distortion is not None:
+        payload["distortion"] = distortion
+    inserted = append_simulation_event_rows(
+        conn,
+        world,
+        [(int(rediscovered_year), "event_rediscovered", payload)],
+    )
+    return inserted[0] if inserted else None
+
+
 def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -902,6 +1306,28 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
             group_id TEXT,
             PRIMARY KEY (event_id, moved_person_id)
         );
+        CREATE TABLE IF NOT EXISTS simulation_event_records (
+            record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            record_key TEXT NOT NULL DEFAULT 'default',
+            record_type TEXT NOT NULL DEFAULT 'event_memory',
+            visibility_state TEXT NOT NULL DEFAULT 'public_known',
+            known_since_year INTEGER,
+            lost_year INTEGER,
+            rediscovered_year INTEGER,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            source_person_id INTEGER,
+            source_institution_id TEXT,
+            preserving_settlement_key INTEGER,
+            preserving_region_key INTEGER,
+            public_actor_person_id INTEGER,
+            public_victim_person_id INTEGER,
+            distortion_json TEXT,
+            prose_variant_key TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (event_id, record_key)
+        );
         """
     )
     event_cols = set(_table_columns(conn, "simulation_events"))
@@ -935,10 +1361,21 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
         ON simulation_event_moves (to_settlement_key, event_id);
         CREATE INDEX IF NOT EXISTS idx_simulation_event_moves_to_region
         ON simulation_event_moves (to_region_key, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_event
+        ON simulation_event_records (event_id, record_key);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_visibility
+        ON simulation_event_records (visibility_state, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_place
+        ON simulation_event_records (preserving_region_key, preserving_settlement_key);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_actor
+        ON simulation_event_records (public_actor_person_id, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_victim
+        ON simulation_event_records (public_victim_person_id, event_id);
         """
     )
     _backfill_simulation_event_people(conn)
     _backfill_simulation_event_moves(conn)
+    _backfill_simulation_event_records(conn)
 
 
 def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
@@ -1027,6 +1464,74 @@ def _backfill_simulation_event_moves(conn: sqlite3.Connection) -> None:
             event_id=int(row["id"]),
             event_type=str(row["event_type"] or ""),
             payload=payload,
+        )
+
+
+def _backfill_simulation_event_records(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "save_metadata"):
+        done = conn.execute(
+            """
+            SELECT meta_value FROM save_metadata
+            WHERE meta_key = ?
+            """,
+            (EVENT_RECORDS_BACKFILLED_META_KEY,),
+        ).fetchone()
+        if done is not None and str(done[0]).strip() == "1":
+            missing = conn.execute(
+                """
+                SELECT e.id
+                FROM simulation_events e
+                LEFT JOIN simulation_event_records r
+                  ON r.event_id = e.id AND r.record_key = 'default'
+                WHERE r.record_id IS NULL
+                LIMIT 1
+                """
+            ).fetchone()
+            if missing is None:
+                return
+    rows = conn.execute(
+        """
+        SELECT e.id, e.sim_year, e.event_type, e.primary_person_id,
+               e.secondary_person_id, e.settlement_key, e.region_key,
+               e.event_origin, e.created_at
+        FROM simulation_events e
+        LEFT JOIN simulation_event_records r
+          ON r.event_id = e.id AND r.record_key = 'default'
+        WHERE r.record_id IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        _insert_default_event_record_row(
+            conn,
+            event_id=int(row["id"]),
+            event_type=str(row["event_type"] or ""),
+            sim_year=(
+                int(row["sim_year"]) if row["sim_year"] is not None else None
+            ),
+            primary_person_id=(
+                int(row["primary_person_id"])
+                if row["primary_person_id"] is not None
+                else None
+            ),
+            secondary_person_id=(
+                int(row["secondary_person_id"])
+                if row["secondary_person_id"] is not None
+                else None
+            ),
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            event_origin=str(row["event_origin"] or "generated"),
+            created_at=str(row["created_at"] or _utc_now_iso()),
+        )
+    if _table_exists(conn, "save_metadata"):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+            VALUES (?, '1')
+            """,
+            (EVENT_RECORDS_BACKFILLED_META_KEY,),
         )
 
 
@@ -1364,6 +1869,7 @@ def _write_rebuilt_save_sqlite(
                     _copy_common_table_columns_from_attached_source(conn, table)
             _backfill_simulation_event_people(conn)
             _backfill_simulation_event_moves(conn)
+            _backfill_simulation_event_records(conn)
             _stamp_save_schema_version(conn, int(target_schema_version))
             conn.commit()
         finally:
@@ -1824,6 +2330,37 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = e.settlement_key
         LEFT JOIN simulation_region_lookup rl ON rl.region_key = e.region_key;
 
+        CREATE VIEW IF NOT EXISTS simulation_event_records_readable AS
+        SELECT
+            r.record_id,
+            r.event_id,
+            e.sim_year,
+            e.event_type,
+            e.event_origin,
+            r.record_key,
+            r.record_type,
+            r.visibility_state,
+            r.known_since_year,
+            r.lost_year,
+            r.rediscovered_year,
+            r.confidence,
+            r.source_person_id,
+            r.source_institution_id,
+            sl.settlement_id AS preserving_settlement_id,
+            rl.region_id AS preserving_region_id,
+            r.public_actor_person_id,
+            r.public_victim_person_id,
+            r.distortion_json,
+            r.prose_variant_key,
+            r.created_at,
+            r.updated_at
+        FROM simulation_event_records r
+        JOIN simulation_events e ON e.id = r.event_id
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = r.preserving_settlement_key
+        LEFT JOIN simulation_region_lookup rl
+            ON rl.region_key = r.preserving_region_key;
+
         CREATE VIEW IF NOT EXISTS simulation_event_moves_readable AS
         SELECT
             m.event_id,
@@ -2057,6 +2594,7 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_couples")
         conn.execute("DELETE FROM simulation_paramours")
         conn.execute("DELETE FROM simulation_meta")
+        conn.execute("DELETE FROM simulation_event_records")
         conn.execute("DELETE FROM simulation_event_moves")
         conn.execute("DELETE FROM simulation_event_people")
         conn.execute("DELETE FROM simulation_events")
@@ -2366,10 +2904,11 @@ def append_simulation_event_rows(
     *,
     created_at: str | None = None,
     verbose_payloads: bool = False,
-) -> None:
-    """Insert append-only simulation event rows. Each row is (sim_year, event_type, payload_dict)."""
+) -> list[int]:
+    """Insert append-only simulation event rows and return inserted event IDs."""
     ts = created_at or _utc_now_iso()
     cur = conn.cursor()
+    event_ids: list[int] = []
     for sim_year, event_type, payload in rows:
         primary, secondary, settlement_id, region_id = _event_common_columns(payload)
         settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
@@ -2401,6 +2940,7 @@ def append_simulation_event_rows(
             ),
         )
         event_id = int(cur.lastrowid)
+        event_ids.append(event_id)
         for person_id, role in _event_person_links_from_payload(payload):
             cur.execute(
                 """
@@ -2415,6 +2955,19 @@ def append_simulation_event_rows(
             event_type=event_type,
             payload=payload,
         )
+        _insert_default_event_record_row(
+            conn,
+            event_id=event_id,
+            event_type=event_type,
+            sim_year=sim_year,
+            primary_person_id=primary,
+            secondary_person_id=secondary,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            event_origin=event_origin,
+            created_at=ts,
+        )
+    return event_ids
 
 
 def _compact_event_payload(event_type: str, payload: dict) -> dict:
@@ -2602,7 +3155,7 @@ def _trait_slots_from_config(config_db_path: Path | str) -> tuple[str, ...]:
     if not path.exists():
         return ()
     try:
-        with sqlite3.connect(path) as conn:
+        with closing(sqlite3.connect(path)) as conn:
             conn.row_factory = sqlite3.Row
             has_map = conn.execute(
                 """

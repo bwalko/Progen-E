@@ -14,6 +14,13 @@ Track behavior/documentation mismatches that can confuse future sessions.
 - If a table is missing, errors often suggest running `python utils/util_load_config.py --world default`.
 - Run config reload first before diagnosing generation errors.
 
+## SQLite handles and `ResourceWarning`
+
+- `sqlite3.Connection` as a context manager commits or rolls back the transaction, but it does **not** close the connection. Use `with closing(sqlite3.connect(path)) as conn:` or an explicit `try/finally: conn.close()` when a helper opens its own connection.
+- `ResourceWarning: unclosed database` tracebacks often point at the line where an old connection is garbage-collected, not the line that opened it. Do not over-debug bystander frames such as NumPy helpers or unrelated loops; audit the connection allocation sites.
+- Cached config loaders should materialize plain Python values (`dict`, tuple, dataclass) while the connection is still open. Do not cache or return `sqlite3.Row`, cursor, or generator state that may retain DB resources.
+- To verify a cleanup, run the relevant tests with `python -W error::ResourceWarning -m unittest ...`. In managed/sandboxed shells, the default `python` may not see user-site packages such as `numpy`/`shapely`; confirm import behavior before treating dependency import failures as code failures.
+
 ## Settlements are lazy; checkpoint column names
 
 - Fresh simulations no longer pre-seed one settlement per region. A settlement row appears when someone is assigned there (founders, random births, offspring paths).
@@ -31,6 +38,12 @@ Track behavior/documentation mismatches that can confuse future sessions.
 ## Simulation context and ``save.sqlite`` flush
 
 - Use ``with SimulationContext.create(...) as ctx`` so ``finalize_run()`` runs on exit (full checkpoint + flushed file-store). Omit the context manager only when testing **partial** persistence (e.g. ``checkpoint_simulation_to_save(..., full_snapshot=False)``) or when ``clear_world_checkpoint`` must be the last write for that sqlite file.
+
+## Event facts vs in-world memory
+
+- ``simulation_events`` is the append-only factual/admin event log. Do not mark a fact itself "lost" or delete it to model historical forgetting.
+- In-world knowledge lives in ``simulation_event_records``. ``library.event_memory_lifecycle`` runs after the annual save checkpoint and mutates those record states (`public_known`, `private_known`, `rumored`, `lost`, `sealed`, `rediscovered`) from persisted rows.
+- Rediscovery logs a new factual ``event_rediscovered`` row while updating the original record's visibility. Browser/admin tools should use both rows when explaining what was found and what original fact resurfaced.
 
 ## Archival upsert and RAM working set
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import tempfile
 import sqlite3
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from library.config_import import load_all_csvs_into_sqlite
@@ -61,7 +62,7 @@ class TestPopulationGrowth100Years(unittest.TestCase):
                     starting_couples=STARTING_COUPLES,
                 )
 
-            with sqlite3.connect(sav) as con:
+            with closing(sqlite3.connect(sav)) as con:
                 con.row_factory = sqlite3.Row
                 latest_year = con.execute(
                     "select max(sim_year) as y from simulation_cohorts"
