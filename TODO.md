@@ -475,6 +475,15 @@ Initial tuning/report pass now exists:
   murder target while raising property-crime visibility and modestly raising
   scandal visibility because those counts were likely under-sampled by the same
   pre-fix issue.
+- Post-`incident_rates.csv` fixed-seed rerun completed with the same 80-year
+  `event_tuning_sample` command:
+  - total events: 17,871;
+  - total records: 17,871;
+  - save size: 17,719,296 bytes;
+  - tracked incident counts: `murder` 7, `property_crime` 45,
+    `affair_scandal` 4, `public_virtue` 2, `knowledge_culture` 1;
+  - compared with the previous 80-year report, `murder` moved 6 -> 7,
+    `property_crime` moved 3 -> 45, and `affair_scandal` moved 2 -> 4.
 - Normal simulation now runs an automatic memory-aging/loss/rediscovery tick
   after the annual save checkpoint. It reviews a deterministic bounded shard of
   old event-memory records, marks some ordinary in-world records `lost`, and can
@@ -508,9 +517,6 @@ Initial tuning/report pass now exists:
 
 Next event-system tasks:
 
-- Re-run the fixed-seed event tuning sample after the `incident_rates.csv`
-  addition and compare `murder`, `property_crime`, and `affair_scandal` counts
-  against the previous 80-year report.
 - Tune lifecycle rates against a fresh fixed-seed sample and decide whether
   high-volume private records such as births/jobs should decay more slowly than
   rare incident records.

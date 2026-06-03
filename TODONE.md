@@ -428,6 +428,20 @@
     a sufficiently high violent-actor propensity candidate.
   - The report now makes zero-count incident slices explicit instead of hiding
     them by omission.
+- Re-ran the fixed-seed event tuning sample after `config/incident_rates.csv`
+  made incident rates era-tunable.
+  - Command shape stayed the same: `event_tuning_sample`, 80 years, 80 starting
+    couples, seed `20260603`, no passive background population, and no canonical
+    report overwrite.
+  - New report produced 17,871 factual events / 17,871 records in a 17,719,296
+    byte save.
+  - Tracked incident counts were: `murder` 7, `property_crime` 45,
+    `affair_scandal` 4, `public_virtue` 2, and `knowledge_culture` 1.
+  - Compared with the previous 80-year report, murder stayed close at 6 -> 7,
+    property crime rose sharply at 3 -> 45, and affair scandal rose modestly at
+    2 -> 4.
+  - Report artifacts were written under
+    `temp/event_history_report/event_tuning_sample/`.
 - Added the first automatic event-memory lifecycle:
   - `library.event_memory_lifecycle` reviews a bounded deterministic shard of
     old event records each simulation year, after the annual save checkpoint has
