@@ -13,6 +13,11 @@ from unittest.mock import patch
 
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
+from library.incident_rates import (
+    IncidentRateParams,
+    clear_incident_rate_cache,
+    incident_rate_for_year,
+)
 from library.simulation_context import SimulationContext
 from library.simulation_incidents import (
     _murder_annual_event_cap,
@@ -192,6 +197,40 @@ class TestSimulationIncidents(unittest.TestCase):
 
         self.assertEqual(_murder_settlement_trial_count(residents), 24)
         self.assertGreaterEqual(_murder_annual_event_cap(settlements), 16)
+        rate = IncidentRateParams(
+            incident_key="murder",
+            target_per_10k_per_year=8.0,
+            annual_cap_multiplier=1.0,
+        )
+        self.assertEqual(_murder_annual_event_cap(settlements, rate), 24)
+
+    def test_incident_rates_csv_resolves_medieval_crime_knobs(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+
+            murder = incident_rate_for_year(
+                db_path=ctx.db_path,
+                world=ctx.world,
+                incident_key="murder",
+                historical_year=1000,
+            )
+            property_crime = incident_rate_for_year(
+                db_path=ctx.db_path,
+                world=ctx.world,
+                incident_key="property_crime",
+                historical_year=1000,
+            )
+            scandal = incident_rate_for_year(
+                db_path=ctx.db_path,
+                world=ctx.world,
+                incident_key="affair_scandal",
+                historical_year=1000,
+            )
+
+            self.assertEqual(murder.target_per_10k_per_year, 4.0)
+            self.assertEqual(property_crime.chance_multiplier, 12.0)
+            self.assertEqual(property_crime.annual_cap_multiplier, 10.0)
+            self.assertEqual(scandal.chance_multiplier, 5.0)
 
     def test_violent_actor_propensity_separates_extreme_and_stable_genomes(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -410,10 +449,21 @@ class TestSimulationIncidents(unittest.TestCase):
             with patch("library.simulation_incidents.MURDER_BASE_SETTLEMENT_CHANCE", 1.0), patch(
                 "library.simulation_incidents.MURDER_SETTLEMENT_CHANCE_CAP", 1.0
             ), patch("library.simulation_incidents.MURDER_PROPENSITY_THRESHOLD", 0.2), patch(
-                "library.simulation_incidents.MURDER_TARGET_PER_10K_PER_YEAR", 10000.0
-            ), patch("library.simulation_incidents.MURDER_SETTLEMENT_TRIAL_POPULATION", 2), patch(
+                "library.simulation_incidents.MURDER_SETTLEMENT_TRIAL_POPULATION", 2
+            ), patch(
                 "library.simulation_incidents.MURDER_MAX_EVENTS_PER_YEAR", 3
             ):
+                with closing(sqlite3.connect(ctx.db_path)) as conn:
+                    conn.execute(
+                        """
+                        UPDATE incident_rates
+                        SET target_per_10k_per_year = ?
+                        WHERE incident_key = ?
+                        """,
+                        ("10000", "murder"),
+                    )
+                    conn.commit()
+                clear_incident_rate_cache()
                 simulation_incidents_annual_tick(ctx, 1001)
 
             murder_events = [

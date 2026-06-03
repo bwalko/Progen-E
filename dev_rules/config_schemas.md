@@ -15,6 +15,7 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/genome.csv` | One row per trait + header | Trait keys + narrative poles + gender sign skew |
 | `config/genome_save_columns.csv` | One row per genome save slot | Compact checkpoint slot → trait mapping |
 | `config/world_start.csv` | Worlds + mortality + header + **`population_scale`** | One row per `world`. `population_scale` (default `0.05`) is the **shared global** modifier applied to region `carrying_capacity` (see [`library/geography.py`](../library/geography.py)) **and** to `government_polity_types.min_population_to_form` / `max_population_before_split` and to settlement-leadership thresholds in `government_titles.csv`. |
+| `config/incident_rates.csv` | Small + header | Era-tuned detailed-incident knobs per (`world` or `*`, `incident_key`, historical-year band): murder target per 10k/year plus chance/cap multipliers for other incident families. |
 | `config/world_geography_continents.csv` | Small + header | One row per (`world`, `continent_id`) |
 | `config/world_geography_regions.csv` | Small + header | One row per (`world`, `region_id`) |
 | `config/world_geography_routes.csv` | Small + header | One directed route per (`world`, `from_region_id`, `to_region_id`) |
@@ -137,6 +138,33 @@ Runtime code still uses normal dictionaries keyed by trait name. The compact sav
 | `sort_order` | integer | Array position; must stay stable for saves written with this config. |
 
 When adding or renaming a genome trait, update both `genome.csv` and this mapping. Because this project is pre-alpha, old saves may be deleted/regenerated instead of migrated.
+
+---
+
+## `config/incident_rates.csv`
+
+**Purpose:** Era-specific tuning knobs for detailed incident materialization in
+`library.simulation_incidents`. Rows are resolved by `library.incident_rates` by
+mapping the simulation year to a historical year through
+`SimulationContext.get_historical_year(...)`, then picking the matching row with
+the latest `history_year_from`. World-specific rows override `*` rows.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `world` | string | `*` for global defaults, or a specific `world_start.world` value. |
+| `incident_key` | string | Current keys: `murder`, `property_crime`, `affair_scandal`, `public_virtue`, `knowledge_culture`. Unknown keys are ignored unless code starts asking for them. |
+| `history_year_from` | integer | First historical year in the band, inclusive. |
+| `history_year_to` | integer or empty | Last historical year in the band, inclusive; empty means open-ended. |
+| `target_per_10k_per_year` | float or empty | Direct detailed-population target for incidents with calibrated population-rate logic. Currently used by `murder`; blank falls back to the code default for that family. |
+| `chance_multiplier` | float `>=0` | Multiplies the per-settlement chance gate and the settlement chance cap. `0` disables chance generation for that row. |
+| `annual_cap_multiplier` | float `>=0` | Multiplies the annual materialized-event cap for that incident family. `0` disables materialization for that row. |
+| `notes` | string | Human tuning notes only; ignored by runtime logic. |
+
+The initial medieval rows keep murder at the current target of about **4
+murders per 10,000 detailed people per year** while raising property-crime and
+scandal visibility because the first review samples showed those slices were
+even quieter than the old undercounted murder slice. Re-run
+`utils/util_event_history_report.py` after changing this CSV.
 
 ---
 

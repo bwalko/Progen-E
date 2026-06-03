@@ -27,6 +27,8 @@ Use this file first when starting a new session in this repository.
 
    Longer population runs use the same canonical report files as that test (only the reported duration changes): `python utils/run_population_simulation.py --years 400`
 
+   Local machine guidance: hostname **Nazuna** is the fast desktop and can run aggressive/full test or simulation checks. Other machines, including the current laptop, should prefer targeted tests and short smoke runs unless the user explicitly asks for a long/aggressive run.
+
 3. For population simulation requests, prefer runtime override patterns in commands (for example changing `STARTING_COUPLES`) instead of editing tests unless asked.
 
 4. **Working set vs save.sqlite (long runs):** Full checkpoints **upsert** `simulation_people` and `simulation_settlements` (historical rows stay in `save.sqlite`; no blanket `DELETE` those tables on snap). After each full snapshot, **`prune_ancient_dead_from_ram`** drops from `ctx.people` anyone dead longer than **`working_set_dead_retention_years`** (default **20**). **`try_load_simulation_checkpoint`** only hydrates alive + recent-dead into RAM; **`simulation_events`** remain append-only. New simulation features that add per-person state should stay compatible with this pattern (bounded RAM, full history on disk).

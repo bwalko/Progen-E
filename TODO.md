@@ -469,6 +469,12 @@ Initial tuning/report pass now exists:
   murders per 10,000 people per year, with population-scaled settlement trials
   and a population-scaled annual cap so 15,000-20,000 detailed people can
   produce historically plausible multi-murder years.
+- Incident rates are now era-tunable through `config/incident_rates.csv`.
+  Murder reads its target from `target_per_10k_per_year`; other tracked incident
+  slices use chance/cap multipliers. The initial medieval rows preserve the
+  murder target while raising property-crime visibility and modestly raising
+  scandal visibility because those counts were likely under-sampled by the same
+  pre-fix issue.
 - Normal simulation now runs an automatic memory-aging/loss/rediscovery tick
   after the annual save checkpoint. It reviews a deterministic bounded shard of
   old event-memory records, marks some ordinary in-world records `lost`, and can
@@ -502,6 +508,9 @@ Initial tuning/report pass now exists:
 
 Next event-system tasks:
 
+- Re-run the fixed-seed event tuning sample after the `incident_rates.csv`
+  addition and compare `murder`, `property_crime`, and `affair_scandal` counts
+  against the previous 80-year report.
 - Tune lifecycle rates against a fresh fixed-seed sample and decide whether
   high-volume private records such as births/jobs should decay more slowly than
   rare incident records.

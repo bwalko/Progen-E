@@ -1,0 +1,18 @@
+world,incident_key,history_year_from,history_year_to,target_per_10k_per_year,chance_multiplier,annual_cap_multiplier,notes
+*,murder,-1000000,-3301,2.0,1.0,1.0,Prehistoric detailed homicide target for small-scale communities
+*,murder,-3300,-1201,3.0,1.0,1.0,Bronze age detailed homicide target
+*,murder,-1200,499,4.0,1.0,1.0,Iron age high-preindustrial detailed homicide target
+*,murder,500,1499,4.0,1.0,1.0,Medieval detailed homicide target from the current retune
+*,murder,1500,,2.5,1.0,1.0,Modern fallback homicide target pending justice-system modeling
+*,property_crime,-1000000,-3301,,6.0,6.0,Property and survival crime visibility retune after murder undercount fix
+*,property_crime,-3300,-1201,,8.0,8.0,Property and survival crime visibility retune after murder undercount fix
+*,property_crime,-1200,499,,10.0,10.0,Property and survival crime visibility retune after murder undercount fix
+*,property_crime,500,1499,,12.0,10.0,Medieval property and survival crime visibility retune
+*,property_crime,1500,,6.0,6.0,Modern property-crime visibility fallback pending institutions
+*,affair_scandal,-1000000,-3301,,2.0,2.0,Household scandal visibility retune for sparse review samples
+*,affair_scandal,-3300,-1201,,3.0,3.0,Household scandal visibility retune for sparse review samples
+*,affair_scandal,-1200,499,,4.0,4.0,Household scandal visibility retune for sparse review samples
+*,affair_scandal,500,1499,,5.0,5.0,Medieval household scandal visibility retune
+*,affair_scandal,1500,,3.0,3.0,Modern household scandal visibility fallback
+*,public_virtue,-1000000,,,1.0,1.0,Currently unchanged but era-tunable
+*,knowledge_culture,-1000000,,,1.0,1.0,Currently unchanged but era-tunable

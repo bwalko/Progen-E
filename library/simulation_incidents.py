@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from library import simulation_timing
+from library.incident_rates import IncidentRateParams, incident_rate_for_year
 
 if TYPE_CHECKING:
     from library.simulation_context import (
@@ -317,19 +318,53 @@ def _weighted_choice(
     return rng.choices(items, weights=weights, k=1)[0]
 
 
+def _incident_chance_multiplier(rate: IncidentRateParams | None) -> float:
+    return max(0.0, float(rate.chance_multiplier if rate is not None else 1.0))
+
+
+def _incident_cap_multiplier(rate: IncidentRateParams | None) -> float:
+    return max(0.0, float(rate.annual_cap_multiplier if rate is not None else 1.0))
+
+
+def _scaled_chance_cap(base_cap: float, rate: IncidentRateParams | None) -> float:
+    return min(1.0, max(0.0, float(base_cap)) * _incident_chance_multiplier(rate))
+
+
+def _annual_event_limit(base_limit: int, rate: IncidentRateParams | None) -> int:
+    multiplier = _incident_cap_multiplier(rate)
+    if int(base_limit) <= 0 or multiplier <= 0.0:
+        return 0
+    return max(1, int(int(base_limit) * multiplier + 0.999999))
+
+
+def _murder_target_per_10k(rate: IncidentRateParams | None) -> float:
+    if rate is not None and rate.target_per_10k_per_year is not None:
+        return max(0.0, float(rate.target_per_10k_per_year))
+    return max(0.0, float(MURDER_TARGET_PER_10K_PER_YEAR))
+
+
 def _murder_annual_event_cap(
     settlements: list[tuple[str, list["SimulationPersonRecord"]]],
+    rate: IncidentRateParams | None = None,
 ) -> int:
     population = sum(len(residents) for _settlement_id, residents in settlements)
     if population <= 0:
         return 0
-    target = (
-        population
-        * max(0.0, float(MURDER_TARGET_PER_10K_PER_YEAR))
-        / 10_000.0
+    target_per_10k = _murder_target_per_10k(rate)
+    cap_multiplier = _incident_cap_multiplier(rate)
+    if target_per_10k <= 0.0 or cap_multiplier <= 0.0:
+        return 0
+    target = population * target_per_10k / 10_000.0
+    cap = int(
+        target
+        * max(0.0, float(MURDER_ANNUAL_CAP_HEADROOM))
+        * cap_multiplier
+        + 0.999999
     )
-    cap = int(target * max(0.0, float(MURDER_ANNUAL_CAP_HEADROOM)) + 0.999999)
-    return max(1, min(int(MURDER_MAX_EVENTS_PER_YEAR), cap))
+    safety_cap = int(int(MURDER_MAX_EVENTS_PER_YEAR) * cap_multiplier + 0.999999)
+    if cap <= 0 or safety_cap <= 0:
+        return 0
+    return max(1, min(safety_cap, cap))
 
 
 def _murder_settlement_trial_count(residents: list["SimulationPersonRecord"]) -> int:
@@ -533,6 +568,7 @@ def _maybe_murder_in_settlement(
     *,
     rng: random.Random,
     already_dead: set[int],
+    rate: IncidentRateParams | None = None,
 ) -> MurderIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -554,12 +590,11 @@ def _maybe_murder_in_settlement(
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 80.0, 0.05, 1.0)
     population_rate_chance = (
-        max(0.0, float(MURDER_TARGET_PER_10K_PER_YEAR))
+        _murder_target_per_10k(rate)
         / 10_000.0
         * min(len(adults), max(1, int(MURDER_SETTLEMENT_TRIAL_POPULATION)))
     )
-    chance = min(
-        MURDER_SETTLEMENT_CHANCE_CAP,
+    raw_chance = (
         MURDER_BASE_SETTLEMENT_CHANCE
         * (0.35 + population_factor)
         * (1.0 + scarcity * 3.0)
@@ -567,7 +602,11 @@ def _maybe_murder_in_settlement(
         + population_rate_chance
         * MURDER_RATE_CONTEXT_MULTIPLIER
         * (0.50 + max_propensity * 2.0)
-        * (1.0 + scarcity * 1.5),
+        * (1.0 + scarcity * 1.5)
+    )
+    chance = min(
+        _scaled_chance_cap(MURDER_SETTLEMENT_CHANCE_CAP, rate),
+        raw_chance * _incident_chance_multiplier(rate),
     )
     if rng.random() >= chance:
         return None
@@ -874,6 +913,7 @@ def _maybe_affair_scandal_in_settlement(
     residents: list["SimulationPersonRecord"],
     *,
     rng: random.Random,
+    rate: IncidentRateParams | None = None,
 ) -> AffairScandalIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -923,12 +963,15 @@ def _maybe_affair_scandal_in_settlement(
         pair_scores.append(_clamp(score))
     max_score = max(pair_scores, default=0.0)
     population_factor = _clamp((len(adult_by_id) - 1) / 80.0, 0.05, 1.0)
-    chance = min(
-        SCANDAL_SETTLEMENT_CHANCE_CAP,
+    raw_chance = (
         SCANDAL_BASE_SETTLEMENT_CHANCE
         * (0.45 + population_factor)
         * (1.0 + social_pressure * 1.5)
-        * (0.45 + max_score * 2.4),
+        * (0.45 + max_score * 2.4)
+    )
+    chance = min(
+        _scaled_chance_cap(SCANDAL_SETTLEMENT_CHANCE_CAP, rate),
+        raw_chance * _incident_chance_multiplier(rate),
     )
     if rng.random() >= chance:
         return None
@@ -1002,6 +1045,7 @@ def _maybe_public_virtue_in_settlement(
     residents: list["SimulationPersonRecord"],
     *,
     rng: random.Random,
+    rate: IncidentRateParams | None = None,
 ) -> PublicVirtueIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -1018,12 +1062,15 @@ def _maybe_public_virtue_in_settlement(
     propensities = {rec.person_id: public_virtue_propensity(rec) for rec in adults}
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 70.0, 0.05, 1.0)
-    chance = min(
-        VIRTUE_SETTLEMENT_CHANCE_CAP,
+    raw_chance = (
         VIRTUE_BASE_SETTLEMENT_CHANCE
         * (0.40 + population_factor)
         * (1.0 + hardship * 1.7)
-        * (0.35 + max_propensity * 2.2),
+        * (0.35 + max_propensity * 2.2)
+    )
+    chance = min(
+        _scaled_chance_cap(VIRTUE_SETTLEMENT_CHANCE_CAP, rate),
+        raw_chance * _incident_chance_multiplier(rate),
     )
     if rng.random() >= chance:
         return None
@@ -1101,6 +1148,7 @@ def _maybe_knowledge_culture_in_settlement(
     residents: list["SimulationPersonRecord"],
     *,
     rng: random.Random,
+    rate: IncidentRateParams | None = None,
 ) -> KnowledgeCultureIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -1116,12 +1164,15 @@ def _maybe_knowledge_culture_in_settlement(
     propensities = {rec.person_id: knowledge_culture_propensity(rec) for rec in adults}
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 90.0, 0.05, 1.0)
-    chance = min(
-        KNOWLEDGE_SETTLEMENT_CHANCE_CAP,
+    raw_chance = (
         KNOWLEDGE_BASE_SETTLEMENT_CHANCE
         * (0.35 + population_factor)
         * (0.75 + max(0.0, 1.0 - min(1.4, pressure)) * 0.25)
-        * (0.35 + max_propensity * 2.5),
+        * (0.35 + max_propensity * 2.5)
+    )
+    chance = min(
+        _scaled_chance_cap(KNOWLEDGE_SETTLEMENT_CHANCE_CAP, rate),
+        raw_chance * _incident_chance_multiplier(rate),
     )
     if rng.random() >= chance:
         return None
@@ -1204,6 +1255,7 @@ def _maybe_property_crime_in_settlement(
     residents: list["SimulationPersonRecord"],
     *,
     rng: random.Random,
+    rate: IncidentRateParams | None = None,
 ) -> TheftFraudIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -1220,12 +1272,15 @@ def _maybe_property_crime_in_settlement(
     propensities = {rec.person_id: property_crime_propensity(rec) for rec in adults}
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 60.0, 0.05, 1.0)
-    chance = min(
-        THEFT_SETTLEMENT_CHANCE_CAP,
+    raw_chance = (
         THEFT_BASE_SETTLEMENT_CHANCE
         * (0.45 + population_factor)
         * (1.0 + scarcity * 2.2)
-        * (0.35 + max_propensity * 2.4),
+        * (0.35 + max_propensity * 2.4)
+    )
+    chance = min(
+        _scaled_chance_cap(THEFT_SETTLEMENT_CHANCE_CAP, rate),
+        raw_chance * _incident_chance_multiplier(rate),
     )
     if rng.random() >= chance:
         return None
@@ -1457,7 +1512,48 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     public_virtue_count = 0
     knowledge_culture_count = 0
     settlements = sorted(ctx.current_people_by_settlement().items())
-    murder_event_limit = _murder_annual_event_cap(settlements)
+    historical_year = ctx.get_historical_year(y)
+    murder_rate = incident_rate_for_year(
+        db_path=ctx.db_path,
+        world=ctx.world,
+        incident_key="murder",
+        historical_year=historical_year,
+    )
+    property_crime_rate = incident_rate_for_year(
+        db_path=ctx.db_path,
+        world=ctx.world,
+        incident_key="property_crime",
+        historical_year=historical_year,
+    )
+    scandal_rate = incident_rate_for_year(
+        db_path=ctx.db_path,
+        world=ctx.world,
+        incident_key="affair_scandal",
+        historical_year=historical_year,
+    )
+    public_virtue_rate = incident_rate_for_year(
+        db_path=ctx.db_path,
+        world=ctx.world,
+        incident_key="public_virtue",
+        historical_year=historical_year,
+    )
+    knowledge_culture_rate = incident_rate_for_year(
+        db_path=ctx.db_path,
+        world=ctx.world,
+        incident_key="knowledge_culture",
+        historical_year=historical_year,
+    )
+    murder_event_limit = _murder_annual_event_cap(settlements, murder_rate)
+    property_crime_event_limit = _annual_event_limit(
+        THEFT_MAX_EVENTS_PER_YEAR, property_crime_rate
+    )
+    scandal_event_limit = _annual_event_limit(SCANDAL_MAX_EVENTS_PER_YEAR, scandal_rate)
+    public_virtue_event_limit = _annual_event_limit(
+        VIRTUE_MAX_EVENTS_PER_YEAR, public_virtue_rate
+    )
+    knowledge_culture_event_limit = _annual_event_limit(
+        KNOWLEDGE_MAX_EVENTS_PER_YEAR, knowledge_culture_rate
+    )
     if prof:
         simulation_timing.accumulate("incidents.setup", tpc() - t0)
         t0 = tpc()
@@ -1472,52 +1568,57 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 residents,
                 rng=rng,
                 already_dead=dead_ids,
+                rate=murder_rate,
             )
             if incident is None:
                 continue
             _record_murder_incident(ctx, y, incident)
             dead_ids.add(int(incident.victim.person_id))
             murder_count += 1
-        if property_crime_count < THEFT_MAX_EVENTS_PER_YEAR:
+        if property_crime_count < property_crime_event_limit:
             property_crime = _maybe_property_crime_in_settlement(
                 ctx,
                 y,
                 settlement_id,
                 residents,
                 rng=theft_rng,
+                rate=property_crime_rate,
             )
             if property_crime is not None:
                 _record_property_crime_incident(ctx, y, property_crime)
                 property_crime_count += 1
-        if scandal_count < SCANDAL_MAX_EVENTS_PER_YEAR:
+        if scandal_count < scandal_event_limit:
             scandal = _maybe_affair_scandal_in_settlement(
                 ctx,
                 y,
                 settlement_id,
                 residents,
                 rng=scandal_rng,
+                rate=scandal_rate,
             )
             if scandal is not None:
                 _record_affair_scandal_incident(ctx, y, scandal)
                 scandal_count += 1
-        if public_virtue_count < VIRTUE_MAX_EVENTS_PER_YEAR:
+        if public_virtue_count < public_virtue_event_limit:
             virtue = _maybe_public_virtue_in_settlement(
                 ctx,
                 y,
                 settlement_id,
                 residents,
                 rng=virtue_rng,
+                rate=public_virtue_rate,
             )
             if virtue is not None:
                 _record_public_virtue_incident(ctx, y, virtue)
                 public_virtue_count += 1
-        if knowledge_culture_count < KNOWLEDGE_MAX_EVENTS_PER_YEAR:
+        if knowledge_culture_count < knowledge_culture_event_limit:
             knowledge = _maybe_knowledge_culture_in_settlement(
                 ctx,
                 y,
                 settlement_id,
                 residents,
                 rng=knowledge_rng,
+                rate=knowledge_culture_rate,
             )
             if knowledge is not None:
                 _record_knowledge_culture_incident(ctx, y, knowledge)
