@@ -101,16 +101,22 @@ SETTLEMENT_BROWSER_HEADERS = [
 HISTORY_VIEW_CHOICES = [
     "Admin Truth",
     "Public Chronicle",
-    "Rumors",
+    "Public Unknown",
+    "Public Rumors",
+    "Public Known",
     "Lost History",
     "Rediscoveries",
 ]
+HISTORY_VIEW_ALIASES = {
+    "Rumors": "Public Rumors",
+}
 HISTORY_BROWSER_HEADERS = [
     "Year",
     "Event ID",
     "Record ID",
     "Event Type",
     "Visibility",
+    "Public Stage",
     "Record Type",
     "Template",
     "Prose",
@@ -134,6 +140,9 @@ from library.event_prose import (  # noqa: E402
     load_admin_event_summaries,
     load_event_record_prose_rows,
     load_public_chronicle_prose,
+    load_public_known_prose,
+    load_public_rumor_prose,
+    load_public_unknown_prose,
 )
 from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID  # noqa: E402
 from library.world_map_svg import (  # noqa: E402
@@ -1044,6 +1053,7 @@ def _history_admin_row(summary: EventAdminSummary) -> dict[str, object]:
         "Record ID": "",
         "Event Type": summary.event_type,
         "Visibility": "admin_truth",
+        "Public Stage": "admin_truth",
         "Record Type": "factual_event",
         "Template": summary.template_key,
         "Prose": summary.prose,
@@ -1058,6 +1068,7 @@ def _history_record_row(row: EventRecordProse) -> dict[str, object]:
         "Record ID": row.record_id,
         "Event Type": row.event_type,
         "Visibility": row.visibility_state,
+        "Public Stage": row.public_knowledge_stage,
         "Record Type": row.record_type,
         "Template": row.prose_variant_key,
         "Prose": row.public_prose,
@@ -1191,10 +1202,25 @@ def _load_history_records_for_view(
             limit=limit,
             offset=offset,
         )
-    if view == "Rumors":
-        return load_event_record_prose_rows(
+    if view == "Public Unknown":
+        return load_public_unknown_prose(
             con,
-            visibility_states={"rumored"},
+            event_types=event_types,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+    if view == "Public Rumors":
+        return load_public_rumor_prose(
+            con,
+            event_types=event_types,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+    if view == "Public Known":
+        return load_public_known_prose(
+            con,
             event_types=event_types,
             search=search,
             limit=limit,
@@ -1242,7 +1268,8 @@ def load_history_browser(
     limit: object,
     offset: object,
 ) -> tuple[gr.Dataframe, str]:
-    selected = view if view in HISTORY_VIEW_CHOICES else "Public Chronicle"
+    selected = HISTORY_VIEW_ALIASES.get(str(view or ""), str(view or ""))
+    selected = selected if selected in HISTORY_VIEW_CHOICES else "Public Chronicle"
     if not world:
         return _history_empty_frame(), "Choose a world."
     row_limit = _safe_int(limit, 100, 1, 500)

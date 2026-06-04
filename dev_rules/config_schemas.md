@@ -17,6 +17,7 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/world_start.csv` | Worlds + mortality + header + **`population_scale`** | One row per `world`. `population_scale` (default `0.05`) is the **shared global** modifier applied to region `carrying_capacity` (see [`library/geography.py`](../library/geography.py)) **and** to `government_polity_types.min_population_to_form` / `max_population_before_split` and to settlement-leadership thresholds in `government_titles.csv`. |
 | `config/incident_rates.csv` | Small + header | Era-tuned detailed-incident knobs per (`world` or `*`, `incident_key`, historical-year band): murder target per 10k/year plus chance/cap multipliers for other incident families. |
 | `config/event_catalog.csv` | Small + header | Authored event/incident kinds per (`event_type`, `incident_kind`): family, display label, context tags, consequence profile, default memory record type/visibility, and selection weight. |
+| `config/event_ontology.csv` | Small + header | Workstream-level event ontology per `event_key`: required context, trait/precondition/witness signals, consequence hooks, importance range, preservation defaults, and public unknown/rumored/known views. |
 | `config/innovation_source_rows.csv` | Generated + header | Trace rows parsed from `Timeline of historic inventions.wiki`; source line, headings, normalized dates, cleaned source title/summary, wiki links, and parse notes. |
 | `config/innovations.csv` | Generated/curated + header | Active simulation innovation catalog; local analogue rows drive startup seeding, discovery eligibility, adoption, diffusion, prosperity, and port-network knowledge. |
 | `config/innovation_eras.csv` | Small + header | Historical-year era bands and adoption thresholds for local/place/polity effective innovation era state. |
@@ -188,8 +189,8 @@ rows provide concrete `incident_kind` variants within those families.
 | `display_name` | string | Human-readable label. Prose currently falls back to labelizing `incident_kind`, but this is the authoring surface for future template selection. |
 | `context_tags` | semicolon-separated strings | Tags used by generator classifiers to pick variant pools, e.g. `theft;scarcity`, `rescue;danger`, `legal;succession`. Matching is any-tag. |
 | `consequence_profile` | string | Current profiles include `death`, `property_loss`, `relationship_fallout`, `public_relief`, and `knowledge_state`. |
-| `default_record_type` | string | Expected memory-record type for this kind; the save layer still derives record type from `event_type` for now. |
-| `default_visibility` | string | Expected initial memory visibility such as `rumored` or `public_known`; retained for future catalog-driven memory defaults. |
+| `default_record_type` | string | Expected memory-record type for this kind; the save layer currently derives default records from `event_type`, while explicit public records can override this. |
+| `default_visibility` | string | Expected initial memory visibility such as `rumored`, `public_unknown`, or `public_known`; explicit event-record helpers can use these public stages directly. |
 | `selection_weight` | float `>=0` | Relative weight when multiple catalog rows match the same event type and context tags. |
 | `notes` | string | Human tuning notes only; ignored by runtime logic. |
 
@@ -208,6 +209,44 @@ Runtime note: `knowledge_state` event payloads may include
 deltas. Each diffusion item targets a destination region/domain with a reduced
 delta based on route friction. `library.world_save` applies those rows to
 `simulation_domain_states` in addition to the primary region delta.
+
+---
+
+## `config/event_ontology.csv`
+
+**Purpose:** Authoring/spec rows for the narrative event ontology described in
+`TODO.md` Workstream 1. This table is broader than the runtime incident catalog:
+rows can exist before a generator uses them, so future event systems have a
+defined context/probability/consequence/public-memory shape before code starts
+sampling them.
+
+`library.event_ontology` loads these rows from config SQLite and falls back to
+the five current vertical-slice families when an old or fixture config DB lacks
+the table.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `event_key` | string | Stable ontology key such as `murder`, `storehouse_robbery`, `heresy_accusation`, or `secret_kindness`. |
+| `event_family` | string | Broad family such as `violent_crime`, `property_survival_crime`, `household_scandal`, `political_crime`, `religious_cultural_conflict`, `public_virtue`, `knowledge_culture`, or `private_life`. |
+| `minimum_context` | semicolon-separated strings | Required actor/place roles before a generator should materialize the event. |
+| `probability_traits` | semicolon-separated strings | Trait or composite signals that should raise/lower probability; these remain propensities, not deterministic labels. |
+| `preconditions` | semicolon-separated strings | Non-genome circumstances such as scarcity, grievance, office tension, or existing relationship state. |
+| `likely_witnesses` | semicolon-separated strings | Plausible witness/source groups for event-memory records. |
+| `consequence_hooks` | semicolon-separated strings | Candidate simulation feedback such as `death`, `property_loss`, `legal_fallout`, `faction_memory`, `knowledge_state`, or `obligation`. |
+| `importance_min` / `importance_max` | float | Expected historical-importance range for tuning and prose sampling. |
+| `default_record_type` / `default_visibility` | string | Expected event-memory defaults when this ontology key is materialized. |
+| `preservation_defaults` | semicolon-separated strings | How records tend to survive, distort, or vanish. |
+| `public_unknown_view` | string | Public-facing unresolved view, e.g. a person is missing but the cause is unknown. |
+| `public_rumored_view` | string | Public-facing rumor/distortion view, e.g. an uncertain tale blames a monster, faction, curse, or rival. |
+| `public_known_view` | string | Public-facing known-history view, ideally matching the factual event when truth is established. |
+| `prose_tone_variants` | semicolon-separated strings | Suggested tone slots such as `rumor`, `court_record`, `household_memory`, `temple_chronicle`, `bardic`, or `later_reconstruction`. |
+| `notes` | string | Human tuning notes only; ignored by runtime logic. |
+
+The save layer represents those public views with `simulation_event_records`.
+A single factual event can have multiple record keys: for example
+`public_unknown` for "Lio went missing", `rumored` for "Lio was taken by a
+monster", and `public_known` for "Fred murdered Lio". Admin/debug views still
+read the factual `simulation_events` row as the truth.
 
 ---
 

@@ -42,8 +42,12 @@ Quick orientation for `library`, `utils`, and `unit_test`.
   - Annual innovation driver: idempotent startup knowledge seeding from `history_equivalent_start_year`, rank/year/prerequisite/era-gated discovery using `knowledge_culture` propensity, same-polity and route diffusion, effective innovation-era state, small prosperity bonuses, and exact portable-innovation scoring for trade networks.
 - `library/event_catalog.py`
   - Loads authored `config/event_catalog.csv` rows from config SQLite, exposes filtered catalog entries by event type/context tags, chooses weighted concrete incident kinds, and falls back to legacy built-in rows for old or fixture config DBs without the table.
+- `library/event_ontology.py`
+  - Loads authored `config/event_ontology.csv` rows from config SQLite, exposing Workstream 1 event-family specs: minimum context, trait/precondition/witness signals, consequence hooks, importance ranges, preservation defaults, prose tones, and public unknown/rumored/known view text. Falls back to the five current vertical-slice families for old or fixture config DBs.
+- `library/event_scoring.py`
+  - Reusable Workstream 2 genome/context scoring layer for event generation: centered signed-genome basis functions, weighted event propensity specs, role/pressure/opportunity context tags, composite-name weights, pressure helpers, and deterministic candidate threshold/weight helpers. Existing incident propensities route through this module and accept optional event context.
 - `library/event_memory_lifecycle.py`
-  - Annual in-world memory aging for persisted event records. Reviews a deterministic bounded shard of old records each year; can mark old `private_known`, `rumored`, and `public_known` records `lost`, and can rediscover old `lost`/`sealed` records by calling the save-layer rediscovery helper that logs a linked `event_rediscovered` fact.
+  - Annual in-world memory aging for persisted event records. Reviews a deterministic bounded shard of old records each year; can mark old `private_known`, `public_unknown`, `rumored`, `misattributed`, and `public_known` records `lost`, and can rediscover old `lost`/`sealed` records by calling the save-layer rediscovery helper that logs a linked `event_rediscovered` fact. Public-facing records can now be staged as `public_unknown`, `rumored`, `misattributed`, or `public_known` while admin truth remains the factual event row.
 - `library/event_prose.py`
   - Deterministic authored-template renderer for factual admin summaries and in-world chronicle prose. Reads existing event/event-record readable rows, resolves known person/place labels from checkpoint tables when available, and derives display text without storing long prose in `save.sqlite`.
 - `library/event_history_report.py`

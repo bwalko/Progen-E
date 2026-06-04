@@ -353,12 +353,15 @@
   - mark records `lost`;
   - seal records into hidden archives/institutions;
   - turn records into `rumored` uncertain/distorted memories;
+  - mark records `public_unknown` for unresolved public notices;
+  - mark records `misattributed` for false public actors, victims, or causes;
   - mark records `rediscovered`.
 - Rediscovery can now log a linked factual `event_rediscovered` row, so finding
   a lost record becomes part of the history rather than only a silent state
   update.
 - Added regression tests for appended event records and v7-to-v8 event-record
-  backfill, plus lost/sealed/rumored/rediscovered transitions.
+  backfill, plus lost/sealed/rumored/public-unknown/misattributed/rediscovered
+  transitions.
 
 ### Completed First Genome-Driven Incident Slice
 
@@ -496,6 +499,50 @@
   - missing catalog tables fall back to legacy kind rows;
   - forced incident tests accept and persist expanded catalog variants while
     preserving their existing family-level consequences.
+- Added the Workstream 1 event ontology foundation:
+  - `config/event_ontology.csv` now defines authoring/spec rows across the
+    initial requested families: violent crime, property/survival crime,
+    household scandal, political crime, religious/cultural conflict, public
+    virtue, knowledge/culture, and private-life events.
+  - `library.event_ontology` loads those rows from config SQLite and falls back
+    to the five current vertical-slice families for old/fixture databases.
+  - Ontology rows include minimum context, probability trait signals,
+    preconditions, likely witnesses, consequence hooks, importance ranges,
+    preservation defaults, prose tone variants, and explicit public
+    unknown/rumored/known view text.
+  - `simulation_event_records` now accepts a `public_unknown` visibility state
+    and exposes a derived `public_knowledge_stage` in
+    `simulation_event_records_readable`.
+  - Added save-layer helpers for stacked public event records so one factual
+    event can carry a public "missing/unknown" notice, a distorted rumor, and a
+    known public account while admin/debug truth remains the factual
+    `simulation_events` row.
+  - The History browser now exposes `Public Unknown`, `Public Rumors`, and
+    `Public Known` filters, with `Public Chronicle` spanning all public stages
+    and `Admin Truth` showing the factual event row.
+  - Added regression tests for ontology loading, public-stage prose rendering,
+    save-readable public stage projection, and the History browser filters.
+- Added the Workstream 2 event scoring foundation:
+  - `library.event_scoring` now owns centered signed-genome scoring primitives,
+    weighted trait-factor specs, optional role/pressure/opportunity context,
+    composite-name weighting, pressure helpers, and deterministic candidate
+    threshold/weight utilities.
+  - The five existing vertical-slice propensities now route through reusable
+    specs while preserving their public names and accepting optional event
+    context:
+    `violent_actor_propensity`, `property_crime_propensity`,
+    `scandal_exposure_propensity`, `public_virtue_propensity`, and
+    `knowledge_culture_propensity`.
+  - `library.simulation_incidents` now uses shared propensity maps, threshold
+    filtering, and threshold-excess weights rather than duplicating that logic
+    in each incident family.
+  - The helper layer accepts `SimulationPersonRecord`, `Person`, or raw genome
+    mappings, so future political, religious/cultural, and private-life event
+    generators can ask "who is likely to do this under these conditions?"
+    without importing the incident module.
+  - Added regression tests for trait basis functions, context/role/composite
+    inputs, candidate weighting, and the existing vertical-slice propensity
+    separations.
 - Added the first durable domain-state consequence model:
   - Bumped `save.sqlite` to schema v9.
   - Added `simulation_domain_states` and `simulation_domain_states_readable` as
@@ -563,10 +610,12 @@
     `simulation_events_readable` rows and memory-state
     `simulation_event_records_readable` rows.
   - It exposes factual admin summaries for true events and public chronicle
-    prose for `public_known`, `rumored`, and `rediscovered` records.
+    prose for `public_unknown`, `rumored`, `misattributed`, `public_known`,
+    and `rediscovered` records.
   - Initial authored templates cover `murder`, `property_crime`,
     `affair_scandal`, `public_virtue`, `knowledge_culture`, `birth`, `death`,
-    `event_rediscovered`, plus generic lost/sealed/private/admin-known records.
+    `event_rediscovered`, plus generic public-unknown, misattributed,
+    lost/sealed/private/admin-known records.
   - It keeps long prose out of `save.sqlite`; rendered text remains traceable to
     `event_id`, `record_id`, and `prose_variant_key`.
 - Added regression tests proving:
@@ -577,7 +626,8 @@
     receive rediscovered prose.
 - Added the first History browser/query surface:
   - `utils.gradio_data_browser` now has an explicit-load History tab for
-    factual admin truth, public chronicle rows, rumors, lost records, and
+    factual admin truth, public chronicle rows, public unknown records,
+    rumors/misattributions, public known records, lost records, and
     rediscoveries.
   - The same tab now has an explicit-load History Summary table for report-style
     totals, tracked incident counts including zeros, event-type counts,
@@ -589,7 +639,8 @@
   - The browser delegates all prose generation to `library.event_prose`, keeping
     UI code focused on query/filter presentation.
 - Added regression tests proving:
-  - public, rumor, and lost History views load the expected rows;
+  - public, public-unknown, rumor/misattribution, public-known, and lost
+    History views load the expected rows;
   - admin truth can filter to `event_rediscovered`;
   - rediscovery History rows include both restored original memory and the
     rediscovery event.
@@ -643,8 +694,9 @@
   - `library.event_memory_lifecycle` reviews a bounded deterministic shard of
     old event records each simulation year, after the annual save checkpoint has
     flushed factual events and default memory records.
-  - Old `private_known`, `rumored`, and `public_known` records can become
-    `lost` using record-type-specific age and chance policies.
+  - Old `private_known`, `public_unknown`, `rumored`, `misattributed`, and
+    `public_known` records can become `lost` using record-type-specific age and
+    chance policies.
   - Old `lost` or `sealed` records can become `rediscovered`; rediscovery writes
     a linked factual `event_rediscovered` row and preserves source/confidence
     details for prose/admin inspection.
@@ -663,7 +715,8 @@
   - report counts, visibility rows, metric summaries, and prose samples derive
     from real save-schema rows;
   - report writing emits all expected TSV/text artifacts.
-  - old public/private/rumored records can be aged to `lost`;
+  - old public/private/unknown/rumored/misattributed records can be aged to
+    `lost`;
   - old lost/sealed records can resurface as linked rediscoveries;
   - high-volume private work/birth records decay and rediscover later than
     incident records;

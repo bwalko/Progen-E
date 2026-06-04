@@ -74,6 +74,11 @@ Important new rule:
 Goal: define event families, structured fields, trigger context, consequence
 hooks, visibility behavior, and prose slots before writing many event generators.
 
+Status: done for the initial authoring/spec foundation. `config/event_ontology.csv`
+now defines rows across the requested families, and `library.event_ontology`
+loads them from config SQLite with a fixture-safe fallback. Remaining work is
+catalog curation and expansion, not the first schema/loader pass.
+
 Initial event families to catalog:
 
 - **Violent crime:** assault, duel, feud killing, murder, attempted murder,
@@ -107,8 +112,7 @@ For each event type, define:
 - preservation/loss defaults;
 - prose tone variants.
 
-Do not try to implement the entire catalog at once. The first vertical slice
-should cover a small but representative set:
+The implemented vertical slice now covers a small but representative set:
 
 1. murder or feud killing;
 2. theft or fraud;
@@ -121,6 +125,30 @@ should cover a small but representative set:
 Goal: create reusable scoring helpers so event systems can ask "who is likely to
 do this under these conditions?" without hardcoding ad hoc trait math in every
 module.
+
+Initial reusable scoring foundation now exists:
+
+- `library.event_scoring` centralizes genome-centered scoring primitives:
+  `negative_extreme`, `positive_extreme`, `ideal_strength`, weighted
+  `TraitFactor` / `EventPropensitySpec`, optional `EventScoringContext`, role
+  tag inference, composite-name weighting, pressure excess helpers, and
+  deterministic threshold/weight helpers for bounded candidate pools.
+- The existing vertical-slice incident propensities now route through this
+  shared layer while preserving their public function names and accepting
+  optional event context:
+  `violent_actor_propensity`, `property_crime_propensity`,
+  `scandal_exposure_propensity`, `public_virtue_propensity`, and
+  `knowledge_culture_propensity`.
+- `library.simulation_incidents` now uses shared propensity maps, threshold
+  filtering, and threshold-excess candidate weights instead of copying that
+  logic in each event family.
+- The scoring helpers accept a `SimulationPersonRecord`, a `Person`, or a raw
+  genome mapping, so future political, religious/cultural, and private-life
+  generators can reuse the same trait math without importing the incident
+  module.
+- Regression tests cover centered signed genome basis functions, context/role
+  tag weights, composite-name inputs, threshold candidate weighting, and the
+  existing vertical-slice propensity separations.
 
 Candidate scoring inputs:
 
@@ -157,6 +185,8 @@ history.
 Potential record states:
 
 - `admin_known`: true event known to the simulator/debug admin.
+- `public_unknown`: visible in-world notice that something happened but key
+  facts are unresolved, e.g. a person went missing before the public knows why.
 - `public_known`: known in-world during or near the event year.
 - `private_known`: known only to involved people or close witnesses.
 - `rumored`: partially known, uncertain, or socially distorted.
@@ -168,23 +198,21 @@ Potential record states:
 - `misattributed`: wrong actor, victim, place, motive, year, or cause is attached
   to the public memory.
 
-Questions to answer before implementation:
+Implementation decisions now made:
 
-- Should record state live on `simulation_events`, a side table, or both?
-- Should multiple records exist for one true event: court record, rumor, later
-  chronicle, household memory?
-- How do we represent "truth" vs "public version" without bloating every event?
-- Which existing event types should default to always admin-known but not always
-  public-known?
-- Can rediscovery produce a new event row like `event_rediscovered`, linked to
-  the original event id?
-
-Candidate schema direction:
-
-- Keep `simulation_events` as the factual append-only backbone.
-- Add a normalized event-memory / event-record table rather than stuffing all
-  record state into payload JSON.
-- Store compact structured fields such as:
+- Record state lives in normalized `simulation_event_records`; factual
+  `simulation_events` remains the append-only admin-truth backbone.
+- Multiple records can exist for one factual event: default record, public
+  unknown notice, rumor, misattribution, known public account, sealed record, or
+  rediscovered memory.
+- Truth vs public version is represented by factual event payloads plus compact
+  public actor/victim/confidence/distortion fields on event records, not by
+  mutating or duplicating the factual event row.
+- Existing event types receive default records on write/backfill with
+  event-type-specific record type, visibility, and confidence.
+- Rediscovery updates the original event record and can write a linked factual
+  `event_rediscovered` row.
+- Implemented compact fields include:
   - `event_id`
   - `record_type`
   - `visibility_state`
@@ -200,15 +228,22 @@ Candidate schema direction:
   - `distortion_json`
   - `prose_variant_key`
 
-Initial v8 foundation now exists:
+Initial normalized event-memory foundation now exists:
 
 - `simulation_event_records` stores one default memory/admin record per factual
   event.
 - `simulation_event_records_readable` exposes event metadata beside memory state.
 - New events create default records immediately; older v7 events backfill records
   when schema is ensured/rebuilt.
-- Helpers can now mark records `lost`, `sealed`, `rumored`, or `rediscovered`.
+- Helpers can now mark records `lost`, `sealed`, `rumored`, `public_unknown`,
+  `misattributed`, or `rediscovered`.
 - Rediscovery can create a linked factual `event_rediscovered` row.
+- Misattribution is now a first-class record transition/public stage: helpers
+  can expose a false public actor, victim, or cause while the factual
+  `simulation_events` row remains unchanged for admin truth.
+- The annual memory lifecycle ages unstable public notices too:
+  `public_unknown`, `rumored`, `misattributed`, `private_known`, and
+  `public_known` records can fade to `lost` according to record-type policies.
 
 Initial murder/feud-killing vertical slice now exists:
 
@@ -253,7 +288,7 @@ Initial affair/scandal vertical slice now exists:
 - Affair-scandal consequences now end the exposed paramour relationship,
   dissolve betrayed official couples when the exposed partner is still linked,
   nudge local stability downward, and record the relationship fallout in the
-  scandal payload. `save.sqlite` schema v12 also persists
+  scandal payload. The current save schema persists
   `heir_legitimacy_rumor` and `inheritance_scandal` variants into
   `simulation_legal_fallout` / `simulation_legal_fallout_readable` rows.
   Deeper legal adjudication, inheritance resolution, and faction reactions
@@ -274,7 +309,7 @@ Initial public-virtue vertical slice now exists:
   benefactor side to the beneficiary side, raise local prosperity/stability,
   reduce food pressure slightly, lift low/blank benefactor leadership
   reputation to `medium`, and persist an active `relief_debt` obligation from
-  beneficiary to benefactor. `save.sqlite` schema v11+ also persists a
+  beneficiary to benefactor. The current save schema also persists a
   source-event-backed leadership reputation mark for the benefactor. Faction
   trust and health/legal fallout remain future work.
 
@@ -294,11 +329,11 @@ Initial knowledge/culture vertical slice now exists:
   and stability effects, transfer patronage support from patron to creator when
   a patron exists, lift low/blank creator status reputation to `middle-high`,
   and record a structured per-domain `knowledge_state` delta in the event
-  payload. `save.sqlite` schema v9+ persists those deltas into regional
+  payload. The current save schema persists those deltas into regional
   `simulation_domain_states` / `simulation_domain_states_readable` rows during
-  event flush/backfill. `save.sqlite` schema v10 now also persists active
+  event flush/backfill. The current save schema also persists active
   `patronage_debt` obligations from creator to patron when patronage exists.
-  `save.sqlite` schema v11+ persists a source-event-backed status reputation
+  The current save schema persists a source-event-backed status reputation
   mark for the creator. Deeper diffusion, schools, guilds, doctrine, and craft
   institutions remain future work.
 
@@ -323,19 +358,42 @@ Event-catalog expansion now exists:
     `kiln_improvement`, `medicinal_discovery`, `inheritance_judgment`,
     `succession_precedent`, `calendar_reform`).
 
-Existing events to retrofit:
+Event ontology/catalog foundation now exists:
 
-- Births may be admin-known but only locally recorded, later lost, or preserved
-  in lineage memory.
-- Deaths may have a known true cause, public cause, suspected cause, or lost
-  burial memory.
-- Couple formation/dissolution may be private, public, scandalous, forgotten, or
-  later inferred.
-- Migrations may be remembered in household tradition or lost except as
-  demographic fact.
-- Office succession, warfare, title changes, and settlement moves should usually
-  have strong record preservation but can still be distorted, suppressed, or
-  rediscovered.
+- `config/event_ontology.csv` defines the Workstream 1 authoring/spec layer
+  across the initial families: violent crime, property/survival crime,
+  household scandal, political crime, religious/cultural conflict, public
+  virtue, knowledge/culture, and private-life seed events.
+- Each ontology row names minimum context, probability trait signals,
+  non-genome preconditions, likely witnesses, consequence hooks, default
+  record visibility, importance range, preservation defaults, prose tone
+  variants, and the three public views:
+  - `public_unknown`: something is publicly unresolved, such as a person going
+    missing;
+  - `rumored`: a distorted/uncertain tale circulates, such as a monster rumor;
+  - `public_known`: the public account names the established actor/victim/place
+    when the truth is known.
+- `library.event_ontology` loads those rows from config SQLite and falls back
+  to the five current vertical slices for old/fixture databases.
+- `simulation_event_records` now supports explicit `public_unknown` records
+  plus helper upserts for stacked public unknown/rumored/known records on the
+  same factual event. Admin/debug views still read the factual
+  `simulation_events` row as the truth.
+- The History browser exposes separate `Public Unknown`, `Public Rumors`, and
+  `Public Known` views, while `Public Chronicle` shows all public stages and
+  `Admin Truth` shows the factual event.
+
+Existing event coverage and remaining refinement:
+
+- Births default to private lineage memory; deaths default to public mortuary
+  memory; secret/household/work/admin events receive private/admin defaults.
+- Office, warfare, dynasty, and settlement events default to public chronicles
+  with stronger preservation behavior.
+- All persisted event records can participate in loss/rediscovery helpers; the
+  annual lifecycle currently ages private, public-unknown, rumored,
+  misattributed, and public-known records.
+- Future work can add richer per-type public-cause distortion for ordinary
+  deaths, migrations, succession, warfare, title changes, and settlement moves.
 
 ### Workstream 4: Consequences And Simulation Feedback
 
@@ -359,6 +417,25 @@ Implementation guardrail:
   every catalog entry fully consequential before the basic event-memory system is
   proven.
 
+Initial consequence foundation now exists:
+
+- Murder, property crime, affair scandal, public virtue, and knowledge/culture
+  payloads now have first consequence hooks.
+- Durable save ledgers persist regional domain states and diffusion, active
+  relief/patronage obligations, reputation marks, legal fallout/adjudications,
+  faction memories, knowledge-born institutions, and innovation discovery /
+  adoption / era state.
+- `SimulationContext.record_year_summary` runs the save-side consequence tick
+  after checkpoint persistence and before event-memory aging.
+
+Remaining consequence work:
+
+- Tune the durable ledgers from multi-year samples.
+- Add browser/report summaries for faction memory, adjudications, domain
+  diffusion, institutions, and innovation state once their sample shapes settle.
+- Add passive-to-detailed promotion, imprisonment/exile/prosecution, and later
+  rediscovery-triggered crises only after the current vertical slices are stable.
+
 ### Workstream 5: Poetic Prose And Narrative Presentation
 
 Goal: produce event prose that is flavorful, variable, and still data-grounded.
@@ -371,17 +448,18 @@ Initial prose-rendering foundation now exists:
   from structured payloads, `event_id`, `record_id`, visibility state, and
   `prose_variant_key`.
 - It exposes factual admin summaries for true events and public chronicle prose
-  for `public_known`, `rumored`, and `rediscovered` records.
+  for `public_unknown`, `rumored`, `misattributed`, `public_known`, and
+  `rediscovered` records.
 - Initial templates cover the first event vertical slices (`murder`,
   `property_crime`, `affair_scandal`, `public_virtue`, `knowledge_culture`) plus
-  generic birth, death, rediscovery, lost, sealed, private, and admin-known
-  records.
+  generic birth, death, rediscovery, lost, sealed, public-unknown,
+  misattributed, private, and admin-known records.
 - The current prose is intentionally authored/template-based. It is stable for
   tests and ready for browser/query integration, but it still needs more tone
   variants, richer names/titles/kinship, and review against real multi-year
   samples.
 
-Recommendation for first implementation:
+Template-expansion recommendations:
 
 - Start with a data-driven prose catalog written by Codex/LLM offline and stored
   as config or library templates.
@@ -436,23 +514,27 @@ Initial browser/query foundation now exists:
 
 - `utils.gradio_data_browser` has a History tab that loads event/prose rows only
   when the user clicks `Load History`.
-- The tab can inspect factual admin truth, public chronicle rows, rumor-only
-  rows, lost-history rows, and rediscovery rows.
+- The tab can inspect factual admin truth, public chronicle rows, public
+  unknown rows, rumor/misattribution rows, public-known rows, lost-history rows,
+  and rediscovery rows.
 - Rediscovery rows include both restored original records and linked
   `event_rediscovered` events.
 - Filters include exact event type, search text, limit, and offset.
 - The browser uses `library.event_prose` instead of duplicating prose templates
   in UI code.
 
-Needed views/tools:
+Implemented and remaining views/tools:
 
-- admin/debug view: all factual events regardless of visibility;
-- in-world chronicle view: only public/preserved/rediscovered records;
-- rumor view: uncertain or distorted records;
-- lost-history view: admin-only list of lost events for debugging/tuning;
-- person event timeline: true events plus known records involving a person;
-- place chronicle: settlement/region/polity visible memory;
-- rediscovery log: records that resurfaced and how.
+- Done: admin/debug view for all factual events regardless of visibility.
+- Done: in-world chronicle view for visible public stages.
+- Done: public unknown, rumor/misattribution, public known, lost-history, and
+  rediscovery views.
+- Done: event-type, text, limit, and offset filters.
+- Remaining: person event timeline that combines true events plus known records
+  involving a person.
+- Remaining: settlement/region/polity chronicle views scoped to visible memory.
+- Remaining: richer rediscovery-log summaries that explain source, confidence,
+  and distortion without requiring raw table inspection.
 
 Gradio/browser caution:
 
@@ -479,23 +561,27 @@ Performance priorities:
   pairs.
 - Passive/cohort populations should only create detailed rows through explicit
   promotion, narrative sampling, user focus, or historically important events.
-- Loss/rediscovery ticks should be cheap and probably batched by year/place.
-- Add counters/timing for event generation, event memory updates, prose rendering,
-  and rediscovery scans once the first vertical slice exists.
+- Loss/rediscovery ticks should stay cheap and bounded by deterministic shards.
+- Continue adding counters/timing for event generation, event-memory updates,
+  prose rendering, and rediscovery scans as tuning needs arise; the first
+  lifecycle gauges now record candidates reviewed, records lost, and records
+  rediscovered.
 
 ### Workstream 8: Tests And Tuning
 
 Minimum test coverage:
 
-- deterministic event generation for a seeded small world;
-- trait/context scoring helpers;
-- event payload person/place links;
-- lost/public/private/rumored/rediscovered state transitions;
-- existing event types receiving default record visibility;
-- prose template rendering with missing optional fields;
-- save/load round-trip for event records;
-- readable views exposing admin vs public history correctly;
-- performance smoke test proving annual event generation is bounded.
+- Done: deterministic forced generation for the current incident slices.
+- Done: trait/context scoring helpers.
+- Done: event payload person/place links for current slices.
+- Done: lost/public/private/rumored/misattributed/rediscovered state
+  transitions.
+- Done: existing event types receiving default record visibility.
+- Done: prose template rendering across admin/public/lost/rediscovered states.
+- Done: save/readable round-trip for event records and public-stage records.
+- Done: readable/browser views exposing admin vs public history correctly.
+- Remaining: broader seeded multi-year performance smoke for annual event
+  generation and lifecycle cost on larger detailed populations.
 
 Tuning artifacts:
 
@@ -570,13 +656,15 @@ Initial tuning/report pass now exists:
 
 ### Suggested Milestones
 
-1. Design the event catalog schema and write the first catalog rows/templates for
-   the vertical slice.
+1. Design the event catalog/ontology schema and write the first catalog rows and
+   public-view slots for the vertical slice. Done for the initial Workstream 1
+   ontology/catalog foundation.
 2. Add event-memory persistence and default visibility records for existing event
-   types.
+   types. Done for the initial normalized event-record foundation.
 3. Implement the first detailed event generator, preferably murder/feud killing,
    because it exercises genome scoring, death consequences, witnesses, record
-   visibility, public uncertainty, and rediscovery.
+   visibility, public uncertainty, and rediscovery. Done for the first murder /
+   feud-killing slice.
 4. Add theft/fraud and affair/scandal to test non-death crimes. Done for the
    initial vertical slices and first consequence hooks.
 5. Add one positive public-virtue event and one knowledge/culture event so the
@@ -584,9 +672,9 @@ Initial tuning/report pass now exists:
    first consequence hooks.
 6. Build prose rendering for factual admin summaries and public chronicle
    records. Done for the initial authored-template foundation.
-7. Add browser/readable views for admin truth, public records, rumors, lost
-   events, and rediscoveries. Done for the initial explicit-load History
-   browser surface.
+7. Add browser/readable views for admin truth, public unknown records, public
+   rumors, public known records, lost events, and rediscoveries. Done for the
+   initial explicit-load History browser surface and public-stage filters.
 8. Run a multi-year sample and tune event rates, loss rates, prose quality, and
    save growth. Done for the first report/rate pass and the first automatic
    memory-aging/loss/rediscovery lifecycle.
@@ -598,8 +686,9 @@ Next event-system tasks:
 - Run multi-year samples to tune the new durable consequence ledgers: faction
   memories, legal adjudications, inter-region domain diffusion, and
   knowledge-born institutions.
-- Add dedicated browser/report summaries for those ledgers once sample shapes
-  settle beyond the current readable save views.
+- Add dedicated browser/report summaries for faction memory, legal
+  adjudications, domain diffusion, institutions, and innovation state once
+  sample shapes settle beyond the current readable save views.
 
 ## Polygonal World Map Generation
 
@@ -637,7 +726,14 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 - File size: about 2.25GB.
 - `simulation_events`: 3,262,904 rows; `payload_json` is about 1.05GB of text.
 - `simulation_people`: 319,939 rows; `person_json` is about 640MB of text.
-- Save schema v2/v3/v4/v5/v6/v7/v8/v9/v10/v11 already removed save-side `world` columns, flattened common `Person` fields into typed columns, compacted genome/mind-body payloads, added normalized event-person links, normalized common place IDs, added the first hybrid passive/cohort tables, normalized `settlement_moved` route detail, added default event-memory records, added regional domain-state rows derived from knowledge/culture events, added active obligation rows derived from public-virtue relief and knowledge patronage, and added reputation marks derived from public-virtue/knowledge consequence payloads. See `TODONE.md`.
+- Save schema v2 through v14 already removed save-side `world` columns,
+  flattened common `Person` fields into typed columns, compacted
+  genome/mind-body payloads, added normalized event-person links, normalized
+  common place IDs, added the first hybrid passive/cohort tables, normalized
+  `settlement_moved` route detail, added default event-memory records, added
+  regional domain-state rows and diffusion, added obligation/reputation/legal
+  fallout/adjudication/faction/institution ledgers, and added innovation
+  discovery/adoption/era state tables. See `TODONE.md`.
 - Remaining bigger wins are likely:
   - continue moving high-volume event detail out of JSON when another specific event family proves hot;
   - use `simulation_people_light` / `simulation_cohorts` for background population instead of creating every background person as a full `Person`;

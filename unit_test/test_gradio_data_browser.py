@@ -18,6 +18,7 @@ from library.world_save import (
     ensure_checkpoint_schema,
     mark_event_record_lost,
     rediscover_event_record,
+    upsert_public_event_record,
 )
 from library.world_map_geometry import MicroRegionCell, RegionCell, WorldMapGeometry
 from library.world_map_svg import load_world_map_overlays
@@ -706,7 +707,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 _insert_compact_person(con, 2, "Pell", "Ash")
                 _insert_compact_person(con, 3, "Ira", "Marsh")
                 _insert_compact_person(con, 4, "Lio", "Dawn")
-                birth_id, _, _ = append_simulation_event_rows(
+                birth_id, crime_id, _ = append_simulation_event_rows(
                     con,
                     "default",
                     [
@@ -749,6 +750,15 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     created_at="2026-01-01T00:00:00+00:00",
                 )
                 mark_event_record_lost(con, birth_id, lost_year=1040)
+                upsert_public_event_record(
+                    con,
+                    crime_id,
+                    public_stage="misattributed",
+                    record_key="false_accusation",
+                    confidence=0.3,
+                    public_actor_person_id=3,
+                    public_victim_person_id=2,
+                )
                 con.commit()
 
             original_db_path = gdb._db_path
@@ -776,16 +786,126 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(public_table["headers"], gdb.HISTORY_BROWSER_HEADERS)
         self.assertEqual(
             [row["Event Type"] for row in public_rows],
-            ["property_crime", "public_virtue"],
+            ["property_crime", "property_crime", "public_virtue"],
         )
         self.assertIn("Public Chronicle", public_status)
-        self.assertEqual([row["Event Type"] for row in rumor_rows], ["property_crime"])
-        self.assertEqual(rumor_rows[0]["Visibility"], "rumored")
+        self.assertEqual(
+            [row["Event Type"] for row in rumor_rows],
+            ["property_crime", "property_crime"],
+        )
+        self.assertEqual(
+            [row["Visibility"] for row in rumor_rows],
+            ["rumored", "misattributed"],
+        )
+        self.assertEqual(
+            [row["Public Stage"] for row in rumor_rows],
+            ["rumored", "rumored"],
+        )
         self.assertIn("Market talk", rumor_rows[0]["Prose"])
+        self.assertIn("Ira Marsh", rumor_rows[1]["Prose"])
         self.assertEqual([row["Event Type"] for row in lost_rows], ["birth"])
         self.assertEqual(lost_rows[0]["Visibility"], "lost")
+        self.assertEqual(lost_rows[0]["Public Stage"], "not_public")
         self.assertIn("No living chronicle preserved", lost_rows[0]["Prose"])
         self.assertIn("Lost History", lost_status)
+
+    def test_history_browser_separates_public_unknown_rumored_known_and_admin_truth(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Fred", "Vale")
+                _insert_compact_person(con, 2, "Lio", "Reed")
+                murder_id = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            1010,
+                            "murder",
+                            {
+                                "killer_person_id": 1,
+                                "victim_person_id": 2,
+                                "incident_kind": "murder",
+                                "motive": "inheritance_plot",
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        )
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )[0]
+                upsert_public_event_record(
+                    con,
+                    murder_id,
+                    public_stage="unknown",
+                    record_key="default",
+                    record_type="missing_person_notice",
+                    public_victim_person_id=2,
+                    distortion={
+                        "public_unknown_summary": "{place}: Lio Reed went missing in {year}."
+                    },
+                )
+                upsert_public_event_record(
+                    con,
+                    murder_id,
+                    public_stage="rumored",
+                    record_key="monster_rumor",
+                    public_victim_person_id=2,
+                    distortion={"rumored_cause": "taken by a monster"},
+                )
+                upsert_public_event_record(
+                    con,
+                    murder_id,
+                    public_stage="known",
+                    record_key="court_truth",
+                    record_type="violent_crime_record",
+                    public_actor_person_id=1,
+                    public_victim_person_id=2,
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                unknown_table, unknown_status = gdb.load_history_browser(
+                    "default", "Public Unknown", "murder", "", 50, 0
+                )
+                rumor_table, rumor_status = gdb.load_history_browser(
+                    "default", "Public Rumors", "murder", "", 50, 0
+                )
+                known_table, known_status = gdb.load_history_browser(
+                    "default", "Public Known", "murder", "", 50, 0
+                )
+                admin_table, admin_status = gdb.load_history_browser(
+                    "default", "Admin Truth", "murder", "", 50, 0
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        unknown_rows = self._history_table_rows(unknown_table)
+        rumor_rows = self._history_table_rows(rumor_table)
+        known_rows = self._history_table_rows(known_table)
+        admin_rows = self._history_table_rows(admin_table)
+        self.assertEqual(unknown_rows[0]["Public Stage"], "unknown")
+        self.assertIn("went missing", unknown_rows[0]["Prose"])
+        self.assertIn("Public Unknown", unknown_status)
+        self.assertEqual(rumor_rows[0]["Public Stage"], "rumored")
+        self.assertIn("taken by a monster", rumor_rows[0]["Prose"])
+        self.assertIn("Public Rumors", rumor_status)
+        self.assertEqual(known_rows[0]["Public Stage"], "known")
+        self.assertIn("Fred Vale as the killer of Lio Reed", known_rows[0]["Prose"])
+        self.assertIn("Public Known", known_status)
+        self.assertEqual(admin_rows[0]["Visibility"], "admin_truth")
+        self.assertIn("Fred Vale killed Lio Reed", admin_rows[0]["Admin Summary"])
+        self.assertIn("Admin Truth", admin_status)
 
     def test_history_browser_loads_admin_truth_search_and_rediscoveries(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

@@ -18,6 +18,7 @@ from library.world_save import (
     ensure_checkpoint_schema,
     mark_event_record_lost,
     seal_event_record,
+    upsert_public_event_record,
 )
 
 
@@ -155,6 +156,74 @@ class TestEventMemoryLifecycle(unittest.TestCase):
             self.assertEqual(str(rows[job_id]["visibility_state"]), "private_known")
             self.assertEqual(str(rows[crime_id]["visibility_state"]), "lost")
             self.assertEqual(int(rows[crime_id]["lost_year"]), 1100)
+
+    def test_lifecycle_can_age_public_unknown_and_misattributed_records(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                event_id = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "murder",
+                            {
+                                "killer_person_id": 1,
+                                "victim_person_id": 2,
+                                "historical_importance": 0.2,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        )
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )[0]
+                upsert_public_event_record(
+                    conn,
+                    event_id,
+                    public_stage="unknown",
+                    record_key="unknown_notice",
+                    confidence=0.2,
+                    public_victim_person_id=2,
+                )
+                upsert_public_event_record(
+                    conn,
+                    event_id,
+                    public_stage="misattributed",
+                    record_key="false_accusation",
+                    confidence=0.3,
+                    public_actor_person_id=3,
+                    public_victim_person_id=2,
+                )
+
+                summary = event_memory_lifecycle_annual_tick(
+                    conn,
+                    year=1100,
+                    shards=1,
+                    loss_chance_multiplier=1000.0,
+                    rediscovery_chance_multiplier=0.0,
+                )
+                rows = {
+                    str(row["record_key"]): row
+                    for row in conn.execute(
+                        """
+                        SELECT record_key, visibility_state, lost_year
+                        FROM simulation_event_records_readable
+                        WHERE event_id = ?
+                        """,
+                        (event_id,),
+                    )
+                }
+
+            self.assertEqual(summary.records_lost, 3)
+            self.assertEqual(str(rows["default"]["visibility_state"]), "lost")
+            self.assertEqual(str(rows["unknown_notice"]["visibility_state"]), "lost")
+            self.assertEqual(str(rows["false_accusation"]["visibility_state"]), "lost")
+            self.assertEqual(int(rows["unknown_notice"]["lost_year"]), 1100)
+            self.assertEqual(int(rows["false_accusation"]["lost_year"]), 1100)
 
     def test_lifecycle_rediscovers_old_lost_or_sealed_records(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

@@ -28,7 +28,13 @@ EVENT_MEMORY_LIFECYCLE_CANDIDATE_LIMIT = 800
 LOSS_CHANCE_MULTIPLIER = 1.0
 REDISCOVERY_CHANCE_MULTIPLIER = 1.0
 
-LOSS_VISIBILITY_STATES: tuple[str, ...] = ("private_known", "rumored", "public_known")
+LOSS_VISIBILITY_STATES: tuple[str, ...] = (
+    "private_known",
+    "public_unknown",
+    "rumored",
+    "misattributed",
+    "public_known",
+)
 REDISCOVERY_VISIBILITY_STATES: tuple[str, ...] = ("lost", "sealed")
 
 
@@ -51,6 +57,9 @@ LOSS_POLICIES: dict[str, _TransitionPolicy] = {
     "scandal_record": _TransitionPolicy(18, 0.08),
     "property_crime_record": _TransitionPolicy(18, 0.075),
     "violent_crime_record": _TransitionPolicy(22, 0.06),
+    "public_unknown_notice": _TransitionPolicy(25, 0.05),
+    "public_rumor": _TransitionPolicy(28, 0.04),
+    "public_misattribution": _TransitionPolicy(32, 0.045),
     "household_memory": _TransitionPolicy(45, 0.03),
     "event_memory": _TransitionPolicy(50, 0.02),
     "lineage_memory": _TransitionPolicy(70, 0.012),
@@ -72,6 +81,9 @@ REDISCOVERY_POLICIES: dict[str, _TransitionPolicy] = {
     "scandal_record": _TransitionPolicy(20, 0.016),
     "public_virtue_record": _TransitionPolicy(30, 0.016),
     "knowledge_record": _TransitionPolicy(35, 0.02),
+    "public_unknown_notice": _TransitionPolicy(18, 0.02),
+    "public_rumor": _TransitionPolicy(18, 0.022),
+    "public_misattribution": _TransitionPolicy(18, 0.024),
     "court_chronicle": _TransitionPolicy(60, 0.012),
     "war_chronicle": _TransitionPolicy(60, 0.012),
     "settlement_chronicle": _TransitionPolicy(60, 0.01),
@@ -333,7 +345,9 @@ def _loss_chance(row: sqlite3.Row, year: int) -> float:
     if event_age < policy.min_age:
         return 0.0
     visibility_factor = {
+        "public_unknown": 1.5,
         "rumored": 1.6,
+        "misattributed": 1.7,
         "private_known": 1.0,
         "public_known": 0.28,
     }.get(str(row["visibility_state"]), 0.0)

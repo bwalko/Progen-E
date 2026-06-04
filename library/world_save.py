@@ -3276,6 +3276,7 @@ _ADMIN_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
 _EVENT_RECORD_VISIBILITY_STATES: frozenset[str] = frozenset(
     {
         "admin_known",
+        "public_unknown",
         "public_known",
         "private_known",
         "rumored",
@@ -3423,6 +3424,13 @@ def _event_record_distortion_json(distortion: dict | None) -> str | None:
     return json.dumps(distortion, sort_keys=True, separators=(",", ":"))
 
 
+def _validate_event_record_visibility_state(visibility_state: str) -> str:
+    state = str(visibility_state or "").strip().lower()
+    if state not in _EVENT_RECORD_VISIBILITY_STATES:
+        raise ValueError(f"unknown event-record visibility state: {visibility_state!r}")
+    return state
+
+
 def _event_record_state_update(
     conn: sqlite3.Connection,
     *,
@@ -3441,9 +3449,7 @@ def _event_record_state_update(
     set_lost_year: bool = False,
     set_rediscovered_year: bool = False,
 ) -> None:
-    state = str(visibility_state or "").strip().lower()
-    if state not in _EVENT_RECORD_VISIBILITY_STATES:
-        raise ValueError(f"unknown event-record visibility state: {visibility_state!r}")
+    state = _validate_event_record_visibility_state(visibility_state)
     key = str(record_key or "default").strip() or "default"
     row = _event_record_row(conn, int(event_id), key)
     now = _utc_now_iso()
@@ -3551,6 +3557,229 @@ def mark_event_record_rumored(
         confidence=confidence,
         source_person_id=source_person_id,
         distortion=distortion,
+    )
+
+
+def mark_event_record_public_unknown(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    known_year: int | None = None,
+    record_key: str = "default",
+    confidence: float = 0.2,
+    source_person_id: int | None = None,
+    public_actor_person_id: int | None = None,
+    public_victim_person_id: int | None = None,
+    distortion: dict | None = None,
+) -> None:
+    """Expose a public notice that something happened but key facts are unknown."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="public_unknown",
+        sim_year=known_year,
+        confidence=confidence,
+        source_person_id=source_person_id,
+        public_actor_person_id=public_actor_person_id,
+        public_victim_person_id=public_victim_person_id,
+        distortion=distortion,
+    )
+
+
+def mark_event_record_misattributed(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    attribution_year: int | None = None,
+    record_key: str = "default",
+    confidence: float = 0.35,
+    source_person_id: int | None = None,
+    public_actor_person_id: int | None = None,
+    public_victim_person_id: int | None = None,
+    distortion: dict | None = None,
+) -> None:
+    """Expose a public version that names the wrong actor, victim, or cause."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="misattributed",
+        sim_year=attribution_year,
+        confidence=confidence,
+        source_person_id=source_person_id,
+        public_actor_person_id=public_actor_person_id,
+        public_victim_person_id=public_victim_person_id,
+        distortion=distortion,
+    )
+
+
+def _event_record_event_row(conn: sqlite3.Connection, event_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT id, sim_year, event_type, primary_person_id, secondary_person_id,
+               settlement_key, region_key, event_origin, created_at
+        FROM simulation_events
+        WHERE id = ?
+        """,
+        (int(event_id),),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"event not found for event_id={int(event_id)}")
+    return row
+
+
+def upsert_event_record(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    record_key: str,
+    visibility_state: str,
+    record_type: str | None = None,
+    known_since_year: int | None = None,
+    lost_year: int | None = None,
+    rediscovered_year: int | None = None,
+    confidence: float = 1.0,
+    source_person_id: int | None = None,
+    source_institution_id: str | None = None,
+    preserving_settlement_id: str | None = None,
+    preserving_region_id: str | None = None,
+    public_actor_person_id: int | None = None,
+    public_victim_person_id: int | None = None,
+    distortion: dict | None = None,
+) -> int:
+    """Create or replace one named memory/public record for a factual event."""
+    event = _event_record_event_row(conn, int(event_id))
+    state = _validate_event_record_visibility_state(visibility_state)
+    key = str(record_key or "").strip() or "default"
+    base_type, _base_state, base_confidence = _event_record_kind_for_type(
+        str(event["event_type"] or ""), str(event["event_origin"] or "generated")
+    )
+    clean_record_type = (
+        str(record_type or base_type or "event_memory").strip() or "event_memory"
+    )
+    public_actor, public_victim = _event_record_public_people(
+        str(event["event_type"] or ""),
+        int(event["primary_person_id"]) if event["primary_person_id"] is not None else None,
+        int(event["secondary_person_id"]) if event["secondary_person_id"] is not None else None,
+    )
+    if public_actor_person_id is not None:
+        public_actor = int(public_actor_person_id)
+    if public_victim_person_id is not None:
+        public_victim = int(public_victim_person_id)
+    settlement_key = (
+        int(event["settlement_key"]) if event["settlement_key"] is not None else None
+    )
+    region_key = int(event["region_key"]) if event["region_key"] is not None else None
+    if preserving_settlement_id is not None or preserving_region_id is not None:
+        region_hint = str(preserving_region_id or "").strip()
+        settlement_hint = str(preserving_settlement_id or "").strip()
+        if not region_hint and ":" in settlement_hint:
+            region_hint = settlement_hint.split(":", 1)[0].strip()
+        region_key = _lookup_or_insert_region_key(conn, region_hint)
+        settlement_key = _lookup_or_insert_settlement_key(
+            conn, settlement_hint, region_hint
+        )
+    known_year = (
+        int(known_since_year)
+        if known_since_year is not None
+        else (int(event["sim_year"]) if event["sim_year"] is not None else None)
+    )
+    now = _utc_now_iso()
+    prose_variant_key = f"{clean_record_type}.{state}.default"
+    conf = max(0.0, min(1.0, float(confidence if confidence is not None else base_confidence)))
+    conn.execute(
+        """
+        INSERT INTO simulation_event_records (
+            event_id, record_key, record_type, visibility_state,
+            known_since_year, lost_year, rediscovered_year, confidence,
+            source_person_id, source_institution_id,
+            preserving_settlement_key, preserving_region_key,
+            public_actor_person_id, public_victim_person_id,
+            distortion_json, prose_variant_key, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id, record_key) DO UPDATE SET
+            record_type = excluded.record_type,
+            visibility_state = excluded.visibility_state,
+            known_since_year = excluded.known_since_year,
+            lost_year = excluded.lost_year,
+            rediscovered_year = excluded.rediscovered_year,
+            confidence = excluded.confidence,
+            source_person_id = excluded.source_person_id,
+            source_institution_id = excluded.source_institution_id,
+            preserving_settlement_key = excluded.preserving_settlement_key,
+            preserving_region_key = excluded.preserving_region_key,
+            public_actor_person_id = excluded.public_actor_person_id,
+            public_victim_person_id = excluded.public_victim_person_id,
+            distortion_json = excluded.distortion_json,
+            prose_variant_key = excluded.prose_variant_key,
+            updated_at = excluded.updated_at
+        """,
+        (
+            int(event_id),
+            key,
+            clean_record_type,
+            state,
+            known_year,
+            int(lost_year) if lost_year is not None else None,
+            int(rediscovered_year) if rediscovered_year is not None else None,
+            conf,
+            int(source_person_id) if source_person_id is not None else None,
+            str(source_institution_id).strip()
+            if source_institution_id is not None and str(source_institution_id).strip()
+            else None,
+            settlement_key,
+            region_key,
+            public_actor,
+            public_victim,
+            _event_record_distortion_json(distortion),
+            prose_variant_key,
+            now,
+            now,
+        ),
+    )
+    row = _event_record_row(conn, int(event_id), key)
+    return int(row["record_id"])
+
+
+def upsert_public_event_record(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    public_stage: str,
+    record_key: str | None = None,
+    record_type: str | None = None,
+    **kwargs: object,
+) -> int:
+    """Create a public unknown, rumor, or known record for one factual event."""
+    stage = str(public_stage or "").strip().lower()
+    stage_map = {
+        "unknown": ("public_unknown", "public_unknown_notice"),
+        "public_unknown": ("public_unknown", "public_unknown_notice"),
+        "rumor": ("rumored", "public_rumor"),
+        "rumored": ("rumored", "public_rumor"),
+        "misattributed": ("misattributed", "public_misattribution"),
+        "false_attribution": ("misattributed", "public_misattribution"),
+        "known": ("public_known", "public_chronicle"),
+        "public_known": ("public_known", "public_chronicle"),
+    }
+    if stage not in stage_map:
+        raise ValueError(f"unknown public event-record stage: {public_stage!r}")
+    visibility, default_record_type = stage_map[stage]
+    key_stage = {
+        "public_unknown": "unknown",
+        "rumored": "rumor",
+        "misattributed": "misattributed",
+        "public_known": "known",
+    }[visibility]
+    return upsert_event_record(
+        conn,
+        int(event_id),
+        record_key=record_key or f"public_{key_stage}",
+        record_type=record_type or default_record_type,
+        visibility_state=visibility,
+        **kwargs,
     )
 
 
@@ -4696,6 +4925,9 @@ def _migrate_simulation_regions_region_display_name(conn: sqlite3.Connection) ->
 def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
     """Inspection views that expose normalized place keys as readable slugs."""
     conn.execute("DROP VIEW IF EXISTS simulation_settlements_readable")
+    conn.execute("DROP VIEW IF EXISTS simulation_events_readable")
+    conn.execute("DROP VIEW IF EXISTS simulation_event_records_readable")
+    conn.execute("DROP VIEW IF EXISTS simulation_event_moves_readable")
     conn.execute("DROP VIEW IF EXISTS simulation_innovation_discoveries_readable")
     conn.execute("DROP VIEW IF EXISTS simulation_innovation_knowledge_readable")
     conn.execute("DROP VIEW IF EXISTS simulation_innovation_era_state_readable")
@@ -4775,6 +5007,13 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
             r.record_key,
             r.record_type,
             r.visibility_state,
+            CASE
+                WHEN r.visibility_state = 'public_unknown' THEN 'unknown'
+                WHEN r.visibility_state IN ('rumored', 'misattributed') THEN 'rumored'
+                WHEN r.visibility_state IN ('public_known', 'rediscovered') THEN 'known'
+                WHEN r.visibility_state = 'admin_known' THEN 'admin'
+                ELSE 'not_public'
+            END AS public_knowledge_stage,
             r.known_since_year,
             r.lost_year,
             r.rediscovered_year,

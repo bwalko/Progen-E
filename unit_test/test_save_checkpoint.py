@@ -25,12 +25,14 @@ from library.world_save import (
     ensure_checkpoint_schema_for_file,
     event_consequence_annual_tick_for_save,
     mark_event_record_lost,
+    mark_event_record_misattributed,
+    mark_event_record_public_unknown,
+    mark_event_record_rumored,
     parse_region_effective_cap_multipliers,
     rebuild_save_sqlite_for_schema_upgrade,
     rediscover_event_record,
     save_schema_version,
     seal_event_record,
-    mark_event_record_rumored,
     try_load_simulation_checkpoint,
 )
 
@@ -1143,6 +1145,47 @@ class TestSaveCheckpoint(unittest.TestCase):
                     """,
                     (event_id,),
                 ).fetchone()
+                mark_event_record_public_unknown(
+                    conn,
+                    event_id,
+                    known_year=1013,
+                    confidence=0.21,
+                    public_victim_person_id=11,
+                    distortion={"public_unknown_summary": "The cause was not known."},
+                )
+                unknown = conn.execute(
+                    """
+                    SELECT visibility_state, public_knowledge_stage, confidence,
+                           public_victim_person_id, distortion_json, prose_variant_key
+                    FROM simulation_event_records_readable
+                    WHERE event_id = ?
+                    """,
+                    (event_id,),
+                ).fetchone()
+                mark_event_record_misattributed(
+                    conn,
+                    event_id,
+                    attribution_year=1014,
+                    confidence=0.18,
+                    source_person_id=22,
+                    public_actor_person_id=33,
+                    public_victim_person_id=11,
+                    distortion={
+                        "false_actor_person_id": 33,
+                        "false_cause": "wolf attack",
+                    },
+                )
+                misattributed = conn.execute(
+                    """
+                    SELECT visibility_state, public_knowledge_stage, confidence,
+                           source_person_id, public_actor_person_id,
+                           public_victim_person_id, distortion_json,
+                           prose_variant_key
+                    FROM simulation_event_records_readable
+                    WHERE event_id = ?
+                    """,
+                    (event_id,),
+                ).fetchone()
             self.assertEqual(str(rumored["visibility_state"]), "rumored")
             self.assertEqual(int(rumored["known_since_year"]), 1000)
             self.assertAlmostEqual(float(rumored["confidence"]), 0.37)
@@ -1153,6 +1196,32 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             self.assertEqual(
                 str(rumored["prose_variant_key"]), "mortuary_memory.rumored.default"
+            )
+            self.assertEqual(str(unknown["visibility_state"]), "public_unknown")
+            self.assertEqual(str(unknown["public_knowledge_stage"]), "unknown")
+            self.assertAlmostEqual(float(unknown["confidence"]), 0.21)
+            self.assertEqual(int(unknown["public_victim_person_id"]), 11)
+            self.assertEqual(
+                json.loads(str(unknown["distortion_json"])),
+                {"public_unknown_summary": "The cause was not known."},
+            )
+            self.assertEqual(
+                str(unknown["prose_variant_key"]),
+                "mortuary_memory.public_unknown.default",
+            )
+            self.assertEqual(str(misattributed["visibility_state"]), "misattributed")
+            self.assertEqual(str(misattributed["public_knowledge_stage"]), "rumored")
+            self.assertAlmostEqual(float(misattributed["confidence"]), 0.18)
+            self.assertEqual(int(misattributed["source_person_id"]), 22)
+            self.assertEqual(int(misattributed["public_actor_person_id"]), 33)
+            self.assertEqual(int(misattributed["public_victim_person_id"]), 11)
+            self.assertEqual(
+                json.loads(str(misattributed["distortion_json"])),
+                {"false_actor_person_id": 33, "false_cause": "wolf attack"},
+            )
+            self.assertEqual(
+                str(misattributed["prose_variant_key"]),
+                "mortuary_memory.misattributed.default",
             )
 
     def test_rediscover_event_record_updates_memory_and_logs_event(self) -> None:

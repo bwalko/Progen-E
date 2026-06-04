@@ -9,6 +9,22 @@ from typing import TYPE_CHECKING
 
 from library import simulation_timing
 from library.event_catalog import choose_event_catalog_kind
+from library.event_scoring import (
+    clamp01 as _clamp,
+    eligible_records_by_threshold,
+    ideal_strength as _ideal_strength,
+    knowledge_culture_propensity,
+    negative_extreme as _negative_extreme,
+    positive_extreme as _positive_extreme,
+    property_crime_propensity,
+    propensity_by_person_id,
+    public_virtue_propensity,
+    scandal_exposure_propensity,
+    threshold_excess_value_weights,
+    threshold_excess_weights,
+    trait_value as _trait,
+    violent_actor_propensity,
+)
 from library.geography import get_region, list_routes_from
 from library.incident_rates import IncidentRateParams, incident_rate_for_year
 
@@ -148,152 +164,6 @@ class KnowledgeCultureIncident:
     historical_importance: float
     novelty_value: float
     genome_signals: dict[str, float]
-
-
-def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, float(value)))
-
-
-def _trait(rec: "SimulationPersonRecord", trait: str) -> float:
-    try:
-        return float((rec.person.genome or {}).get(trait, 0.0))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _negative_extreme(rec: "SimulationPersonRecord", trait: str) -> float:
-    return _clamp((-_trait(rec, trait) - 35.0) / 65.0)
-
-
-def _positive_extreme(rec: "SimulationPersonRecord", trait: str) -> float:
-    return _clamp((_trait(rec, trait) - 35.0) / 65.0)
-
-
-def _ideal_strength(rec: "SimulationPersonRecord", trait: str) -> float:
-    return _clamp(1.0 - abs(_trait(rec, trait)) / 55.0)
-
-
-def violent_actor_propensity(rec: "SimulationPersonRecord") -> float:
-    """Return a 0..1 tendency for severe personal violence under pressure."""
-    risk = (
-        _negative_extreme(rec, "justice") * 0.25
-        + _negative_extreme(rec, "empathy") * 0.20
-        + _negative_extreme(rec, "patience") * 0.12
-        + _negative_extreme(rec, "temperance") * 0.08
-        + _positive_extreme(rec, "courage") * 0.10
-        + _positive_extreme(rec, "assertiveness") * 0.11
-        + _positive_extreme(rec, "neurochemical") * 0.09
-        + _positive_extreme(rec, "ambition") * 0.05
-    )
-    protection = (
-        _ideal_strength(rec, "justice") * 0.16
-        + _ideal_strength(rec, "empathy") * 0.12
-        + _ideal_strength(rec, "temperance") * 0.10
-        + _ideal_strength(rec, "patience") * 0.08
-    )
-    return _clamp(risk * (1.0 - min(0.55, protection)))
-
-
-def property_crime_propensity(rec: "SimulationPersonRecord") -> float:
-    """Return a 0..1 tendency for theft, fraud, or extortion under pressure."""
-    predatory_intent = _clamp(
-        _negative_extreme(rec, "justice")
-        + _negative_extreme(rec, "honesty")
-        + _positive_extreme(rec, "persuasion") * 0.6
-        + _positive_extreme(rec, "ambition") * 0.5
-    )
-    skill_factor = (
-        _ideal_strength(rec, "perception") * 0.09
-        + _ideal_strength(rec, "adaptability") * 0.04
-    ) * predatory_intent
-    risk = (
-        _negative_extreme(rec, "justice") * 0.24
-        + _negative_extreme(rec, "honesty") * 0.23
-        + _negative_extreme(rec, "empathy") * 0.10
-        + _positive_extreme(rec, "persuasion") * 0.10
-        + _positive_extreme(rec, "ambition") * 0.08
-        + _positive_extreme(rec, "frugality") * 0.07
-        + _negative_extreme(rec, "frugality") * 0.05
-        + skill_factor
-    )
-    protection = (
-        _ideal_strength(rec, "justice") * 0.16
-        + _ideal_strength(rec, "honesty") * 0.14
-        + _ideal_strength(rec, "empathy") * 0.08
-        + _ideal_strength(rec, "discipline") * 0.06
-    )
-    return _clamp(risk * (1.0 - min(0.55, protection)))
-
-
-def scandal_exposure_propensity(rec: "SimulationPersonRecord") -> float:
-    """Return a 0..1 tendency for a secret relationship to become exposed."""
-    risk = (
-        _positive_extreme(rec, "mating drive") * 0.24
-        + _negative_extreme(rec, "loyalty") * 0.20
-        + _negative_extreme(rec, "modesty") * 0.16
-        + _positive_extreme(rec, "neurochemical") * 0.10
-        + _positive_extreme(rec, "assertiveness") * 0.07
-        + _positive_extreme(rec, "persuasion") * 0.05
-        + _negative_extreme(rec, "discipline") * 0.05
-        + _negative_extreme(rec, "honesty") * 0.05
-        + _positive_extreme(rec, "honesty") * 0.04
-    )
-    protection = (
-        _ideal_strength(rec, "loyalty") * 0.16
-        + _ideal_strength(rec, "modesty") * 0.10
-        + _ideal_strength(rec, "discipline") * 0.07
-        + _ideal_strength(rec, "temperance") * 0.05
-    )
-    return _clamp(risk * (1.0 - min(0.55, protection)))
-
-
-def public_virtue_propensity(rec: "SimulationPersonRecord") -> float:
-    """Return a 0..1 tendency for costly public virtue under pressure."""
-    prosocial = (
-        _ideal_strength(rec, "empathy") * 0.12
-        + _ideal_strength(rec, "justice") * 0.11
-        + _ideal_strength(rec, "nurturance") * 0.09
-        + _ideal_strength(rec, "civics") * 0.08
-        + _ideal_strength(rec, "honesty") * 0.05
-    )
-    action = (
-        _positive_extreme(rec, "courage") * 0.16
-        + _positive_extreme(rec, "assertiveness") * 0.05
-        + _ideal_strength(rec, "discipline") * 0.05
-        + _ideal_strength(rec, "resilience") * 0.05
-    )
-    generosity = _negative_extreme(rec, "frugality") * 0.05
-    inhibitors = (
-        _negative_extreme(rec, "empathy") * 0.18
-        + _negative_extreme(rec, "justice") * 0.15
-        + _negative_extreme(rec, "nurturance") * 0.10
-        + _negative_extreme(rec, "civics") * 0.08
-        + _negative_extreme(rec, "honesty") * 0.05
-    )
-    return _clamp((prosocial + action + generosity) * (1.0 - min(0.65, inhibitors)))
-
-
-def knowledge_culture_propensity(rec: "SimulationPersonRecord") -> float:
-    """Return a 0..1 tendency for invention, discovery, or cultural breakthrough."""
-    drive = (
-        _positive_extreme(rec, "curiosity") * 0.17
-        + _positive_extreme(rec, "creativity") * 0.15
-        + _positive_extreme(rec, "intellect") * 0.14
-        + _positive_extreme(rec, "focus") * 0.11
-        + _positive_extreme(rec, "perception") * 0.09
-        + _ideal_strength(rec, "discipline") * 0.06
-        + _positive_extreme(rec, "civics") * 0.05
-        + _positive_extreme(rec, "wit") * 0.04
-        + _ideal_strength(rec, "adaptability") * 0.04
-    )
-    inhibitors = (
-        _negative_extreme(rec, "curiosity") * 0.18
-        + _negative_extreme(rec, "creativity") * 0.15
-        + _negative_extreme(rec, "intellect") * 0.14
-        + _negative_extreme(rec, "focus") * 0.10
-        + _negative_extreme(rec, "discipline") * 0.08
-    )
-    return _clamp(drive * (1.0 - min(0.60, inhibitors)))
 
 
 def _residence_settlement_id(rec: "SimulationPersonRecord") -> str:
@@ -638,7 +508,7 @@ def _maybe_murder_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     scarcity = _clamp((pressure - 0.75) / 0.75)
-    propensities = {rec.person_id: violent_actor_propensity(rec) for rec in adults}
+    propensities = propensity_by_person_id(adults, violent_actor_propensity)
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 80.0, 0.05, 1.0)
     population_rate_chance = (
@@ -662,19 +532,16 @@ def _maybe_murder_in_settlement(
     )
     if rng.random() >= chance:
         return None
-    candidate_killers = [
-        rec
-        for rec in adults
-        if propensities[rec.person_id] >= MURDER_PROPENSITY_THRESHOLD
-    ]
+    candidate_killers = eligible_records_by_threshold(
+        adults, propensities, MURDER_PROPENSITY_THRESHOLD
+    )
     if not candidate_killers:
         return None
     killer = _weighted_choice(
         candidate_killers,
-        [
-            max(0.001, (propensities[rec.person_id] - MURDER_PROPENSITY_THRESHOLD) ** 2)
-            for rec in candidate_killers
-        ],
+        threshold_excess_weights(
+            candidate_killers, propensities, MURDER_PROPENSITY_THRESHOLD
+        ),
         rng,
     )
     if killer is None:
@@ -2061,9 +1928,9 @@ def _maybe_affair_scandal_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     social_pressure = _clamp((pressure - 0.55) / 1.0)
-    propensities = {
-        pid: scandal_exposure_propensity(rec) for pid, rec in adult_by_id.items()
-    }
+    propensities = propensity_by_person_id(
+        adult_by_id.values(), scandal_exposure_propensity
+    )
     pair_scores: list[float] = []
     for a, b, betrayed_ids in candidate_pairs:
         score = (
@@ -2098,10 +1965,9 @@ def _maybe_affair_scandal_in_settlement(
         return None
     chosen = rng.choices(
         eligible,
-        weights=[
-            max(0.001, (score - SCANDAL_PROPENSITY_THRESHOLD) ** 2)
-            for score in eligible_scores
-        ],
+        weights=threshold_excess_value_weights(
+            eligible_scores, SCANDAL_PROPENSITY_THRESHOLD
+        ),
         k=1,
     )[0]
     a, b, betrayed_ids = chosen
@@ -2170,7 +2036,7 @@ def _maybe_public_virtue_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     hardship = _clamp((pressure - 0.45) / 1.0)
-    propensities = {rec.person_id: public_virtue_propensity(rec) for rec in adults}
+    propensities = propensity_by_person_id(adults, public_virtue_propensity)
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 70.0, 0.05, 1.0)
     raw_chance = (
@@ -2185,19 +2051,14 @@ def _maybe_public_virtue_in_settlement(
     )
     if rng.random() >= chance:
         return None
-    candidates = [
-        rec
-        for rec in adults
-        if propensities[rec.person_id] >= VIRTUE_PROPENSITY_THRESHOLD
-    ]
+    candidates = eligible_records_by_threshold(
+        adults, propensities, VIRTUE_PROPENSITY_THRESHOLD
+    )
     if not candidates:
         return None
     benefactor = _weighted_choice(
         candidates,
-        [
-            max(0.001, (propensities[rec.person_id] - VIRTUE_PROPENSITY_THRESHOLD) ** 2)
-            for rec in candidates
-        ],
+        threshold_excess_weights(candidates, propensities, VIRTUE_PROPENSITY_THRESHOLD),
         rng,
     )
     if benefactor is None:
@@ -2274,7 +2135,7 @@ def _maybe_knowledge_culture_in_settlement(
     if len(adults) < 2:
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
-    propensities = {rec.person_id: knowledge_culture_propensity(rec) for rec in adults}
+    propensities = propensity_by_person_id(adults, knowledge_culture_propensity)
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 90.0, 0.05, 1.0)
     raw_chance = (
@@ -2289,19 +2150,16 @@ def _maybe_knowledge_culture_in_settlement(
     )
     if rng.random() >= chance:
         return None
-    candidates = [
-        rec
-        for rec in adults
-        if propensities[rec.person_id] >= KNOWLEDGE_PROPENSITY_THRESHOLD
-    ]
+    candidates = eligible_records_by_threshold(
+        adults, propensities, KNOWLEDGE_PROPENSITY_THRESHOLD
+    )
     if not candidates:
         return None
     creator = _weighted_choice(
         candidates,
-        [
-            max(0.001, (propensities[rec.person_id] - KNOWLEDGE_PROPENSITY_THRESHOLD) ** 2)
-            for rec in candidates
-        ],
+        threshold_excess_weights(
+            candidates, propensities, KNOWLEDGE_PROPENSITY_THRESHOLD
+        ),
         rng,
     )
     if creator is None:
@@ -2382,7 +2240,7 @@ def _maybe_property_crime_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     scarcity = _clamp((pressure - 0.65) / 0.85)
-    propensities = {rec.person_id: property_crime_propensity(rec) for rec in adults}
+    propensities = propensity_by_person_id(adults, property_crime_propensity)
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 60.0, 0.05, 1.0)
     raw_chance = (
@@ -2397,19 +2255,14 @@ def _maybe_property_crime_in_settlement(
     )
     if rng.random() >= chance:
         return None
-    candidates = [
-        rec
-        for rec in adults
-        if propensities[rec.person_id] >= THEFT_PROPENSITY_THRESHOLD
-    ]
+    candidates = eligible_records_by_threshold(
+        adults, propensities, THEFT_PROPENSITY_THRESHOLD
+    )
     if not candidates:
         return None
     perpetrator = _weighted_choice(
         candidates,
-        [
-            max(0.001, (propensities[rec.person_id] - THEFT_PROPENSITY_THRESHOLD) ** 2)
-            for rec in candidates
-        ],
+        threshold_excess_weights(candidates, propensities, THEFT_PROPENSITY_THRESHOLD),
         rng,
     )
     if perpetrator is None:

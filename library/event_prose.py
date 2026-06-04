@@ -14,8 +14,17 @@ import sqlite3
 from typing import Any
 
 
+PUBLIC_UNKNOWN_VISIBILITY_STATES: frozenset[str] = frozenset({"public_unknown"})
+PUBLIC_RUMOR_VISIBILITY_STATES: frozenset[str] = frozenset(
+    {"rumored", "misattributed"}
+)
+PUBLIC_KNOWN_VISIBILITY_STATES: frozenset[str] = frozenset(
+    {"public_known", "rediscovered"}
+)
 PUBLIC_CHRONICLE_VISIBILITY_STATES: frozenset[str] = frozenset(
-    {"public_known", "rumored", "rediscovered"}
+    PUBLIC_UNKNOWN_VISIBILITY_STATES
+    | PUBLIC_RUMOR_VISIBILITY_STATES
+    | PUBLIC_KNOWN_VISIBILITY_STATES
 )
 
 
@@ -36,6 +45,7 @@ class EventRecordProse:
     event_type: str
     record_type: str
     visibility_state: str
+    public_knowledge_stage: str
     prose_variant_key: str
     admin_summary: str
     public_prose: str
@@ -237,6 +247,7 @@ def render_event_record_prose(
     rr = resolver or EventProseResolver()
     admin = render_event_admin_summary(row, resolver=rr)
     payload = _payload(row)
+    distortion = _json_object(row.get("distortion_json"))
     event_type = admin.event_type
     year = admin.sim_year
     place = _record_place(row, payload, rr)
@@ -263,10 +274,14 @@ def render_event_record_prose(
         public = f"Admin note: {admin.prose}"
     elif state == "rediscovered":
         public = _rediscovered_memory_text(event_type, year, payload, place, rr)
-    elif state == "rumored":
-        public = _rumor_text(event_type, year, payload, place, rr)
+    elif state == "public_unknown":
+        public = _public_unknown_text(event_type, year, payload, distortion, place, rr, row)
+    elif state == "misattributed":
+        public = _misattributed_text(event_type, year, payload, distortion, place, rr, row)
+    elif state in PUBLIC_RUMOR_VISIBILITY_STATES:
+        public = _rumor_text(event_type, year, payload, distortion, place, rr, row)
     else:
-        public = _public_text(event_type, year, payload, place, rr)
+        public = _public_text(event_type, year, payload, distortion, place, rr, row)
 
     return EventRecordProse(
         event_id=admin.event_id,
@@ -275,6 +290,7 @@ def render_event_record_prose(
         event_type=event_type,
         record_type=record_type,
         visibility_state=state,
+        public_knowledge_stage=_public_knowledge_stage(state),
         prose_variant_key=variant,
         admin_summary=admin.prose,
         public_prose=public,
@@ -422,30 +438,103 @@ def load_public_chronicle_prose(
     )
 
 
+def load_public_unknown_prose(
+    conn: sqlite3.Connection,
+    *,
+    event_types: Iterable[str] | None = None,
+    search: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> list[EventRecordProse]:
+    """Load public records where the public knows only that something is unresolved."""
+
+    return load_event_record_prose_rows(
+        conn,
+        visibility_states=PUBLIC_UNKNOWN_VISIBILITY_STATES,
+        event_types=event_types,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def load_public_rumor_prose(
+    conn: sqlite3.Connection,
+    *,
+    event_types: Iterable[str] | None = None,
+    search: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> list[EventRecordProse]:
+    """Load public records whose public version is uncertain or distorted."""
+
+    return load_event_record_prose_rows(
+        conn,
+        visibility_states=PUBLIC_RUMOR_VISIBILITY_STATES,
+        event_types=event_types,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def load_public_known_prose(
+    conn: sqlite3.Connection,
+    *,
+    event_types: Iterable[str] | None = None,
+    search: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> list[EventRecordProse]:
+    """Load public records whose public version is treated as known history."""
+
+    return load_event_record_prose_rows(
+        conn,
+        visibility_states=PUBLIC_KNOWN_VISIBILITY_STATES,
+        event_types=event_types,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+
+
 def _public_text(
     event_type: str,
     year: int,
     payload: Mapping[str, Any],
+    distortion: Mapping[str, Any],
     place: str,
     rr: EventProseResolver,
+    row: Mapping[str, Any],
 ) -> str:
+    summary = _distortion_summary(
+        distortion, ("public_known_summary", "known_summary", "public_summary")
+    )
+    if summary:
+        return _contextual_public_summary(summary, year, place)
     if event_type == "murder":
+        actor = _public_person(row, payload, rr, "public_actor_person_id", "killer_person_id")
+        victim = _public_person(row, payload, rr, "public_victim_person_id", "victim_person_id")
         return (
-            f"The record of {place} names {rr.person(payload.get('killer_person_id'))} "
-            f"as the killer of {rr.person(payload.get('victim_person_id'))} in "
+            f"The record of {place} names {actor} "
+            f"as the killer of {victim} in "
             f"{year}, remembered as {_kind(payload)}."
         )
     if event_type == "property_crime":
+        actor = _public_person(
+            row, payload, rr, "public_actor_person_id", "perpetrator_person_id"
+        )
+        victim = _public_person(row, payload, rr, "public_victim_person_id", "target_person_id")
         return (
             f"The market record of {place} set down {_kind(payload)} by "
-            f"{rr.person(payload.get('perpetrator_person_id'))} against "
-            f"{rr.person(payload.get('target_person_id'))}."
+            f"{actor} against {victim}."
         )
     if event_type == "affair_scandal":
+        actor = _public_person(row, payload, rr, "public_actor_person_id", "accused_person_id")
+        partner = rr.person(payload.get("paramour_person_id"))
         return (
             f"The household talk of {place} openly named "
-            f"{rr.person(payload.get('accused_person_id'))} and "
-            f"{rr.person(payload.get('paramour_person_id'))} in {_kind(payload)}."
+            f"{actor} and {partner} in {_kind(payload)}."
         )
     if event_type == "public_virtue":
         return (
@@ -476,10 +565,25 @@ def _rumor_text(
     event_type: str,
     year: int,
     payload: Mapping[str, Any],
+    distortion: Mapping[str, Any],
     place: str,
     rr: EventProseResolver,
+    row: Mapping[str, Any],
 ) -> str:
+    summary = _distortion_summary(
+        distortion, ("rumor_summary", "rumored_summary", "public_summary")
+    )
+    if summary:
+        return _contextual_public_summary(summary, year, place)
     if event_type == "murder":
+        victim = _public_person(row, payload, rr, "public_victim_person_id", "victim_person_id")
+        rumored_cause = _label(
+            distortion.get("rumored_cause")
+            or distortion.get("public_cause")
+            or distortion.get("suspected_cause")
+        )
+        if rumored_cause != "unknown":
+            return f"Rumor in {place} claimed {victim} was {rumored_cause} in {year}."
         return (
             f"It was said in {place} that {rr.person(payload.get('killer_person_id'))} "
             f"killed {rr.person(payload.get('victim_person_id'))}; the tale called it "
@@ -497,6 +601,81 @@ def _rumor_text(
             f"with {rr.person(payload.get('paramour_person_id'))} in {_kind(payload)}."
         )
     return f"It was said in {place} that {_label(event_type)} occurred in {year}."
+
+
+def _misattributed_text(
+    event_type: str,
+    year: int,
+    payload: Mapping[str, Any],
+    distortion: Mapping[str, Any],
+    place: str,
+    rr: EventProseResolver,
+    row: Mapping[str, Any],
+) -> str:
+    summary = _distortion_summary(
+        distortion,
+        ("misattributed_summary", "false_summary", "public_summary"),
+    )
+    if summary:
+        return _contextual_public_summary(summary, year, place)
+    if event_type == "murder":
+        actor = _public_person(row, payload, rr, "public_actor_person_id")
+        victim = _public_person(row, payload, rr, "public_victim_person_id", "victim_person_id")
+        return (
+            f"A public account in {place} named {actor} as the killer of "
+            f"{victim} in {year}."
+        )
+    if event_type == "property_crime":
+        actor = _public_person(row, payload, rr, "public_actor_person_id")
+        victim = _public_person(row, payload, rr, "public_victim_person_id", "target_person_id")
+        return (
+            f"A public account in {place} blamed {actor} for {_kind(payload)} "
+            f"against {victim}."
+        )
+    if event_type == "death":
+        victim = _public_person(row, payload, rr, "public_victim_person_id", "person_id")
+        cause = _label(distortion.get("public_cause") or distortion.get("false_cause"))
+        if cause != "unknown":
+            return (
+                f"The public account of {place} gave {cause} as the cause of "
+                f"{victim}'s death in {year}."
+            )
+    return (
+        f"A public account in {place} preserved a mistaken version of "
+        f"{_label(event_type)} from {year}."
+    )
+
+
+def _public_unknown_text(
+    event_type: str,
+    year: int,
+    payload: Mapping[str, Any],
+    distortion: Mapping[str, Any],
+    place: str,
+    rr: EventProseResolver,
+    row: Mapping[str, Any],
+) -> str:
+    summary = _distortion_summary(
+        distortion, ("unknown_summary", "public_unknown_summary", "public_summary")
+    )
+    if summary:
+        return _contextual_public_summary(summary, year, place)
+    if event_type == "murder":
+        victim = _public_person(row, payload, rr, "public_victim_person_id", "victim_person_id")
+        return (
+            f"In {place}, {victim} was known only to have gone missing in {year}; "
+            f"who was responsible and why remained unknown."
+        )
+    if event_type == "death":
+        victim = _public_person(row, payload, rr, "public_victim_person_id", "person_id")
+        return (
+            f"The public memory of {place} knew {victim} had died in {year}, "
+            f"but not the cause."
+        )
+    return (
+        f"The public memory of {place} knew that {_label(event_type)} touched "
+        f"the year {year}, but not what truly happened."
+    )
 
 
 def _rediscovered_memory_text(
@@ -578,6 +757,10 @@ def _source_label(payload: Mapping[str, Any]) -> str:
 
 def _payload(row: Mapping[str, Any]) -> dict[str, Any]:
     value = row.get("payload_json")
+    return _json_object(value)
+
+
+def _json_object(value: object) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     if value is None:
@@ -590,6 +773,59 @@ def _payload(row: Mapping[str, Any]) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
+def _public_knowledge_stage(visibility_state: object) -> str:
+    state = _clean_key(visibility_state)
+    if state in PUBLIC_UNKNOWN_VISIBILITY_STATES:
+        return "unknown"
+    if state in PUBLIC_RUMOR_VISIBILITY_STATES:
+        return "rumored"
+    if state in PUBLIC_KNOWN_VISIBILITY_STATES:
+        return "known"
+    if state == "admin_known":
+        return "admin"
+    return "not_public"
+
+
+def _public_person(
+    row: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    rr: EventProseResolver,
+    public_key: str,
+    *payload_keys: str,
+) -> str:
+    pid = _coerce_int(row.get(public_key))
+    if pid is not None:
+        return rr.person(pid)
+    for key in payload_keys:
+        pid = _coerce_int(payload.get(key))
+        if pid is not None:
+            return rr.person(pid)
+    return "an unknown person"
+
+
+def _distortion_summary(
+    distortion: Mapping[str, Any], keys: tuple[str, ...]
+) -> str:
+    for key in keys:
+        value = distortion.get(key)
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _contextual_public_summary(summary: str, year: int, place: str) -> str:
+    text = summary.strip().replace("\n", " ")
+    if "{year}" in text or "{place}" in text:
+        try:
+            text = text.format(year=year, place=place)
+        except (KeyError, ValueError):
+            pass
+    if str(year) in text or place in text:
+        return text
+    return f"{year}, {place}: {text}"
 
 
 def _mapping(row: Mapping[str, Any] | sqlite3.Row) -> dict[str, Any]:
