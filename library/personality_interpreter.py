@@ -48,17 +48,13 @@ def _genome_rows_cached(db_path_s: str) -> tuple[dict[str, str], ...]:
     """Parsed ``genome`` rows keyed by resolved-path string; ``()`` if table missing."""
     with closing(_connect(db_path_s)) as conn:
         try:
-            raw = conn.execute("SELECT * FROM genome").fetchall()
+            rows = [
+                {str(k): "" if row[k] is None else str(row[k]).strip() for k in row.keys()}
+                for row in conn.execute("SELECT * FROM genome")
+            ]
         except sqlite3.OperationalError:
             return ()
-    out: list[dict[str, str]] = []
-    for row in raw:
-        d: dict[str, str] = {}
-        for k in row.keys():
-            v = row[k]
-            d[k] = "" if v is None else str(v).strip()
-        out.append(d)
-    return tuple(out)
+    return tuple(rows)
 
 
 def _label_for(row: dict[str, str], side: str) -> str:

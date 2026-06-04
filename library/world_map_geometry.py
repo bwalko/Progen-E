@@ -12,6 +12,7 @@ import heapq
 import math
 import random
 import sqlite3
+from contextlib import closing
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
@@ -214,7 +215,7 @@ def _load_map_hints(
         return {}, {}
     continent_hints: dict[str, _ContinentMapHint] = {}
     region_hints: dict[str, _RegionMapHint] = {}
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn:
         conn.row_factory = sqlite3.Row
         tables = {
             str(r["name"])
@@ -288,7 +289,7 @@ def _world_map_seed(
         save_path = Path(save_db_path)
         if save_path.exists():
             try:
-                with sqlite3.connect(save_path) as conn:
+                with closing(sqlite3.connect(save_path)) as conn:
                     row = conn.execute(
                         """
                         SELECT meta_value FROM simulation_meta
@@ -305,7 +306,7 @@ def _world_map_seed(
     if not path.exists():
         return world
     try:
-        with sqlite3.connect(path) as conn:
+        with closing(sqlite3.connect(path)) as conn:
             conn.row_factory = sqlite3.Row
             cols = {
                 str(r["name"])

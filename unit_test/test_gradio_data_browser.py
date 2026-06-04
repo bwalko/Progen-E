@@ -13,6 +13,12 @@ if "gradio" not in sys.modules and importlib.util.find_spec("gradio") is None:
 
 import utils.gradio_data_browser as gdb
 from library.config_import import load_all_csvs_into_sqlite
+from library.world_save import (
+    append_simulation_event_rows,
+    ensure_checkpoint_schema,
+    mark_event_record_lost,
+    rediscover_event_record,
+)
 from library.world_map_geometry import MicroRegionCell, RegionCell, WorldMapGeometry
 from library.world_map_svg import load_world_map_overlays
 from utils.gradio_data_browser import (
@@ -598,11 +604,52 @@ def _memory_legacy_place_save() -> sqlite3.Connection:
     return con
 
 
-def _event_row(con: sqlite3.Connection, event_type: str, payload: dict[str, object]) -> sqlite3.Row:
+def _event_row(
+    con: sqlite3.Connection,
+    event_type: str,
+    payload: dict[str, object],
+    *,
+    year: int = 10,
+) -> sqlite3.Row:
     return con.execute(
         "select ? as sim_year, ? as event_type, ? as payload_json",
-        (10, event_type, json.dumps(payload)),
+        (year, event_type, json.dumps(payload)),
     ).fetchone()
+
+
+def _attach_empty_genome_config(con: sqlite3.Connection) -> None:
+    con.execute("attach database ':memory:' as cfg")
+    con.execute(
+        """
+        create table cfg.genome (
+            trait text,
+            "deficient deviation" text,
+            "optimal centerpoint" text,
+            "excess deviation" text,
+            "deficient description" text,
+            "optimal description" text,
+            "excess description" text
+        )
+        """
+    )
+
+
+def _insert_compact_person(
+    con: sqlite3.Connection,
+    person_id: int,
+    first_name: str,
+    last_name: str,
+) -> None:
+    con.execute(
+        """
+        insert into simulation_people (
+            person_id, is_founder, is_alive, first_name, last_name,
+            gender, ethnic, species, birthyear, person_json
+        )
+        values (?, 1, 1, ?, ?, 'female', 'human', 'human', 970, '{}')
+        """,
+        (person_id, first_name, last_name),
+    )
 
 
 def _genome_row(con: sqlite3.Connection) -> sqlite3.Row:
@@ -644,6 +691,272 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 con.close()
             except sqlite3.ProgrammingError:
                 pass
+
+    def _history_table_rows(self, table: dict[str, object]) -> list[dict[str, object]]:
+        headers = list(table["headers"])  # type: ignore[index]
+        return [dict(zip(headers, row)) for row in table["value"]]  # type: ignore[index]
+
+    def test_history_browser_loads_public_rumor_and_lost_views(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Tara", "Stone")
+                _insert_compact_person(con, 2, "Pell", "Ash")
+                _insert_compact_person(con, 3, "Ira", "Marsh")
+                _insert_compact_person(con, 4, "Lio", "Dawn")
+                birth_id, _, _ = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            1001,
+                            "birth",
+                            {
+                                "person_id": 4,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1002,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 1,
+                                "target_person_id": 2,
+                                "incident_kind": "storehouse_robbery",
+                                "motive": "scarcity",
+                                "loss_value": 0.18,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1003,
+                            "public_virtue",
+                            {
+                                "benefactor_person_id": 3,
+                                "beneficiary_person_id": 4,
+                                "incident_kind": "heroic_rescue",
+                                "motive": "mercy",
+                                "relief_value": 0.12,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                mark_event_record_lost(con, birth_id, lost_year=1040)
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                public_table, public_status = gdb.load_history_browser(
+                    "default", "Public Chronicle", "", "", 50, 0
+                )
+                rumor_table, _ = gdb.load_history_browser(
+                    "default", "Rumors", "", "", 50, 0
+                )
+                lost_table, lost_status = gdb.load_history_browser(
+                    "default", "Lost History", "", "", 50, 0
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        public_rows = self._history_table_rows(public_table)
+        rumor_rows = self._history_table_rows(rumor_table)
+        lost_rows = self._history_table_rows(lost_table)
+        self.assertEqual(public_table["headers"], gdb.HISTORY_BROWSER_HEADERS)
+        self.assertEqual(
+            [row["Event Type"] for row in public_rows],
+            ["property_crime", "public_virtue"],
+        )
+        self.assertIn("Public Chronicle", public_status)
+        self.assertEqual([row["Event Type"] for row in rumor_rows], ["property_crime"])
+        self.assertEqual(rumor_rows[0]["Visibility"], "rumored")
+        self.assertIn("Market talk", rumor_rows[0]["Prose"])
+        self.assertEqual([row["Event Type"] for row in lost_rows], ["birth"])
+        self.assertEqual(lost_rows[0]["Visibility"], "lost")
+        self.assertIn("No living chronicle preserved", lost_rows[0]["Prose"])
+        self.assertIn("Lost History", lost_status)
+
+    def test_history_browser_loads_admin_truth_search_and_rediscoveries(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 10, "Lio", "Reed")
+                _insert_compact_person(con, 41, "Sera", "Archivist")
+                original_event_id = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            990,
+                            "birth",
+                            {
+                                "person_id": 10,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        )
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )[0]
+                mark_event_record_lost(con, original_event_id, lost_year=1040)
+                rediscover_event_record(
+                    con,
+                    original_event_id,
+                    rediscovered_year=1100,
+                    source_person_id=41,
+                    source_institution_id="temple_ledger",
+                    preserving_settlement_id="aeria_north:settlement:1",
+                    confidence=0.82,
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                admin_table, admin_status = gdb.load_history_browser(
+                    "default", "Admin Truth", "event_rediscovered", "", 50, 0
+                )
+                rediscovery_table, rediscovery_status = gdb.load_history_browser(
+                    "default", "Rediscoveries", "", "", 50, 0
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        admin_rows = self._history_table_rows(admin_table)
+        rediscovery_rows = self._history_table_rows(rediscovery_table)
+        self.assertEqual([row["Event Type"] for row in admin_rows], ["event_rediscovered"])
+        self.assertEqual(admin_rows[0]["Visibility"], "admin_truth")
+        self.assertIn(str(original_event_id), admin_rows[0]["Prose"])
+        self.assertIn("Admin Truth", admin_status)
+        self.assertEqual(
+            [row["Event Type"] for row in rediscovery_rows],
+            ["birth", "event_rediscovered"],
+        )
+        self.assertEqual(rediscovery_rows[0]["Visibility"], "rediscovered")
+        self.assertIn("later hand recovered", rediscovery_rows[0]["Prose"])
+        self.assertIn("Lio Reed", rediscovery_rows[0]["Prose"])
+        self.assertIn(str(original_event_id), rediscovery_rows[1]["Prose"])
+        self.assertIn("Rediscoveries", rediscovery_status)
+
+    def test_history_summary_exposes_report_counts_and_lifecycle_visibility(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Tara", "Stone")
+                _insert_compact_person(con, 2, "Pell", "Ash")
+                _insert_compact_person(con, 3, "Ira", "Marsh")
+                _insert_compact_person(con, 4, "Lio", "Dawn")
+                birth_id, _crime_id, _virtue_id = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "birth",
+                            {
+                                "person_id": 4,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1001,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 1,
+                                "target_person_id": 2,
+                                "historical_importance": 0.33,
+                                "loss_value": 0.12,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1002,
+                            "public_virtue",
+                            {
+                                "benefactor_person_id": 3,
+                                "beneficiary_person_id": 4,
+                                "historical_importance": 0.44,
+                                "relief_value": 0.2,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                mark_event_record_lost(con, birth_id, lost_year=1040)
+                rediscover_event_record(
+                    con,
+                    birth_id,
+                    rediscovered_year=1100,
+                    source_institution_id="temple_ledger",
+                    preserving_settlement_id="aeria_north:settlement:1",
+                    confidence=0.82,
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                summary_table, summary_status = gdb.load_history_summary("default")
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        rows = self._history_table_rows(summary_table)
+        by_section_key = {(row["Section"], row["Key"]): row for row in rows}
+        self.assertEqual(summary_table["headers"], gdb.HISTORY_SUMMARY_HEADERS)
+        self.assertEqual(by_section_key[("Overview", "total_events")]["Count"], 4)
+        self.assertEqual(by_section_key[("Tracked Incidents", "murder")]["Count"], 0)
+        self.assertEqual(
+            by_section_key[("Tracked Incidents", "property_crime")]["Count"], 1
+        )
+        self.assertEqual(
+            by_section_key[
+                ("Visibility", "birth / lineage_memory / rediscovered")
+            ]["Count"],
+            1,
+        )
+        self.assertEqual(
+            by_section_key[
+                (
+                    "Visibility",
+                    "event_rediscovered / rediscovery_record / public_known",
+                )
+            ]["Count"],
+            1,
+        )
+        self.assertIn(
+            "avg=0.3300",
+            by_section_key[("Metrics", "property_crime historical_importance")][
+                "Value"
+            ],
+        )
+        self.assertIn("history summary rows", summary_status)
 
     def test_job_event_fitness_uses_event_payload_not_current_person_score(self) -> None:
         con = _memory_save()
@@ -692,6 +1005,363 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Ada formed a household partnership with Bea Forge", text)
         self.assertIn("<strong>Ada</strong> formed a household partnership with", html)
         self.assertIn(">Bea Forge</a>", html)
+
+    def test_person_sheet_has_separate_history_sections(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, 120)")
+        con.execute(
+            """
+            insert into simulation_people (
+                person_id, world, is_founder, father_id, mother_id, is_alive, person_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                3,
+                "test",
+                1,
+                None,
+                None,
+                1,
+                json.dumps({"first_name": "Cato", "last_name": "Vale", "birthyear": 5}),
+            ),
+        )
+        con.executemany(
+            """
+            insert into simulation_events (world, sim_year, event_type, payload_json)
+            values (?, ?, ?, ?)
+            """,
+            [
+                ("test", 100, "job_assigned", json.dumps({"person_id": 1, "job": "smith"})),
+                ("test", 101, "couple_formed", json.dumps({"person_a_id": 1, "person_b_id": 2})),
+                ("test", 103, "paramour_formed", json.dumps({"person_a_id": 1, "person_b_id": 3})),
+                ("test", 105, "job_lost", json.dumps({"person_id": 1, "old_job": "smith"})),
+                ("test", 105, "unemployment_started", json.dumps({"person_id": 1, "last_job": "smith"})),
+                ("test", 110, "job_assigned", json.dumps({"person_id": 1, "job": "scribe"})),
+                ("test", 110, "unemployment_ended", json.dumps({"person_id": 1, "new_job": "scribe"})),
+                ("test", 112, "paramour_ended", json.dumps({"person_a_id": 1, "person_b_id": 3})),
+                ("test", 115, "couple_dissolved", json.dumps({"person_a_id": 1, "person_b_id": 2})),
+            ],
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertLess(sheet.index("Job History"), sheet.index(">Events</h3>"))
+        self.assertLess(sheet.index("Partner History"), sheet.index(">Events</h3>"))
+        self.assertLess(sheet.index("Paramour History"), sheet.index(">Events</h3>"))
+        job_section = sheet[sheet.index("Job History"):sheet.index("Partner History")]
+        partner_section = sheet[sheet.index("Partner History"):sheet.index("Paramour History")]
+        paramour_section = sheet[sheet.index("Paramour History"):sheet.index(">Events</h3>")]
+        self.assertLess(job_section.index("100-105"), job_section.index("105-110"))
+        self.assertLess(job_section.index("105-110"), job_section.index("110-120"))
+        self.assertIn("smith", job_section)
+        self.assertIn("Unemployed", job_section)
+        self.assertIn("scribe", job_section)
+        self.assertIn("101-115", partner_section)
+        self.assertIn(">Bea Forge", partner_section)
+        self.assertIn("person-link", partner_section)
+        self.assertIn("103-112", paramour_section)
+        self.assertIn(">Cato Vale", paramour_section)
+        self.assertIn("person-link", paramour_section)
+        self.assertIn("Job History:\n- 100-105: smith", share)
+        self.assertIn("Partner History:\n- 101-115: Bea Forge", share)
+        self.assertIn("Paramour History:\n- 103-112: Cato Vale", share)
+
+    def test_person_sheet_prominently_lists_consequence_ledgers(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, 120)")
+        con.execute(
+            """
+            insert into simulation_people (
+                person_id, world, is_founder, father_id, mother_id, is_alive, person_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                3,
+                "test",
+                1,
+                None,
+                None,
+                1,
+                json.dumps({"first_name": "Cato", "last_name": "Vale", "birthyear": 5}),
+            ),
+        )
+        con.execute(
+            """
+            create table simulation_event_people (
+                event_id integer,
+                person_id integer,
+                role text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_events (id, world, sim_year, event_type, payload_json)
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                20,
+                "test",
+                1004,
+                "knowledge_culture",
+                json.dumps(
+                    {
+                        "creator_person_id": 1,
+                        "patron_person_id": 2,
+                        "incident_kind": "improved_plow",
+                        "knowledge_domain": "toolmaking",
+                        "novelty_value": 0.2,
+                        "settlement_id": "aeria_north:settlement:1",
+                        "region_id": "aeria_north",
+                        "consequences": {
+                            "knowledge_state": {
+                                "domain": "toolmaking",
+                                "state_delta": 0.07,
+                            }
+                        },
+                    }
+                ),
+            ),
+        )
+        con.executemany(
+            "insert into simulation_event_people values (?, ?, ?)",
+            [(20, 1, "creator"), (20, 2, "patron")],
+        )
+        con.execute(
+            """
+            create table simulation_obligations_readable (
+                obligation_id integer,
+                source_event_id integer,
+                source_event_year integer,
+                source_event_type text,
+                obligation_key text,
+                obligation_type text,
+                status text,
+                owed_by_person_id integer,
+                owed_to_person_id integer,
+                region_id text,
+                settlement_id text,
+                strength real,
+                start_year integer,
+                expected_end_year integer,
+                resolved_year integer,
+                details_json text,
+                created_at text,
+                updated_at text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_obligations_readable
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                21,
+                1001,
+                "public_virtue",
+                "beneficiary_to_benefactor",
+                "relief_debt",
+                "active",
+                1,
+                2,
+                "aeria_north",
+                "aeria_north:settlement:1",
+                0.35,
+                1001,
+                1013,
+                None,
+                "{}",
+                "now",
+                "now",
+            ),
+        )
+        con.execute(
+            """
+            create table simulation_reputation_marks_readable (
+                reputation_mark_id integer,
+                source_event_id integer,
+                source_event_year integer,
+                source_event_type text,
+                mark_key text,
+                person_id integer,
+                reputation_axis text,
+                reputation_before text,
+                reputation_after text,
+                direction text,
+                mark_strength real,
+                region_id text,
+                settlement_id text,
+                mark_year integer,
+                details_json text,
+                created_at text,
+                updated_at text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_reputation_marks_readable
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                22,
+                1002,
+                "public_virtue",
+                "leadership:1",
+                1,
+                "leadership",
+                "low",
+                "medium",
+                "positive",
+                0.33,
+                "aeria_north",
+                "aeria_north:settlement:1",
+                1002,
+                "{}",
+                "now",
+                "now",
+            ),
+        )
+        con.execute(
+            """
+            create table simulation_legal_fallout_readable (
+                fallout_id integer,
+                source_event_id integer,
+                source_event_year integer,
+                source_event_type text,
+                fallout_key text,
+                fallout_type text,
+                status text,
+                principal_person_id integer,
+                opposing_person_id integer,
+                related_person_id integer,
+                region_id text,
+                settlement_id text,
+                severity real,
+                start_year integer,
+                expected_resolution_year integer,
+                resolved_year integer,
+                details_json text,
+                created_at text,
+                updated_at text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_legal_fallout_readable
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                23,
+                1003,
+                "affair_scandal",
+                "heir_legitimacy:1:3:2",
+                "heir_legitimacy_challenge",
+                "active",
+                1,
+                2,
+                3,
+                "aeria_north",
+                "aeria_north:settlement:1",
+                0.58,
+                1003,
+                1021,
+                None,
+                "{}",
+                "now",
+                "now",
+            ),
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertLess(sheet.index("Consequences"), sheet.index(">Events</h3>"))
+        self.assertLess(sheet.index("Consequences"), sheet.index("Job History"))
+        self.assertIn("Active Obligations", sheet)
+        self.assertIn("Reputation Marks", sheet)
+        self.assertIn("Legal Fallout", sheet)
+        self.assertIn("Knowledge Effects", sheet)
+        self.assertIn("Obligation: relief debt", sheet)
+        self.assertIn("Reputation: leadership", sheet)
+        self.assertIn("Legal Fallout: heir legitimacy challenge", sheet)
+        self.assertIn("Knowledge Effect: toolmaking", sheet)
+        self.assertIn(">Bea Forge", sheet)
+        self.assertIn(">Cato Vale", sheet)
+        self.assertIn("Consequences:\n- Obligations: 1", share)
+        self.assertIn("Reputation marks: 1", share)
+        self.assertIn("Legal fallout: 1", share)
+        self.assertIn("Knowledge effects: 1", share)
+        self.assertIn("Active Obligations:\n- 1001-1013: relief debt", share)
+        self.assertIn("Reputation Marks:\n- 1002: leadership low -> medium", share)
+        self.assertIn("Legal Fallout:\n- 1003-1021: heir legitimacy challenge", share)
+        self.assertIn("Knowledge Effects:\n- 1004: toolmaking", share)
+
+    def test_partner_history_ignores_context_events_and_merges_repeated_pair(self) -> None:
+        con = _memory_save()
+        events = [
+            _event_row(con, "couple_formed", {"person_a_id": 2, "person_b_id": 1}, year=1022),
+            _event_row(con, "couple_dissolved", {"person_a_id": 2, "person_b_id": 1}, year=1030),
+            _event_row(con, "couple_formed", {"person_a_id": 2, "person_b_id": 1}, year=1031),
+            _event_row(con, "couple_dissolved", {"person_a_id": 3, "person_b_id": 4}, year=1039),
+            _event_row(con, "couple_dissolved", {"person_a_id": 1, "person_b_id": 2}, year=1039),
+        ]
+
+        entries = gdb._relationship_history_entries(
+            events,
+            1,
+            {},
+            1100,
+            formed_types={"couple_formed", "same_sex_couple_formed"},
+            ended_types={"couple_dissolved"},
+            current_person_key="partner_person_id",
+        )
+
+        self.assertEqual(
+            entries,
+            [{"start_year": 1022, "end_year": 1039, "person_id": 2}],
+        )
+
+    def test_murder_event_names_killer_and_victim(self) -> None:
+        con = _memory_save()
+        event = _event_row(
+            con,
+            "murder",
+            {
+                "killer_person_id": 1,
+                "victim_person_id": 2,
+                "incident_kind": "feud_murder",
+                "motive": "revenge",
+            },
+        )
+
+        killer_text = _event_sentence(con, "test", event, 1)
+        victim_text = _event_sentence(con, "test", event, 2)
+        killer_html = _event_sentence_html(con, "test", event, 1)
+        victim_html = _event_sentence_html(con, "test", event, 2)
+
+        self.assertIn("Ada killed Bea Forge", killer_text)
+        self.assertIn("Bea was killed by Ada Forge", victim_text)
+        self.assertIn("feud murder", killer_text)
+        self.assertNotIn("murder: Ada", killer_text)
+        self.assertIn("<strong>Ada</strong> killed", killer_html)
+        self.assertIn("<strong>Bea</strong> was killed by", victim_html)
+        self.assertIn(">Bea Forge</a>", killer_html)
+        self.assertIn(">Ada Forge</a>", victim_html)
 
     def test_career_fitness_update_uses_event_payload(self) -> None:
         con = _memory_save()
@@ -750,6 +1420,65 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         )
 
         self.assertEqual([int(row["person_id"]) for row in rows], [2, 1])
+
+    def test_people_browser_searches_keyed_current_settlement(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = Path(tmp) / "save.sqlite"
+            con = _test_connect(save)
+            con.row_factory = sqlite3.Row
+            ensure_checkpoint_schema(con)
+            con.execute(
+                """
+                create table world_state (
+                    id integer primary key check (id = 1),
+                    start_year integer not null,
+                    current_year integer not null
+                )
+                """
+            )
+            con.execute(
+                """
+                insert or replace into world_state (id, start_year, current_year)
+                values (1, 970, 1000)
+                """
+            )
+            con.execute("insert into simulation_region_lookup values (1, 'r1')")
+            con.execute("insert into simulation_settlement_lookup values (1, 'r1:s1', 1)")
+            _insert_compact_person(con, 1, "Ada", "Forge")
+            con.execute(
+                """
+                update simulation_people
+                set birthplace_region_key = 1,
+                    birthplace_settlement_key = 1,
+                    current_settlement_key = 1
+                where person_id = 1
+                """
+            )
+            con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: save
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                table, status, person_ids = gdb.load_people_browser(
+                    "default",
+                    "r1:s1",
+                    "All",
+                    "",
+                    "",
+                    "Default",
+                    "Descending",
+                    50,
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        self.assertEqual(person_ids, [1])
+        self.assertIn("showing 1 of 1 people", status)
+        self.assertEqual(table["value"][0][8], "r1:s1")
 
     def test_person_from_row_expands_compact_trait_arrays(self) -> None:
         con = _test_connect(":memory:")
@@ -883,6 +1612,43 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         rows = _person_event_rows(con, "test", 1)
 
         self.assertEqual([r["event_type"] for r in rows], ["job_assigned"])
+
+    def test_settlement_move_event_uses_normalized_move_details(self) -> None:
+        con = _test_connect(":memory:")
+        con.row_factory = sqlite3.Row
+        ensure_checkpoint_schema(con)
+        _insert_compact_person(con, 1, "Ada", "Forge")
+        _insert_compact_person(con, 2, "Bea", "Forge")
+        append_simulation_event_rows(
+            con,
+            "default",
+            [
+                (
+                    1143,
+                    "settlement_moved",
+                    {
+                        "moved_person_ids": [1, 2],
+                        "from_settlement_id": "r1:s1",
+                        "to_settlement_id": "r2:s3",
+                        "from_region_id": "r1",
+                        "to_region_id": "r2",
+                        "move_reason": "resource_pressure",
+                    },
+                )
+            ],
+        )
+
+        rows = _person_event_rows(con, "default", 1)
+        text = _event_sentence(con, "default", rows[0], 1)
+        shown_html = _event_sentence_html(con, "default", rows[0], 1)
+
+        self.assertEqual([r["event_type"] for r in rows], ["settlement_moved"])
+        self.assertIn("r1:s1", text)
+        self.assertIn("r2:s3", text)
+        self.assertIn("resource pressure", text)
+        self.assertNotIn("unknown to unknown", text)
+        self.assertIn("r1:s1", shown_html)
+        self.assertIn("r2:s3", shown_html)
 
     def test_closest_to_ideal_can_prefer_optimal_trait_phrase(self) -> None:
         con = _memory_save()

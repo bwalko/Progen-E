@@ -159,25 +159,34 @@ def load_government_catalog(db_path: Path | str) -> GovernmentCatalog:
     path = Path(db_path).resolve()
     with closing(sqlite3.connect(path)) as conn:
         conn.row_factory = sqlite3.Row
-        era_rows = conn.execute(
-            "SELECT * FROM government_eras ORDER BY history_year_from"
-        ).fetchall()
-        pt_rows = conn.execute(
-            "SELECT * FROM government_polity_types ORDER BY polity_type_id"
-        ).fetchall()
-        title_rows = conn.execute(
-            "SELECT * FROM government_titles ORDER BY title_id"
-        ).fetchall()
+        era_rows = [
+            {str(k): row[k] for k in row.keys()}
+            for row in conn.execute(
+                "SELECT * FROM government_eras ORDER BY history_year_from"
+            )
+        ]
+        pt_rows = [
+            {str(k): row[k] for k in row.keys()}
+            for row in conn.execute(
+                "SELECT * FROM government_polity_types ORDER BY polity_type_id"
+            )
+        ]
+        title_rows = [
+            {str(k): row[k] for k in row.keys()}
+            for row in conn.execute("SELECT * FROM government_titles ORDER BY title_id")
+        ]
         try:
-            sp_rows = conn.execute(
-                "SELECT * FROM government_starting_polities WHERE region_id IS NOT NULL AND trim(region_id) != ''"
-            ).fetchall()
+            sp_rows = [
+                {str(k): row[k] for k in row.keys()}
+                for row in conn.execute(
+                    "SELECT * FROM government_starting_polities WHERE region_id IS NOT NULL AND trim(region_id) != ''"
+                )
+            ]
         except sqlite3.OperationalError:
             sp_rows = []
 
     eras: list[GovernmentEraRow] = []
-    for r in era_rows:
-        rd = dict(r)
+    for rd in era_rows:
         eras.append(
             GovernmentEraRow(
                 world=str(rd.get("world") or "default").strip() or "default",
@@ -193,8 +202,7 @@ def load_government_catalog(db_path: Path | str) -> GovernmentCatalog:
         )
 
     polity_types: list[PolityTypeRow] = []
-    for r in pt_rows:
-        rd = dict(r)
+    for rd in pt_rows:
         parent = str(rd.get("parent_polity_type_id") or "").strip() or None
         polity_types.append(
             PolityTypeRow(
@@ -214,8 +222,7 @@ def load_government_catalog(db_path: Path | str) -> GovernmentCatalog:
         )
 
     titles: list[TitleRow] = []
-    for r in title_rows:
-        rd = dict(r)
+    for rd in title_rows:
         term_raw = rd.get("term_years")
         term_years: int | None
         if term_raw is None or str(term_raw).strip() == "":
@@ -254,8 +261,7 @@ def load_government_catalog(db_path: Path | str) -> GovernmentCatalog:
         )
 
     starting: list[StartingPolitySpec] = []
-    for r in sp_rows:
-        rd = dict(r)
+    for rd in sp_rows:
         starting.append(
             StartingPolitySpec(
                 world=str(rd.get("world") or "default").strip(),
@@ -392,5 +398,7 @@ def load_genome_composite_rows(db_path: Path | str) -> tuple[dict[str, object], 
     path = Path(db_path).resolve()
     with closing(sqlite3.connect(path)) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM genome_composites").fetchall()
-    return tuple(dict(r) for r in rows)
+        return tuple(
+            {str(k): row[k] for k in row.keys()}
+            for row in conn.execute("SELECT * FROM genome_composites")
+        )

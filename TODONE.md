@@ -227,6 +227,343 @@
 - Verbose event logging still preserves raw self-contained movement payloads for debugging runs.
 - Schema ensure/rebuild can backfill movement rows from older raw/verbose `settlement_moved` payloads when the route detail is still present.
 
+### Completed Save Schema v8 Event Memory Foundation
+
+- Added `simulation_event_records` as the first durable split between factual
+  simulation events and in-world historical memory:
+  - one default record per event;
+  - `record_type` for court chronicles, household memories, lineage memories,
+    mortuary memories, settlement chronicles, work records, household secrets,
+    and admin notes;
+  - `visibility_state` values such as `public_known`, `private_known`, and
+    `admin_known`;
+  - future-ready fields for `lost_year`, `rediscovered_year`, confidence,
+    source person/institution, preserving place, public actor/victim,
+    distortion JSON, and prose template key.
+- New event writes create a default memory record immediately.
+- Schema ensure/rebuild backfills default event records for older saves.
+- Added `simulation_event_records_readable` so admin/debug tools can inspect
+  factual event metadata beside its current in-world record state.
+- Added explicit state-transition helpers for event memory:
+  - mark records `lost`;
+  - seal records into hidden archives/institutions;
+  - turn records into `rumored` uncertain/distorted memories;
+  - mark records `rediscovered`.
+- Rediscovery can now log a linked factual `event_rediscovered` row, so finding
+  a lost record becomes part of the history rather than only a silent state
+  update.
+- Added regression tests for appended event records and v7-to-v8 event-record
+  backfill, plus lost/sealed/rumored/rediscovered transitions.
+
+### Completed First Genome-Driven Incident Slice
+
+- Added `library.simulation_incidents` for rare detailed personal incidents.
+- Implemented the first bounded event generator: `murder`.
+  - Samples adult candidates per settlement using the existing deterministic
+    decision-sample pattern.
+  - Scores violent actor propensity from genome traits including `justice`,
+    `empathy`, `patience`, `temperance`, `courage`, `assertiveness`,
+    `neurochemical`, and `ambition`.
+  - Mixes local settlement resource pressure into the chance gate.
+  - Classifies initial incident kinds such as `domestic_murder`,
+    `feud_killing`, `rash_brawl_killing`, `predatory_murder`, and `murder`.
+  - Records structured event payloads with killer, victim, witnesses, motive,
+    place, actor propensity, historical importance, and genome signal context.
+  - Marks the victim dead immediately so downstream same-year systems can react.
+- Integrated the incidents tick after household care and before government in
+  `SimulationContext.record_year_summary`.
+- Added event indexing roles for `killer_person_id`, witnesses, and suspects.
+- Murder event-memory rows default to `violent_crime_record` with `rumored`
+  visibility.
+- Added regression tests proving:
+  - extreme violent genomes score above stable genomes;
+  - a forced murder tick records a murder, kills the victim, and persists a
+    rumored violent-crime record;
+  - stable low-risk adults do not produce murders even when the chance gate is
+    forced open.
+- Implemented the second bounded event generator: `property_crime`.
+  - Scores theft/fraud/extortion/hoarding-theft propensity from `justice`,
+    `honesty`, `empathy`, `persuasion`, `perception`, `ambition`, `frugality`,
+    and `adaptability`.
+  - Competence traits such as perception/adaptability amplify suspect intent but
+    do not make stable people criminal by themselves.
+  - Records structured event payloads with perpetrator, target, witnesses,
+    motive, incident kind, loss value, place, resource pressure, historical
+    importance, and genome signal context.
+  - Applies the first property/economy consequence hook: target households lose
+    modest `household_prosperity`, perpetrator households gain a smaller amount,
+    the affected settlement loses a little prosperity/stability, and the event
+    payload records before/after consequence deltas.
+- Property-crime event-memory rows default to `property_crime_record` with
+  `rumored` visibility.
+- Added regression tests proving:
+  - extreme property-crime genomes score above stable genomes;
+  - a forced property-crime tick records a non-lethal incident and persists a
+    rumored property-crime record;
+  - stable low-risk adults do not produce property crimes even when the chance
+    gate is forced open.
+- Implemented the third bounded event generator: `affair_scandal`.
+  - Samples existing paramour pairs where at least one participant has a
+    spouse/partner outside the paramour relationship.
+  - Scores exposure propensity from `mating drive`, `loyalty`, `modesty`,
+    `honesty`, `neurochemical`, `assertiveness`, `persuasion`, and
+    `discipline`.
+  - Records structured event payloads with accused person, paramour, betrayed
+    partner(s), witnesses, motive, incident kind, place, resource pressure,
+    historical importance, and genome signal context.
+  - Applies the first relationship consequence hook: exposed paramour ties end,
+    betrayed official couples dissolve when the exposed partner is still linked,
+    the affected settlement takes a small stability penalty, and the event
+    payload records the relationship fallout.
+- Scandal event-memory rows default to `scandal_record` with `rumored`
+  visibility.
+- Added regression tests proving:
+  - scandal-exposure genomes score above stable genomes;
+  - a forced affair-scandal tick records an existing paramour affair, persists a
+    rumored scandal record, and indexes accused/paramour/betrayed-partner roles;
+  - stable low-risk paramour pairs do not produce scandals even when the chance
+    gate is forced open.
+- Implemented the fourth bounded event generator: `public_virtue`.
+  - Scores costly public virtue from `empathy`, `justice`, `nurturance`,
+    `civics`, `honesty`, `courage`, `assertiveness`, `discipline`,
+    `resilience`, and `frugality`.
+  - Samples a benefactor and beneficiary per settlement under bounded
+    candidate pools, with resource pressure and beneficiary hardship shaping
+    event chance and target selection.
+  - Classifies initial incident kinds such as `heroic_rescue`, `public_mercy`,
+    `public_arbitration`, and `loyal_service`.
+  - Records structured event payloads with benefactor, beneficiary, witnesses,
+    motive, incident kind, place, resource pressure, historical importance,
+    relief value, and genome signal context.
+  - Applies the first public-virtue consequence hook: beneficiary households
+    gain modest prosperity, benefactor households pay a smaller cost, the
+    affected settlement gains a little prosperity/stability and food-pressure
+    relief, low/blank benefactor leadership reputation rises to `medium`, and
+    the event payload records relief and reputation deltas.
+- Public-virtue event-memory rows default to `public_virtue_record` with
+  `public_known` visibility.
+- Added regression tests proving:
+  - heroic public-virtue genomes score above selfish/low-prosocial genomes;
+  - a forced public-virtue tick records a positive public event, persists a
+    public-known virtue record, and indexes benefactor/beneficiary roles;
+  - low-prosocial adults do not produce public-virtue events even when the
+    chance gate is forced open.
+- Implemented the fifth bounded event generator: `knowledge_culture`.
+  - Scores breakthrough propensity from `curiosity`, `creativity`, `intellect`,
+    `focus`, `perception`, `discipline`, `civics`, `wit`, and `adaptability`.
+  - Samples creators, patrons, and witnesses per settlement under bounded
+    candidate pools, with low resource pressure and high creator propensity
+    shaping event chance.
+  - Classifies initial incident kinds such as `invention`, `discovery`,
+    `legal_precedent`, `artistic_triumph`, and `scholarly_breakthrough`.
+  - Records structured event payloads with creator, patron, witnesses, motive,
+    knowledge domain, incident kind, place, resource pressure, historical
+    importance, novelty value, and genome signal context.
+  - Applies the first knowledge/culture consequence hook: breakthroughs nudge
+    settlement and regional prosperity/stability, patronage transfers modest
+    household prosperity from patron to creator when a patron exists, low/blank
+    creator status reputation rises to `middle-high`, and the payload records a
+    structured per-domain `knowledge_state` delta for future durable domain
+    tables.
+- Knowledge/culture event-memory rows default to `knowledge_record` with
+  `public_known` visibility.
+- Added regression tests proving:
+  - knowledge/culture creator genomes score above low-aptitude genomes;
+  - a forced knowledge/culture tick records a public breakthrough, persists a
+    public-known knowledge record, and indexes creator/patron roles;
+  - low-aptitude adults do not produce knowledge/culture events even when the
+    chance gate is forced open.
+- Added the first authored event catalog:
+  - `config/event_catalog.csv` now defines 50 concrete event/incident kind rows
+    with family labels, context tags, consequence profiles, default memory
+    expectations, and selection weights.
+  - `library.event_catalog` loads catalog rows from config SQLite and falls
+    back to legacy built-in rows for old/fixture databases.
+  - `library.simulation_incidents` uses catalog-backed kind selection while
+    keeping the existing bounded trait/context gates and rates.
+  - New catalog rows expand crime, rescue, legal, invention, and
+    succession-adjacent variety, including `storehouse_robbery`,
+    `livestock_theft`, `inheritance_fraud`, `river_rescue`,
+    `succession_arbitration`, `improved_plow`, `inheritance_judgment`, and
+    `succession_precedent`.
+- Added regression tests proving:
+  - authored catalog rows load through the normal CSV-to-SQLite path;
+  - missing catalog tables fall back to legacy kind rows;
+  - forced incident tests accept and persist expanded catalog variants while
+    preserving their existing family-level consequences.
+- Added the first durable domain-state consequence model:
+  - Bumped `save.sqlite` to schema v9.
+  - Added `simulation_domain_states` and `simulation_domain_states_readable` as
+    one-row-per-region/domain state accumulated from `knowledge_culture` events.
+  - Event flush now upserts regional `domain_score`, breakthrough count,
+    first/latest years, first/latest event ids, latest incident kind, latest
+    creator, and latest settlement from the structured `knowledge_state`
+    consequence payload.
+  - Older v8 saves backfill domain-state rows from existing `knowledge_culture`
+    events when checkpoint schema is ensured/rebuilt; reset/clear paths remove
+    the derived rows with the rest of the checkpoint.
+  - Added regression tests proving forced knowledge/culture events create the
+    readable domain-state row and v8 knowledge events backfill into v9 domain
+    state.
+- Added the first durable obligation consequence model:
+  - Bumped `save.sqlite` to schema v10.
+  - Added `simulation_obligations` and `simulation_obligations_readable` as an
+    active obligation ledger keyed back to source factual events.
+  - Public-virtue relief now emits a `relief_debt` from beneficiary to
+    benefactor, with strength, start year, expected end year, place, and source
+    role persisted.
+  - Knowledge/culture patronage now emits a `patronage_debt` from creator to
+    patron when a patron exists, with the same durable obligation fields.
+  - Older v9 saves backfill obligation rows from existing public-virtue relief
+    and knowledge patronage consequence payloads when checkpoint schema is
+    ensured/rebuilt; reset/clear paths remove obligation rows with the rest of
+    the checkpoint.
+  - Added regression tests proving generated public-virtue and knowledge/culture
+    events create readable obligation rows, and v9 public-virtue rows backfill
+    into v10 obligations.
+- Added the first durable reputation-memory consequence model:
+  - Bumped `save.sqlite` to schema v11.
+  - Added `simulation_reputation_marks` and
+    `simulation_reputation_marks_readable` as source-event-backed rows for
+    leadership/status reputation changes.
+  - Public-virtue benefactor reputation lifts now persist a `leadership` mark
+    with before/after values, direction, strength, place, source event, and mark
+    year.
+  - Knowledge/culture creator reputation lifts now persist a `status` mark with
+    the same durable inspection fields.
+  - Older v10 saves backfill reputation marks from existing
+    `consequences.public_reputation` payloads when checkpoint schema is
+    ensured/rebuilt; reset/clear paths remove reputation marks with the rest of
+    the checkpoint.
+  - Added regression tests proving generated public-virtue and knowledge/culture
+    events create readable reputation marks, and v10 public-virtue rows backfill
+    into v11 marks.
+- Added the first durable legal fallout consequence model:
+  - Bumped `save.sqlite` to schema v12.
+  - Added `simulation_legal_fallout` and
+    `simulation_legal_fallout_readable` as source-event-backed rows for
+    legitimacy and inheritance disputes.
+  - Affair-scandal `heir_legitimacy_rumor` events now persist an active
+    `heir_legitimacy_challenge` with principal, opposing, related person,
+    severity, place, start year, and expected resolution year.
+  - Affair-scandal `inheritance_scandal` events now persist an active
+    `inheritance_dispute` with the same durable inspection fields.
+  - Older v11 affair-scandal events backfill legal fallout rows from existing
+    factual payloads when checkpoint schema is ensured/rebuilt; reset/clear
+    paths remove legal fallout rows with the rest of the checkpoint.
+  - Added regression tests proving forced affair scandals create readable legal
+    fallout rows, and v11 inheritance-scandal rows backfill into v12 fallout.
+- Added the first deterministic event-prose renderer:
+  - `library.event_prose` derives prose on demand from factual
+    `simulation_events_readable` rows and memory-state
+    `simulation_event_records_readable` rows.
+  - It exposes factual admin summaries for true events and public chronicle
+    prose for `public_known`, `rumored`, and `rediscovered` records.
+  - Initial authored templates cover `murder`, `property_crime`,
+    `affair_scandal`, `public_virtue`, `knowledge_culture`, `birth`, `death`,
+    `event_rediscovered`, plus generic lost/sealed/private/admin-known records.
+  - It keeps long prose out of `save.sqlite`; rendered text remains traceable to
+    `event_id`, `record_id`, and `prose_variant_key`.
+- Added regression tests proving:
+  - factual admin summaries include true structured payload details;
+  - public chronicle loading excludes private/admin records while rendering
+    public-known and rumored event records;
+  - lost records disappear from public chronicle output until rediscovery, then
+    receive rediscovered prose.
+- Added the first History browser/query surface:
+  - `utils.gradio_data_browser` now has an explicit-load History tab for
+    factual admin truth, public chronicle rows, rumors, lost records, and
+    rediscoveries.
+  - The same tab now has an explicit-load History Summary table for report-style
+    totals, tracked incident counts including zeros, event-type counts,
+    visibility-state counts, and metric summaries.
+  - The surface supports exact event-type filtering, text search, limit, and
+    offset.
+  - Rediscovery view includes both the restored original records and linked
+    `event_rediscovered` events.
+  - The browser delegates all prose generation to `library.event_prose`, keeping
+    UI code focused on query/filter presentation.
+- Added regression tests proving:
+  - public, rumor, and lost History views load the expected rows;
+  - admin truth can filter to `event_rediscovered`;
+  - rediscovery History rows include both restored original memory and the
+    rediscovery event.
+  - History Summary exposes event report counts, zero-count tracked incident
+    slices, lifecycle visibility states, and linked rediscovery rows.
+- Added the first event-history tuning report:
+  - `library.event_history_report` summarizes event counts by type/year,
+    event-memory visibility states, tracked incident slice counts, numeric
+    payload metrics such as `historical_importance` / `resource_pressure`, and
+    public chronicle prose samples.
+  - `utils/util_event_history_report.py` writes report artifacts to
+    `temp/event_history_report/<world>/`.
+  - Report outputs include `summary.txt`, `event_counts_by_type.tsv`,
+    `event_counts_by_year_type.tsv`, `event_visibility_counts.tsv`,
+    `tracked_incident_counts.tsv`, `event_metric_summaries.tsv`, and
+    `public_chronicle_samples.tsv`.
+- Tuned initial event rates/gates after fixed-seed scratch samples showed the
+  first defaults were too quiet for review.
+  - Final sample command used `event_tuning_sample`, 80 years, 80 starting
+    couples, seed `20260603`, no passive background population, and no canonical
+    report overwrite.
+  - Final sample produced 18,213 factual events / 18,213 records in an about
+    18.1 MB save.
+  - Tracked incident counts were: `murder` 6, `property_crime` 3,
+    `affair_scandal` 2, `public_virtue` 6, and `knowledge_culture` 3.
+  - The same sample showed 39 still-lost records, 2 original records in
+    `rediscovered` state, and 2 linked factual `event_rediscovered` rows.
+  - Murder was retuned after a larger 200-year run produced 85 murders, far
+    below the rough historical-criminology target of about 3-5 murders per
+    10,000 people per year. The generator now uses an explicit detailed
+    population target of 4 murders per 10,000 people per year, population-scaled
+    settlement trials, and a population-scaled annual cap while still requiring
+    a sufficiently high violent-actor propensity candidate.
+  - The report now makes zero-count incident slices explicit instead of hiding
+    them by omission.
+- Re-ran the fixed-seed event tuning sample after `config/incident_rates.csv`
+  made incident rates era-tunable.
+  - Command shape stayed the same: `event_tuning_sample`, 80 years, 80 starting
+    couples, seed `20260603`, no passive background population, and no canonical
+    report overwrite.
+  - New report produced 17,871 factual events / 17,871 records in a 17,719,296
+    byte save.
+  - Tracked incident counts were: `murder` 7, `property_crime` 45,
+    `affair_scandal` 4, `public_virtue` 2, and `knowledge_culture` 1.
+  - Compared with the previous 80-year report, murder stayed close at 6 -> 7,
+    property crime rose sharply at 3 -> 45, and affair scandal rose modestly at
+    2 -> 4.
+  - Report artifacts were written under
+    `temp/event_history_report/event_tuning_sample/`.
+- Added the first automatic event-memory lifecycle:
+  - `library.event_memory_lifecycle` reviews a bounded deterministic shard of
+    old event records each simulation year, after the annual save checkpoint has
+    flushed factual events and default memory records.
+  - Old `private_known`, `rumored`, and `public_known` records can become
+    `lost` using record-type-specific age and chance policies.
+  - Old `lost` or `sealed` records can become `rediscovered`; rediscovery writes
+    a linked factual `event_rediscovered` row and preserves source/confidence
+    details for prose/admin inspection.
+  - The lifecycle uses stable hash draws rather than the global RNG, so the same
+    save/year/review shard produces repeatable transitions.
+- Tuned lifecycle rates against a fresh fixed-seed `event_tuning_sample` run:
+  - the 80-year / 80-couple / seed `20260603` sample produced 17,363 events and
+    records in a 17,252,352 byte save;
+  - tracked incidents remained present: `murder` 11, `property_crime` 43,
+    `affair_scandal` 4, `public_virtue` 5, `knowledge_culture` 1;
+  - routine work records now decay much later and rediscover far less often,
+    leaving 0 lost and 0 rediscovered work records in the sample;
+  - lineage birth memory was already durable and stayed that way, with 1 lost
+    birth record out of 2,555.
+- Added regression tests proving:
+  - report counts, visibility rows, metric summaries, and prose samples derive
+    from real save-schema rows;
+  - report writing emits all expected TSV/text artifacts.
+  - old public/private/rumored records can be aged to `lost`;
+  - old lost/sealed records can resurface as linked rediscoveries;
+  - high-volume private work/birth records decay and rediscover later than
+    incident records;
+  - `record_year_summary` invokes the lifecycle after save persistence.
+
 ### Completed Hybrid Mixed-Mode Population Pass
 
 - Replaced static background cohort snapshots in the canonical population runner with passive demographic evolution:

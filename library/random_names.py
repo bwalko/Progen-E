@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import re
 import sqlite3
+from contextlib import closing
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -52,32 +53,28 @@ def _name_tables_cached(
         raise FileNotFoundError(
             f"Database not found: {path}. Run: python utils/util_load_config.py --world default"
         )
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    try:
-        er = conn.execute("SELECT * FROM ethnic").fetchall()
-        ethnic_rows = [{str(k): row[k] for k in row.keys()} for row in er]
-        fr = conn.execute(
-            "SELECT ethnic, gender, name, rate, name_part FROM first_name"
-        ).fetchall()
-        first_rows = []
-        for row in fr:
-            first_rows.append(
-                {
-                    "ethnic": row["ethnic"],
-                    "gender": row["gender"],
-                    "name": row["name"],
-                    "rate": row["rate"],
-                    "name_part": row["name_part"],
-                }
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        ethnic_rows = [
+            {str(k): row[k] for k in row.keys()}
+            for row in conn.execute("SELECT * FROM ethnic")
+        ]
+        first_rows = [
+            {
+                "ethnic": row["ethnic"],
+                "gender": row["gender"],
+                "name": row["name"],
+                "rate": row["rate"],
+                "name_part": row["name_part"],
+            }
+            for row in conn.execute(
+                "SELECT ethnic, gender, name, rate, name_part FROM first_name"
             )
-        lr = conn.execute("SELECT ethnic, name, rate FROM last_name").fetchall()
+        ]
         last_rows = [
             {"ethnic": row["ethnic"], "name": row["name"], "rate": row["rate"]}
-            for row in lr
+            for row in conn.execute("SELECT ethnic, name, rate FROM last_name")
         ]
-    finally:
-        conn.close()
 
     ethnic_map: dict[str, dict[str, object]] = {}
     for row in ethnic_rows:
@@ -358,10 +355,9 @@ def _toponym_marker_tokens(db_path_s: str) -> frozenset[str]:
     match the person's birthplace / local settlement labels (see
     :func:`_filter_lookup_last_name_pool`).
     """
-    conn = sqlite3.connect(db_path_s)
-    conn.row_factory = sqlite3.Row
     tokens: set[str] = set()
-    try:
+    with closing(sqlite3.connect(db_path_s)) as conn:
+        conn.row_factory = sqlite3.Row
         has_placenames = _sqlite_table_exists(conn, "placenames")
         has_regions = _sqlite_table_exists(conn, "world_geography_regions")
         has_last = _sqlite_table_exists(conn, "last_name")
@@ -422,8 +418,6 @@ def _toponym_marker_tokens(db_path_s: str) -> frozenset[str]:
                     if lk in rnc or rnc in lk:
                         tokens.add(lk)
                         break
-    finally:
-        conn.close()
     return frozenset(tokens)
 
 

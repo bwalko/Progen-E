@@ -10,7 +10,7 @@ import json
 import sqlite3
 import time
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,9 +34,17 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 7
+SAVE_SCHEMA_VERSION = 12
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
+EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
+DOMAIN_STATES_BACKFILLED_META_KEY = "simulation_domain_states_backfilled_event_id"
+OBLIGATIONS_BACKFILLED_META_KEY = "simulation_obligations_backfilled_event_id"
+REPUTATION_MARKS_BACKFILLED_META_KEY = "simulation_reputation_marks_backfilled_event_id"
+LEGAL_FALLOUT_BACKFILLED_META_KEY = "simulation_legal_fallout_backfilled_event_id"
+LEGAL_FALLOUT_SCANDAL_KINDS: frozenset[str] = frozenset(
+    {"heir_legitimacy_rumor", "inheritance_scandal"}
+)
 
 _SAVE_REBUILD_SOURCE_SCHEMA = "source_db"
 
@@ -70,6 +78,10 @@ _SAVE_REBUILD_TABLES = (
     "simulation_events",
     "simulation_event_people",
     "simulation_event_moves",
+    "simulation_event_records",
+    "simulation_obligations",
+    "simulation_reputation_marks",
+    "simulation_legal_fallout",
     "simulation_regions",
     "simulation_settlements",
     "simulation_polities",
@@ -292,7 +304,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
             f"save.sqlite schema version {version} is newer than supported "
             f"version {SAVE_SCHEMA_VERSION}"
         )
-    if version not in (0, 3, 4, 5, 6, SAVE_SCHEMA_VERSION):
+    if version not in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11, SAVE_SCHEMA_VERSION):
         raise RuntimeError(
             f"save.sqlite schema version {version} needs a migration before "
             f"this code can open it"
@@ -604,6 +616,16 @@ _EVENT_PERSON_SCALAR_ROLES: dict[str, str] = {
     "child_id": "child",
     "father_id": "father",
     "mother_id": "mother",
+    "killer_person_id": "killer",
+    "perpetrator_person_id": "perpetrator",
+    "accused_person_id": "accused",
+    "betrayed_partner_person_id": "betrayed_partner",
+    "paramour_person_id": "paramour",
+    "benefactor_person_id": "benefactor",
+    "beneficiary_person_id": "beneficiary",
+    "creator_person_id": "creator",
+    "patron_person_id": "patron",
+    "target_person_id": "target",
     "victim_person_id": "victim",
     "purseholder_person_id": "purseholder",
     "moved_person_id": "moved",
@@ -618,6 +640,9 @@ _EVENT_PERSON_LIST_ROLES: dict[str, str] = {
     "dependent_minor_ids": "dependent_minor",
     "moved_person_ids": "moved",
     "child_ids": "child",
+    "witness_person_ids": "witness",
+    "suspect_person_ids": "suspect",
+    "betrayed_partner_person_ids": "betrayed_partner",
 }
 
 _EVENT_SETTLEMENT_KEYS: tuple[str, ...] = (
@@ -783,6 +808,15 @@ def _coerce_event_int(value: object) -> int | None:
         return None
 
 
+def _coerce_event_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _event_move_person_ids(payload: dict) -> list[int]:
     ids: list[int] = []
     seen: set[int] = set()
@@ -866,6 +900,1475 @@ def _insert_simulation_event_move_rows(
         )
 
 
+def _ensure_simulation_domain_state_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_domain_states (
+            region_key INTEGER NOT NULL,
+            domain TEXT NOT NULL,
+            domain_score REAL NOT NULL DEFAULT 0.0,
+            breakthrough_count INTEGER NOT NULL DEFAULT 0,
+            first_event_year INTEGER,
+            latest_event_year INTEGER,
+            first_event_id INTEGER,
+            latest_event_id INTEGER,
+            latest_incident_kind TEXT,
+            latest_creator_person_id INTEGER,
+            latest_settlement_key INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (region_key, domain)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_domain_states_domain
+        ON simulation_domain_states (domain, region_key);
+        CREATE INDEX IF NOT EXISTS idx_simulation_domain_states_latest_event
+        ON simulation_domain_states (latest_event_id);
+        """
+    )
+    _backfill_simulation_domain_states(conn)
+
+
+def _domain_states_processed_event_id(conn: sqlite3.Connection) -> int:
+    _ensure_save_metadata_schema(conn)
+    row = conn.execute(
+        """
+        SELECT meta_value FROM save_metadata
+        WHERE meta_key = ?
+        """,
+        (DOMAIN_STATES_BACKFILLED_META_KEY,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return 0
+    try:
+        return max(0, int(str(row[0]).strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_domain_states_processed_event_id(
+    conn: sqlite3.Connection, event_id: int | None
+) -> None:
+    _ensure_save_metadata_schema(conn)
+    processed = max(0, int(event_id or 0))
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+        VALUES (?, ?)
+        """,
+        (DOMAIN_STATES_BACKFILLED_META_KEY, str(processed)),
+    )
+
+
+def _knowledge_state_delta_from_payload(payload: dict) -> tuple[str, float] | None:
+    consequences = payload.get("consequences")
+    if not isinstance(consequences, dict):
+        consequences = {}
+    knowledge_state = consequences.get("knowledge_state")
+    if not isinstance(knowledge_state, dict):
+        knowledge_state = {}
+    domain = str(
+        knowledge_state.get("domain") or payload.get("knowledge_domain") or ""
+    ).strip()
+    if not domain:
+        return None
+    delta = _coerce_event_float(knowledge_state.get("state_delta"))
+    if delta is None:
+        novelty = _coerce_event_float(payload.get("novelty_value"))
+        delta = max(0.01, float(novelty or 0.0) * 0.35)
+    delta = round(max(0.0, float(delta)), 5)
+    if delta <= 0.0:
+        return None
+    return domain, delta
+
+
+def _upsert_simulation_domain_state_from_event(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    sim_year: int | None,
+    event_type: str,
+    payload: dict,
+    settlement_key: int | None = None,
+    region_key: int | None = None,
+    created_at: str | None = None,
+) -> None:
+    if str(event_type or "").strip() != "knowledge_culture":
+        return
+    state = _knowledge_state_delta_from_payload(payload)
+    if state is None:
+        return
+    domain, delta = state
+    if region_key is None:
+        _primary, _secondary, settlement_id, region_id = _event_common_columns(payload)
+        settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+        region_key = _lookup_or_insert_region_key(conn, region_id)
+    if region_key is None:
+        return
+    ts = created_at or _utc_now_iso()
+    creator_id = _coerce_event_person_id(payload.get("creator_person_id"))
+    incident_kind = str(payload.get("incident_kind") or "").strip() or None
+    conn.execute(
+        """
+        INSERT INTO simulation_domain_states (
+            region_key, domain, domain_score, breakthrough_count,
+            first_event_year, latest_event_year,
+            first_event_id, latest_event_id,
+            latest_incident_kind, latest_creator_person_id, latest_settlement_key,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(region_key, domain) DO UPDATE SET
+            domain_score = round(
+                simulation_domain_states.domain_score + excluded.domain_score,
+                5
+            ),
+            breakthrough_count = simulation_domain_states.breakthrough_count + 1,
+            first_event_year = COALESCE(
+                simulation_domain_states.first_event_year,
+                excluded.first_event_year
+            ),
+            latest_event_year = excluded.latest_event_year,
+            first_event_id = COALESCE(
+                simulation_domain_states.first_event_id,
+                excluded.first_event_id
+            ),
+            latest_event_id = excluded.latest_event_id,
+            latest_incident_kind = excluded.latest_incident_kind,
+            latest_creator_person_id = excluded.latest_creator_person_id,
+            latest_settlement_key = COALESCE(
+                excluded.latest_settlement_key,
+                simulation_domain_states.latest_settlement_key
+            ),
+            updated_at = excluded.updated_at
+        """,
+        (
+            int(region_key),
+            domain,
+            delta,
+            sim_year,
+            sim_year,
+            int(event_id),
+            int(event_id),
+            incident_kind,
+            creator_id,
+            settlement_key,
+            ts,
+            ts,
+        ),
+    )
+
+
+def _backfill_simulation_domain_states(conn: sqlite3.Connection) -> None:
+    processed_event_id = _domain_states_processed_event_id(conn)
+    max_row = conn.execute("SELECT MAX(id) FROM simulation_events").fetchone()
+    max_event_id = int(max_row[0] or 0) if max_row is not None else 0
+    if max_event_id <= processed_event_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, sim_year, event_type, settlement_key, region_key,
+               payload_json, created_at
+        FROM simulation_events
+        WHERE id > ?
+        ORDER BY id
+        """,
+        (processed_event_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _upsert_simulation_domain_state_from_event(
+            conn,
+            event_id=int(row["id"]),
+            sim_year=row["sim_year"],
+            event_type=str(row["event_type"] or ""),
+            payload=payload,
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            created_at=str(row["created_at"] or "") or None,
+        )
+    _set_domain_states_processed_event_id(conn, max_event_id)
+
+
+def _ensure_simulation_obligation_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_obligations (
+            obligation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_event_id INTEGER NOT NULL,
+            obligation_key TEXT NOT NULL,
+            obligation_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            owed_by_person_id INTEGER NOT NULL,
+            owed_to_person_id INTEGER NOT NULL,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            strength REAL NOT NULL DEFAULT 0.0,
+            start_year INTEGER,
+            expected_end_year INTEGER,
+            resolved_year INTEGER,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (source_event_id, obligation_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_obligations_owed_by
+        ON simulation_obligations (owed_by_person_id, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_obligations_owed_to
+        ON simulation_obligations (owed_to_person_id, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_obligations_place
+        ON simulation_obligations (region_key, settlement_key, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_obligations_type
+        ON simulation_obligations (obligation_type, status);
+        """
+    )
+    _backfill_simulation_obligations(conn)
+
+
+def _obligations_processed_event_id(conn: sqlite3.Connection) -> int:
+    _ensure_save_metadata_schema(conn)
+    row = conn.execute(
+        """
+        SELECT meta_value FROM save_metadata
+        WHERE meta_key = ?
+        """,
+        (OBLIGATIONS_BACKFILLED_META_KEY,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return 0
+    try:
+        return max(0, int(str(row[0]).strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_obligations_processed_event_id(
+    conn: sqlite3.Connection, event_id: int | None
+) -> None:
+    _ensure_save_metadata_schema(conn)
+    processed = max(0, int(event_id or 0))
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+        VALUES (?, ?)
+        """,
+        (OBLIGATIONS_BACKFILLED_META_KEY, str(processed)),
+    )
+
+
+def _event_obligation_rows_from_payload(
+    event_type: str,
+    payload: dict,
+    *,
+    sim_year: int | None,
+) -> list[dict[str, object]]:
+    consequences = payload.get("consequences")
+    if not isinstance(consequences, dict):
+        consequences = {}
+    raw_obligations = consequences.get("obligations")
+    rows: list[dict[str, object]] = []
+    if isinstance(raw_obligations, list):
+        for item in raw_obligations:
+            if isinstance(item, dict):
+                rows.append(dict(item))
+    if rows:
+        return rows
+
+    et = str(event_type or "").strip()
+    if et == "knowledge_culture" and isinstance(consequences.get("patronage"), dict):
+        creator_id = _coerce_event_person_id(payload.get("creator_person_id"))
+        patron_id = _coerce_event_person_id(payload.get("patron_person_id"))
+        if creator_id is not None and patron_id is not None:
+            novelty = _coerce_event_float(payload.get("novelty_value")) or 0.0
+            rows.append(
+                {
+                    "obligation_key": "creator_to_patron",
+                    "obligation_type": "patronage_debt",
+                    "owed_by_person_id": creator_id,
+                    "owed_to_person_id": patron_id,
+                    "strength": round(min(1.0, max(0.05, novelty * 1.8)), 5),
+                    "start_year": sim_year,
+                    "expected_duration_years": 20,
+                    "source_role": "knowledge_patronage",
+                }
+            )
+    elif et == "public_virtue" and isinstance(consequences.get("relief"), dict):
+        benefactor_id = _coerce_event_person_id(payload.get("benefactor_person_id"))
+        beneficiary_id = _coerce_event_person_id(payload.get("beneficiary_person_id"))
+        if benefactor_id is not None and beneficiary_id is not None:
+            relief = _coerce_event_float(payload.get("relief_value")) or 0.0
+            rows.append(
+                {
+                    "obligation_key": "beneficiary_to_benefactor",
+                    "obligation_type": "relief_debt",
+                    "owed_by_person_id": beneficiary_id,
+                    "owed_to_person_id": benefactor_id,
+                    "strength": round(min(1.0, max(0.04, relief * 1.4)), 5),
+                    "start_year": sim_year,
+                    "expected_duration_years": 12,
+                    "source_role": "public_virtue_relief",
+                }
+            )
+    return rows
+
+
+def _insert_simulation_obligation_rows(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    sim_year: int | None,
+    event_type: str,
+    payload: dict,
+    settlement_key: int | None = None,
+    region_key: int | None = None,
+    created_at: str | None = None,
+) -> None:
+    obligations = _event_obligation_rows_from_payload(
+        event_type,
+        payload,
+        sim_year=sim_year,
+    )
+    if not obligations:
+        return
+    _primary, _secondary, payload_settlement_id, payload_region_id = _event_common_columns(
+        payload
+    )
+    ts = created_at or _utc_now_iso()
+    for idx, obligation in enumerate(obligations):
+        owed_by = _coerce_event_person_id(obligation.get("owed_by_person_id"))
+        owed_to = _coerce_event_person_id(obligation.get("owed_to_person_id"))
+        if owed_by is None or owed_to is None:
+            continue
+        obligation_type = str(
+            obligation.get("obligation_type") or obligation.get("kind") or ""
+        ).strip()
+        if not obligation_type:
+            continue
+        obligation_key = str(
+            obligation.get("obligation_key")
+            or obligation.get("source_role")
+            or f"{obligation_type}:{owed_by}:{owed_to}:{idx}"
+        ).strip()
+        status = str(obligation.get("status") or "active").strip() or "active"
+        strength_raw = _coerce_event_float(obligation.get("strength"))
+        strength = round(min(1.0, max(0.0, float(strength_raw or 0.0))), 5)
+        start_year = _coerce_event_int(obligation.get("start_year"))
+        if start_year is None:
+            start_year = sim_year
+        expected_end_year = _coerce_event_int(obligation.get("expected_end_year"))
+        if expected_end_year is None and start_year is not None:
+            duration = _coerce_event_int(obligation.get("expected_duration_years"))
+            if duration is not None and duration > 0:
+                expected_end_year = int(start_year) + int(duration)
+        resolved_year = _coerce_event_int(obligation.get("resolved_year"))
+        obligation_region_id = str(
+            obligation.get("region_id") or payload_region_id or ""
+        ).strip()
+        obligation_settlement_id = str(
+            obligation.get("settlement_id") or payload_settlement_id or ""
+        ).strip()
+        obligation_region_key = region_key
+        if obligation_region_id:
+            obligation_region_key = _lookup_or_insert_region_key(
+                conn, obligation_region_id
+            )
+        obligation_settlement_key = settlement_key
+        if obligation_settlement_id:
+            obligation_settlement_key = _lookup_or_insert_settlement_key(
+                conn,
+                obligation_settlement_id,
+                obligation_region_id,
+            )
+        details = {
+            str(k): v
+            for k, v in obligation.items()
+            if str(k)
+            not in {
+                "obligation_key",
+                "obligation_type",
+                "kind",
+                "status",
+                "owed_by_person_id",
+                "owed_to_person_id",
+                "strength",
+                "start_year",
+                "expected_end_year",
+                "expected_duration_years",
+                "resolved_year",
+                "settlement_id",
+                "region_id",
+            }
+        }
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO simulation_obligations (
+                source_event_id, obligation_key, obligation_type, status,
+                owed_by_person_id, owed_to_person_id, region_key, settlement_key,
+                strength, start_year, expected_end_year, resolved_year,
+                details_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(event_id),
+                obligation_key,
+                obligation_type,
+                status,
+                int(owed_by),
+                int(owed_to),
+                obligation_region_key,
+                obligation_settlement_key,
+                strength,
+                start_year,
+                expected_end_year,
+                resolved_year,
+                json.dumps(details, separators=(",", ":")),
+                ts,
+                ts,
+            ),
+        )
+
+
+def _backfill_simulation_obligations(conn: sqlite3.Connection) -> None:
+    processed_event_id = _obligations_processed_event_id(conn)
+    max_row = conn.execute("SELECT MAX(id) FROM simulation_events").fetchone()
+    max_event_id = int(max_row[0] or 0) if max_row is not None else 0
+    if max_event_id <= processed_event_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, sim_year, event_type, settlement_key, region_key,
+               payload_json, created_at
+        FROM simulation_events
+        WHERE id > ?
+        ORDER BY id
+        """,
+        (processed_event_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _insert_simulation_obligation_rows(
+            conn,
+            event_id=int(row["id"]),
+            sim_year=row["sim_year"],
+            event_type=str(row["event_type"] or ""),
+            payload=payload,
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            created_at=str(row["created_at"] or "") or None,
+        )
+    _set_obligations_processed_event_id(conn, max_event_id)
+
+
+def _ensure_simulation_reputation_mark_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_reputation_marks (
+            reputation_mark_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_event_id INTEGER NOT NULL,
+            mark_key TEXT NOT NULL,
+            person_id INTEGER NOT NULL,
+            reputation_axis TEXT NOT NULL,
+            reputation_before TEXT,
+            reputation_after TEXT,
+            direction TEXT NOT NULL DEFAULT 'positive',
+            mark_strength REAL NOT NULL DEFAULT 0.0,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            mark_year INTEGER,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (source_event_id, mark_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_reputation_marks_person
+        ON simulation_reputation_marks (person_id, reputation_axis, mark_year);
+        CREATE INDEX IF NOT EXISTS idx_simulation_reputation_marks_axis
+        ON simulation_reputation_marks (reputation_axis, direction);
+        CREATE INDEX IF NOT EXISTS idx_simulation_reputation_marks_place
+        ON simulation_reputation_marks (region_key, settlement_key, mark_year);
+        """
+    )
+    _backfill_simulation_reputation_marks(conn)
+
+
+def _reputation_marks_processed_event_id(conn: sqlite3.Connection) -> int:
+    _ensure_save_metadata_schema(conn)
+    row = conn.execute(
+        """
+        SELECT meta_value FROM save_metadata
+        WHERE meta_key = ?
+        """,
+        (REPUTATION_MARKS_BACKFILLED_META_KEY,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return 0
+    try:
+        return max(0, int(str(row[0]).strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_reputation_marks_processed_event_id(
+    conn: sqlite3.Connection, event_id: int | None
+) -> None:
+    _ensure_save_metadata_schema(conn)
+    processed = max(0, int(event_id or 0))
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+        VALUES (?, ?)
+        """,
+        (REPUTATION_MARKS_BACKFILLED_META_KEY, str(processed)),
+    )
+
+
+def _reputation_value_rank(value: object) -> int:
+    text = str(value or "").strip().lower()
+    if text in {"high", "strong", "middle-high", "volatile-high"}:
+        return 3
+    if text in {"medium", "middle-variable", "middle-high but brittle", "middle-high but cold"}:
+        return 2
+    if text in {"low", "weak", "middle-low", "low-middle", "low-variable", "volatile-low"}:
+        return 1
+    return 0
+
+
+def _reputation_direction(before: object, after: object) -> str:
+    before_rank = _reputation_value_rank(before)
+    after_rank = _reputation_value_rank(after)
+    if after_rank > before_rank:
+        return "positive"
+    if after_rank < before_rank:
+        return "negative"
+    return "stable"
+
+
+def _reputation_strength(before: object, after: object) -> float:
+    before_rank = _reputation_value_rank(before)
+    after_rank = _reputation_value_rank(after)
+    if before_rank == after_rank:
+        return 0.05
+    return round(min(1.0, max(0.05, abs(after_rank - before_rank) / 3.0)), 5)
+
+
+def _event_reputation_mark_rows_from_payload(
+    event_type: str,
+    payload: dict,
+    *,
+    sim_year: int | None,
+) -> list[dict[str, object]]:
+    consequences = payload.get("consequences")
+    if not isinstance(consequences, dict):
+        consequences = {}
+    raw_marks = consequences.get("reputation_marks")
+    rows: list[dict[str, object]] = []
+    if isinstance(raw_marks, list):
+        for item in raw_marks:
+            if isinstance(item, dict):
+                rows.append(dict(item))
+    if rows:
+        return rows
+
+    public_reputation = consequences.get("public_reputation")
+    if not isinstance(public_reputation, dict):
+        return []
+    person_id = _coerce_event_person_id(public_reputation.get("person_id"))
+    if person_id is None:
+        person_id = _coerce_event_person_id(payload.get("benefactor_person_id"))
+    if person_id is None:
+        person_id = _coerce_event_person_id(payload.get("creator_person_id"))
+    if person_id is None:
+        return []
+    source_role = {
+        "public_virtue": "public_virtue_reputation",
+        "knowledge_culture": "knowledge_reputation",
+    }.get(str(event_type or "").strip(), "event_reputation")
+    axis_fields = (
+        ("leader_tendency", "leadership"),
+        ("status_tendency", "status"),
+    )
+    for field_name, axis in axis_fields:
+        before_key = f"{field_name}_before"
+        after_key = f"{field_name}_after"
+        if before_key not in public_reputation and after_key not in public_reputation:
+            continue
+        before_value = public_reputation.get(before_key)
+        after_value = public_reputation.get(after_key)
+        rows.append(
+            {
+                "mark_key": f"{axis}:{person_id}",
+                "person_id": person_id,
+                "reputation_axis": axis,
+                "reputation_before": before_value,
+                "reputation_after": after_value,
+                "direction": _reputation_direction(before_value, after_value),
+                "mark_strength": _reputation_strength(before_value, after_value),
+                "mark_year": sim_year,
+                "source_role": source_role,
+            }
+        )
+    return rows
+
+
+def _insert_simulation_reputation_mark_rows(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    sim_year: int | None,
+    event_type: str,
+    payload: dict,
+    settlement_key: int | None = None,
+    region_key: int | None = None,
+    created_at: str | None = None,
+) -> None:
+    marks = _event_reputation_mark_rows_from_payload(
+        event_type,
+        payload,
+        sim_year=sim_year,
+    )
+    if not marks:
+        return
+    _primary, _secondary, payload_settlement_id, payload_region_id = _event_common_columns(
+        payload
+    )
+    ts = created_at or _utc_now_iso()
+    for idx, mark in enumerate(marks):
+        person_id = _coerce_event_person_id(mark.get("person_id"))
+        if person_id is None:
+            continue
+        axis = str(mark.get("reputation_axis") or mark.get("axis") or "").strip()
+        if not axis:
+            continue
+        before_value = mark.get("reputation_before")
+        after_value = mark.get("reputation_after")
+        direction = str(
+            mark.get("direction") or _reputation_direction(before_value, after_value)
+        ).strip() or "stable"
+        strength_raw = _coerce_event_float(mark.get("mark_strength"))
+        if strength_raw is None:
+            strength_raw = _coerce_event_float(mark.get("strength"))
+        strength = (
+            round(min(1.0, max(0.0, float(strength_raw))), 5)
+            if strength_raw is not None
+            else _reputation_strength(before_value, after_value)
+        )
+        mark_key = str(
+            mark.get("mark_key") or f"{axis}:{person_id}:{idx}"
+        ).strip()
+        mark_year = _coerce_event_int(mark.get("mark_year"))
+        if mark_year is None:
+            mark_year = sim_year
+        mark_region_id = str(mark.get("region_id") or payload_region_id or "").strip()
+        mark_settlement_id = str(
+            mark.get("settlement_id") or payload_settlement_id or ""
+        ).strip()
+        mark_region_key = region_key
+        if mark_region_id:
+            mark_region_key = _lookup_or_insert_region_key(conn, mark_region_id)
+        mark_settlement_key = settlement_key
+        if mark_settlement_id:
+            mark_settlement_key = _lookup_or_insert_settlement_key(
+                conn,
+                mark_settlement_id,
+                mark_region_id,
+            )
+        details = {
+            str(k): v
+            for k, v in mark.items()
+            if str(k)
+            not in {
+                "mark_key",
+                "person_id",
+                "reputation_axis",
+                "axis",
+                "reputation_before",
+                "reputation_after",
+                "direction",
+                "mark_strength",
+                "strength",
+                "mark_year",
+                "settlement_id",
+                "region_id",
+            }
+        }
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO simulation_reputation_marks (
+                source_event_id, mark_key, person_id, reputation_axis,
+                reputation_before, reputation_after, direction, mark_strength,
+                region_key, settlement_key, mark_year, details_json,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(event_id),
+                mark_key,
+                int(person_id),
+                axis,
+                str(before_value) if before_value is not None else None,
+                str(after_value) if after_value is not None else None,
+                direction,
+                strength,
+                mark_region_key,
+                mark_settlement_key,
+                mark_year,
+                json.dumps(details, separators=(",", ":")),
+                ts,
+                ts,
+            ),
+        )
+
+
+def _backfill_simulation_reputation_marks(conn: sqlite3.Connection) -> None:
+    processed_event_id = _reputation_marks_processed_event_id(conn)
+    max_row = conn.execute("SELECT MAX(id) FROM simulation_events").fetchone()
+    max_event_id = int(max_row[0] or 0) if max_row is not None else 0
+    if max_event_id <= processed_event_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, sim_year, event_type, settlement_key, region_key,
+               payload_json, created_at
+        FROM simulation_events
+        WHERE id > ?
+        ORDER BY id
+        """,
+        (processed_event_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _insert_simulation_reputation_mark_rows(
+            conn,
+            event_id=int(row["id"]),
+            sim_year=row["sim_year"],
+            event_type=str(row["event_type"] or ""),
+            payload=payload,
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            created_at=str(row["created_at"] or "") or None,
+        )
+    _set_reputation_marks_processed_event_id(conn, max_event_id)
+
+
+def _ensure_simulation_legal_fallout_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_legal_fallout (
+            fallout_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_event_id INTEGER NOT NULL,
+            fallout_key TEXT NOT NULL,
+            fallout_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            principal_person_id INTEGER NOT NULL,
+            opposing_person_id INTEGER,
+            related_person_id INTEGER,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            severity REAL NOT NULL DEFAULT 0.0,
+            start_year INTEGER,
+            expected_resolution_year INTEGER,
+            resolved_year INTEGER,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (source_event_id, fallout_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_legal_fallout_principal
+        ON simulation_legal_fallout (principal_person_id, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_legal_fallout_opposing
+        ON simulation_legal_fallout (opposing_person_id, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_legal_fallout_type
+        ON simulation_legal_fallout (fallout_type, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_legal_fallout_place
+        ON simulation_legal_fallout (region_key, settlement_key, status);
+        """
+    )
+    _backfill_simulation_legal_fallout(conn)
+
+
+def _legal_fallout_processed_event_id(conn: sqlite3.Connection) -> int:
+    _ensure_save_metadata_schema(conn)
+    row = conn.execute(
+        """
+        SELECT meta_value FROM save_metadata
+        WHERE meta_key = ?
+        """,
+        (LEGAL_FALLOUT_BACKFILLED_META_KEY,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return 0
+    try:
+        return max(0, int(str(row[0]).strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_legal_fallout_processed_event_id(
+    conn: sqlite3.Connection, event_id: int | None
+) -> None:
+    _ensure_save_metadata_schema(conn)
+    processed = max(0, int(event_id or 0))
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+        VALUES (?, ?)
+        """,
+        (LEGAL_FALLOUT_BACKFILLED_META_KEY, str(processed)),
+    )
+
+
+def _event_betrayed_partner_ids(payload: dict) -> list[int]:
+    betrayed_ids = _coerce_event_person_id_list(
+        payload.get("betrayed_partner_person_ids")
+    )
+    primary_betrayed = _coerce_event_person_id(
+        payload.get("betrayed_partner_person_id")
+    )
+    if primary_betrayed is not None and primary_betrayed not in betrayed_ids:
+        betrayed_ids.insert(0, primary_betrayed)
+    return betrayed_ids
+
+
+def _event_legal_fallout_rows_from_payload(
+    event_type: str,
+    payload: dict,
+    *,
+    sim_year: int | None,
+) -> list[dict[str, object]]:
+    consequences = payload.get("consequences")
+    if not isinstance(consequences, dict):
+        consequences = {}
+    raw_fallout = consequences.get("legal_fallout")
+    rows: list[dict[str, object]] = []
+    if isinstance(raw_fallout, list):
+        for item in raw_fallout:
+            if isinstance(item, dict):
+                rows.append(dict(item))
+    if rows:
+        return rows
+
+    if str(event_type or "").strip() != "affair_scandal":
+        return []
+    incident_kind = str(payload.get("incident_kind") or "").strip()
+    if incident_kind not in LEGAL_FALLOUT_SCANDAL_KINDS:
+        return []
+    accused_id = _coerce_event_person_id(payload.get("accused_person_id"))
+    paramour_id = _coerce_event_person_id(payload.get("paramour_person_id"))
+    if accused_id is None or paramour_id is None:
+        return []
+    betrayed_ids = _event_betrayed_partner_ids(payload)
+    opposing_id = betrayed_ids[0] if betrayed_ids else None
+    historical_importance = _coerce_event_float(payload.get("historical_importance")) or 0.0
+    severity = round(
+        min(
+            1.0,
+            max(
+                0.06,
+                0.22
+                + float(historical_importance) * 0.75
+                + min(0.15, 0.05 * len(betrayed_ids)),
+            ),
+        ),
+        5,
+    )
+    if incident_kind == "heir_legitimacy_rumor":
+        fallout_type = "heir_legitimacy_challenge"
+        fallout_key = f"heir_legitimacy:{accused_id}:{paramour_id}:{opposing_id or 0}"
+        duration_years = 18
+    else:
+        fallout_type = "inheritance_dispute"
+        fallout_key = f"inheritance:{accused_id}:{opposing_id or 0}:{paramour_id}"
+        duration_years = 8
+    return [
+        {
+            "fallout_key": fallout_key,
+            "fallout_type": fallout_type,
+            "status": "active",
+            "principal_person_id": accused_id,
+            "opposing_person_id": opposing_id,
+            "related_person_id": paramour_id,
+            "severity": severity,
+            "start_year": sim_year,
+            "expected_duration_years": duration_years,
+            "source_role": "affair_scandal_legal_fallout",
+            "incident_kind": incident_kind,
+            "betrayed_partner_person_ids": betrayed_ids,
+        }
+    ]
+
+
+def _insert_simulation_legal_fallout_rows(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    sim_year: int | None,
+    event_type: str,
+    payload: dict,
+    settlement_key: int | None = None,
+    region_key: int | None = None,
+    created_at: str | None = None,
+) -> None:
+    fallout_rows = _event_legal_fallout_rows_from_payload(
+        event_type,
+        payload,
+        sim_year=sim_year,
+    )
+    if not fallout_rows:
+        return
+    _primary, _secondary, payload_settlement_id, payload_region_id = _event_common_columns(
+        payload
+    )
+    ts = created_at or _utc_now_iso()
+    for idx, fallout in enumerate(fallout_rows):
+        principal_id = _coerce_event_person_id(fallout.get("principal_person_id"))
+        if principal_id is None:
+            continue
+        fallout_type = str(
+            fallout.get("fallout_type") or fallout.get("kind") or ""
+        ).strip()
+        if not fallout_type:
+            continue
+        opposing_id = _coerce_event_person_id(fallout.get("opposing_person_id"))
+        related_id = _coerce_event_person_id(fallout.get("related_person_id"))
+        fallout_key = str(
+            fallout.get("fallout_key")
+            or fallout.get("source_role")
+            or f"{fallout_type}:{principal_id}:{opposing_id or 0}:{related_id or 0}:{idx}"
+        ).strip()
+        status = str(fallout.get("status") or "active").strip() or "active"
+        severity_raw = _coerce_event_float(fallout.get("severity"))
+        severity = round(min(1.0, max(0.0, float(severity_raw or 0.0))), 5)
+        start_year = _coerce_event_int(fallout.get("start_year"))
+        if start_year is None:
+            start_year = sim_year
+        expected_resolution_year = _coerce_event_int(
+            fallout.get("expected_resolution_year")
+        )
+        if expected_resolution_year is None and start_year is not None:
+            duration = _coerce_event_int(fallout.get("expected_duration_years"))
+            if duration is not None and duration > 0:
+                expected_resolution_year = int(start_year) + int(duration)
+        resolved_year = _coerce_event_int(fallout.get("resolved_year"))
+        fallout_region_id = str(
+            fallout.get("region_id") or payload_region_id or ""
+        ).strip()
+        fallout_settlement_id = str(
+            fallout.get("settlement_id") or payload_settlement_id or ""
+        ).strip()
+        fallout_region_key = region_key
+        if fallout_region_id:
+            fallout_region_key = _lookup_or_insert_region_key(
+                conn, fallout_region_id
+            )
+        fallout_settlement_key = settlement_key
+        if fallout_settlement_id:
+            fallout_settlement_key = _lookup_or_insert_settlement_key(
+                conn,
+                fallout_settlement_id,
+                fallout_region_id,
+            )
+        details = {
+            str(k): v
+            for k, v in fallout.items()
+            if str(k)
+            not in {
+                "fallout_key",
+                "fallout_type",
+                "kind",
+                "status",
+                "principal_person_id",
+                "opposing_person_id",
+                "related_person_id",
+                "severity",
+                "start_year",
+                "expected_resolution_year",
+                "expected_duration_years",
+                "resolved_year",
+                "settlement_id",
+                "region_id",
+            }
+        }
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO simulation_legal_fallout (
+                source_event_id, fallout_key, fallout_type, status,
+                principal_person_id, opposing_person_id, related_person_id,
+                region_key, settlement_key, severity, start_year,
+                expected_resolution_year, resolved_year, details_json,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(event_id),
+                fallout_key,
+                fallout_type,
+                status,
+                int(principal_id),
+                int(opposing_id) if opposing_id is not None else None,
+                int(related_id) if related_id is not None else None,
+                fallout_region_key,
+                fallout_settlement_key,
+                severity,
+                start_year,
+                expected_resolution_year,
+                resolved_year,
+                json.dumps(details, separators=(",", ":")),
+                ts,
+                ts,
+            ),
+        )
+
+
+def _backfill_simulation_legal_fallout(conn: sqlite3.Connection) -> None:
+    processed_event_id = _legal_fallout_processed_event_id(conn)
+    max_row = conn.execute("SELECT MAX(id) FROM simulation_events").fetchone()
+    max_event_id = int(max_row[0] or 0) if max_row is not None else 0
+    if max_event_id <= processed_event_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, sim_year, event_type, settlement_key, region_key,
+               payload_json, created_at
+        FROM simulation_events
+        WHERE id > ?
+        ORDER BY id
+        """,
+        (processed_event_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _insert_simulation_legal_fallout_rows(
+            conn,
+            event_id=int(row["id"]),
+            sim_year=row["sim_year"],
+            event_type=str(row["event_type"] or ""),
+            payload=payload,
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            created_at=str(row["created_at"] or "") or None,
+        )
+    _set_legal_fallout_processed_event_id(conn, max_event_id)
+
+
+_PUBLIC_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "founder_created",
+        "death",
+        "settlement_move_planned",
+        "settlement_move_dropped",
+        "settlement_moved",
+        "polity_promoted",
+        "polity_split_vassal",
+        "polity_named",
+        "polity_dissolved",
+        "office_selection",
+        "office_succession",
+        "campaign_started",
+        "campaign_ended",
+        "battle_fought",
+        "dynastic_marriage_alliance",
+    }
+)
+
+_PRIVATE_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "birth",
+        "couple_formed",
+        "couple_dissolved",
+        "same_sex_couple_formed",
+        "job_assigned",
+        "job_lost",
+        "unemployment_started",
+        "unemployment_ended",
+        "job_seeker_migration",
+        "household_childcare_shortfall",
+        "household_prosperity_crisis",
+        "partner_residence_reconciled",
+    }
+)
+
+_SECRET_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
+    {"paramour_formed", "paramour_ended"}
+)
+
+_ADMIN_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "career_fitness_updated",
+        "settlement_job_market_effect",
+        "place_debug_probe",
+    }
+)
+
+_EVENT_RECORD_VISIBILITY_STATES: frozenset[str] = frozenset(
+    {
+        "admin_known",
+        "public_known",
+        "private_known",
+        "rumored",
+        "sealed",
+        "lost",
+        "rediscovered",
+        "misattributed",
+    }
+)
+
+
+def _event_record_kind_for_type(
+    event_type: str, event_origin: str
+) -> tuple[str, str, float]:
+    """Return ``(record_type, visibility_state, confidence)`` for a default memory row."""
+    et = str(event_type or "").strip()
+    origin = str(event_origin or "").strip().lower()
+    if (
+        origin in {"inferred", "backfilled"}
+        or et.startswith("promotion_backfill_")
+        or et in _ADMIN_RECORD_EVENT_TYPES
+    ):
+        return "admin_note", "admin_known", 0.75 if origin != "generated" else 1.0
+    if et == "event_rediscovered":
+        return "rediscovery_record", "public_known", 1.0
+    if et in {"murder", "feud_killing"}:
+        return "violent_crime_record", "rumored", 0.55
+    if et in {"property_crime", "theft", "fraud", "extortion"}:
+        return "property_crime_record", "rumored", 0.5
+    if et in {"affair_scandal", "affair_exposed", "disputed_parentage"}:
+        return "scandal_record", "rumored", 0.55
+    if et in {"public_virtue", "heroic_rescue", "public_mercy"}:
+        return "public_virtue_record", "public_known", 0.85
+    if et in {"knowledge_culture", "invention", "discovery", "legal_precedent"}:
+        return "knowledge_record", "public_known", 0.8
+    if et in _SECRET_RECORD_EVENT_TYPES:
+        return "household_secret", "private_known", 1.0
+    if et == "birth":
+        return "lineage_memory", "private_known", 1.0
+    if et == "death":
+        return "mortuary_memory", "public_known", 1.0
+    if et.startswith("office_") or et.startswith("polity_"):
+        return "court_chronicle", "public_known", 1.0
+    if (
+        et.startswith("campaign_")
+        or et.startswith("battle_")
+        or et.startswith("dynastic_")
+    ):
+        return "war_chronicle", "public_known", 1.0
+    if et.startswith("settlement_"):
+        return "settlement_chronicle", "public_known", 1.0
+    if et.startswith("job_") or et.startswith("unemployment_"):
+        return "work_record", "private_known", 1.0
+    if et.startswith("household_") or et in _PRIVATE_RECORD_EVENT_TYPES:
+        return "household_memory", "private_known", 1.0
+    if et in _PUBLIC_RECORD_EVENT_TYPES:
+        return "public_chronicle", "public_known", 1.0
+    return "event_memory", "private_known", 1.0
+
+
+def _event_record_public_people(
+    event_type: str,
+    primary_person_id: int | None,
+    secondary_person_id: int | None,
+) -> tuple[int | None, int | None]:
+    et = str(event_type or "").strip()
+    if et == "death":
+        return None, primary_person_id
+    if et in {"household_childcare_shortfall", "household_prosperity_crisis"}:
+        return None, primary_person_id
+    return primary_person_id, secondary_person_id
+
+
+def _insert_default_event_record_row(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    event_type: str,
+    sim_year: int | None,
+    primary_person_id: int | None,
+    secondary_person_id: int | None,
+    settlement_key: int | None,
+    region_key: int | None,
+    event_origin: str,
+    created_at: str,
+) -> None:
+    record_type, visibility_state, confidence = _event_record_kind_for_type(
+        event_type, event_origin
+    )
+    public_actor, public_victim = _event_record_public_people(
+        event_type, primary_person_id, secondary_person_id
+    )
+    prose_variant_key = f"{record_type}.{visibility_state}.default"
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO simulation_event_records (
+            event_id, record_key, record_type, visibility_state,
+            known_since_year, confidence, preserving_settlement_key,
+            preserving_region_key, public_actor_person_id,
+            public_victim_person_id, prose_variant_key, created_at, updated_at
+        )
+        VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(event_id),
+            record_type,
+            visibility_state,
+            sim_year,
+            float(confidence),
+            settlement_key,
+            region_key,
+            public_actor,
+            public_victim,
+            prose_variant_key,
+            created_at,
+            created_at,
+        ),
+    )
+
+
+def _event_record_row(
+    conn: sqlite3.Connection, event_id: int, record_key: str
+) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM simulation_event_records
+        WHERE event_id = ? AND record_key = ?
+        """,
+        (int(event_id), str(record_key or "default").strip() or "default"),
+    ).fetchone()
+    if row is None:
+        raise ValueError(
+            f"event record not found for event_id={int(event_id)} "
+            f"record_key={str(record_key or 'default').strip() or 'default'}"
+        )
+    return row
+
+
+def _event_record_distortion_json(distortion: dict | None) -> str | None:
+    if distortion is None:
+        return None
+    if not isinstance(distortion, dict):
+        raise TypeError("distortion must be a dict or None")
+    return json.dumps(distortion, sort_keys=True, separators=(",", ":"))
+
+
+def _event_record_state_update(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    record_key: str = "default",
+    visibility_state: str,
+    sim_year: int | None = None,
+    confidence: float | None = None,
+    source_person_id: int | None = None,
+    source_institution_id: str | None = None,
+    preserving_settlement_id: str | None = None,
+    preserving_region_id: str | None = None,
+    public_actor_person_id: int | None = None,
+    public_victim_person_id: int | None = None,
+    distortion: dict | None = None,
+    set_lost_year: bool = False,
+    set_rediscovered_year: bool = False,
+) -> None:
+    state = str(visibility_state or "").strip().lower()
+    if state not in _EVENT_RECORD_VISIBILITY_STATES:
+        raise ValueError(f"unknown event-record visibility state: {visibility_state!r}")
+    key = str(record_key or "default").strip() or "default"
+    row = _event_record_row(conn, int(event_id), key)
+    now = _utc_now_iso()
+    updates: dict[str, object] = {
+        "visibility_state": state,
+        "updated_at": now,
+        "prose_variant_key": f"{row['record_type']}.{state}.default",
+    }
+    if sim_year is not None:
+        if row["known_since_year"] is None:
+            updates["known_since_year"] = int(sim_year)
+        if set_lost_year:
+            updates["lost_year"] = int(sim_year)
+        if set_rediscovered_year:
+            updates["rediscovered_year"] = int(sim_year)
+    if confidence is not None:
+        updates["confidence"] = max(0.0, min(1.0, float(confidence)))
+    if source_person_id is not None:
+        updates["source_person_id"] = int(source_person_id)
+    if source_institution_id is not None:
+        text = str(source_institution_id).strip()
+        updates["source_institution_id"] = text or None
+    if preserving_settlement_id is not None or preserving_region_id is not None:
+        region_hint = str(preserving_region_id or "").strip()
+        settlement_hint = str(preserving_settlement_id or "").strip()
+        if not region_hint and ":" in settlement_hint:
+            region_hint = settlement_hint.split(":", 1)[0].strip()
+        updates["preserving_region_key"] = _lookup_or_insert_region_key(
+            conn, region_hint
+        )
+        updates["preserving_settlement_key"] = _lookup_or_insert_settlement_key(
+            conn, settlement_hint, region_hint
+        )
+    if public_actor_person_id is not None:
+        updates["public_actor_person_id"] = int(public_actor_person_id)
+    if public_victim_person_id is not None:
+        updates["public_victim_person_id"] = int(public_victim_person_id)
+    if distortion is not None:
+        updates["distortion_json"] = _event_record_distortion_json(distortion)
+    assignments = ", ".join(f"{_quote_identifier(k)} = ?" for k in updates)
+    conn.execute(
+        f"""
+        UPDATE simulation_event_records
+        SET {assignments}
+        WHERE event_id = ? AND record_key = ?
+        """,
+        (*updates.values(), int(event_id), key),
+    )
+
+
+def mark_event_record_lost(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    lost_year: int,
+    record_key: str = "default",
+) -> None:
+    """Mark an in-world event record as no longer actively remembered."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="lost",
+        sim_year=int(lost_year),
+        set_lost_year=True,
+    )
+
+
+def seal_event_record(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    sealed_year: int | None = None,
+    record_key: str = "default",
+    source_institution_id: str | None = None,
+) -> None:
+    """Hide a record in-world without losing its preserving institution/archive."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="sealed",
+        sim_year=sealed_year,
+        source_institution_id=source_institution_id,
+    )
+
+
+def mark_event_record_rumored(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    rumor_year: int | None = None,
+    record_key: str = "default",
+    confidence: float = 0.45,
+    source_person_id: int | None = None,
+    distortion: dict | None = None,
+) -> None:
+    """Turn a preserved/private record into an uncertain public or local rumor."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="rumored",
+        sim_year=rumor_year,
+        confidence=confidence,
+        source_person_id=source_person_id,
+        distortion=distortion,
+    )
+
+
+def rediscover_event_record(
+    conn: sqlite3.Connection,
+    event_id: int,
+    *,
+    rediscovered_year: int,
+    world: str = "default",
+    record_key: str = "default",
+    source_person_id: int | None = None,
+    source_institution_id: str | None = None,
+    preserving_settlement_id: str | None = None,
+    preserving_region_id: str | None = None,
+    confidence: float = 0.85,
+    distortion: dict | None = None,
+    create_event: bool = True,
+) -> int | None:
+    """Mark a lost/hidden record as rediscovered and optionally log that discovery."""
+    _event_record_state_update(
+        conn,
+        event_id=int(event_id),
+        record_key=record_key,
+        visibility_state="rediscovered",
+        sim_year=int(rediscovered_year),
+        confidence=confidence,
+        source_person_id=source_person_id,
+        source_institution_id=source_institution_id,
+        preserving_settlement_id=preserving_settlement_id,
+        preserving_region_id=preserving_region_id,
+        distortion=distortion,
+        set_rediscovered_year=True,
+    )
+    if not create_event:
+        return None
+    payload: dict[str, object] = {
+        "original_event_id": int(event_id),
+        "original_record_key": str(record_key or "default").strip() or "default",
+        "confidence": max(0.0, min(1.0, float(confidence))),
+    }
+    if source_person_id is not None:
+        payload["source_person_id"] = int(source_person_id)
+    if source_institution_id is not None:
+        payload["source_institution_id"] = str(source_institution_id).strip()
+    region_hint = str(preserving_region_id or "").strip()
+    settlement_hint = str(preserving_settlement_id or "").strip()
+    if not region_hint and ":" in settlement_hint:
+        region_hint = settlement_hint.split(":", 1)[0].strip()
+    if settlement_hint:
+        payload["settlement_id"] = settlement_hint
+    if region_hint:
+        payload["region_id"] = region_hint
+    if distortion is not None:
+        payload["distortion"] = distortion
+    inserted = append_simulation_event_rows(
+        conn,
+        world,
+        [(int(rediscovered_year), "event_rediscovered", payload)],
+    )
+    return inserted[0] if inserted else None
+
+
 def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -902,6 +2405,28 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
             group_id TEXT,
             PRIMARY KEY (event_id, moved_person_id)
         );
+        CREATE TABLE IF NOT EXISTS simulation_event_records (
+            record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            record_key TEXT NOT NULL DEFAULT 'default',
+            record_type TEXT NOT NULL DEFAULT 'event_memory',
+            visibility_state TEXT NOT NULL DEFAULT 'public_known',
+            known_since_year INTEGER,
+            lost_year INTEGER,
+            rediscovered_year INTEGER,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            source_person_id INTEGER,
+            source_institution_id TEXT,
+            preserving_settlement_key INTEGER,
+            preserving_region_key INTEGER,
+            public_actor_person_id INTEGER,
+            public_victim_person_id INTEGER,
+            distortion_json TEXT,
+            prose_variant_key TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (event_id, record_key)
+        );
         """
     )
     event_cols = set(_table_columns(conn, "simulation_events"))
@@ -935,10 +2460,21 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
         ON simulation_event_moves (to_settlement_key, event_id);
         CREATE INDEX IF NOT EXISTS idx_simulation_event_moves_to_region
         ON simulation_event_moves (to_region_key, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_event
+        ON simulation_event_records (event_id, record_key);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_visibility
+        ON simulation_event_records (visibility_state, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_place
+        ON simulation_event_records (preserving_region_key, preserving_settlement_key);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_actor
+        ON simulation_event_records (public_actor_person_id, event_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_event_records_victim
+        ON simulation_event_records (public_victim_person_id, event_id);
         """
     )
     _backfill_simulation_event_people(conn)
     _backfill_simulation_event_moves(conn)
+    _backfill_simulation_event_records(conn)
 
 
 def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
@@ -1027,6 +2563,74 @@ def _backfill_simulation_event_moves(conn: sqlite3.Connection) -> None:
             event_id=int(row["id"]),
             event_type=str(row["event_type"] or ""),
             payload=payload,
+        )
+
+
+def _backfill_simulation_event_records(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "save_metadata"):
+        done = conn.execute(
+            """
+            SELECT meta_value FROM save_metadata
+            WHERE meta_key = ?
+            """,
+            (EVENT_RECORDS_BACKFILLED_META_KEY,),
+        ).fetchone()
+        if done is not None and str(done[0]).strip() == "1":
+            missing = conn.execute(
+                """
+                SELECT e.id
+                FROM simulation_events e
+                LEFT JOIN simulation_event_records r
+                  ON r.event_id = e.id AND r.record_key = 'default'
+                WHERE r.record_id IS NULL
+                LIMIT 1
+                """
+            ).fetchone()
+            if missing is None:
+                return
+    rows = conn.execute(
+        """
+        SELECT e.id, e.sim_year, e.event_type, e.primary_person_id,
+               e.secondary_person_id, e.settlement_key, e.region_key,
+               e.event_origin, e.created_at
+        FROM simulation_events e
+        LEFT JOIN simulation_event_records r
+          ON r.event_id = e.id AND r.record_key = 'default'
+        WHERE r.record_id IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        _insert_default_event_record_row(
+            conn,
+            event_id=int(row["id"]),
+            event_type=str(row["event_type"] or ""),
+            sim_year=(
+                int(row["sim_year"]) if row["sim_year"] is not None else None
+            ),
+            primary_person_id=(
+                int(row["primary_person_id"])
+                if row["primary_person_id"] is not None
+                else None
+            ),
+            secondary_person_id=(
+                int(row["secondary_person_id"])
+                if row["secondary_person_id"] is not None
+                else None
+            ),
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            event_origin=str(row["event_origin"] or "generated"),
+            created_at=str(row["created_at"] or _utc_now_iso()),
+        )
+    if _table_exists(conn, "save_metadata"):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+            VALUES (?, '1')
+            """,
+            (EVENT_RECORDS_BACKFILLED_META_KEY,),
         )
 
 
@@ -1364,6 +2968,11 @@ def _write_rebuilt_save_sqlite(
                     _copy_common_table_columns_from_attached_source(conn, table)
             _backfill_simulation_event_people(conn)
             _backfill_simulation_event_moves(conn)
+            _backfill_simulation_event_records(conn)
+            _backfill_simulation_domain_states(conn)
+            _backfill_simulation_obligations(conn)
+            _backfill_simulation_reputation_marks(conn)
+            _backfill_simulation_legal_fallout(conn)
             _stamp_save_schema_version(conn, int(target_schema_version))
             conn.commit()
         finally:
@@ -1491,6 +3100,10 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     )
     _ensure_place_lookup_schema(conn)
     _ensure_simulation_events_tables(conn)
+    _ensure_simulation_domain_state_tables(conn)
+    _ensure_simulation_obligation_tables(conn)
+    _ensure_simulation_reputation_mark_tables(conn)
+    _ensure_simulation_legal_fallout_tables(conn)
     _ensure_simulation_people_table(conn)
     _ensure_hybrid_population_tables(conn)
     conn.executescript(_CREATE_SIMULATION_REGIONS)
@@ -1824,6 +3437,37 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = e.settlement_key
         LEFT JOIN simulation_region_lookup rl ON rl.region_key = e.region_key;
 
+        CREATE VIEW IF NOT EXISTS simulation_event_records_readable AS
+        SELECT
+            r.record_id,
+            r.event_id,
+            e.sim_year,
+            e.event_type,
+            e.event_origin,
+            r.record_key,
+            r.record_type,
+            r.visibility_state,
+            r.known_since_year,
+            r.lost_year,
+            r.rediscovered_year,
+            r.confidence,
+            r.source_person_id,
+            r.source_institution_id,
+            sl.settlement_id AS preserving_settlement_id,
+            rl.region_id AS preserving_region_id,
+            r.public_actor_person_id,
+            r.public_victim_person_id,
+            r.distortion_json,
+            r.prose_variant_key,
+            r.created_at,
+            r.updated_at
+        FROM simulation_event_records r
+        JOIN simulation_events e ON e.id = r.event_id
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = r.preserving_settlement_key
+        LEFT JOIN simulation_region_lookup rl
+            ON rl.region_key = r.preserving_region_key;
+
         CREATE VIEW IF NOT EXISTS simulation_event_moves_readable AS
         SELECT
             m.event_id,
@@ -1851,6 +3495,105 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
             ON from_rl.region_key = m.from_region_key
         LEFT JOIN simulation_region_lookup to_rl
             ON to_rl.region_key = m.to_region_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_domain_states_readable AS
+        SELECT
+            rl.region_id,
+            d.region_key,
+            d.domain,
+            d.domain_score,
+            d.breakthrough_count,
+            d.first_event_year,
+            d.latest_event_year,
+            d.first_event_id,
+            d.latest_event_id,
+            d.latest_incident_kind,
+            d.latest_creator_person_id,
+            sl.settlement_id AS latest_settlement_id,
+            d.created_at,
+            d.updated_at
+        FROM simulation_domain_states d
+        JOIN simulation_region_lookup rl ON rl.region_key = d.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = d.latest_settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_obligations_readable AS
+        SELECT
+            o.obligation_id,
+            o.source_event_id,
+            e.sim_year AS source_event_year,
+            e.event_type AS source_event_type,
+            o.obligation_key,
+            o.obligation_type,
+            o.status,
+            o.owed_by_person_id,
+            o.owed_to_person_id,
+            rl.region_id,
+            sl.settlement_id,
+            o.strength,
+            o.start_year,
+            o.expected_end_year,
+            o.resolved_year,
+            o.details_json,
+            o.created_at,
+            o.updated_at
+        FROM simulation_obligations o
+        JOIN simulation_events e ON e.id = o.source_event_id
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = o.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = o.settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_reputation_marks_readable AS
+        SELECT
+            m.reputation_mark_id,
+            m.source_event_id,
+            e.sim_year AS source_event_year,
+            e.event_type AS source_event_type,
+            m.mark_key,
+            m.person_id,
+            m.reputation_axis,
+            m.reputation_before,
+            m.reputation_after,
+            m.direction,
+            m.mark_strength,
+            rl.region_id,
+            sl.settlement_id,
+            m.mark_year,
+            m.details_json,
+            m.created_at,
+            m.updated_at
+        FROM simulation_reputation_marks m
+        JOIN simulation_events e ON e.id = m.source_event_id
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = m.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = m.settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_legal_fallout_readable AS
+        SELECT
+            f.fallout_id,
+            f.source_event_id,
+            e.sim_year AS source_event_year,
+            e.event_type AS source_event_type,
+            f.fallout_key,
+            f.fallout_type,
+            f.status,
+            f.principal_person_id,
+            f.opposing_person_id,
+            f.related_person_id,
+            rl.region_id,
+            sl.settlement_id,
+            f.severity,
+            f.start_year,
+            f.expected_resolution_year,
+            f.resolved_year,
+            f.details_json,
+            f.created_at,
+            f.updated_at
+        FROM simulation_legal_fallout f
+        JOIN simulation_events e ON e.id = f.source_event_id
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = f.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = f.settlement_key;
 
         CREATE VIEW IF NOT EXISTS simulation_people_light_readable AS
         SELECT
@@ -2057,8 +3800,13 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_couples")
         conn.execute("DELETE FROM simulation_paramours")
         conn.execute("DELETE FROM simulation_meta")
+        conn.execute("DELETE FROM simulation_event_records")
         conn.execute("DELETE FROM simulation_event_moves")
         conn.execute("DELETE FROM simulation_event_people")
+        conn.execute("DELETE FROM simulation_domain_states")
+        conn.execute("DELETE FROM simulation_obligations")
+        conn.execute("DELETE FROM simulation_reputation_marks")
+        conn.execute("DELETE FROM simulation_legal_fallout")
         conn.execute("DELETE FROM simulation_events")
         from library import government_checkpoint as _gov_ckpt
 
@@ -2366,10 +4114,11 @@ def append_simulation_event_rows(
     *,
     created_at: str | None = None,
     verbose_payloads: bool = False,
-) -> None:
-    """Insert append-only simulation event rows. Each row is (sim_year, event_type, payload_dict)."""
+) -> list[int]:
+    """Insert append-only simulation event rows and return inserted event IDs."""
     ts = created_at or _utc_now_iso()
     cur = conn.cursor()
+    event_ids: list[int] = []
     for sim_year, event_type, payload in rows:
         primary, secondary, settlement_id, region_id = _event_common_columns(payload)
         settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
@@ -2401,6 +4150,7 @@ def append_simulation_event_rows(
             ),
         )
         event_id = int(cur.lastrowid)
+        event_ids.append(event_id)
         for person_id, role in _event_person_links_from_payload(payload):
             cur.execute(
                 """
@@ -2415,6 +4165,64 @@ def append_simulation_event_rows(
             event_type=event_type,
             payload=payload,
         )
+        _upsert_simulation_domain_state_from_event(
+            conn,
+            event_id=event_id,
+            sim_year=sim_year,
+            event_type=event_type,
+            payload=payload,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            created_at=ts,
+        )
+        _insert_simulation_obligation_rows(
+            conn,
+            event_id=event_id,
+            sim_year=sim_year,
+            event_type=event_type,
+            payload=payload,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            created_at=ts,
+        )
+        _insert_simulation_reputation_mark_rows(
+            conn,
+            event_id=event_id,
+            sim_year=sim_year,
+            event_type=event_type,
+            payload=payload,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            created_at=ts,
+        )
+        _insert_simulation_legal_fallout_rows(
+            conn,
+            event_id=event_id,
+            sim_year=sim_year,
+            event_type=event_type,
+            payload=payload,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            created_at=ts,
+        )
+        _insert_default_event_record_row(
+            conn,
+            event_id=event_id,
+            event_type=event_type,
+            sim_year=sim_year,
+            primary_person_id=primary,
+            secondary_person_id=secondary,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            event_origin=event_origin,
+            created_at=ts,
+        )
+    if event_ids:
+        _set_domain_states_processed_event_id(conn, max(event_ids))
+        _set_obligations_processed_event_id(conn, max(event_ids))
+        _set_reputation_marks_processed_event_id(conn, max(event_ids))
+        _set_legal_fallout_processed_event_id(conn, max(event_ids))
+    return event_ids
 
 
 def _compact_event_payload(event_type: str, payload: dict) -> dict:
@@ -2602,7 +4410,7 @@ def _trait_slots_from_config(config_db_path: Path | str) -> tuple[str, ...]:
     if not path.exists():
         return ()
     try:
-        with sqlite3.connect(path) as conn:
+        with closing(sqlite3.connect(path)) as conn:
             conn.row_factory = sqlite3.Row
             has_map = conn.execute(
                 """

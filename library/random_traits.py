@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import random
 import sqlite3
+from contextlib import closing
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,10 @@ def _connect(db_path: Path | str | None) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {str(k): row[k] for k in row.keys()}
 
 
 def _as_int(value: object, default: int = 0) -> int:
@@ -132,18 +137,13 @@ def choose_species_row(
 @lru_cache(maxsize=8)
 def _species_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
     path = Path(db_path_s)
-    conn = _connect(path)
-    try:
+    with closing(_connect(path)) as conn:
         try:
-            raw = conn.execute("SELECT * FROM species").fetchall()
+            return tuple(_row_dict(row) for row in conn.execute("SELECT * FROM species"))
         except sqlite3.OperationalError as exc:
             raise LookupError(
                 "SQLite table `species` missing. Run: python utils/util_load_config.py --world default"
             ) from exc
-        rows = tuple({k: r[k] for k in r.keys()} for r in raw)
-    finally:
-        conn.close()
-    return rows
 
 
 @lru_cache(maxsize=256)
@@ -199,12 +199,11 @@ def choose_gender(*, gender: str | None = None) -> str:
 def _genome_trait_definitions(db_path_s: str) -> tuple[tuple[str, str, str], ...]:
     """Cached ``(trait, skew_high, skew_low)`` from ``genome`` (tags lowercased)."""
     path = Path(db_path_s)
-    conn = _connect(path)
-    try:
+    with closing(_connect(path)) as conn:
         try:
             rows = conn.execute(
                 "SELECT trait, gender_skew_high, gender_skew_low FROM genome"
-            ).fetchall()
+            )
         except sqlite3.OperationalError as exc:
             raise LookupError(
                 "SQLite table `genome` missing. Run: python utils/util_load_config.py --world default"
@@ -222,8 +221,6 @@ def _genome_trait_definitions(db_path_s: str) -> tuple[tuple[str, str, str], ...
                 sl = ""
             out.append((trait, sh, sl))
         return tuple(out)
-    finally:
-        conn.close()
 
 
 def _p_positive_genome_sign(
@@ -350,17 +347,15 @@ def _sample_categorical(dist: dict[str, float]) -> str:
 @lru_cache(maxsize=8)
 def _sexual_nature_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
     path = Path(db_path_s)
-    conn = _connect(path)
-    try:
+    with closing(_connect(path)) as conn:
         try:
-            raw = conn.execute("SELECT * FROM sexual_nature").fetchall()
+            return tuple(
+                _row_dict(row) for row in conn.execute("SELECT * FROM sexual_nature")
+            )
         except sqlite3.OperationalError as exc:
             raise LookupError(
                 "SQLite table `sexual_nature` missing. Run: python utils/util_load_config.py --world default"
             ) from exc
-        return tuple({k: r[k] for k in r.keys()} for r in raw)
-    finally:
-        conn.close()
 
 
 @lru_cache(maxsize=8)
@@ -390,17 +385,13 @@ def _sexual_nature_definitions(
 @lru_cache(maxsize=8)
 def _gender_mind_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
     path = Path(db_path_s)
-    conn = _connect(path)
-    try:
+    with closing(_connect(path)) as conn:
         try:
-            raw = conn.execute("SELECT * FROM gender_mind").fetchall()
+            return tuple(_row_dict(row) for row in conn.execute("SELECT * FROM gender_mind"))
         except sqlite3.OperationalError as exc:
             raise LookupError(
                 "SQLite table `gender_mind` missing. Run: python utils/util_load_config.py --world default"
             ) from exc
-        return tuple({k: r[k] for k in r.keys()} for r in raw)
-    finally:
-        conn.close()
 
 
 @lru_cache(maxsize=8)

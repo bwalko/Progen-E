@@ -27,13 +27,15 @@ Use this file first when starting a new session in this repository.
 
    Longer population runs use the same canonical report files as that test (only the reported duration changes): `python utils/run_population_simulation.py --years 400`
 
+   Local machine guidance: hostname **Nazuna** is the fast desktop and can run aggressive/full test or simulation checks. Other machines, including the current laptop, should prefer targeted tests and short smoke runs unless the user explicitly asks for a long/aggressive run.
+
 3. For population simulation requests, prefer runtime override patterns in commands (for example changing `STARTING_COUPLES`) instead of editing tests unless asked.
 
 4. **Working set vs save.sqlite (long runs):** Full checkpoints **upsert** `simulation_people` and `simulation_settlements` (historical rows stay in `save.sqlite`; no blanket `DELETE` those tables on snap). After each full snapshot, **`prune_ancient_dead_from_ram`** drops from `ctx.people` anyone dead longer than **`working_set_dead_retention_years`** (default **20**). **`try_load_simulation_checkpoint`** only hydrates alive + recent-dead into RAM; **`simulation_events`** remain append-only. New simulation features that add per-person state should stay compatible with this pattern (bounded RAM, full history on disk).
 
 ## Project Facts To Preserve
 
-- **Progen-E** layout: each world has a folder under `worlds/<world_id>/` with **`config.sqlite`** (imported from `config/*.csv`, not written during simulation) and **`save.sqlite`** (mutable simulation state: `world_state` clock plus **`simulation_*`** checkpoint tables for people, settlements, couples, and append-only **`simulation_events`**). `SimulationContext.record_year_summary` and **`finalize_run()`** persist to the save DB.
+- **Progen-E** layout: each world has a folder under `worlds/<world_id>/` with **`config.sqlite`** (imported from `config/*.csv`, not written during simulation) and **`save.sqlite`** (mutable simulation state: `world_state` clock plus **`simulation_*`** checkpoint/state tables for people, settlements, couples, event records, regional domain states, obligation ledgers, reputation marks, legal fallout rows, and append-only **`simulation_events`**). `SimulationContext.record_year_summary` and **`finalize_run()`** persist to the save DB.
 - Legacy root **`Progen-E.sqlite`** (if it still exists from older layouts) is obsolete; the project uses **`worlds/<world_id>/config.sqlite`**. You may delete the legacy file after confirming nothing references it.
 - `world_start` is immutable config (in `config.sqlite`); runtime time progression is stored in **`save.sqlite`** (`world_state`).
 - `Person.birthyear` is canonical; age is always `simulation_year - birthyear`.
