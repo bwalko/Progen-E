@@ -276,6 +276,17 @@ class TestSaveCheckpoint(unittest.TestCase):
                             "career_fitness_updated",
                             {"person_id": 5, "fitness_score": 0.71},
                         ),
+                        (
+                            1003,
+                            "settlement_commercial_outpost_founded",
+                            {
+                                "settlement_id": "boreas_port:settlement:2",
+                                "region_id": "boreas_port",
+                                "mother_settlement_id": "aeria_port:settlement:1",
+                                "trade_network_id": "aeria_port:settlement:1",
+                                "founder_person_ids": [6, 7],
+                            },
+                        ),
                     ],
                     created_at="2026-01-01T00:00:00+00:00",
                 )
@@ -325,6 +336,22 @@ class TestSaveCheckpoint(unittest.TestCase):
                 str(rows["career_fitness_updated"]["visibility_state"]), "admin_known"
             )
             self.assertEqual(float(rows["career_fitness_updated"]["confidence"]), 1.0)
+            self.assertEqual(
+                str(rows["settlement_commercial_outpost_founded"]["record_type"]),
+                "settlement_chronicle",
+            )
+            self.assertEqual(
+                str(rows["settlement_commercial_outpost_founded"]["visibility_state"]),
+                "public_known",
+            )
+            self.assertEqual(
+                str(
+                    rows["settlement_commercial_outpost_founded"][
+                        "preserving_region_id"
+                    ]
+                ),
+                "boreas_port",
+            )
 
     def test_v8_knowledge_events_backfill_domain_state(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

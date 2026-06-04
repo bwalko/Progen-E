@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import sqlite3
 import tempfile
 import unittest
@@ -20,6 +21,8 @@ from library.incident_rates import (
 )
 from library.simulation_context import SimulationContext
 from library.simulation_incidents import (
+    _knowledge_culture_kind,
+    _knowledge_domain,
     _murder_annual_event_cap,
     _murder_settlement_trial_count,
     knowledge_culture_propensity,
@@ -342,6 +345,74 @@ class TestSimulationIncidents(unittest.TestCase):
 
             self.assertGreater(knowledge_culture_propensity(creator), 0.7)
             self.assertLess(knowledge_culture_propensity(dull), 0.05)
+
+    def test_maritime_and_mercantile_jobs_select_portable_knowledge_domains(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            port = ctx.ensure_active_settlement_for_region("aeria_port")
+            inland = ctx.ensure_active_settlement_for_region("aeria_north")
+            shipwright = self._add_adult(
+                ctx,
+                genome=KNOWLEDGE_CREATOR_GENOME,
+                gender="Male",
+                settlement_id=port.settlement_id,
+                region_id=port.region_id,
+            )
+            shipwright.person = replace(
+                shipwright.person,
+                job="ship carpenter",
+                current_settlement_id=port.settlement_id,
+            )
+            scribe = self._add_adult(
+                ctx,
+                genome=KNOWLEDGE_CREATOR_GENOME,
+                gender="Female",
+                settlement_id=inland.settlement_id,
+                region_id=inland.region_id,
+            )
+            scribe.person = replace(
+                scribe.person,
+                job="scribe",
+                current_settlement_id=inland.settlement_id,
+            )
+            merchant = self._add_adult(
+                ctx,
+                genome=KNOWLEDGE_CREATOR_GENOME,
+                gender="Male",
+                settlement_id=inland.settlement_id,
+                region_id=inland.region_id,
+            )
+            merchant.person = replace(
+                merchant.person,
+                job="merchant",
+                current_settlement_id=inland.settlement_id,
+            )
+            jurist = self._add_adult(
+                ctx,
+                genome=KNOWLEDGE_CREATOR_GENOME,
+                gender="Female",
+                settlement_id=inland.settlement_id,
+                region_id=inland.region_id,
+            )
+            jurist.person = replace(
+                jurist.person,
+                job="trade law judge",
+                current_settlement_id=inland.settlement_id,
+            )
+
+            ship_kind = _knowledge_culture_kind(ctx, shipwright, random.Random(1))
+            scribe_kind = _knowledge_culture_kind(ctx, scribe, random.Random(2))
+            merchant_kind = _knowledge_culture_kind(ctx, merchant, random.Random(3))
+            jurist_kind = _knowledge_culture_kind(ctx, jurist, random.Random(4))
+
+            self.assertEqual(ship_kind, "shipbuilding_advance")
+            self.assertEqual(_knowledge_domain(ship_kind, shipwright), "shipbuilding")
+            self.assertEqual(scribe_kind, "writing_system")
+            self.assertEqual(_knowledge_domain(scribe_kind, scribe), "writing")
+            self.assertEqual(merchant_kind, "accounting_method")
+            self.assertEqual(_knowledge_domain(merchant_kind, merchant), "accounting")
+            self.assertEqual(jurist_kind, "trade_law_precedent")
+            self.assertEqual(_knowledge_domain(jurist_kind, jurist), "trade_law")
 
     def test_forced_murder_tick_records_event_kills_victim_and_persists_rumor(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -1295,6 +1366,13 @@ class TestSimulationIncidents(unittest.TestCase):
                     "water_lift",
                     "kiln_improvement",
                     "dye_recipe",
+                    "shipbuilding_advance",
+                    "navigation_discovery",
+                    "writing_system",
+                    "accounting_method",
+                    "trade_law_precedent",
+                    "standard_container",
+                    "luxury_dye_recipe",
                     "discovery",
                     "medicinal_discovery",
                     "new_star_record",
@@ -1317,9 +1395,14 @@ class TestSimulationIncidents(unittest.TestCase):
                     "law",
                     "medicine",
                     "natural_history",
+                    "navigation",
                     "performance",
                     "scholarship",
+                    "shipbuilding",
                     "toolmaking",
+                    "writing",
+                    "accounting",
+                    "trade_law",
                 },
             )
             self.assertIn("novelty_value", event)
@@ -1515,6 +1598,81 @@ class TestSimulationIncidents(unittest.TestCase):
             )
             self.assertEqual(roles["creator"], creator.person_id)
             self.assertEqual(roles["patron"], patron.person_id)
+
+    def test_maritime_knowledge_diffuses_domain_state_to_sea_route_destinations(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            ctx = self._context(root)
+            settlement = ctx.ensure_active_settlement_for_region("aeria_port")
+            creator = self._add_adult(
+                ctx,
+                genome=KNOWLEDGE_CREATOR_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            patron = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            creator.person = replace(
+                creator.person,
+                job="ship carpenter",
+                current_settlement_id=settlement.settlement_id,
+                household_prosperity=1.0,
+                status_tendency="low",
+            )
+            patron.person = replace(
+                patron.person,
+                job="merchant",
+                current_settlement_id=settlement.settlement_id,
+                job_prosperity_01=0.9,
+                household_prosperity=1.0,
+            )
+            ctx._pending_simulation_events.clear()
+
+            with patch("library.simulation_incidents.MURDER_BASE_SETTLEMENT_CHANCE", 0.0), patch(
+                "library.simulation_incidents.THEFT_BASE_SETTLEMENT_CHANCE", 0.0
+            ), patch("library.simulation_incidents.SCANDAL_BASE_SETTLEMENT_CHANCE", 0.0), patch(
+                "library.simulation_incidents.VIRTUE_BASE_SETTLEMENT_CHANCE", 0.0
+            ), patch("library.simulation_incidents.KNOWLEDGE_BASE_SETTLEMENT_CHANCE", 1.0), patch(
+                "library.simulation_incidents.KNOWLEDGE_SETTLEMENT_CHANCE_CAP", 1.0
+            ), patch("library.simulation_incidents.KNOWLEDGE_PROPENSITY_THRESHOLD", 0.25), patch(
+                "library.simulation_incidents.KNOWLEDGE_MAX_EVENTS_PER_YEAR", 1
+            ):
+                simulation_incidents_annual_tick(ctx, 1001)
+
+            events = [
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "knowledge_culture"
+            ]
+            self.assertEqual(len(events), 1)
+            event = events[0]
+            self.assertEqual(str(event["incident_kind"]), "shipbuilding_advance")
+            self.assertEqual(str(event["knowledge_domain"]), "shipbuilding")
+            diffusion = event["consequences"]["knowledge_state_diffusion"]
+            self.assertTrue(diffusion)
+            self.assertEqual(diffusion[0]["region_id"], "boreas_port")
+
+            checkpoint_simulation_to_save(ctx, full_snapshot=False)
+            with closing(sqlite3.connect(root / "save.sqlite")) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT region_id, domain, domain_score
+                    FROM simulation_domain_states_readable
+                    WHERE domain = 'shipbuilding'
+                    ORDER BY region_id
+                    """
+                ).fetchall()
+            states = {str(row["region_id"]): float(row["domain_score"]) for row in rows}
+            self.assertIn("aeria_port", states)
+            self.assertIn("boreas_port", states)
+            self.assertGreater(states["aeria_port"], states["boreas_port"])
 
     def test_forced_knowledge_culture_skips_low_aptitude_adults(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

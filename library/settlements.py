@@ -86,6 +86,10 @@ class SettlementState:
     status: str = "active"
     consecutive_empty_years: int = 0
     site_slot: int = 1
+    founding_reason: str = "organic"
+    mother_settlement_id: str | None = None
+    trade_network_id: str | None = None
+    autonomy_level: str = "autonomous"
 
     def __post_init__(self) -> None:
         if not str(self.settlement_id).strip():
@@ -94,6 +98,14 @@ class SettlementState:
         self.status = st if st else "active"
         if int(self.site_slot) < 1:
             self.site_slot = 1
+        reason = (self.founding_reason or "organic").strip().lower()
+        self.founding_reason = reason if reason else "organic"
+        mother = str(self.mother_settlement_id or "").strip()
+        self.mother_settlement_id = mother or None
+        network = str(self.trade_network_id or "").strip()
+        self.trade_network_id = network or self.settlement_id
+        autonomy = (self.autonomy_level or "autonomous").strip().lower()
+        self.autonomy_level = autonomy if autonomy else "autonomous"
 
 
 def classify_settlement_level(resident_count: int) -> str:
@@ -147,4 +159,8 @@ def evolve_settlement(
         status=state.status,
         consecutive_empty_years=state.consecutive_empty_years,
         site_slot=state.site_slot,
+        founding_reason=state.founding_reason,
+        mother_settlement_id=state.mother_settlement_id,
+        trade_network_id=state.trade_network_id,
+        autonomy_level=state.autonomy_level,
     )

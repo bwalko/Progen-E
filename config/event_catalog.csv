@@ -38,6 +38,13 @@ knowledge_culture,improved_plow,knowledge_culture,improved plow,invention;craft;
 knowledge_culture,water_lift,knowledge_culture,water lift,invention;engineering;food,knowledge_state,knowledge_record,public_known,0.70,Water movement or irrigation device.
 knowledge_culture,kiln_improvement,knowledge_culture,kiln improvement,invention;craft,knowledge_state,knowledge_record,public_known,0.70,Craft production advance.
 knowledge_culture,dye_recipe,knowledge_culture,dye recipe,invention;art;craft,knowledge_state,knowledge_record,public_known,0.60,Recipe or material discovery.
+knowledge_culture,shipbuilding_advance,knowledge_culture,shipbuilding advance,shipbuilding;sea;craft,knowledge_state,knowledge_record,public_known,0.70,Boat hull rigging or shipwright practice improvement.
+knowledge_culture,navigation_discovery,knowledge_culture,navigation discovery,navigation;sea;discovery,knowledge_state,knowledge_record,public_known,0.75,Portable route finding pilotage or coastal navigation knowledge.
+knowledge_culture,writing_system,knowledge_culture,writing system,writing;admin,knowledge_state,knowledge_record,public_known,0.65,Recordable signs or notation spread through administration and trade.
+knowledge_culture,accounting_method,knowledge_culture,accounting method,accounting;trade;admin,knowledge_state,knowledge_record,public_known,0.70,Ledger tally or credit practice useful to merchants.
+knowledge_culture,trade_law_precedent,knowledge_culture,trade law precedent,trade_law;legal;trade,knowledge_state,knowledge_record,public_known,0.65,Durable custom for contracts tolls shipping or merchant disputes.
+knowledge_culture,standard_container,knowledge_culture,standard container,standard_container;craft;trade,knowledge_state,knowledge_record,public_known,0.60,Reusable container measure or packaging standard for exchange.
+knowledge_culture,luxury_dye_recipe,knowledge_culture,luxury dye recipe,luxury_dye;craft;art;trade,knowledge_state,knowledge_record,public_known,0.55,High-value color recipe or finishing technique.
 knowledge_culture,discovery,knowledge_culture,discovery,discovery,knowledge_state,knowledge_record,public_known,1.00,Baseline discovery.
 knowledge_culture,medicinal_discovery,knowledge_culture,medicinal discovery,discovery;medicine,knowledge_state,knowledge_record,public_known,0.75,Healing or plant knowledge.
 knowledge_culture,new_star_record,knowledge_culture,new star record,discovery;calendar;scholarship,knowledge_state,knowledge_record,public_known,0.55,Celestial or calendar observation.

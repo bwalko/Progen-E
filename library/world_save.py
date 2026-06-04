@@ -981,6 +981,37 @@ def _knowledge_state_delta_from_payload(payload: dict) -> tuple[str, float] | No
     return domain, delta
 
 
+def _knowledge_state_diffusion_from_payload(
+    payload: dict,
+) -> list[tuple[str, str | None, str, float]]:
+    consequences = payload.get("consequences")
+    if not isinstance(consequences, dict):
+        return []
+    raw = consequences.get("knowledge_state_diffusion")
+    if not isinstance(raw, list):
+        return []
+    out: list[tuple[str, str | None, str, float]] = []
+    fallback_domain = str(payload.get("knowledge_domain") or "").strip()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        region_id = str(item.get("region_id") or "").strip()
+        if not region_id:
+            continue
+        domain = str(item.get("domain") or fallback_domain).strip()
+        if not domain:
+            continue
+        delta = _coerce_event_float(item.get("state_delta"))
+        if delta is None:
+            continue
+        delta = round(max(0.0, float(delta)), 5)
+        if delta <= 0.0:
+            continue
+        settlement_id = str(item.get("settlement_id") or "").strip() or None
+        out.append((region_id, settlement_id, domain, delta))
+    return out
+
+
 def _upsert_simulation_domain_state_from_event(
     conn: sqlite3.Connection,
     *,
@@ -994,68 +1025,96 @@ def _upsert_simulation_domain_state_from_event(
 ) -> None:
     if str(event_type or "").strip() != "knowledge_culture":
         return
-    state = _knowledge_state_delta_from_payload(payload)
-    if state is None:
+    primary_state = _knowledge_state_delta_from_payload(payload)
+    diffusion_states = _knowledge_state_diffusion_from_payload(payload)
+    if primary_state is None and not diffusion_states:
         return
-    domain, delta = state
-    if region_key is None:
-        _primary, _secondary, settlement_id, region_id = _event_common_columns(payload)
-        settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
-        region_key = _lookup_or_insert_region_key(conn, region_id)
-    if region_key is None:
+    rows: list[tuple[int, int | None, str, float]] = []
+    if primary_state is not None:
+        domain, delta = primary_state
+        primary_region_key = region_key
+        primary_settlement_key = settlement_key
+        if primary_region_key is None:
+            _primary, _secondary, settlement_id, region_id = _event_common_columns(payload)
+            primary_settlement_key = _lookup_or_insert_settlement_key(
+                conn, settlement_id, region_id
+            )
+            primary_region_key = _lookup_or_insert_region_key(conn, region_id)
+        if primary_region_key is not None:
+            rows.append(
+                (
+                    int(primary_region_key),
+                    primary_settlement_key,
+                    domain,
+                    delta,
+                )
+            )
+    for region_id, settlement_id, domain, delta in diffusion_states:
+        diffuse_region_key = _lookup_or_insert_region_key(conn, region_id)
+        if diffuse_region_key is None:
+            continue
+        diffuse_settlement_key = (
+            _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+            if settlement_id
+            else None
+        )
+        rows.append((int(diffuse_region_key), diffuse_settlement_key, domain, delta))
+    if not rows:
         return
     ts = created_at or _utc_now_iso()
     creator_id = _coerce_event_person_id(payload.get("creator_person_id"))
     incident_kind = str(payload.get("incident_kind") or "").strip() or None
-    conn.execute(
-        """
-        INSERT INTO simulation_domain_states (
-            region_key, domain, domain_score, breakthrough_count,
-            first_event_year, latest_event_year,
-            first_event_id, latest_event_id,
-            latest_incident_kind, latest_creator_person_id, latest_settlement_key,
-            created_at, updated_at
+
+    for target_region_key, target_settlement_key, domain, delta in rows:
+        conn.execute(
+            """
+            INSERT INTO simulation_domain_states (
+                region_key, domain, domain_score, breakthrough_count,
+                first_event_year, latest_event_year,
+                first_event_id, latest_event_id,
+                latest_incident_kind, latest_creator_person_id, latest_settlement_key,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(region_key, domain) DO UPDATE SET
+                domain_score = round(
+                    simulation_domain_states.domain_score + excluded.domain_score,
+                    5
+                ),
+                breakthrough_count = simulation_domain_states.breakthrough_count + 1,
+                first_event_year = COALESCE(
+                    simulation_domain_states.first_event_year,
+                    excluded.first_event_year
+                ),
+                latest_event_year = excluded.latest_event_year,
+                first_event_id = COALESCE(
+                    simulation_domain_states.first_event_id,
+                    excluded.first_event_id
+                ),
+                latest_event_id = excluded.latest_event_id,
+                latest_incident_kind = excluded.latest_incident_kind,
+                latest_creator_person_id = excluded.latest_creator_person_id,
+                latest_settlement_key = COALESCE(
+                    excluded.latest_settlement_key,
+                    simulation_domain_states.latest_settlement_key
+                ),
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(target_region_key),
+                domain,
+                delta,
+                sim_year,
+                sim_year,
+                int(event_id),
+                int(event_id),
+                incident_kind,
+                creator_id,
+                target_settlement_key,
+                ts,
+                ts,
+            ),
         )
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(region_key, domain) DO UPDATE SET
-            domain_score = round(
-                simulation_domain_states.domain_score + excluded.domain_score,
-                5
-            ),
-            breakthrough_count = simulation_domain_states.breakthrough_count + 1,
-            first_event_year = COALESCE(
-                simulation_domain_states.first_event_year,
-                excluded.first_event_year
-            ),
-            latest_event_year = excluded.latest_event_year,
-            first_event_id = COALESCE(
-                simulation_domain_states.first_event_id,
-                excluded.first_event_id
-            ),
-            latest_event_id = excluded.latest_event_id,
-            latest_incident_kind = excluded.latest_incident_kind,
-            latest_creator_person_id = excluded.latest_creator_person_id,
-            latest_settlement_key = COALESCE(
-                excluded.latest_settlement_key,
-                simulation_domain_states.latest_settlement_key
-            ),
-            updated_at = excluded.updated_at
-        """,
-        (
-            int(region_key),
-            domain,
-            delta,
-            sim_year,
-            sim_year,
-            int(event_id),
-            int(event_id),
-            incident_kind,
-            creator_id,
-            settlement_key,
-            ts,
-            ts,
-        ),
-    )
 
 
 def _backfill_simulation_domain_states(conn: sqlite3.Connection) -> None:
@@ -2788,9 +2847,10 @@ def _copy_settlements_from_attached_source(conn: sqlite3.Connection) -> int:
                 food_pressure, prosperity_pool, stability, market_pull,
                 display_name, etymology, name_category_primary, name_category_secondary,
                 name_culture_primary, name_culture_secondary, local_geography_json,
-                founded_sim_year, abandoned_sim_year, status, consecutive_empty_years, site_slot
+                founded_sim_year, abandoned_sim_year, status, consecutive_empty_years, site_slot,
+                founding_reason, mother_settlement_id, trade_network_id, autonomy_level
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 skey,
@@ -2814,6 +2874,10 @@ def _copy_settlements_from_attached_source(conn: sqlite3.Connection) -> int:
                 row["status"] if "status" in source_cols else "active",
                 int(row["consecutive_empty_years"] if "consecutive_empty_years" in source_cols and row["consecutive_empty_years"] is not None else 0),
                 int(row["site_slot"] if "site_slot" in source_cols and row["site_slot"] is not None else 1),
+                row["founding_reason"] if "founding_reason" in source_cols else "organic",
+                row["mother_settlement_id"] if "mother_settlement_id" in source_cols else None,
+                row["trade_network_id"] if "trade_network_id" in source_cols and row["trade_network_id"] is not None else row["settlement_id"],
+                row["autonomy_level"] if "autonomy_level" in source_cols else "autonomous",
             ),
         )
         copied += 1
@@ -3113,6 +3177,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _migrate_simulation_settlements_lifecycle_columns(conn)
     _migrate_simulation_settlements_empty_site_columns(conn)
     _migrate_simulation_settlements_prosperity_pool(conn)
+    _migrate_simulation_settlements_trade_network_columns(conn)
     _migrate_simulation_regions_economy_columns(conn)
     _migrate_relationship_surname_convention_columns(conn)
     from library import government_checkpoint as _gov_ckpt
@@ -3240,6 +3305,68 @@ def _migrate_simulation_settlements_prosperity_pool(conn: sqlite3.Connection) ->
             ADD COLUMN prosperity_pool REAL NOT NULL DEFAULT 1.0
             """
         )
+
+
+def _migrate_simulation_settlements_trade_network_columns(conn: sqlite3.Connection) -> None:
+    st = conn.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='simulation_settlements'
+        """
+    ).fetchone()
+    if st is None:
+        return
+    cols = {
+        str(r[1])
+        for r in conn.execute("PRAGMA table_info(simulation_settlements)").fetchall()
+    }
+    if "founding_reason" not in cols:
+        conn.execute(
+            """
+            ALTER TABLE simulation_settlements
+            ADD COLUMN founding_reason TEXT NOT NULL DEFAULT 'organic'
+            """
+        )
+    if "mother_settlement_id" not in cols:
+        conn.execute(
+            "ALTER TABLE simulation_settlements ADD COLUMN mother_settlement_id TEXT"
+        )
+    if "trade_network_id" not in cols:
+        conn.execute(
+            "ALTER TABLE simulation_settlements ADD COLUMN trade_network_id TEXT"
+        )
+    if "autonomy_level" not in cols:
+        conn.execute(
+            """
+            ALTER TABLE simulation_settlements
+            ADD COLUMN autonomy_level TEXT NOT NULL DEFAULT 'autonomous'
+            """
+        )
+    conn.execute(
+        """
+        UPDATE simulation_settlements
+        SET founding_reason = 'organic'
+        WHERE founding_reason IS NULL OR trim(founding_reason) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE simulation_settlements
+        SET autonomy_level = 'autonomous'
+        WHERE autonomy_level IS NULL OR trim(autonomy_level) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE simulation_settlements
+        SET trade_network_id = (
+            SELECT sl.settlement_id
+            FROM simulation_settlement_lookup sl
+            WHERE sl.settlement_key = simulation_settlements.settlement_key
+        )
+        WHERE trade_network_id IS NULL OR trim(trade_network_id) = ''
+        """
+    )
 
 
 def _migrate_simulation_regions_economy_columns(conn: sqlite3.Connection) -> None:
@@ -3375,6 +3502,7 @@ def _migrate_simulation_regions_region_display_name(conn: sqlite3.Connection) ->
 
 def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
     """Inspection views that expose normalized place keys as readable slugs."""
+    conn.execute("DROP VIEW IF EXISTS simulation_settlements_readable")
     conn.executescript(
         """
         CREATE VIEW IF NOT EXISTS simulation_regions_readable AS
@@ -3416,7 +3544,11 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
             s.abandoned_sim_year,
             s.status,
             s.consecutive_empty_years,
-            s.site_slot
+            s.site_slot,
+            s.founding_reason,
+            s.mother_settlement_id,
+            s.trade_network_id,
+            s.autonomy_level
         FROM simulation_settlements s
         JOIN simulation_settlement_lookup sl ON sl.settlement_key = s.settlement_key
         JOIN simulation_region_lookup rl ON rl.region_key = s.region_key;
@@ -3756,6 +3888,10 @@ def _settlement_state_from_db_row(row: sqlite3.Row) -> SettlementState:
     site_slot = 1
     if "site_slot" in row.keys() and row["site_slot"] is not None:
         site_slot = max(1, int(row["site_slot"]))
+    founding_reason = _row_optional_str(row, "founding_reason") or "organic"
+    mother_settlement_id = _row_optional_str(row, "mother_settlement_id")
+    trade_network_id = _row_optional_str(row, "trade_network_id") or sid
+    autonomy_level = _row_optional_str(row, "autonomy_level") or "autonomous"
 
     return SettlementState(
         region_id=rid,
@@ -3779,6 +3915,10 @@ def _settlement_state_from_db_row(row: sqlite3.Row) -> SettlementState:
         status=status,
         consecutive_empty_years=ce,
         site_slot=site_slot,
+        founding_reason=founding_reason,
+        mother_settlement_id=mother_settlement_id,
+        trade_network_id=trade_network_id,
+        autonomy_level=autonomy_level,
     )
 
 
@@ -5086,9 +5226,11 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                     name_culture_primary, name_culture_secondary,
                     local_geography_json,
                     founded_sim_year, abandoned_sim_year, status,
-                    consecutive_empty_years, site_slot
+                    consecutive_empty_years, site_slot,
+                    founding_reason, mother_settlement_id, trade_network_id,
+                    autonomy_level
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     settlement_key,
@@ -5112,6 +5254,10 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                     st.status,
                     st.consecutive_empty_years,
                     st.site_slot,
+                    st.founding_reason,
+                    st.mother_settlement_id,
+                    st.trade_network_id or st.settlement_id,
+                    st.autonomy_level,
                 ),
             )
 

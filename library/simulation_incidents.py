@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from library import simulation_timing
 from library.event_catalog import choose_event_catalog_kind
+from library.geography import get_region, list_routes_from
 from library.incident_rates import IncidentRateParams, incident_rate_for_year
 
 if TYPE_CHECKING:
@@ -905,15 +906,140 @@ SCHOLARLY_KNOWLEDGE_KINDS = frozenset(
 INVENTION_KNOWLEDGE_KINDS = frozenset(
     {"invention", "improved_plow", "water_lift", "kiln_improvement", "dye_recipe"}
 )
+MARITIME_KNOWLEDGE_KINDS = frozenset(
+    {"shipbuilding_advance", "navigation_discovery"}
+)
+MERCANTILE_KNOWLEDGE_KINDS = frozenset(
+    {"writing_system", "accounting_method", "trade_law_precedent"}
+)
+PORTABLE_CRAFT_KNOWLEDGE_KINDS = frozenset(
+    {"standard_container", "luxury_dye_recipe"}
+)
+PORTABLE_MERCANTILE_DOMAINS = frozenset(
+    {
+        "navigation",
+        "shipbuilding",
+        "writing",
+        "accounting",
+        "trade_law",
+        "craft",
+        "art",
+    }
+)
+_MARITIME_JOB_TOKENS = frozenset(
+    {"sail", "ship", "dock", "ferry", "fish", "boat", "navigator", "pilot"}
+)
+_MERCANTILE_JOB_TOKENS = frozenset(
+    {"merchant", "trader", "market", "scribe", "clerk", "account", "admin", "judge", "law"}
+)
+_PORT_CRAFT_JOB_TOKENS = frozenset(
+    {"artisan", "craft", "smith", "potter", "carpenter", "weaver", "dyer"}
+)
+_COASTAL_TRADE_REGION_TOKENS = frozenset(
+    {"coast", "port", "harbor", "harbour", "delta", "fishery", "trade", "bay", "maritime"}
+)
+
+
+def _creator_residence_region_id(
+    ctx: "SimulationContext", creator: "SimulationPersonRecord"
+) -> str | None:
+    sid = (
+        creator.person.current_settlement_id
+        or creator.person.birthplace_settlement_id
+        or ""
+    ).strip()
+    if sid:
+        st = ctx.settlements_by_id.get(sid)
+        if st is not None and (st.region_id or "").strip():
+            return st.region_id.strip()
+    rid = (creator.person.birthplace_region_id or "").strip()
+    return rid or None
+
+
+def _creator_in_maritime_trade_place(
+    ctx: "SimulationContext", creator: "SimulationPersonRecord"
+) -> bool:
+    rid = _creator_residence_region_id(ctx, creator)
+    if not rid:
+        return False
+    try:
+        region = get_region(rid, world=ctx.world, db_path=ctx.db_path)
+    except LookupError:
+        return False
+    text = " ".join(
+        str(getattr(region, attr, "") or "").lower()
+        for attr in ("region_id", "region_name", "biome", "terrain", "keywords")
+    )
+    if not any(token in text for token in _COASTAL_TRADE_REGION_TOKENS):
+        return False
+    try:
+        return any(
+            route.route_type.strip().lower() == "sea"
+            for route in list_routes_from(
+                rid,
+                world=ctx.world,
+                db_path=ctx.db_path,
+                simulation_year=ctx.current_year,
+            )
+        )
+    except LookupError:
+        return False
 
 
 def _knowledge_culture_kind(
     ctx: "SimulationContext", creator: "SimulationPersonRecord", rng: random.Random
 ) -> str:
+    job = str(creator.person.job or "").strip().lower()
+    maritime_job = any(token in job for token in _MARITIME_JOB_TOKENS)
+    mercantile_job = any(token in job for token in _MERCANTILE_JOB_TOKENS)
+    craft_job = any(token in job for token in _PORT_CRAFT_JOB_TOKENS)
+    maritime_place = _creator_in_maritime_trade_place(ctx, creator)
+    if maritime_job or maritime_place:
+        if any(token in job for token in ("ship", "boat", "carpenter")):
+            return _catalog_incident_kind(
+                ctx,
+                "knowledge_culture",
+                tags=("shipbuilding",),
+                default="shipbuilding_advance",
+                rng=rng,
+            )
+        if _positive_extreme(creator, "perception") >= 0.35 or _positive_extreme(
+            creator, "curiosity"
+        ) >= 0.35:
+            return _catalog_incident_kind(
+                ctx,
+                "knowledge_culture",
+                tags=("navigation",),
+                default="navigation_discovery",
+                rng=rng,
+            )
+    if mercantile_job:
+        if any(token in job for token in ("judge", "law")):
+            return _catalog_incident_kind(
+                ctx,
+                "knowledge_culture",
+                tags=("trade_law",),
+                default="trade_law_precedent",
+                rng=rng,
+            )
+        if any(token in job for token in ("scribe", "clerk", "admin")):
+            return _catalog_incident_kind(
+                ctx,
+                "knowledge_culture",
+                tags=("writing",),
+                default="writing_system",
+                rng=rng,
+            )
+        return _catalog_incident_kind(
+            ctx,
+            "knowledge_culture",
+            tags=("accounting",),
+            default="accounting_method",
+            rng=rng,
+        )
     if _positive_extreme(creator, "civics") >= 0.45 and _ideal_strength(
         creator, "justice"
     ) >= 0.55:
-        job = str(creator.person.job or "").strip().lower()
         tags = ("legal", "succession") if any(
             token in job for token in ("king", "duke", "chief", "judge", "heir")
         ) else ("legal",)
@@ -955,7 +1081,22 @@ def _knowledge_culture_kind(
             default="scholarly_breakthrough",
             rng=rng,
         )
-    job = str(creator.person.job or "").strip().lower()
+    if craft_job and maritime_place:
+        if "dyer" in job or _positive_extreme(creator, "creativity") >= 0.45:
+            return _catalog_incident_kind(
+                ctx,
+                "knowledge_culture",
+                tags=("luxury_dye",),
+                default="luxury_dye_recipe",
+                rng=rng,
+            )
+        return _catalog_incident_kind(
+            ctx,
+            "knowledge_culture",
+            tags=("standard_container",),
+            default="standard_container",
+            rng=rng,
+        )
     tags = ("invention", "craft") if any(
         token in job for token in ("smith", "artisan", "craft", "potter")
     ) else ("invention",)
@@ -970,6 +1111,18 @@ def _knowledge_culture_kind(
 
 def _knowledge_domain(kind: str, creator: "SimulationPersonRecord") -> str:
     job = str(creator.person.job or "").strip().lower()
+    if kind == "shipbuilding_advance":
+        return "shipbuilding"
+    if kind == "navigation_discovery":
+        return "navigation"
+    if kind == "writing_system":
+        return "writing"
+    if kind == "accounting_method":
+        return "accounting"
+    if kind == "trade_law_precedent":
+        return "trade_law"
+    if kind in PORTABLE_CRAFT_KNOWLEDGE_KINDS:
+        return "craft"
     if kind in LEGAL_KNOWLEDGE_KINDS:
         return "law"
     if kind in ART_KNOWLEDGE_KINDS:
@@ -1390,6 +1543,56 @@ def _knowledge_settlement_deltas(incident: KnowledgeCultureIncident) -> tuple[fl
     return min(0.09, novelty * 0.35), min(0.035, novelty * 0.08)
 
 
+def _knowledge_state_diffusion(
+    ctx: "SimulationContext",
+    year: int,
+    incident: KnowledgeCultureIncident,
+    primary_delta: float,
+) -> list[dict[str, object]]:
+    domain = str(incident.knowledge_domain or "").strip()
+    if domain not in PORTABLE_MERCANTILE_DOMAINS:
+        return []
+    try:
+        routes = [
+            route
+            for route in list_routes_from(
+                incident.region_id,
+                world=ctx.world,
+                db_path=ctx.db_path,
+                simulation_year=int(year),
+            )
+            if route.route_type.strip().lower() == "sea"
+        ]
+    except LookupError:
+        return []
+    routes.sort(key=lambda route: (float(route.friction), route.to_region_id))
+    out: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for route in routes:
+        dest = str(route.to_region_id or "").strip()
+        if not dest or dest == incident.region_id or dest in seen:
+            continue
+        seen.add(dest)
+        friction = max(0.0, float(route.friction))
+        delta = round(max(0.001, float(primary_delta) * (0.35 / (1.0 + friction * 0.05))), 5)
+        if delta <= 0.0:
+            continue
+        out.append(
+            {
+                "region_id": dest,
+                "domain": domain,
+                "state_delta": delta,
+                "state_key": f"{dest}:{domain}",
+                "source_region_id": incident.region_id,
+                "route_type": route.route_type,
+                "route_friction": round(friction, 5),
+            }
+        )
+        if len(out) >= 3:
+            break
+    return out
+
+
 def _apply_knowledge_culture_consequences(
     ctx: "SimulationContext", year: int, incident: KnowledgeCultureIncident
 ) -> dict[str, object]:
@@ -1435,12 +1638,16 @@ def _apply_knowledge_culture_consequences(
                 "source_role": "knowledge_patronage",
             }
         )
+    primary_delta = round(max(0.01, novelty * 0.35), 5)
     return {
         "knowledge_state": {
             "domain": incident.knowledge_domain,
-            "state_delta": round(max(0.01, novelty * 0.35), 5),
+            "state_delta": primary_delta,
             "state_key": f"{incident.region_id}:{incident.knowledge_domain}",
         },
+        "knowledge_state_diffusion": _knowledge_state_diffusion(
+            ctx, int(year), incident, primary_delta
+        ),
         "patronage": patronage,
         "obligations": obligations,
         "public_reputation": _raise_person_reputation(

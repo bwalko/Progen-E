@@ -1,5 +1,16 @@
 # TODO
 
+## Clarified Scope Notes
+
+- The Phonecians/Phoenician-inspired request has been implemented as a generic
+  maritime mercantile expansion v1; see `TODONE.md`. Future work should treat
+  that source material as inspiration for simulation patterns, not as an
+  instruction to add literal Phoenician/Punic culture, names, religion, or
+  historical events.
+- A full commodity economy remains outside that v1 scope. Add it as a new
+  explicit TODO before extending the current geography/job/knowledge-driven
+  trade-network model into commodity production, cargo, prices, or supply chains.
+
 ## Primary Task: Genome-Driven Events, Lost Records, And Chronicle Prose
 
 Build a simulation layer where genomes, relationships, offices, household stress,

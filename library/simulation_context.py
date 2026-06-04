@@ -1072,6 +1072,88 @@ class SimulationContext:
             return age < int(mf)
         return age < 18
 
+    def settlement_household_member_ids_for_move(
+        self, adult_person_id: int, ref_year: int | None = None
+    ) -> list[int]:
+        """Adult, co-resident partner, and dependent co-resident children."""
+        rec = self.id_to_record.get(int(adult_person_id))
+        if rec is None or int(adult_person_id) not in self.current_people_ids:
+            return []
+        year = int(
+            ref_year
+            if ref_year is not None
+            else self.current_year
+            if self.current_year is not None
+            else self.simulation_start_year
+        )
+        origin_sid = self._residence_settlement_id(rec)
+        if not origin_sid:
+            return [int(adult_person_id)]
+        to_move: list[int] = [int(adult_person_id)]
+        parent_ids: set[int] = {int(adult_person_id)}
+        partner_id = rec.person.partner_person_id
+        if partner_id is not None:
+            partner = self.id_to_record.get(int(partner_id))
+            if (
+                partner is not None
+                and int(partner_id) in self.current_people_ids
+                and self._residence_settlement_id(partner) == origin_sid
+            ):
+                to_move.append(int(partner_id))
+                parent_ids.add(int(partner_id))
+        for pid in list(self.current_people_ids):
+            if int(pid) in parent_ids:
+                continue
+            child = self.id_to_record.get(int(pid))
+            if child is None or self._residence_settlement_id(child) != origin_sid:
+                continue
+            child_parents = {x for x in (child.father_id, child.mother_id) if x is not None}
+            if int(adult_person_id) not in child_parents:
+                continue
+            if len(parent_ids) > 1 and not child_parents.issubset(parent_ids):
+                continue
+            if self._person_is_dependent_minor(child, year):
+                to_move.append(int(pid))
+        return sorted(dict.fromkeys(to_move))
+
+    def queue_household_move_to_settlement(
+        self,
+        person_id: int,
+        settlement_id: str,
+        *,
+        move_reason: str | None = None,
+        requested_year: int | None = None,
+        apply_year: int | None = None,
+        source_event: str | None = None,
+        group_id: str | None = None,
+    ) -> list[int]:
+        """Queue an adult's co-resident household for a deferred settlement move."""
+        req_y = int(
+            requested_year
+            if requested_year is not None
+            else self.current_year
+            if self.current_year is not None
+            else self.simulation_start_year
+        )
+        app_y = int(apply_year if apply_year is not None else req_y + 1)
+        queued: list[int] = []
+        for pid in self.settlement_household_member_ids_for_move(int(person_id), req_y):
+            try:
+                changed = self.queue_person_move_to_settlement(
+                    pid,
+                    settlement_id,
+                    move_reason=move_reason,
+                    requested_year=req_y,
+                    apply_year=app_y,
+                    source_event=source_event,
+                    group_id=group_id,
+                )
+            except (ValueError, LookupError):
+                continue
+            if changed:
+                queued.append(int(pid))
+        return queued
+
     def relocate_birthing_household_to_settlement(
         self, mother_person_id: int, new_settlement_id: str
     ) -> None:
@@ -1083,49 +1165,15 @@ class SimulationContext:
         if mrec is None or mother_person_id not in self.current_people_ids:
             return
         ref_year = int(self.current_year or self.simulation_start_year)
-        mother_sid = (
-            mrec.person.current_settlement_id or mrec.person.birthplace_settlement_id or ""
-        ).strip()
-        spouse_id = mrec.person.partner_person_id
-        to_move: list[int] = [mother_person_id]
-        if (
-            spouse_id is not None
-            and spouse_id in self.current_people_ids
-            and self.id_to_record.get(spouse_id) is not None
-        ):
-            srec = self.id_to_record[spouse_id]
-            s_sid = (
-                srec.person.current_settlement_id or srec.person.birthplace_settlement_id or ""
-            ).strip()
-            if s_sid == mother_sid:
-                to_move.append(spouse_id)
-        required_parents: set[int] = {mother_person_id}
-        if spouse_id is not None:
-            required_parents.add(spouse_id)
-        for pid in list(self.current_people_ids):
-            if pid in required_parents:
-                continue
-            c = self.id_to_record.get(pid)
-            if c is None:
-                continue
-            child_parents = {x for x in (c.father_id, c.mother_id) if x is not None}
-            if child_parents != required_parents:
-                continue
-            if self._person_is_dependent_minor(c, ref_year):
-                to_move.append(pid)
-        for pid in to_move:
-            try:
-                self.queue_person_move_to_settlement(
-                    pid,
-                    ns,
-                    move_reason="birthing_household_spinoff",
-                    requested_year=ref_year,
-                    apply_year=ref_year + 1,
-                    source_event="birthing_household_spinoff",
-                    group_id=f"birth_spinoff:{mother_person_id}:{ref_year}",
-                )
-            except (ValueError, LookupError):
-                continue
+        self.queue_household_move_to_settlement(
+            mother_person_id,
+            ns,
+            move_reason="birthing_household_spinoff",
+            requested_year=ref_year,
+            apply_year=ref_year + 1,
+            source_event="birthing_household_spinoff",
+            group_id=f"birth_spinoff:{mother_person_id}:{ref_year}",
+        )
 
     def queue_person_move_to_settlement(
         self,
@@ -2152,6 +2200,7 @@ class SimulationContext:
         from library.simulation_migration import simulation_migration_annual_tick
         from library.simulation_mind_body import simulation_mind_body_annual_tick
         from library.simulation_social import simulation_social_annual_tick
+        from library.simulation_trade_networks import simulation_trade_networks_annual_tick
 
         if prof:
             t0 = tpc()
@@ -2167,6 +2216,11 @@ class SimulationContext:
         simulation_migration_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.migration", tpc() - t0)
+        if prof:
+            t0 = tpc()
+        simulation_trade_networks_annual_tick(self, year)
+        if prof:
+            simulation_timing.accumulate("summary.trade_networks", tpc() - t0)
         if prof:
             t0 = tpc()
         simulation_social_annual_tick(self, year)

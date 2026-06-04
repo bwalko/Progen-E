@@ -1,5 +1,43 @@
 # TODONE
 
+## Maritime Mercantile Expansion V1
+
+- Added a generic maritime mercantile expansion archetype inspired by the
+  Phoenician-style pattern of coastal hubs, sea travel, outposts, portable
+  knowledge, and successor centers.
+  - This is intentionally **not** a literal Phoenician/Punic culture feature:
+    no culture names, religions, historical events, or naming rules were added.
+  - This is intentionally **not** a commodity-economy pass: v1 uses geography,
+    sea routes, jobs, settlement market/prosperity, and persisted knowledge
+    domains as the trade desirability signals.
+- Added `library.simulation_trade_networks`:
+  - `PortNetworkScore`
+  - `score_port_network`
+  - `simulation_trade_networks_annual_tick`
+  - annual commercial-outpost founding with deterministic world/year RNG,
+    mother-settlement thresholds, 25-year cooldowns, and a cap of two outposts
+    per world-year
+  - mature dependent outpost autonomy and weakened-root successor recentering
+- Extended settlement state/save data with:
+  - `founding_reason`
+  - `mother_settlement_id`
+  - `trade_network_id`
+  - `autonomy_level`
+  - additive save migration/backfill defaults for older rows
+- Added household-grouped settlement moves reusable by outpost founding and
+  existing grouped move patterns.
+- Expanded `knowledge_culture` with portable mercantile/maritime variants:
+  `shipbuilding_advance`, `navigation_discovery`, `writing_system`,
+  `accounting_method`, `trade_law_precedent`, `standard_container`, and
+  `luxury_dye_recipe`.
+  - Portable knowledge domains can diffuse through up to three sea-route
+    destinations with route-friction-reduced domain-state deltas.
+- Added regression coverage for port scoring, disabled sea-route eras,
+  outpost founding/cooldowns/caps, invalid or duplicate destinations,
+  household founder grouping, settlement-field save/load roundtrip, autonomy,
+  successor recentering, portable knowledge selection, and sea-route domain
+  diffusion.
+
 ## Better SVG Map Data Plan
 
 ### Completed Geometry Foundation Work

@@ -190,9 +190,20 @@ rows provide concrete `incident_kind` variants within those families.
 | `notes` | string | Human tuning notes only; ignored by runtime logic. |
 
 Rows currently expand the initial vertical slices with more crime, rescue,
-legal, invention, and succession-adjacent variants. `library.event_catalog`
-falls back to legacy built-in rows if the table is absent in an old or fixture
-config DB.
+legal, invention, and succession-adjacent variants. The `knowledge_culture`
+slice includes portable mercantile/maritime variants such as
+`shipbuilding_advance`, `navigation_discovery`, `writing_system`,
+`accounting_method`, `trade_law_precedent`, `standard_container`, and
+`luxury_dye_recipe`; `library.simulation_incidents` maps them to domain-state
+keys such as `navigation`, `shipbuilding`, `writing`, `accounting`,
+`trade_law`, and `craft`. `library.event_catalog` falls back to legacy
+built-in rows if the table is absent in an old or fixture config DB.
+
+Runtime note: `knowledge_state` event payloads may include
+`consequences.knowledge_state_diffusion`, a list of bounded sea-route diffusion
+deltas. Each diffusion item targets a destination region/domain with a reduced
+delta based on route friction. `library.world_save` applies those rows to
+`simulation_domain_states` in addition to the primary region delta.
 
 ---
 
@@ -337,6 +348,9 @@ At runtime, `library.geography.list_routes_from` does **not** query this table a
 | `friction` | number | Cost/difficulty scalar; higher = less likely movement. |
 | `bidirectional` | integer (0/1) | Data hint for humans; loader still stores explicit directed rows. |
 
+Sea routes are also used by `library.simulation_trade_networks` for port
+centrality, commercial-outpost destinations, and knowledge diffusion reach.
+
 ---
 
 ## `config/world_geography_travel_eras.csv`
@@ -368,6 +382,13 @@ Overlapping bands for the same `world`: the row with the largest `history_year_f
 CSV files under `config/` are loaded into **`worlds/<world_id>/config.sqlite`** by `utils/util_load_config.py` (one SQLite table per file, e.g. `ethnic`, `first_name`, `last_name`, `species`, `genome`, `world_start`, `gender_mind`, `sexual_nature`, …).
 
 **`generate_person_random`** in `library.generator` reads **`species`** (body, appearance, age bands), builds **`Person.genome`** via `library.random_traits.choose_genome` from the **`genome`** table, and uses **`world_start`** + **`species`** for life-stage / age sampling (`choose_life_stage_and_age`, backed by `utils.util_age_distribution`). **`first_name`** / **`last_name`** / full naming integration are still planned; the **`ethnic`** table remains for kinship / constructed-name logic. **`generate_person_from_birth`** is not implemented yet.
+
+Runtime save-schema note: `simulation_settlements` in `save.sqlite` includes
+trade-network lineage fields used by the maritime expansion layer:
+`founding_reason`, `mother_settlement_id`, `trade_network_id`, and
+`autonomy_level`. Older save rows are migrated with defaults of
+`founding_reason="organic"`, `mother_settlement_id=NULL`,
+`trade_network_id=<settlement_id>`, and `autonomy_level="autonomous"`.
 
 ---
 
