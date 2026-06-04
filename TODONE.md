@@ -482,7 +482,7 @@
   - low-aptitude adults do not produce knowledge/culture events even when the
     chance gate is forced open.
 - Added the first authored event catalog:
-  - `config/event_catalog.csv` now defines 50 concrete event/incident kind rows
+  - `config/event_catalog.csv` now defines 57 concrete event/incident kind rows
     with family labels, context tags, consequence profiles, default memory
     expectations, and selection weights.
   - `library.event_catalog` loads catalog rows from config SQLite and falls
