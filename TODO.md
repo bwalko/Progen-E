@@ -207,8 +207,10 @@ Initial theft/fraud vertical slice now exists:
   witnesses, incident kind, motive, loss value, settlement/region, resource
   pressure, historical importance, and genome signals.
 - Property-crime records default to `property_crime_record` / `rumored`.
-- No property/economy mutation happens yet; loss consequences need a later
-  household/economy design pass.
+- Property-crime consequences now immediately apply a small target-household
+  prosperity loss, a smaller perpetrator-household gain, and a local settlement
+  prosperity/stability penalty. The event payload records those before/after
+  consequence deltas for inspection.
 
 Initial affair/scandal vertical slice now exists:
 
@@ -222,9 +224,14 @@ Initial affair/scandal vertical slice now exists:
   betrayed partner(s), witnesses, incident kind, motive, settlement/region,
   resource pressure, historical importance, and genome signals.
 - Affair-scandal records default to `scandal_record` / `rumored`.
-- The current slice does not dissolve couples or paramours. Consequences such
-  as breakup, legitimacy crisis, inheritance dispute, or later rediscovery are
-  deferred to the event-consequence pass.
+- Affair-scandal consequences now end the exposed paramour relationship,
+  dissolve betrayed official couples when the exposed partner is still linked,
+  nudge local stability downward, and record the relationship fallout in the
+  scandal payload. `save.sqlite` schema v12 also persists
+  `heir_legitimacy_rumor` and `inheritance_scandal` variants into
+  `simulation_legal_fallout` / `simulation_legal_fallout_readable` rows.
+  Deeper legal adjudication, inheritance resolution, and faction reactions
+  remain future work.
 
 Initial public-virtue vertical slice now exists:
 
@@ -237,9 +244,13 @@ Initial public-virtue vertical slice now exists:
   witnesses, incident kind, motive, settlement/region, resource pressure,
   historical importance, relief value, and genome signals.
 - Public-virtue records default to `public_virtue_record` / `public_known`.
-- The current slice does not mutate wealth, health, legal standing, or future
-  obligation state. Consequences such as gratitude, patronage, faction trust,
-  or public reputation need a later feedback pass.
+- Public-virtue consequences now transfer modest household prosperity from the
+  benefactor side to the beneficiary side, raise local prosperity/stability,
+  reduce food pressure slightly, lift low/blank benefactor leadership
+  reputation to `medium`, and persist an active `relief_debt` obligation from
+  beneficiary to benefactor. `save.sqlite` schema v11+ also persists a
+  source-event-backed leadership reputation mark for the benefactor. Faction
+  trust and health/legal fallout remain future work.
 
 Initial knowledge/culture vertical slice now exists:
 
@@ -253,9 +264,38 @@ Initial knowledge/culture vertical slice now exists:
   witnesses, incident kind, knowledge domain, motive, settlement/region,
   resource pressure, historical importance, novelty value, and genome signals.
 - Knowledge/culture records default to `knowledge_record` / `public_known`.
-- The current slice does not mutate technology, law, culture, jobs, or polity
-  doctrine yet. Consequences such as legal reforms, craft diffusion, schools,
-  patronage, or later cultural memory need a follow-up feedback pass.
+- Knowledge/culture consequences now apply modest settlement/region prosperity
+  and stability effects, transfer patronage support from patron to creator when
+  a patron exists, lift low/blank creator status reputation to `middle-high`,
+  and record a structured per-domain `knowledge_state` delta in the event
+  payload. `save.sqlite` schema v9+ persists those deltas into regional
+  `simulation_domain_states` / `simulation_domain_states_readable` rows during
+  event flush/backfill. `save.sqlite` schema v10 now also persists active
+  `patronage_debt` obligations from creator to patron when patronage exists.
+  `save.sqlite` schema v11+ persists a source-event-backed status reputation
+  mark for the creator. Deeper diffusion, schools, guilds, doctrine, and craft
+  institutions remain future work.
+
+Event-catalog expansion now exists:
+
+- `config/event_catalog.csv` defines authored event/incident kind rows with
+  family, display label, context tags, consequence profile, default memory
+  expectations, and selection weight.
+- `library.event_catalog` loads the catalog from config SQLite and falls back
+  to legacy built-in rows for old or fixture databases without the table.
+- `library.simulation_incidents` now uses catalog-backed variant pools while
+  keeping the existing bounded trait/context gates. The catalog expands:
+  - violent and property crime (`kin_killing`, `ambush_killing`,
+    `storehouse_robbery`, `livestock_theft`, `debt_fraud`,
+    `inheritance_fraud`, `market_extortion`);
+  - scandal/succession risk (`heir_legitimacy_rumor`,
+    `inheritance_scandal`);
+  - rescue/virtue (`river_rescue`, `fire_rescue`, `famine_mercy`,
+    `boundary_arbitration`, `succession_arbitration`,
+    `oath_kept_under_pressure`);
+  - knowledge/legal/invention rows (`improved_plow`, `water_lift`,
+    `kiln_improvement`, `medicinal_discovery`, `inheritance_judgment`,
+    `succession_precedent`, `calendar_reform`).
 
 Existing events to retrofit:
 
@@ -489,6 +529,18 @@ Initial tuning/report pass now exists:
   old event-memory records, marks some ordinary in-world records `lost`, and can
   turn old lost/sealed records into `rediscovered` records with a linked factual
   `event_rediscovered` event.
+- Lifecycle-rate tuning now treats high-volume private records differently from
+  rare incident records. A fresh 80-year fixed-seed `event_tuning_sample` rerun
+  using the same command produced:
+  - total events: 17,363;
+  - total records: 17,363;
+  - save size: 17,252,352 bytes;
+  - tracked incident counts: `murder` 11, `property_crime` 43,
+    `affair_scandal` 4, `public_virtue` 5, `knowledge_culture` 1;
+  - high-volume work records stayed private: 0 lost and 0 rediscovered across
+    `job_assigned`, `job_lost`, `unemployment_started`, and
+    `unemployment_ended`;
+  - lineage birth memory remained durable: 1 lost birth record out of 2,555.
 
 ### Suggested Milestones
 
@@ -500,10 +552,10 @@ Initial tuning/report pass now exists:
    because it exercises genome scoring, death consequences, witnesses, record
    visibility, public uncertainty, and rediscovery.
 4. Add theft/fraud and affair/scandal to test non-death crimes. Done for the
-   initial vertical slices; consequence hooks still need follow-up work.
+   initial vertical slices and first consequence hooks.
 5. Add one positive public-virtue event and one knowledge/culture event so the
-   system is not only crime-shaped. Done for the initial vertical slices;
-   consequence hooks still need follow-up work.
+   system is not only crime-shaped. Done for the initial vertical slices and
+   first consequence hooks.
 6. Build prose rendering for factual admin summaries and public chronicle
    records. Done for the initial authored-template foundation.
 7. Add browser/readable views for admin truth, public records, rumors, lost
@@ -517,15 +569,9 @@ Initial tuning/report pass now exists:
 
 Next event-system tasks:
 
-- Tune lifecycle rates against a fresh fixed-seed sample and decide whether
-  high-volume private records such as births/jobs should decay more slowly than
-  rare incident records.
-- Add consequence hooks for non-lethal incidents: property/economy mutation for
-  property crime, relationship/reputation fallout for scandals, public
-  reputation/patronage for virtue, and knowledge/culture state changes for
-  breakthroughs.
-- Expand the event catalog with more crime, rescue, legal, invention, and
-  succession-adjacent rows once the consequence hooks have a place to land.
+- Add deeper durable consequence models after more samples: faction memory,
+  legal adjudication/inheritance resolution, inter-region domain diffusion,
+  schools/guilds, doctrine, and craft institutions.
 
 ## Polygonal World Map Generation
 
@@ -563,7 +609,7 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 - File size: about 2.25GB.
 - `simulation_events`: 3,262,904 rows; `payload_json` is about 1.05GB of text.
 - `simulation_people`: 319,939 rows; `person_json` is about 640MB of text.
-- Save schema v2/v3/v4/v5/v6/v7/v8 already removed save-side `world` columns, flattened common `Person` fields into typed columns, compacted genome/mind-body payloads, added normalized event-person links, normalized common place IDs, added the first hybrid passive/cohort tables, normalized `settlement_moved` route detail, and added default event-memory records. See `TODONE.md`.
+- Save schema v2/v3/v4/v5/v6/v7/v8/v9/v10/v11 already removed save-side `world` columns, flattened common `Person` fields into typed columns, compacted genome/mind-body payloads, added normalized event-person links, normalized common place IDs, added the first hybrid passive/cohort tables, normalized `settlement_moved` route detail, added default event-memory records, added regional domain-state rows derived from knowledge/culture events, added active obligation rows derived from public-virtue relief and knowledge patronage, and added reputation marks derived from public-virtue/knowledge consequence payloads. See `TODONE.md`.
 - Remaining bigger wins are likely:
   - continue moving high-volume event detail out of JSON when another specific event family proves hot;
   - use `simulation_people_light` / `simulation_cohorts` for background population instead of creating every background person as a full `Person`;

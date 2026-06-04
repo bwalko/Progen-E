@@ -1,0 +1,51 @@
+event_type,incident_kind,event_family,display_name,context_tags,consequence_profile,default_record_type,default_visibility,selection_weight,notes
+murder,murder,violent_crime,murder,ordinary,death,violent_crime_record,rumored,1.00,Baseline lethal violence.
+murder,domestic_murder,violent_crime,domestic murder,domestic;household,death,violent_crime_record,rumored,1.00,Partner or paramour conflict turns lethal.
+murder,kin_killing,violent_crime,kin killing,kin;household,death,violent_crime_record,rumored,0.75,Family grievance turns lethal.
+murder,feud_killing,violent_crime,feud killing,feud;revenge,death,violent_crime_record,rumored,1.00,Retaliatory killing tied to feud logic.
+murder,feud_murder,violent_crime,feud murder,feud;revenge,death,violent_crime_record,rumored,0.75,Less sanctioned feud killing.
+murder,rash_brawl_killing,violent_crime,rash brawl killing,brawl;impulse,death,violent_crime_record,rumored,1.00,Impulsive quarrel turns lethal.
+murder,ambush_killing,violent_crime,ambush killing,predatory;planned,death,violent_crime_record,rumored,0.60,Premeditated attack outside public order.
+murder,predatory_murder,violent_crime,predatory murder,predatory;planned,death,violent_crime_record,rumored,1.00,Low empathy and forceful intent.
+property_crime,theft,property_crime,theft,theft,property_loss,property_crime_record,rumored,1.00,Baseline opportunistic theft.
+property_crime,livestock_theft,property_crime,livestock theft,theft;survival;valuable_target,property_loss,property_crime_record,rumored,0.85,Rural survival or market theft.
+property_crime,storehouse_robbery,property_crime,storehouse robbery,theft;survival;scarcity;valuable_target,property_loss,property_crime_record,rumored,0.80,Scarcity crime against stored goods.
+property_crime,market_stall_theft,property_crime,market stall theft,theft;market,property_loss,property_crime_record,rumored,0.75,Market theft with witnesses.
+property_crime,fraud,property_crime,fraud,fraud,property_loss,property_crime_record,rumored,1.00,Baseline deception crime.
+property_crime,debt_fraud,property_crime,debt fraud,fraud;debt,property_loss,property_crime_record,rumored,0.85,Fraud emerging from debt or hardship.
+property_crime,inheritance_fraud,property_crime,inheritance fraud,fraud;succession;household,property_loss,property_crime_record,rumored,0.60,Forged household or succession claim.
+property_crime,extortion,property_crime,extortion,extortion,property_loss,property_crime_record,rumored,1.00,Baseline coercive property crime.
+property_crime,market_extortion,property_crime,market extortion,extortion;market,property_loss,property_crime_record,rumored,0.75,Coercion around trade or tolls.
+property_crime,hoarding_theft,property_crime,hoarding theft,hoarding;theft;scarcity,property_loss,property_crime_record,rumored,1.00,Secret taking during scarcity.
+affair_scandal,affair_exposed,household_scandal,affair exposed,rumor;household,relationship_fallout,scandal_record,rumored,1.00,Baseline household scandal.
+affair_scandal,affair_witnessed,household_scandal,affair witnessed,witnessed;household,relationship_fallout,scandal_record,rumored,1.00,Secret relationship seen by witnesses.
+affair_scandal,confessed_affair,household_scandal,confessed affair,confession;household,relationship_fallout,scandal_record,rumored,1.00,Open confession exposes paramour tie.
+affair_scandal,double_affair_exposed,household_scandal,double affair exposed,double_household;household,relationship_fallout,scandal_record,rumored,1.00,Two betrayed households are implicated.
+affair_scandal,heir_legitimacy_rumor,household_scandal,heir legitimacy rumor,succession;household;rumor,relationship_fallout,scandal_record,rumored,0.55,Scandal threatens later lineage claims.
+affair_scandal,inheritance_scandal,household_scandal,inheritance scandal,succession;household,relationship_fallout,scandal_record,rumored,0.55,Affair creates inheritance doubt.
+public_virtue,heroic_rescue,public_virtue,heroic rescue,rescue,public_relief,public_virtue_record,public_known,1.00,Baseline costly rescue.
+public_virtue,river_rescue,public_virtue,river rescue,rescue;danger,public_relief,public_virtue_record,public_known,0.80,Rescue from water or flood danger.
+public_virtue,fire_rescue,public_virtue,fire rescue,rescue;danger,public_relief,public_virtue_record,public_known,0.80,Rescue from house or storehouse fire.
+public_virtue,public_mercy,public_virtue,public mercy,mercy;relief,public_relief,public_virtue_record,public_known,1.00,Baseline public mercy.
+public_virtue,famine_mercy,public_virtue,famine mercy,mercy;relief;scarcity,public_relief,public_virtue_record,public_known,0.90,Relief during scarcity.
+public_virtue,public_arbitration,public_virtue,public arbitration,arbitration;legal,public_relief,public_virtue_record,public_known,1.00,Baseline public dispute settlement.
+public_virtue,boundary_arbitration,public_virtue,boundary arbitration,arbitration;legal;land,public_relief,public_virtue_record,public_known,0.75,Public settlement of land or route dispute.
+public_virtue,succession_arbitration,public_virtue,succession arbitration,arbitration;legal;succession,public_relief,public_virtue_record,public_known,0.65,Public mediation around inheritance or office claim.
+public_virtue,loyal_service,public_virtue,loyal service,loyal_service,public_relief,public_virtue_record,public_known,1.00,Baseline loyal service.
+public_virtue,oath_kept_under_pressure,public_virtue,oath kept under pressure,loyal_service;succession,public_relief,public_virtue_record,public_known,0.70,Loyalty during claim or office stress.
+knowledge_culture,invention,knowledge_culture,invention,invention,knowledge_state,knowledge_record,public_known,1.00,Baseline invention.
+knowledge_culture,improved_plow,knowledge_culture,improved plow,invention;craft;food,knowledge_state,knowledge_record,public_known,0.75,Agricultural tool improvement.
+knowledge_culture,water_lift,knowledge_culture,water lift,invention;engineering;food,knowledge_state,knowledge_record,public_known,0.70,Water movement or irrigation device.
+knowledge_culture,kiln_improvement,knowledge_culture,kiln improvement,invention;craft,knowledge_state,knowledge_record,public_known,0.70,Craft production advance.
+knowledge_culture,dye_recipe,knowledge_culture,dye recipe,invention;art;craft,knowledge_state,knowledge_record,public_known,0.60,Recipe or material discovery.
+knowledge_culture,discovery,knowledge_culture,discovery,discovery,knowledge_state,knowledge_record,public_known,1.00,Baseline discovery.
+knowledge_culture,medicinal_discovery,knowledge_culture,medicinal discovery,discovery;medicine,knowledge_state,knowledge_record,public_known,0.75,Healing or plant knowledge.
+knowledge_culture,new_star_record,knowledge_culture,new star record,discovery;calendar;scholarship,knowledge_state,knowledge_record,public_known,0.55,Celestial or calendar observation.
+knowledge_culture,legal_precedent,knowledge_culture,legal precedent,legal,knowledge_state,knowledge_record,public_known,1.00,Baseline legal precedent.
+knowledge_culture,boundary_judgment,knowledge_culture,boundary judgment,legal;land,knowledge_state,knowledge_record,public_known,0.80,Judgment over land or water boundary.
+knowledge_culture,inheritance_judgment,knowledge_culture,inheritance judgment,legal;succession,knowledge_state,knowledge_record,public_known,0.80,Durable inheritance rule.
+knowledge_culture,succession_precedent,knowledge_culture,succession precedent,legal;succession,knowledge_state,knowledge_record,public_known,0.70,Office or dynastic succession ruling.
+knowledge_culture,artistic_triumph,knowledge_culture,artistic triumph,art,knowledge_state,knowledge_record,public_known,1.00,Baseline public artwork or performance.
+knowledge_culture,famous_performance,knowledge_culture,famous performance,art;performance,knowledge_state,knowledge_record,public_known,0.80,Performance that enters public memory.
+knowledge_culture,scholarly_breakthrough,knowledge_culture,scholarly breakthrough,scholarship,knowledge_state,knowledge_record,public_known,1.00,Baseline scholarly breakthrough.
+knowledge_culture,calendar_reform,knowledge_culture,calendar reform,scholarship;calendar;legal,knowledge_state,knowledge_record,public_known,0.65,Durable calendar or reckoning change.

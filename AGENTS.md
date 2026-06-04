@@ -35,7 +35,7 @@ Use this file first when starting a new session in this repository.
 
 ## Project Facts To Preserve
 
-- **Progen-E** layout: each world has a folder under `worlds/<world_id>/` with **`config.sqlite`** (imported from `config/*.csv`, not written during simulation) and **`save.sqlite`** (mutable simulation state: `world_state` clock plus **`simulation_*`** checkpoint tables for people, settlements, couples, and append-only **`simulation_events`**). `SimulationContext.record_year_summary` and **`finalize_run()`** persist to the save DB.
+- **Progen-E** layout: each world has a folder under `worlds/<world_id>/` with **`config.sqlite`** (imported from `config/*.csv`, not written during simulation) and **`save.sqlite`** (mutable simulation state: `world_state` clock plus **`simulation_*`** checkpoint/state tables for people, settlements, couples, event records, regional domain states, obligation ledgers, reputation marks, legal fallout rows, and append-only **`simulation_events`**). `SimulationContext.record_year_summary` and **`finalize_run()`** persist to the save DB.
 - Legacy root **`Progen-E.sqlite`** (if it still exists from older layouts) is obsolete; the project uses **`worlds/<world_id>/config.sqlite`**. You may delete the legacy file after confirming nothing references it.
 - `world_start` is immutable config (in `config.sqlite`); runtime time progression is stored in **`save.sqlite`** (`world_state`).
 - `Person.birthyear` is canonical; age is always `simulation_year - birthyear`.

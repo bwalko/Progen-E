@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from library import simulation_timing
+from library.event_catalog import choose_event_catalog_kind
 from library.incident_rates import IncidentRateParams, incident_rate_for_year
 
 if TYPE_CHECKING:
@@ -58,6 +59,13 @@ KNOWLEDGE_SETTLEMENT_SAMPLE_CAP = 240
 KNOWLEDGE_MAX_EVENTS_PER_YEAR = 2
 KNOWLEDGE_RNG_STREAM = 610_079
 KNOWLEDGE_SAMPLE_STREAM = 610_081
+HOUSEHOLD_CONSEQUENCE_DEFAULT_PROSPERITY = 1.0
+HOUSEHOLD_CONSEQUENCE_MIN_PROSPERITY = 0.0
+HOUSEHOLD_CONSEQUENCE_MAX_PROSPERITY = 25.0
+SETTLEMENT_CONSEQUENCE_MAX_PROSPERITY = 2.5
+LEGAL_FALLOUT_SCANDAL_KINDS: frozenset[str] = frozenset(
+    {"heir_legitimacy_rumor", "inheritance_scandal"}
+)
 
 
 @dataclass(frozen=True)
@@ -399,25 +407,68 @@ def _relationship_motive(
     return "settlement_grievance", 1.0
 
 
-def _incident_kind(killer: "SimulationPersonRecord", motive: str) -> str:
+def _incident_kind(
+    ctx: "SimulationContext",
+    killer: "SimulationPersonRecord",
+    motive: str,
+    rng: random.Random,
+) -> str:
     if motive in {"partner_conflict", "paramour_conflict"}:
-        return "domestic_murder"
+        return _catalog_incident_kind(
+            ctx,
+            "murder",
+            tags=("domestic", "household"),
+            default="domestic_murder",
+            rng=rng,
+        )
+    if motive == "kin_conflict":
+        return _catalog_incident_kind(
+            ctx,
+            "murder",
+            tags=("kin", "household"),
+            default="kin_killing",
+            rng=rng,
+        )
     if (
         _positive_extreme(killer, "justice") >= 0.35
         and _positive_extreme(killer, "courage") >= 0.20
     ):
-        return "feud_killing"
+        return _catalog_incident_kind(
+            ctx,
+            "murder",
+            tags=("feud", "revenge"),
+            default="feud_killing",
+            rng=rng,
+        )
     if (
         _negative_extreme(killer, "patience")
         + _positive_extreme(killer, "neurochemical")
     ) >= 0.9:
-        return "rash_brawl_killing"
+        return _catalog_incident_kind(
+            ctx,
+            "murder",
+            tags=("brawl", "impulse"),
+            default="rash_brawl_killing",
+            rng=rng,
+        )
     if (
         _negative_extreme(killer, "empathy") >= 0.55
         and _positive_extreme(killer, "assertiveness") >= 0.35
     ):
-        return "predatory_murder"
-    return "murder"
+        return _catalog_incident_kind(
+            ctx,
+            "murder",
+            tags=("predatory", "planned"),
+            default="predatory_murder",
+            rng=rng,
+        )
+    return _catalog_incident_kind(
+        ctx,
+        "murder",
+        tags=("ordinary",),
+        default="murder",
+        rng=rng,
+    )
 
 
 def _genome_signal_payload(
@@ -649,7 +700,7 @@ def _maybe_murder_in_settlement(
     return MurderIncident(
         killer=killer,
         victim=victim,
-        incident_kind=_incident_kind(killer, motive),
+        incident_kind=_incident_kind(ctx, killer, motive, rng),
         motive=motive,
         witness_person_ids=witness_ids,
         settlement_id=settlement_id,
@@ -677,16 +728,57 @@ def _property_crime_motive(
     return "opportunity"
 
 
-def _property_crime_kind(perpetrator: "SimulationPersonRecord", motive: str) -> str:
+def _property_crime_kind(
+    ctx: "SimulationContext",
+    perpetrator: "SimulationPersonRecord",
+    target: "SimulationPersonRecord",
+    motive: str,
+    rng: random.Random,
+) -> str:
     if _positive_extreme(perpetrator, "persuasion") >= 0.45 and _negative_extreme(
         perpetrator, "honesty"
     ) >= 0.35:
-        return "fraud"
+        tags = ("fraud", "debt") if motive == "debt_or_hardship" else ("fraud",)
+        if str(target.person.partner_person_id or "").strip():
+            tags = (*tags, "household")
+        return _catalog_incident_kind(
+            ctx,
+            "property_crime",
+            tags=tags,
+            default="fraud",
+            rng=rng,
+        )
     if _positive_extreme(perpetrator, "assertiveness") >= 0.45:
-        return "extortion"
+        tags = ("extortion", "market") if target.person.job else ("extortion",)
+        return _catalog_incident_kind(
+            ctx,
+            "property_crime",
+            tags=tags,
+            default="extortion",
+            rng=rng,
+        )
     if motive == "hoarding":
-        return "hoarding_theft"
-    return "theft"
+        return _catalog_incident_kind(
+            ctx,
+            "property_crime",
+            tags=("hoarding", "theft", "scarcity"),
+            default="hoarding_theft",
+            rng=rng,
+        )
+    tags = ("theft",)
+    if motive in {"scarcity", "debt_or_hardship"}:
+        tags = ("theft", "survival", "scarcity")
+    if float(target.person.job_prosperity_01 or 0.0) >= 0.55:
+        tags = (*tags, "valuable_target")
+    if target.person.job:
+        tags = (*tags, "market")
+    return _catalog_incident_kind(
+        ctx,
+        "property_crime",
+        tags=tags,
+        default="theft",
+        rng=rng,
+    )
 
 
 def _property_crime_loss(
@@ -714,23 +806,59 @@ def _beneficiary_need_score(rec: "SimulationPersonRecord", pressure: float) -> f
 
 
 def _public_virtue_kind(
+    ctx: "SimulationContext",
     benefactor: "SimulationPersonRecord",
     beneficiary: "SimulationPersonRecord",
     pressure: float,
+    rng: random.Random,
 ) -> str:
     if _positive_extreme(benefactor, "courage") >= 0.45 or _negative_extreme(
         beneficiary, "physical"
     ) >= 0.45:
-        return "heroic_rescue"
+        return _catalog_incident_kind(
+            ctx,
+            "public_virtue",
+            tags=("rescue", "danger"),
+            default="heroic_rescue",
+            rng=rng,
+        )
     if pressure >= 1.0 or beneficiary.person.unemployment_started_year is not None:
-        return "public_mercy"
+        tags = ("mercy", "relief", "scarcity") if pressure >= 1.0 else ("mercy", "relief")
+        return _catalog_incident_kind(
+            ctx,
+            "public_virtue",
+            tags=tags,
+            default="public_mercy",
+            rng=rng,
+        )
     if _ideal_strength(benefactor, "justice") >= 0.7 and _ideal_strength(
         benefactor, "civics"
     ) >= 0.55:
-        return "public_arbitration"
+        tags = ("arbitration", "legal")
+        if beneficiary.person.partner_person_id is not None:
+            tags = (*tags, "succession")
+        return _catalog_incident_kind(
+            ctx,
+            "public_virtue",
+            tags=tags,
+            default="public_arbitration",
+            rng=rng,
+        )
     if _ideal_strength(benefactor, "loyalty") >= 0.65:
-        return "loyal_service"
-    return "public_mercy"
+        return _catalog_incident_kind(
+            ctx,
+            "public_virtue",
+            tags=("loyal_service", "succession"),
+            default="loyal_service",
+            rng=rng,
+        )
+    return _catalog_incident_kind(
+        ctx,
+        "public_virtue",
+        tags=("mercy", "relief"),
+        default="public_mercy",
+        rng=rng,
+    )
 
 
 def _public_virtue_motive(benefactor: "SimulationPersonRecord", pressure: float) -> str:
@@ -756,35 +884,99 @@ def _public_virtue_relief_value(
     return round(_clamp(0.03 + rng.random() * 0.06 + actor_cost + need), 4)
 
 
-def _knowledge_culture_kind(creator: "SimulationPersonRecord") -> str:
+LEGAL_KNOWLEDGE_KINDS = frozenset(
+    {
+        "legal_precedent",
+        "boundary_judgment",
+        "inheritance_judgment",
+        "succession_precedent",
+        "calendar_reform",
+    }
+)
+ART_KNOWLEDGE_KINDS = frozenset(
+    {"artistic_triumph", "famous_performance", "dye_recipe"}
+)
+DISCOVERY_KNOWLEDGE_KINDS = frozenset(
+    {"discovery", "medicinal_discovery", "new_star_record"}
+)
+SCHOLARLY_KNOWLEDGE_KINDS = frozenset(
+    {"scholarly_breakthrough", "calendar_reform", "new_star_record"}
+)
+INVENTION_KNOWLEDGE_KINDS = frozenset(
+    {"invention", "improved_plow", "water_lift", "kiln_improvement", "dye_recipe"}
+)
+
+
+def _knowledge_culture_kind(
+    ctx: "SimulationContext", creator: "SimulationPersonRecord", rng: random.Random
+) -> str:
     if _positive_extreme(creator, "civics") >= 0.45 and _ideal_strength(
         creator, "justice"
     ) >= 0.55:
-        return "legal_precedent"
+        job = str(creator.person.job or "").strip().lower()
+        tags = ("legal", "succession") if any(
+            token in job for token in ("king", "duke", "chief", "judge", "heir")
+        ) else ("legal",)
+        return _catalog_incident_kind(
+            ctx,
+            "knowledge_culture",
+            tags=tags,
+            default="legal_precedent",
+            rng=rng,
+        )
     if _positive_extreme(creator, "creativity") >= 0.55 and _positive_extreme(
         creator, "wit"
     ) >= 0.35:
-        return "artistic_triumph"
+        return _catalog_incident_kind(
+            ctx,
+            "knowledge_culture",
+            tags=("art", "performance"),
+            default="artistic_triumph",
+            rng=rng,
+        )
     if _positive_extreme(creator, "perception") >= 0.50 and _positive_extreme(
         creator, "curiosity"
     ) >= 0.45:
-        return "discovery"
+        tags = ("discovery", "medicine") if "healer" in str(creator.person.job or "").lower() else ("discovery",)
+        return _catalog_incident_kind(
+            ctx,
+            "knowledge_culture",
+            tags=tags,
+            default="discovery",
+            rng=rng,
+        )
     if _positive_extreme(creator, "intellect") >= 0.50 and _positive_extreme(
         creator, "focus"
     ) >= 0.35:
-        return "scholarly_breakthrough"
-    return "invention"
+        return _catalog_incident_kind(
+            ctx,
+            "knowledge_culture",
+            tags=("scholarship", "calendar"),
+            default="scholarly_breakthrough",
+            rng=rng,
+        )
+    job = str(creator.person.job or "").strip().lower()
+    tags = ("invention", "craft") if any(
+        token in job for token in ("smith", "artisan", "craft", "potter")
+    ) else ("invention",)
+    return _catalog_incident_kind(
+        ctx,
+        "knowledge_culture",
+        tags=tags,
+        default="invention",
+        rng=rng,
+    )
 
 
 def _knowledge_domain(kind: str, creator: "SimulationPersonRecord") -> str:
     job = str(creator.person.job or "").strip().lower()
-    if kind == "legal_precedent":
+    if kind in LEGAL_KNOWLEDGE_KINDS:
         return "law"
-    if kind == "artistic_triumph":
+    if kind in ART_KNOWLEDGE_KINDS:
         return "performance" if "bard" in job or "singer" in job else "art"
-    if kind == "discovery":
+    if kind in DISCOVERY_KNOWLEDGE_KINDS:
         return "medicine" if "healer" in job else "natural_history"
-    if kind == "scholarly_breakthrough":
+    if kind in SCHOLARLY_KNOWLEDGE_KINDS:
         return "calendar" if _positive_extreme(creator, "focus") >= 0.55 else "scholarship"
     if "smith" in job or "artisan" in job or "craft" in job:
         return "craft"
@@ -812,6 +1004,452 @@ def _knowledge_novelty_value(
     )
     adversity = min(0.05, max(0.0, pressure - 0.8) * 0.03)
     return round(_clamp(0.04 + rng.random() * 0.08 + signal + adversity), 4)
+
+
+def _catalog_incident_kind(
+    ctx: "SimulationContext",
+    event_type: str,
+    *,
+    tags: tuple[str, ...],
+    default: str,
+    rng: random.Random,
+) -> str:
+    try:
+        return choose_event_catalog_kind(
+            db_path=ctx.db_path,
+            event_type=event_type,
+            any_tags=tags,
+            default=default,
+            rng=rng,
+        )
+    except Exception:
+        return str(default)
+
+
+def _household_member_ids_for_consequence(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+) -> list[int]:
+    try:
+        from library.simulation_careers import _household_ids_for_job_move
+
+        return _household_ids_for_job_move(ctx, rec, int(year))
+    except Exception:
+        return [int(rec.person_id)]
+
+
+def _household_prosperity_value(
+    ctx: "SimulationContext", member_ids: list[int]
+) -> float:
+    for pid in member_ids:
+        rec = ctx.id_to_record.get(int(pid))
+        if rec is None:
+            continue
+        value = rec.person.household_prosperity
+        if value is not None:
+            return float(value)
+    return HOUSEHOLD_CONSEQUENCE_DEFAULT_PROSPERITY
+
+
+def _apply_household_prosperity_delta(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    *,
+    year: int,
+    delta: float,
+) -> dict[str, object]:
+    member_ids = _household_member_ids_for_consequence(ctx, rec, int(year))
+    before = _household_prosperity_value(ctx, member_ids)
+    after = _clamp(
+        before + float(delta),
+        HOUSEHOLD_CONSEQUENCE_MIN_PROSPERITY,
+        HOUSEHOLD_CONSEQUENCE_MAX_PROSPERITY,
+    )
+    rounded_after = round(after, 5)
+    for pid in member_ids:
+        member = ctx.id_to_record.get(int(pid))
+        if member is None:
+            continue
+        member.person = replace(member.person, household_prosperity=rounded_after)
+    return {
+        "household_member_ids": [int(pid) for pid in member_ids],
+        "prosperity_before": round(before, 5),
+        "prosperity_after": rounded_after,
+        "prosperity_delta": round(after - before, 5),
+    }
+
+
+def _apply_settlement_deltas(
+    ctx: "SimulationContext",
+    settlement_id: str,
+    *,
+    prosperity_delta: float = 0.0,
+    stability_delta: float = 0.0,
+    food_pressure_delta: float = 0.0,
+) -> dict[str, object]:
+    sid = str(settlement_id or "").strip()
+    st = ctx.settlements_by_id.get(sid)
+    if st is None:
+        return {}
+    before_prosperity = float(getattr(st, "prosperity_pool", 1.0) or 0.0)
+    before_stability = float(getattr(st, "stability", 0.5) or 0.0)
+    before_food = float(getattr(st, "food_pressure", 0.0) or 0.0)
+    after_prosperity = _clamp(
+        before_prosperity + float(prosperity_delta),
+        0.0,
+        SETTLEMENT_CONSEQUENCE_MAX_PROSPERITY,
+    )
+    after_stability = _clamp(before_stability + float(stability_delta), 0.0, 1.0)
+    after_food = _clamp(before_food + float(food_pressure_delta), 0.0, 2.0)
+    ctx.settlements_by_id[sid] = replace(
+        st,
+        prosperity_pool=round(after_prosperity, 5),
+        stability=round(after_stability, 5),
+        food_pressure=round(after_food, 5),
+    )
+    return {
+        "settlement_id": sid,
+        "prosperity_pool_before": round(before_prosperity, 5),
+        "prosperity_pool_after": round(after_prosperity, 5),
+        "prosperity_pool_delta": round(after_prosperity - before_prosperity, 5),
+        "stability_before": round(before_stability, 5),
+        "stability_after": round(after_stability, 5),
+        "stability_delta": round(after_stability - before_stability, 5),
+        "food_pressure_before": round(before_food, 5),
+        "food_pressure_after": round(after_food, 5),
+        "food_pressure_delta": round(after_food - before_food, 5),
+    }
+
+
+def _apply_region_pool_delta(
+    ctx: "SimulationContext", region_id: str, delta: float
+) -> dict[str, object]:
+    rid = str(region_id or "").strip()
+    if not rid:
+        return {}
+    before = float(ctx.region_prosperity_pool.get(rid, 1.0) or 0.0)
+    after = _clamp(
+        before + float(delta),
+        0.0,
+        SETTLEMENT_CONSEQUENCE_MAX_PROSPERITY,
+    )
+    ctx.region_prosperity_pool[rid] = round(after, 5)
+    return {
+        "region_id": rid,
+        "prosperity_pool_before": round(before, 5),
+        "prosperity_pool_after": round(after, 5),
+        "prosperity_pool_delta": round(after - before, 5),
+    }
+
+
+def _relationship_update_at_year(
+    ctx: "SimulationContext", year: int, method_name: str, a_id: int, b_id: int
+) -> dict[str, object]:
+    old_year = ctx.current_year
+    ctx.current_year = int(year)
+    try:
+        getattr(ctx, method_name)(int(a_id), int(b_id))
+    finally:
+        ctx.current_year = old_year
+    if ctx._pending_simulation_events:
+        return ctx._pending_simulation_events[-1][2]
+    return {}
+
+
+def _reputation_rank(value: object) -> int:
+    text = str(value or "").strip().lower()
+    if text in {"high", "strong", "middle-high", "volatile-high"}:
+        return 3
+    if text in {"medium", "middle-variable", "middle-high but brittle", "middle-high but cold"}:
+        return 2
+    if text in {"low", "weak", "middle-low", "low-middle", "low-variable", "volatile-low"}:
+        return 1
+    return 0
+
+
+def _raise_person_reputation(
+    rec: "SimulationPersonRecord",
+    *,
+    leader_tendency_at_least: str | None = None,
+    status_tendency_at_least: str | None = None,
+) -> dict[str, object]:
+    changes: dict[str, object] = {"person_id": int(rec.person_id)}
+    updates: dict[str, object] = {}
+    if leader_tendency_at_least:
+        before = rec.person.leader_tendency
+        if _reputation_rank(before) < _reputation_rank(leader_tendency_at_least):
+            updates["leader_tendency"] = leader_tendency_at_least
+            changes["leader_tendency_before"] = before
+            changes["leader_tendency_after"] = leader_tendency_at_least
+    if status_tendency_at_least:
+        before = rec.person.status_tendency
+        if _reputation_rank(before) < _reputation_rank(status_tendency_at_least):
+            updates["status_tendency"] = status_tendency_at_least
+            changes["status_tendency_before"] = before
+            changes["status_tendency_after"] = status_tendency_at_least
+    if updates:
+        rec.person = replace(rec.person, **updates)
+    return changes if len(changes) > 1 else {}
+
+
+def _apply_property_crime_consequences(
+    ctx: "SimulationContext", year: int, incident: TheftFraudIncident
+) -> dict[str, object]:
+    loss_delta = -max(0.035, float(incident.loss_value) * 2.2)
+    gain_delta = max(0.012, float(incident.loss_value) * 0.65)
+    settlement = _apply_settlement_deltas(
+        ctx,
+        incident.settlement_id,
+        prosperity_delta=-float(incident.loss_value) * 0.25,
+        stability_delta=-(0.006 + float(incident.loss_value) * 0.06),
+    )
+    return {
+        "property_loss": {
+            "target": _apply_household_prosperity_delta(
+                ctx,
+                incident.target,
+                year=int(year),
+                delta=loss_delta,
+            ),
+            "perpetrator": _apply_household_prosperity_delta(
+                ctx,
+                incident.perpetrator,
+                year=int(year),
+                delta=gain_delta,
+            ),
+        },
+        "settlement": settlement,
+    }
+
+
+def _apply_affair_scandal_consequences(
+    ctx: "SimulationContext", year: int, incident: AffairScandalIncident
+) -> dict[str, object]:
+    ended_paramour = False
+    dissolved_couples: list[dict[str, object]] = []
+    a_id = int(incident.accused.person_id)
+    b_id = int(incident.paramour.person_id)
+    pair_set = {a_id, b_id}
+    if any({int(x), int(y)} == pair_set for x, y in ctx.paramours):
+        payload = _relationship_update_at_year(
+            ctx, int(year), "end_paramour_relationship", a_id, b_id
+        )
+        payload.update(
+            {
+                "end_reason": "affair_scandal",
+                "end_reasons": ["affair_scandal"],
+                "source_event": "affair_scandal",
+            }
+        )
+        ended_paramour = True
+    for betrayed_id in incident.betrayed_partner_ids:
+        betrayed = ctx.id_to_record.get(int(betrayed_id))
+        if betrayed is None:
+            continue
+        partner_id = betrayed.person.partner_person_id
+        if partner_id is None or int(partner_id) not in pair_set:
+            continue
+        payload = _relationship_update_at_year(
+            ctx, int(year), "dissolve_couple", int(betrayed_id), int(partner_id)
+        )
+        payload.update(
+            {
+                "breakup_reason": "affair_scandal",
+                "breakup_reasons": ["affair_scandal"],
+                "source_event": "affair_scandal",
+            }
+        )
+        dissolved_couples.append(
+            {
+                "person_a_id": int(betrayed_id),
+                "person_b_id": int(partner_id),
+            }
+        )
+    settlement = _apply_settlement_deltas(
+        ctx,
+        incident.settlement_id,
+        stability_delta=-(0.004 + float(incident.historical_importance) * 0.015),
+    )
+    consequences: dict[str, object] = {
+        "ended_paramour": ended_paramour,
+        "dissolved_couples": dissolved_couples,
+        "settlement": settlement,
+    }
+    legal_fallout = _affair_scandal_legal_fallout(int(year), incident)
+    if legal_fallout:
+        consequences["legal_fallout"] = legal_fallout
+    return consequences
+
+
+def _affair_scandal_legal_fallout(
+    year: int, incident: AffairScandalIncident
+) -> list[dict[str, object]]:
+    incident_kind = str(incident.incident_kind or "").strip()
+    if incident_kind not in LEGAL_FALLOUT_SCANDAL_KINDS:
+        return []
+    accused_id = int(incident.accused.person_id)
+    paramour_id = int(incident.paramour.person_id)
+    betrayed_ids = [int(pid) for pid in incident.betrayed_partner_ids]
+    opposing_id = betrayed_ids[0] if betrayed_ids else None
+    severity = round(
+        min(
+            1.0,
+            max(
+                0.06,
+                0.22
+                + float(incident.historical_importance) * 0.75
+                + min(0.15, 0.05 * len(betrayed_ids)),
+            ),
+        ),
+        5,
+    )
+    if incident_kind == "heir_legitimacy_rumor":
+        fallout_type = "heir_legitimacy_challenge"
+        fallout_key = f"heir_legitimacy:{accused_id}:{paramour_id}:{opposing_id or 0}"
+        duration_years = 18
+    else:
+        fallout_type = "inheritance_dispute"
+        fallout_key = f"inheritance:{accused_id}:{opposing_id or 0}:{paramour_id}"
+        duration_years = 8
+    return [
+        {
+            "fallout_key": fallout_key,
+            "fallout_type": fallout_type,
+            "status": "active",
+            "principal_person_id": accused_id,
+            "opposing_person_id": opposing_id,
+            "related_person_id": paramour_id,
+            "severity": severity,
+            "start_year": int(year),
+            "expected_duration_years": duration_years,
+            "settlement_id": incident.settlement_id,
+            "region_id": incident.region_id,
+            "source_role": "affair_scandal_legal_fallout",
+            "incident_kind": incident_kind,
+            "betrayed_partner_person_ids": betrayed_ids,
+        }
+    ]
+
+
+def _apply_public_virtue_consequences(
+    ctx: "SimulationContext", year: int, incident: PublicVirtueIncident
+) -> dict[str, object]:
+    relief = float(incident.relief_value)
+    beneficiary_gain = max(0.04, relief * 1.8)
+    benefactor_cost = -min(0.18, max(0.015, relief * 0.45))
+    obligation_strength = round(min(1.0, max(0.04, relief * 1.4)), 5)
+    settlement = _apply_settlement_deltas(
+        ctx,
+        incident.settlement_id,
+        prosperity_delta=min(0.08, relief * 0.32),
+        stability_delta=min(0.05, 0.008 + relief * 0.20),
+        food_pressure_delta=-min(0.04, relief * 0.10),
+    )
+    return {
+        "relief": {
+            "beneficiary": _apply_household_prosperity_delta(
+                ctx,
+                incident.beneficiary,
+                year=int(year),
+                delta=beneficiary_gain,
+            ),
+            "benefactor": _apply_household_prosperity_delta(
+                ctx,
+                incident.benefactor,
+                year=int(year),
+                delta=benefactor_cost,
+            ),
+        },
+        "public_reputation": _raise_person_reputation(
+            incident.benefactor,
+            leader_tendency_at_least="medium",
+        ),
+        "obligations": [
+            {
+                "obligation_key": "beneficiary_to_benefactor",
+                "obligation_type": "relief_debt",
+                "owed_by_person_id": int(incident.beneficiary.person_id),
+                "owed_to_person_id": int(incident.benefactor.person_id),
+                "strength": obligation_strength,
+                "start_year": int(year),
+                "expected_duration_years": 12,
+                "settlement_id": incident.settlement_id,
+                "region_id": incident.region_id,
+                "source_role": "public_virtue_relief",
+            }
+        ],
+        "settlement": settlement,
+    }
+
+
+def _knowledge_settlement_deltas(incident: KnowledgeCultureIncident) -> tuple[float, float]:
+    novelty = float(incident.novelty_value)
+    if incident.incident_kind in LEGAL_KNOWLEDGE_KINDS:
+        return min(0.04, novelty * 0.08), min(0.06, 0.012 + novelty * 0.18)
+    if incident.incident_kind in ART_KNOWLEDGE_KINDS:
+        return min(0.07, novelty * 0.28), min(0.04, novelty * 0.10)
+    return min(0.09, novelty * 0.35), min(0.035, novelty * 0.08)
+
+
+def _apply_knowledge_culture_consequences(
+    ctx: "SimulationContext", year: int, incident: KnowledgeCultureIncident
+) -> dict[str, object]:
+    novelty = float(incident.novelty_value)
+    prosperity_delta, stability_delta = _knowledge_settlement_deltas(incident)
+    settlement = _apply_settlement_deltas(
+        ctx,
+        incident.settlement_id,
+        prosperity_delta=prosperity_delta,
+        stability_delta=stability_delta,
+    )
+    region = _apply_region_pool_delta(ctx, incident.region_id, min(0.08, novelty * 0.22))
+    patronage: dict[str, object] = {}
+    obligations: list[dict[str, object]] = []
+    if incident.patron is not None:
+        grant = max(0.025, novelty * 0.55)
+        cost = -min(0.16, grant * 0.55)
+        patronage = {
+            "creator": _apply_household_prosperity_delta(
+                ctx,
+                incident.creator,
+                year=int(year),
+                delta=grant,
+            ),
+            "patron": _apply_household_prosperity_delta(
+                ctx,
+                incident.patron,
+                year=int(year),
+                delta=cost,
+            ),
+        }
+        obligations.append(
+            {
+                "obligation_key": "creator_to_patron",
+                "obligation_type": "patronage_debt",
+                "owed_by_person_id": int(incident.creator.person_id),
+                "owed_to_person_id": int(incident.patron.person_id),
+                "strength": round(min(1.0, max(0.05, novelty * 1.8)), 5),
+                "start_year": int(year),
+                "expected_duration_years": 20,
+                "settlement_id": incident.settlement_id,
+                "region_id": incident.region_id,
+                "source_role": "knowledge_patronage",
+            }
+        )
+    return {
+        "knowledge_state": {
+            "domain": incident.knowledge_domain,
+            "state_delta": round(max(0.01, novelty * 0.35), 5),
+            "state_key": f"{incident.region_id}:{incident.knowledge_domain}",
+        },
+        "patronage": patronage,
+        "obligations": obligations,
+        "public_reputation": _raise_person_reputation(
+            incident.creator,
+            status_tendency_at_least="middle-high",
+        ),
+        "settlement": settlement,
+        "region": region,
+    }
 
 
 def _paramour_pair_betrayed_partner_ids(
@@ -873,14 +1511,46 @@ def _scandal_motive(
     return "household_rumor"
 
 
-def _scandal_kind(motive: str, betrayed_partner_count: int) -> str:
+def _scandal_kind(
+    ctx: "SimulationContext",
+    motive: str,
+    betrayed_partner_count: int,
+    rng: random.Random,
+) -> str:
     if betrayed_partner_count > 1:
-        return "double_affair_exposed"
+        return _catalog_incident_kind(
+            ctx,
+            "affair_scandal",
+            tags=("double_household", "household"),
+            default="double_affair_exposed",
+            rng=rng,
+        )
     if motive == "confession":
-        return "confessed_affair"
+        return _catalog_incident_kind(
+            ctx,
+            "affair_scandal",
+            tags=("confession", "household"),
+            default="confessed_affair",
+            rng=rng,
+        )
     if motive == "witnessed_meeting":
-        return "affair_witnessed"
-    return "affair_exposed"
+        return _catalog_incident_kind(
+            ctx,
+            "affair_scandal",
+            tags=("witnessed", "household"),
+            default="affair_witnessed",
+            rng=rng,
+        )
+    tags = ("rumor", "household")
+    if motive == "household_rumor":
+        tags = (*tags, "succession")
+    return _catalog_incident_kind(
+        ctx,
+        "affair_scandal",
+        tags=tags,
+        default="affair_exposed",
+        rng=rng,
+    )
 
 
 def _scandal_importance(
@@ -1008,7 +1678,7 @@ def _maybe_affair_scandal_in_settlement(
         accused=accused,
         paramour=paramour,
         betrayed_partner_ids=tuple(sorted(betrayed_ids)),
-        incident_kind=_scandal_kind(motive, len(betrayed_ids)),
+        incident_kind=_scandal_kind(ctx, motive, len(betrayed_ids), rng),
         motive=motive,
         witness_person_ids=witness_ids,
         settlement_id=settlement_id,
@@ -1105,7 +1775,9 @@ def _maybe_public_virtue_in_settlement(
     relief_value = _public_virtue_relief_value(
         benefactor, beneficiary, pressure, rng
     )
-    incident_kind = _public_virtue_kind(benefactor, beneficiary, pressure)
+    incident_kind = _public_virtue_kind(
+        ctx, benefactor, beneficiary, pressure, rng
+    )
     return PublicVirtueIncident(
         benefactor=benefactor,
         beneficiary=beneficiary,
@@ -1211,7 +1883,7 @@ def _maybe_knowledge_culture_in_settlement(
         target_id=int(patron.person_id) if patron is not None else int(creator.person_id),
         rng=rng,
     )
-    kind = _knowledge_culture_kind(creator)
+    kind = _knowledge_culture_kind(ctx, creator, rng)
     novelty_value = _knowledge_novelty_value(creator, pressure, rng)
     return KnowledgeCultureIncident(
         creator=creator,
@@ -1312,7 +1984,7 @@ def _maybe_property_crime_in_settlement(
     if target is None:
         return None
     motive = _property_crime_motive(perpetrator, pressure)
-    incident_kind = _property_crime_kind(perpetrator, motive)
+    incident_kind = _property_crime_kind(ctx, perpetrator, target, motive, rng)
     witness_ids = _choose_witnesses(
         adults,
         actor_id=int(perpetrator.person_id),
@@ -1380,6 +2052,7 @@ def _record_murder_incident(
 def _record_property_crime_incident(
     ctx: "SimulationContext", year: int, incident: TheftFraudIncident
 ) -> None:
+    consequences = _apply_property_crime_consequences(ctx, int(year), incident)
     ctx._record_simulation_event(
         int(year),
         "property_crime",
@@ -1397,6 +2070,7 @@ def _record_property_crime_incident(
             "resource_pressure": round(incident.resource_pressure, 5),
             "historical_importance": round(incident.historical_importance, 5),
             "loss_value": incident.loss_value,
+            "consequences": consequences,
             "genome_signals": incident.genome_signals,
         },
     )
@@ -1405,6 +2079,7 @@ def _record_property_crime_incident(
 def _record_affair_scandal_incident(
     ctx: "SimulationContext", year: int, incident: AffairScandalIncident
 ) -> None:
+    consequences = _apply_affair_scandal_consequences(ctx, int(year), incident)
     primary_betrayed_id = (
         int(incident.betrayed_partner_ids[0])
         if incident.betrayed_partner_ids
@@ -1428,6 +2103,7 @@ def _record_affair_scandal_incident(
         "pair_exposure_score": round(incident.pair_exposure_score, 5),
         "resource_pressure": round(incident.resource_pressure, 5),
         "historical_importance": round(incident.historical_importance, 5),
+        "consequences": consequences,
         "genome_signals": incident.genome_signals,
     }
     ctx._record_simulation_event(int(year), "affair_scandal", payload)
@@ -1436,6 +2112,7 @@ def _record_affair_scandal_incident(
 def _record_public_virtue_incident(
     ctx: "SimulationContext", year: int, incident: PublicVirtueIncident
 ) -> None:
+    consequences = _apply_public_virtue_consequences(ctx, int(year), incident)
     ctx._record_simulation_event(
         int(year),
         "public_virtue",
@@ -1453,6 +2130,7 @@ def _record_public_virtue_incident(
             "resource_pressure": round(incident.resource_pressure, 5),
             "historical_importance": round(incident.historical_importance, 5),
             "relief_value": incident.relief_value,
+            "consequences": consequences,
             "genome_signals": incident.genome_signals,
         },
     )
@@ -1461,6 +2139,7 @@ def _record_public_virtue_incident(
 def _record_knowledge_culture_incident(
     ctx: "SimulationContext", year: int, incident: KnowledgeCultureIncident
 ) -> None:
+    consequences = _apply_knowledge_culture_consequences(ctx, int(year), incident)
     payload = {
         "year": int(year),
         "event_type": "knowledge_culture",
@@ -1478,6 +2157,7 @@ def _record_knowledge_culture_incident(
         "resource_pressure": round(incident.resource_pressure, 5),
         "historical_importance": round(incident.historical_importance, 5),
         "novelty_value": incident.novelty_value,
+        "consequences": consequences,
         "genome_signals": incident.genome_signals,
     }
     ctx._record_simulation_event(int(year), "knowledge_culture", payload)

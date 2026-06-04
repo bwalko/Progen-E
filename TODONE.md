@@ -290,7 +290,10 @@
   - Records structured event payloads with perpetrator, target, witnesses,
     motive, incident kind, loss value, place, resource pressure, historical
     importance, and genome signal context.
-  - Leaves actual property/economy mutation for a later accounting design pass.
+  - Applies the first property/economy consequence hook: target households lose
+    modest `household_prosperity`, perpetrator households gain a smaller amount,
+    the affected settlement loses a little prosperity/stability, and the event
+    payload records before/after consequence deltas.
 - Property-crime event-memory rows default to `property_crime_record` with
   `rumored` visibility.
 - Added regression tests proving:
@@ -308,8 +311,10 @@
   - Records structured event payloads with accused person, paramour, betrayed
     partner(s), witnesses, motive, incident kind, place, resource pressure,
     historical importance, and genome signal context.
-  - Leaves relationship consequences to a later pass; the first slice records
-    the scandal without dissolving couples or paramours.
+  - Applies the first relationship consequence hook: exposed paramour ties end,
+    betrayed official couples dissolve when the exposed partner is still linked,
+    the affected settlement takes a small stability penalty, and the event
+    payload records the relationship fallout.
 - Scandal event-memory rows default to `scandal_record` with `rumored`
   visibility.
 - Added regression tests proving:
@@ -330,8 +335,11 @@
   - Records structured event payloads with benefactor, beneficiary, witnesses,
     motive, incident kind, place, resource pressure, historical importance,
     relief value, and genome signal context.
-  - Leaves wealth, health, reputation, patronage, and obligation consequences
-    for a later feedback pass.
+  - Applies the first public-virtue consequence hook: beneficiary households
+    gain modest prosperity, benefactor households pay a smaller cost, the
+    affected settlement gains a little prosperity/stability and food-pressure
+    relief, low/blank benefactor leadership reputation rises to `medium`, and
+    the event payload records relief and reputation deltas.
 - Public-virtue event-memory rows default to `public_virtue_record` with
   `public_known` visibility.
 - Added regression tests proving:
@@ -351,8 +359,12 @@
   - Records structured event payloads with creator, patron, witnesses, motive,
     knowledge domain, incident kind, place, resource pressure, historical
     importance, novelty value, and genome signal context.
-  - Leaves technology, law, culture, jobs, polity doctrine, patronage, and
-    school/guild consequences for a later feedback pass.
+  - Applies the first knowledge/culture consequence hook: breakthroughs nudge
+    settlement and regional prosperity/stability, patronage transfers modest
+    household prosperity from patron to creator when a patron exists, low/blank
+    creator status reputation rises to `middle-high`, and the payload records a
+    structured per-domain `knowledge_state` delta for future durable domain
+    tables.
 - Knowledge/culture event-memory rows default to `knowledge_record` with
   `public_known` visibility.
 - Added regression tests proving:
@@ -361,6 +373,86 @@
     public-known knowledge record, and indexes creator/patron roles;
   - low-aptitude adults do not produce knowledge/culture events even when the
     chance gate is forced open.
+- Added the first authored event catalog:
+  - `config/event_catalog.csv` now defines 50 concrete event/incident kind rows
+    with family labels, context tags, consequence profiles, default memory
+    expectations, and selection weights.
+  - `library.event_catalog` loads catalog rows from config SQLite and falls
+    back to legacy built-in rows for old/fixture databases.
+  - `library.simulation_incidents` uses catalog-backed kind selection while
+    keeping the existing bounded trait/context gates and rates.
+  - New catalog rows expand crime, rescue, legal, invention, and
+    succession-adjacent variety, including `storehouse_robbery`,
+    `livestock_theft`, `inheritance_fraud`, `river_rescue`,
+    `succession_arbitration`, `improved_plow`, `inheritance_judgment`, and
+    `succession_precedent`.
+- Added regression tests proving:
+  - authored catalog rows load through the normal CSV-to-SQLite path;
+  - missing catalog tables fall back to legacy kind rows;
+  - forced incident tests accept and persist expanded catalog variants while
+    preserving their existing family-level consequences.
+- Added the first durable domain-state consequence model:
+  - Bumped `save.sqlite` to schema v9.
+  - Added `simulation_domain_states` and `simulation_domain_states_readable` as
+    one-row-per-region/domain state accumulated from `knowledge_culture` events.
+  - Event flush now upserts regional `domain_score`, breakthrough count,
+    first/latest years, first/latest event ids, latest incident kind, latest
+    creator, and latest settlement from the structured `knowledge_state`
+    consequence payload.
+  - Older v8 saves backfill domain-state rows from existing `knowledge_culture`
+    events when checkpoint schema is ensured/rebuilt; reset/clear paths remove
+    the derived rows with the rest of the checkpoint.
+  - Added regression tests proving forced knowledge/culture events create the
+    readable domain-state row and v8 knowledge events backfill into v9 domain
+    state.
+- Added the first durable obligation consequence model:
+  - Bumped `save.sqlite` to schema v10.
+  - Added `simulation_obligations` and `simulation_obligations_readable` as an
+    active obligation ledger keyed back to source factual events.
+  - Public-virtue relief now emits a `relief_debt` from beneficiary to
+    benefactor, with strength, start year, expected end year, place, and source
+    role persisted.
+  - Knowledge/culture patronage now emits a `patronage_debt` from creator to
+    patron when a patron exists, with the same durable obligation fields.
+  - Older v9 saves backfill obligation rows from existing public-virtue relief
+    and knowledge patronage consequence payloads when checkpoint schema is
+    ensured/rebuilt; reset/clear paths remove obligation rows with the rest of
+    the checkpoint.
+  - Added regression tests proving generated public-virtue and knowledge/culture
+    events create readable obligation rows, and v9 public-virtue rows backfill
+    into v10 obligations.
+- Added the first durable reputation-memory consequence model:
+  - Bumped `save.sqlite` to schema v11.
+  - Added `simulation_reputation_marks` and
+    `simulation_reputation_marks_readable` as source-event-backed rows for
+    leadership/status reputation changes.
+  - Public-virtue benefactor reputation lifts now persist a `leadership` mark
+    with before/after values, direction, strength, place, source event, and mark
+    year.
+  - Knowledge/culture creator reputation lifts now persist a `status` mark with
+    the same durable inspection fields.
+  - Older v10 saves backfill reputation marks from existing
+    `consequences.public_reputation` payloads when checkpoint schema is
+    ensured/rebuilt; reset/clear paths remove reputation marks with the rest of
+    the checkpoint.
+  - Added regression tests proving generated public-virtue and knowledge/culture
+    events create readable reputation marks, and v10 public-virtue rows backfill
+    into v11 marks.
+- Added the first durable legal fallout consequence model:
+  - Bumped `save.sqlite` to schema v12.
+  - Added `simulation_legal_fallout` and
+    `simulation_legal_fallout_readable` as source-event-backed rows for
+    legitimacy and inheritance disputes.
+  - Affair-scandal `heir_legitimacy_rumor` events now persist an active
+    `heir_legitimacy_challenge` with principal, opposing, related person,
+    severity, place, start year, and expected resolution year.
+  - Affair-scandal `inheritance_scandal` events now persist an active
+    `inheritance_dispute` with the same durable inspection fields.
+  - Older v11 affair-scandal events backfill legal fallout rows from existing
+    factual payloads when checkpoint schema is ensured/rebuilt; reset/clear
+    paths remove legal fallout rows with the rest of the checkpoint.
+  - Added regression tests proving forced affair scandals create readable legal
+    fallout rows, and v11 inheritance-scandal rows backfill into v12 fallout.
 - Added the first deterministic event-prose renderer:
   - `library.event_prose` derives prose on demand from factual
     `simulation_events_readable` rows and memory-state
@@ -453,12 +545,23 @@
     details for prose/admin inspection.
   - The lifecycle uses stable hash draws rather than the global RNG, so the same
     save/year/review shard produces repeatable transitions.
+- Tuned lifecycle rates against a fresh fixed-seed `event_tuning_sample` run:
+  - the 80-year / 80-couple / seed `20260603` sample produced 17,363 events and
+    records in a 17,252,352 byte save;
+  - tracked incidents remained present: `murder` 11, `property_crime` 43,
+    `affair_scandal` 4, `public_virtue` 5, `knowledge_culture` 1;
+  - routine work records now decay much later and rediscover far less often,
+    leaving 0 lost and 0 rediscovered work records in the sample;
+  - lineage birth memory was already durable and stayed that way, with 1 lost
+    birth record out of 2,555.
 - Added regression tests proving:
   - report counts, visibility rows, metric summaries, and prose samples derive
     from real save-schema rows;
   - report writing emits all expected TSV/text artifacts.
   - old public/private/rumored records can be aged to `lost`;
   - old lost/sealed records can resurface as linked rediscoveries;
+  - high-volume private work/birth records decay and rediscover later than
+    incident records;
   - `record_year_summary` invokes the lifecycle after save persistence.
 
 ### Completed Hybrid Mixed-Mode Population Pass

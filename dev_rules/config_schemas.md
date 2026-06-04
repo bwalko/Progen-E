@@ -16,6 +16,7 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/genome_save_columns.csv` | One row per genome save slot | Compact checkpoint slot → trait mapping |
 | `config/world_start.csv` | Worlds + mortality + header + **`population_scale`** | One row per `world`. `population_scale` (default `0.05`) is the **shared global** modifier applied to region `carrying_capacity` (see [`library/geography.py`](../library/geography.py)) **and** to `government_polity_types.min_population_to_form` / `max_population_before_split` and to settlement-leadership thresholds in `government_titles.csv`. |
 | `config/incident_rates.csv` | Small + header | Era-tuned detailed-incident knobs per (`world` or `*`, `incident_key`, historical-year band): murder target per 10k/year plus chance/cap multipliers for other incident families. |
+| `config/event_catalog.csv` | Small + header | Authored event/incident kinds per (`event_type`, `incident_kind`): family, display label, context tags, consequence profile, default memory record type/visibility, and selection weight. |
 | `config/world_geography_continents.csv` | Small + header | One row per (`world`, `continent_id`) |
 | `config/world_geography_regions.csv` | Small + header | One row per (`world`, `region_id`) |
 | `config/world_geography_routes.csv` | Small + header | One directed route per (`world`, `from_region_id`, `to_region_id`) |
@@ -165,6 +166,33 @@ murders per 10,000 detailed people per year** while raising property-crime and
 scandal visibility because the first review samples showed those slices were
 even quieter than the old undercounted murder slice. Re-run
 `utils/util_event_history_report.py` after changing this CSV.
+
+---
+
+## `config/event_catalog.csv`
+
+**Purpose:** Authored catalog rows for detailed event/incident kinds used by
+`library.event_catalog` and `library.simulation_incidents`. The simulator still
+chooses broad incident families through bounded trait/context logic; catalog
+rows provide concrete `incident_kind` variants within those families.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `event_type` | string | Factual event type such as `murder`, `property_crime`, `affair_scandal`, `public_virtue`, or `knowledge_culture`. |
+| `incident_kind` | string | Concrete subtype stored in event payloads, e.g. `storehouse_robbery`, `river_rescue`, `succession_precedent`. |
+| `event_family` | string | Broad authoring family such as `violent_crime`, `property_crime`, `household_scandal`, `public_virtue`, `knowledge_culture`. |
+| `display_name` | string | Human-readable label. Prose currently falls back to labelizing `incident_kind`, but this is the authoring surface for future template selection. |
+| `context_tags` | semicolon-separated strings | Tags used by generator classifiers to pick variant pools, e.g. `theft;scarcity`, `rescue;danger`, `legal;succession`. Matching is any-tag. |
+| `consequence_profile` | string | Current profiles include `death`, `property_loss`, `relationship_fallout`, `public_relief`, and `knowledge_state`. |
+| `default_record_type` | string | Expected memory-record type for this kind; the save layer still derives record type from `event_type` for now. |
+| `default_visibility` | string | Expected initial memory visibility such as `rumored` or `public_known`; retained for future catalog-driven memory defaults. |
+| `selection_weight` | float `>=0` | Relative weight when multiple catalog rows match the same event type and context tags. |
+| `notes` | string | Human tuning notes only; ignored by runtime logic. |
+
+Rows currently expand the initial vertical slices with more crime, rescue,
+legal, invention, and succession-adjacent variants. `library.event_catalog`
+falls back to legacy built-in rows if the table is absent in an old or fixture
+config DB.
 
 ---
 

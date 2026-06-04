@@ -106,6 +106,56 @@ class TestEventMemoryLifecycle(unittest.TestCase):
                 str(rows[recent_birth_id]["visibility_state"]), "private_known"
             )
 
+    def test_high_volume_private_records_decay_later_than_incidents(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                birth_id, job_id, crime_id = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (1040, "birth", {"person_id": 1}),
+                        (1040, "job_assigned", {"person_id": 1, "job": "miller"}),
+                        (
+                            1040,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 2,
+                                "target_person_id": 3,
+                                "historical_importance": 0.2,
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+
+                summary = event_memory_lifecycle_annual_tick(
+                    conn,
+                    year=1100,
+                    shards=1,
+                    loss_chance_multiplier=1000.0,
+                    rediscovery_chance_multiplier=0.0,
+                )
+                rows = {
+                    int(row["event_id"]): row
+                    for row in conn.execute(
+                        """
+                        SELECT event_id, visibility_state, lost_year
+                        FROM simulation_event_records_readable
+                        WHERE event_id IN (?, ?, ?)
+                        """,
+                        (birth_id, job_id, crime_id),
+                    )
+                }
+
+            self.assertEqual(summary.records_lost, 1)
+            self.assertEqual(str(rows[birth_id]["visibility_state"]), "private_known")
+            self.assertEqual(str(rows[job_id]["visibility_state"]), "private_known")
+            self.assertEqual(str(rows[crime_id]["visibility_state"]), "lost")
+            self.assertEqual(int(rows[crime_id]["lost_year"]), 1100)
+
     def test_lifecycle_rediscovers_old_lost_or_sealed_records(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             sav = Path(td) / "save.sqlite"
@@ -206,6 +256,57 @@ class TestEventMemoryLifecycle(unittest.TestCase):
                 {murder_id, knowledge_id},
             )
             self.assertEqual(int(rediscovery_record_count), 2)
+
+    def test_routine_work_records_rediscover_later_than_incidents(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                job_id, crime_id = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (1000, "job_lost", {"person_id": 1, "old_job": "miller"}),
+                        (
+                            1000,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 2,
+                                "target_person_id": 3,
+                                "historical_importance": 0.2,
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                mark_event_record_lost(conn, job_id, lost_year=1040)
+                mark_event_record_lost(conn, crime_id, lost_year=1040)
+
+                summary = event_memory_lifecycle_annual_tick(
+                    conn,
+                    year=1080,
+                    shards=1,
+                    rediscovery_shards=1,
+                    loss_chance_multiplier=0.0,
+                    rediscovery_chance_multiplier=1000.0,
+                )
+                rows = {
+                    int(row["event_id"]): row
+                    for row in conn.execute(
+                        """
+                        SELECT event_id, visibility_state, rediscovered_year
+                        FROM simulation_event_records_readable
+                        WHERE event_id IN (?, ?)
+                        """,
+                        (job_id, crime_id),
+                    )
+                }
+
+            self.assertEqual(summary.records_rediscovered, 1)
+            self.assertEqual(str(rows[job_id]["visibility_state"]), "lost")
+            self.assertEqual(str(rows[crime_id]["visibility_state"]), "rediscovered")
+            self.assertEqual(int(rows[crime_id]["rediscovered_year"]), 1080)
 
     def test_record_year_summary_runs_memory_lifecycle_after_save_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

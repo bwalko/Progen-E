@@ -512,6 +512,28 @@ body.dark .person-sheet,
     color: var(--person-sheet-title) !important;
     font-size: 18px;
 }
+.subsection-title {
+    margin: 10px 0 6px;
+    color: var(--person-sheet-title) !important;
+    font-size: 14px;
+}
+.consequence-section {
+    border-top: 1px solid var(--person-sheet-rule);
+    border-bottom: 1px solid var(--person-sheet-rule);
+    padding: 2px 0 14px;
+    margin: 4px 0 16px;
+}
+.consequence-summary {
+    margin-bottom: 10px;
+}
+.consequence-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 10px 14px;
+}
+.consequence-row strong {
+    color: var(--person-sheet-title) !important;
+}
 .trait-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -3177,6 +3199,417 @@ def _relationship_history_lines(
     ]
 
 
+def _row_value(row: sqlite3.Row, key: str, default: object = None) -> object:
+    return row[key] if key in row.keys() else default
+
+
+def _person_obligation_rows(
+    con: sqlite3.Connection, world: str, person_id: object
+) -> list[sqlite3.Row]:
+    if not _has_relation(con, "simulation_obligations_readable"):
+        return []
+    try:
+        return con.execute(
+            """
+            SELECT *
+            FROM simulation_obligations_readable
+            WHERE owed_by_person_id = ? OR owed_to_person_id = ?
+            ORDER BY
+              COALESCE(start_year, source_event_year, 0),
+              source_event_id,
+              obligation_id
+            LIMIT 30
+            """,
+            (person_id, person_id),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+
+
+def _person_reputation_mark_rows(
+    con: sqlite3.Connection, world: str, person_id: object
+) -> list[sqlite3.Row]:
+    if not _has_relation(con, "simulation_reputation_marks_readable"):
+        return []
+    try:
+        return con.execute(
+            """
+            SELECT *
+            FROM simulation_reputation_marks_readable
+            WHERE person_id = ?
+            ORDER BY
+              COALESCE(mark_year, source_event_year, 0),
+              source_event_id,
+              reputation_mark_id
+            LIMIT 30
+            """,
+            (person_id,),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+
+
+def _person_legal_fallout_rows(
+    con: sqlite3.Connection, world: str, person_id: object
+) -> list[sqlite3.Row]:
+    if not _has_relation(con, "simulation_legal_fallout_readable"):
+        return []
+    try:
+        return con.execute(
+            """
+            SELECT *
+            FROM simulation_legal_fallout_readable
+            WHERE principal_person_id = ?
+               OR opposing_person_id = ?
+               OR related_person_id = ?
+            ORDER BY
+              COALESCE(start_year, source_event_year, 0),
+              source_event_id,
+              fallout_id
+            LIMIT 30
+            """,
+            (person_id, person_id, person_id),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+
+
+def _person_knowledge_effect_rows(
+    events: list[sqlite3.Row], person_id: object
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for event in events:
+        event_type = str(_row_value(event, "event_type") or "").strip()
+        if event_type != "knowledge_culture":
+            continue
+        payload = _load_json_object(_row_value(event, "payload_json"))
+        creator_id = payload.get("creator_person_id")
+        patron_id = payload.get("patron_person_id")
+        roles: list[str] = []
+        if _same_person_id(creator_id, person_id):
+            roles.append("creator")
+        if _same_person_id(patron_id, person_id):
+            roles.append("patron")
+        if not roles:
+            continue
+        consequences = payload.get("consequences")
+        if not isinstance(consequences, dict):
+            consequences = {}
+        knowledge_state = consequences.get("knowledge_state")
+        if not isinstance(knowledge_state, dict):
+            knowledge_state = {}
+        rows.append(
+            {
+                "event_id": _event_id(event),
+                "year": _row_value(event, "sim_year"),
+                "role": ", ".join(roles),
+                "incident_kind": payload.get("incident_kind"),
+                "domain": knowledge_state.get("domain")
+                or payload.get("knowledge_domain"),
+                "state_delta": knowledge_state.get("state_delta"),
+                "novelty_value": payload.get("novelty_value"),
+                "creator_person_id": creator_id,
+                "patron_person_id": patron_id,
+                "settlement_id": payload.get("settlement_id"),
+                "region_id": payload.get("region_id"),
+            }
+        )
+    return rows[:30]
+
+
+def _year_span_text(start_year: object, end_year: object = None) -> str:
+    if start_year in (None, "") and end_year in (None, ""):
+        return "Unknown years"
+    if end_year in (None, ""):
+        return str(start_year)
+    if start_year in (None, ""):
+        return f"until {end_year}"
+    return f"{start_year}-{end_year}"
+
+
+def _place_tail(row: sqlite3.Row | dict[str, object]) -> str:
+    getter = row.get if isinstance(row, dict) else lambda key, default=None: _row_value(row, key, default)
+    parts = [
+        str(getter("settlement_id") or "").strip(),
+        str(getter("region_id") or "").strip(),
+    ]
+    shown = [part for part in parts if part]
+    return f"; place: {', '.join(shown)}" if shown else ""
+
+
+def _detail_bits(*items: tuple[str, object]) -> str:
+    bits: list[str] = []
+    for label, value in items:
+        if value in (None, ""):
+            continue
+        bits.append(f"{label}: {value}")
+    return "; ".join(bits)
+
+
+def _person_consequence_summary_cards(
+    obligations: list[sqlite3.Row],
+    reputation_marks: list[sqlite3.Row],
+    legal_fallout: list[sqlite3.Row],
+    knowledge_effects: list[dict[str, object]],
+) -> list[str]:
+    return [
+        _render_detail_card("Obligations", len(obligations)),
+        _render_detail_card("Reputation Marks", len(reputation_marks)),
+        _render_detail_card("Legal Fallout", len(legal_fallout)),
+        _render_detail_card("Knowledge Effects", len(knowledge_effects)),
+    ]
+
+
+def _person_obligation_items_html(
+    con: sqlite3.Connection,
+    world: str,
+    rows: list[sqlite3.Row],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ['<div class="relation muted">No recorded obligations</div>']
+    items: list[str] = []
+    for row in rows:
+        owed_by = _row_value(row, "owed_by_person_id")
+        owed_to = _row_value(row, "owed_to_person_id")
+        if _same_person_id(owed_by, focus_person_id):
+            role = "owes"
+            other = owed_to
+        else:
+            role = "is owed by"
+            other = owed_by
+        detail = _detail_bits(
+            ("status", _row_value(row, "status")),
+            ("strength", _fmt_number(_row_value(row, "strength"))),
+            ("source", str(_row_value(row, "source_event_type") or "").replace("_", " ")),
+        )
+        if detail:
+            detail += _place_tail(row)
+        items.append(
+            '<div class="relation consequence-row consequence-obligation">'
+            f'<strong>{html.escape(_year_span_text(_row_value(row, "start_year"), _row_value(row, "expected_end_year")))} · '
+            f'Obligation: {html.escape(str(_row_value(row, "obligation_type") or "unknown").replace("_", " "))}</strong><br>'
+            f'{_short_person_html_for_event(con, world, focus_person_id, focus_person_id)} '
+            f'{html.escape(role)} {_person_link_html(con, world, other)}'
+            f'<br><span class="muted">{html.escape(detail)}</span>'
+            '</div>'
+        )
+    return items
+
+
+def _person_reputation_mark_items_html(
+    rows: list[sqlite3.Row],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ['<div class="relation muted">No recorded reputation marks</div>']
+    items: list[str] = []
+    for row in rows:
+        before = _row_value(row, "reputation_before") or "unknown"
+        after = _row_value(row, "reputation_after") or "unknown"
+        axis = str(_row_value(row, "reputation_axis") or "reputation").replace("_", " ")
+        detail = _detail_bits(
+            ("direction", _row_value(row, "direction")),
+            ("strength", _fmt_number(_row_value(row, "mark_strength"))),
+            ("source", str(_row_value(row, "source_event_type") or "").replace("_", " ")),
+        )
+        if detail:
+            detail += _place_tail(row)
+        items.append(
+            '<div class="relation consequence-row consequence-reputation">'
+            f'<strong>{html.escape(_year_span_text(_row_value(row, "mark_year")))} · '
+            f'Reputation: {html.escape(axis)}</strong><br>'
+            f'Changed from {html.escape(str(before))} to {html.escape(str(after))}'
+            f'<br><span class="muted">{html.escape(detail)}</span>'
+            '</div>'
+        )
+    return items
+
+
+def _person_legal_fallout_role(row: sqlite3.Row, focus_person_id: object) -> str:
+    if _same_person_id(_row_value(row, "principal_person_id"), focus_person_id):
+        return "principal"
+    if _same_person_id(_row_value(row, "opposing_person_id"), focus_person_id):
+        return "opposing party"
+    if _same_person_id(_row_value(row, "related_person_id"), focus_person_id):
+        return "related person"
+    return "related"
+
+
+def _person_legal_fallout_items_html(
+    con: sqlite3.Connection,
+    world: str,
+    rows: list[sqlite3.Row],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ['<div class="relation muted">No recorded legal fallout</div>']
+    items: list[str] = []
+    for row in rows:
+        people = [
+            ("principal", _row_value(row, "principal_person_id")),
+            ("opposing", _row_value(row, "opposing_person_id")),
+            ("related", _row_value(row, "related_person_id")),
+        ]
+        people_bits = [
+            f"{label}: {_short_person_html_for_event(con, world, pid, focus_person_id)}"
+            for label, pid in people
+            if pid not in (None, "")
+        ]
+        detail = _detail_bits(
+            ("role", _person_legal_fallout_role(row, focus_person_id)),
+            ("status", _row_value(row, "status")),
+            ("severity", _fmt_number(_row_value(row, "severity"))),
+            ("source", str(_row_value(row, "source_event_type") or "").replace("_", " ")),
+        )
+        if detail:
+            detail += _place_tail(row)
+        items.append(
+            '<div class="relation consequence-row consequence-legal">'
+            f'<strong>{html.escape(_year_span_text(_row_value(row, "start_year"), _row_value(row, "expected_resolution_year")))} · '
+            f'Legal Fallout: {html.escape(str(_row_value(row, "fallout_type") or "unknown").replace("_", " "))}</strong><br>'
+            f'{"; ".join(people_bits)}'
+            f'<br><span class="muted">{html.escape(detail)}</span>'
+            '</div>'
+        )
+    return items
+
+
+def _person_knowledge_effect_items_html(
+    con: sqlite3.Connection,
+    world: str,
+    rows: list[dict[str, object]],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ['<div class="relation muted">No recorded knowledge/domain effects</div>']
+    items: list[str] = []
+    for row in rows:
+        domain = str(row.get("domain") or "unknown domain").replace("_", " ")
+        kind = str(row.get("incident_kind") or "knowledge culture").replace("_", " ")
+        creator = _short_person_html_for_event(
+            con, world, row.get("creator_person_id"), focus_person_id
+        )
+        patron_id = row.get("patron_person_id")
+        patron = (
+            f"; patron: {_short_person_html_for_event(con, world, patron_id, focus_person_id)}"
+            if patron_id not in (None, "")
+            else ""
+        )
+        detail = _detail_bits(
+            ("role", row.get("role")),
+            ("state delta", _fmt_number(row.get("state_delta"), digits=3)),
+            ("novelty", _fmt_number(row.get("novelty_value"), digits=3)),
+        )
+        if detail:
+            detail += _place_tail(row)
+        items.append(
+            '<div class="relation consequence-row consequence-knowledge">'
+            f'<strong>{html.escape(_year_span_text(row.get("year")))} · '
+            f'Knowledge Effect: {html.escape(domain)}</strong><br>'
+            f'{creator} shaped {html.escape(domain)} through {html.escape(kind)}{patron}'
+            f'<br><span class="muted">{html.escape(detail)}</span>'
+            '</div>'
+        )
+    return items
+
+
+def _person_obligation_lines(
+    con: sqlite3.Connection,
+    world: str,
+    rows: list[sqlite3.Row],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ["- No recorded obligations."]
+    lines: list[str] = []
+    for row in rows:
+        owed_by = _row_value(row, "owed_by_person_id")
+        owed_to = _row_value(row, "owed_to_person_id")
+        if _same_person_id(owed_by, focus_person_id):
+            role = f"owes {_person_link_text(con, world, owed_to)}"
+        else:
+            role = f"is owed by {_person_link_text(con, world, owed_by)}"
+        details = _detail_bits(
+            ("status", _row_value(row, "status")),
+            ("strength", _fmt_number(_row_value(row, "strength"))),
+        )
+        if details:
+            details = f"; {details}"
+        lines.append(
+            f"- {_year_span_text(_row_value(row, 'start_year'), _row_value(row, 'expected_end_year'))}: "
+            f"{str(_row_value(row, 'obligation_type') or 'unknown').replace('_', ' ')}; {role}{details}."
+        )
+    return lines
+
+
+def _person_reputation_mark_lines(rows: list[sqlite3.Row]) -> list[str]:
+    if not rows:
+        return ["- No recorded reputation marks."]
+    return [
+        (
+            f"- {_year_span_text(_row_value(row, 'mark_year'))}: "
+            f"{str(_row_value(row, 'reputation_axis') or 'reputation').replace('_', ' ')} "
+            f"{_row_value(row, 'reputation_before') or 'unknown'} -> "
+            f"{_row_value(row, 'reputation_after') or 'unknown'}; "
+            f"direction {str(_row_value(row, 'direction') or 'stable')}, "
+            f"strength {_fmt_number(_row_value(row, 'mark_strength'))}."
+        )
+        for row in rows
+    ]
+
+
+def _person_legal_fallout_lines(
+    con: sqlite3.Connection,
+    world: str,
+    rows: list[sqlite3.Row],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ["- No recorded legal fallout."]
+    lines: list[str] = []
+    for row in rows:
+        principal = _person_link_text(con, world, _row_value(row, "principal_person_id"))
+        opposing = _person_link_text(con, world, _row_value(row, "opposing_person_id"))
+        related = _person_link_text(con, world, _row_value(row, "related_person_id"))
+        lines.append(
+            f"- {_year_span_text(_row_value(row, 'start_year'), _row_value(row, 'expected_resolution_year'))}: "
+            f"{str(_row_value(row, 'fallout_type') or 'unknown').replace('_', ' ')}; "
+            f"role {_person_legal_fallout_role(row, focus_person_id)}; "
+            f"principal {principal}; opposing {opposing}; related {related}; "
+            f"status {str(_row_value(row, 'status') or 'active')}; "
+            f"severity {_fmt_number(_row_value(row, 'severity'))}."
+        )
+    return lines
+
+
+def _person_knowledge_effect_lines(
+    con: sqlite3.Connection,
+    world: str,
+    rows: list[dict[str, object]],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ["- No recorded knowledge/domain effects."]
+    lines: list[str] = []
+    for row in rows:
+        creator = _person_link_text(con, world, row.get("creator_person_id"))
+        patron_id = row.get("patron_person_id")
+        patron = (
+            f"; patron {_person_link_text(con, world, patron_id)}"
+            if patron_id not in (None, "")
+            else ""
+        )
+        lines.append(
+            f"- {_year_span_text(row.get('year'))}: "
+            f"{str(row.get('domain') or 'unknown domain').replace('_', ' ')}; "
+            f"role {row.get('role') or 'related'}; creator {creator}{patron}; "
+            f"state delta {_fmt_number(row.get('state_delta'), digits=3)}, "
+            f"novelty {_fmt_number(row.get('novelty_value'), digits=3)}."
+        )
+    return lines
+
+
 def _genome_labels(con: sqlite3.Connection) -> dict[str, sqlite3.Row]:
     return {
         str(row["trait"]): row
@@ -3353,6 +3786,28 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         person,
         current_year,
     )
+    obligation_rows = _person_obligation_rows(con, world, row["person_id"])
+    reputation_mark_rows = _person_reputation_mark_rows(con, world, row["person_id"])
+    legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
+    knowledge_effect_rows = _person_knowledge_effect_rows(events, row["person_id"])
+    consequence_summary_cards = _person_consequence_summary_cards(
+        obligation_rows,
+        reputation_mark_rows,
+        legal_fallout_rows,
+        knowledge_effect_rows,
+    )
+    obligation_items = _person_obligation_items_html(
+        con, world, obligation_rows, row["person_id"]
+    )
+    reputation_items = _person_reputation_mark_items_html(
+        reputation_mark_rows, row["person_id"]
+    )
+    legal_fallout_items = _person_legal_fallout_items_html(
+        con, world, legal_fallout_rows, row["person_id"]
+    )
+    knowledge_effect_items = _person_knowledge_effect_items_html(
+        con, world, knowledge_effect_rows, row["person_id"]
+    )
     job_items = _job_history_items_html(job_history)
     partner_items = _relationship_history_items_html(
         con,
@@ -3450,6 +3905,28 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
       <section aria-labelledby="person-{row['person_id']}-identity">
         <h3 id="person-{row['person_id']}-identity" class="section-title">Identity</h3>
         <div class="detail-grid">{''.join(identity_cards)}</div>
+      </section>
+      <section aria-labelledby="person-{row['person_id']}-consequences" class="consequence-section">
+        <h3 id="person-{row['person_id']}-consequences" class="section-title">Consequences</h3>
+        <div class="detail-grid consequence-summary">{''.join(consequence_summary_cards)}</div>
+        <div class="consequence-groups">
+          <div>
+            <h4 class="subsection-title">Active Obligations</h4>
+            <div class="relation-list">{''.join(obligation_items)}</div>
+          </div>
+          <div>
+            <h4 class="subsection-title">Reputation Marks</h4>
+            <div class="relation-list">{''.join(reputation_items)}</div>
+          </div>
+          <div>
+            <h4 class="subsection-title">Legal Fallout</h4>
+            <div class="relation-list">{''.join(legal_fallout_items)}</div>
+          </div>
+          <div>
+            <h4 class="subsection-title">Knowledge Effects</h4>
+            <div class="relation-list">{''.join(knowledge_effect_items)}</div>
+          </div>
+        </div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-tags">
         <h3 id="person-{row['person_id']}-tags" class="section-title">Character Tags</h3>
@@ -3557,6 +4034,20 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
         person,
         current_year,
     )
+    obligation_rows = _person_obligation_rows(con, world, row["person_id"])
+    reputation_mark_rows = _person_reputation_mark_rows(con, world, row["person_id"])
+    legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
+    knowledge_effect_rows = _person_knowledge_effect_rows(events, row["person_id"])
+    obligation_lines = _person_obligation_lines(
+        con, world, obligation_rows, row["person_id"]
+    )
+    reputation_mark_lines = _person_reputation_mark_lines(reputation_mark_rows)
+    legal_fallout_lines = _person_legal_fallout_lines(
+        con, world, legal_fallout_rows, row["person_id"]
+    )
+    knowledge_effect_lines = _person_knowledge_effect_lines(
+        con, world, knowledge_effect_rows, row["person_id"]
+    )
     job_history_lines = _job_history_lines(job_history)
     partner_history_lines = _relationship_history_lines(
         con,
@@ -3609,6 +4100,24 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             "",
             "Children:",
             *child_lines,
+            "",
+            "Consequences:",
+            f"- Obligations: {len(obligation_rows)}",
+            f"- Reputation marks: {len(reputation_mark_rows)}",
+            f"- Legal fallout: {len(legal_fallout_rows)}",
+            f"- Knowledge effects: {len(knowledge_effect_rows)}",
+            "",
+            "Active Obligations:",
+            *obligation_lines,
+            "",
+            "Reputation Marks:",
+            *reputation_mark_lines,
+            "",
+            "Legal Fallout:",
+            *legal_fallout_lines,
+            "",
+            "Knowledge Effects:",
+            *knowledge_effect_lines,
             "",
             "Job History:",
             *job_history_lines,

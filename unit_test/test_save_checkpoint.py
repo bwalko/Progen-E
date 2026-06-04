@@ -326,6 +326,499 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             self.assertEqual(float(rows["career_fitness_updated"]["confidence"]), 1.0)
 
+    def test_v8_knowledge_events_backfill_domain_state(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.executescript(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    );
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '8');
+                    PRAGMA user_version = 8;
+
+                    CREATE TABLE simulation_region_lookup (
+                        region_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        region_id TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE simulation_settlement_lookup (
+                        settlement_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        settlement_id TEXT NOT NULL UNIQUE,
+                        region_key INTEGER NOT NULL
+                    );
+                    INSERT INTO simulation_region_lookup (region_key, region_id)
+                    VALUES (1, 'aeria_north');
+                    INSERT INTO simulation_settlement_lookup (
+                        settlement_key, settlement_id, region_key
+                    )
+                    VALUES (1, 'aeria_north:settlement:1', 1);
+
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        primary_person_id INTEGER,
+                        secondary_person_id INTEGER,
+                        settlement_key INTEGER,
+                        region_key INTEGER,
+                        event_origin TEXT NOT NULL DEFAULT 'generated',
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        id, sim_year, event_type, primary_person_id,
+                        settlement_key, region_key, payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        7,
+                        1002,
+                        "knowledge_culture",
+                        41,
+                        1,
+                        1,
+                        json.dumps(
+                            {
+                                "creator_person_id": 41,
+                                "incident_kind": "improved_plow",
+                                "knowledge_domain": "toolmaking",
+                                "novelty_value": 0.2,
+                                "consequences": {
+                                    "knowledge_state": {
+                                        "domain": "toolmaking",
+                                        "state_delta": 0.07,
+                                    }
+                                },
+                            },
+                            separators=(",", ":"),
+                        ),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+
+                ensure_checkpoint_schema(conn)
+
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                row = conn.execute(
+                    """
+                    SELECT region_id, domain, domain_score, breakthrough_count,
+                           first_event_year, latest_event_year, first_event_id,
+                           latest_event_id, latest_incident_kind,
+                           latest_creator_person_id, latest_settlement_id
+                    FROM simulation_domain_states_readable
+                    """
+                ).fetchone()
+                processed = conn.execute(
+                    """
+                    SELECT meta_value
+                    FROM save_metadata
+                    WHERE meta_key = 'simulation_domain_states_backfilled_event_id'
+                    """
+                ).fetchone()
+
+            self.assertIsNotNone(row)
+            self.assertEqual(str(row["region_id"]), "aeria_north")
+            self.assertEqual(str(row["domain"]), "toolmaking")
+            self.assertAlmostEqual(float(row["domain_score"]), 0.07)
+            self.assertEqual(int(row["breakthrough_count"]), 1)
+            self.assertEqual(int(row["first_event_year"]), 1002)
+            self.assertEqual(int(row["latest_event_year"]), 1002)
+            self.assertEqual(int(row["first_event_id"]), 7)
+            self.assertEqual(int(row["latest_event_id"]), 7)
+            self.assertEqual(str(row["latest_incident_kind"]), "improved_plow")
+            self.assertEqual(int(row["latest_creator_person_id"]), 41)
+            self.assertEqual(
+                str(row["latest_settlement_id"]), "aeria_north:settlement:1"
+            )
+            self.assertIsNotNone(processed)
+            self.assertEqual(str(processed["meta_value"]), "7")
+
+    def test_v9_public_virtue_events_backfill_obligations(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.executescript(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    );
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '9');
+                    PRAGMA user_version = 9;
+
+                    CREATE TABLE simulation_region_lookup (
+                        region_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        region_id TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE simulation_settlement_lookup (
+                        settlement_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        settlement_id TEXT NOT NULL UNIQUE,
+                        region_key INTEGER NOT NULL
+                    );
+                    INSERT INTO simulation_region_lookup (region_key, region_id)
+                    VALUES (1, 'aeria_north');
+                    INSERT INTO simulation_settlement_lookup (
+                        settlement_key, settlement_id, region_key
+                    )
+                    VALUES (1, 'aeria_north:settlement:1', 1);
+
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        primary_person_id INTEGER,
+                        secondary_person_id INTEGER,
+                        settlement_key INTEGER,
+                        region_key INTEGER,
+                        event_origin TEXT NOT NULL DEFAULT 'generated',
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        id, sim_year, event_type, primary_person_id,
+                        secondary_person_id, settlement_key, region_key,
+                        payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        8,
+                        1003,
+                        "public_virtue",
+                        51,
+                        52,
+                        1,
+                        1,
+                        json.dumps(
+                            {
+                                "benefactor_person_id": 51,
+                                "beneficiary_person_id": 52,
+                                "incident_kind": "famine_mercy",
+                                "relief_value": 0.18,
+                                "consequences": {
+                                    "relief": {
+                                        "beneficiary": {"prosperity_delta": 0.1},
+                                        "benefactor": {"prosperity_delta": -0.04},
+                                    }
+                                },
+                            },
+                            separators=(",", ":"),
+                        ),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+
+                ensure_checkpoint_schema(conn)
+
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                row = conn.execute(
+                    """
+                    SELECT source_event_id, source_event_year, source_event_type,
+                           obligation_key, obligation_type, status,
+                           owed_by_person_id, owed_to_person_id, region_id,
+                           settlement_id, strength, start_year, expected_end_year,
+                           details_json
+                    FROM simulation_obligations_readable
+                    """
+                ).fetchone()
+                processed = conn.execute(
+                    """
+                    SELECT meta_value
+                    FROM save_metadata
+                    WHERE meta_key = 'simulation_obligations_backfilled_event_id'
+                    """
+                ).fetchone()
+
+            self.assertIsNotNone(row)
+            self.assertEqual(int(row["source_event_id"]), 8)
+            self.assertEqual(int(row["source_event_year"]), 1003)
+            self.assertEqual(str(row["source_event_type"]), "public_virtue")
+            self.assertEqual(str(row["obligation_key"]), "beneficiary_to_benefactor")
+            self.assertEqual(str(row["obligation_type"]), "relief_debt")
+            self.assertEqual(str(row["status"]), "active")
+            self.assertEqual(int(row["owed_by_person_id"]), 52)
+            self.assertEqual(int(row["owed_to_person_id"]), 51)
+            self.assertEqual(str(row["region_id"]), "aeria_north")
+            self.assertEqual(
+                str(row["settlement_id"]), "aeria_north:settlement:1"
+            )
+            self.assertGreater(float(row["strength"]), 0.0)
+            self.assertEqual(int(row["start_year"]), 1003)
+            self.assertEqual(int(row["expected_end_year"]), 1015)
+            self.assertEqual(
+                json.loads(str(row["details_json"])),
+                {"source_role": "public_virtue_relief"},
+            )
+            self.assertIsNotNone(processed)
+            self.assertEqual(str(processed["meta_value"]), "8")
+
+    def test_v10_public_virtue_events_backfill_reputation_marks(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.executescript(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    );
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '10');
+                    PRAGMA user_version = 10;
+
+                    CREATE TABLE simulation_region_lookup (
+                        region_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        region_id TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE simulation_settlement_lookup (
+                        settlement_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        settlement_id TEXT NOT NULL UNIQUE,
+                        region_key INTEGER NOT NULL
+                    );
+                    INSERT INTO simulation_region_lookup (region_key, region_id)
+                    VALUES (1, 'aeria_north');
+                    INSERT INTO simulation_settlement_lookup (
+                        settlement_key, settlement_id, region_key
+                    )
+                    VALUES (1, 'aeria_north:settlement:1', 1);
+
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        primary_person_id INTEGER,
+                        secondary_person_id INTEGER,
+                        settlement_key INTEGER,
+                        region_key INTEGER,
+                        event_origin TEXT NOT NULL DEFAULT 'generated',
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        id, sim_year, event_type, primary_person_id,
+                        secondary_person_id, settlement_key, region_key,
+                        payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        9,
+                        1004,
+                        "public_virtue",
+                        61,
+                        62,
+                        1,
+                        1,
+                        json.dumps(
+                            {
+                                "benefactor_person_id": 61,
+                                "beneficiary_person_id": 62,
+                                "incident_kind": "heroic_rescue",
+                                "consequences": {
+                                    "public_reputation": {
+                                        "person_id": 61,
+                                        "leader_tendency_before": "low",
+                                        "leader_tendency_after": "medium",
+                                    }
+                                },
+                            },
+                            separators=(",", ":"),
+                        ),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+
+                ensure_checkpoint_schema(conn)
+
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                row = conn.execute(
+                    """
+                    SELECT source_event_id, source_event_year, source_event_type,
+                           mark_key, person_id, reputation_axis,
+                           reputation_before, reputation_after, direction,
+                           mark_strength, region_id, settlement_id, mark_year,
+                           details_json
+                    FROM simulation_reputation_marks_readable
+                    """
+                ).fetchone()
+                processed = conn.execute(
+                    """
+                    SELECT meta_value
+                    FROM save_metadata
+                    WHERE meta_key = 'simulation_reputation_marks_backfilled_event_id'
+                    """
+                ).fetchone()
+
+            self.assertIsNotNone(row)
+            self.assertEqual(int(row["source_event_id"]), 9)
+            self.assertEqual(int(row["source_event_year"]), 1004)
+            self.assertEqual(str(row["source_event_type"]), "public_virtue")
+            self.assertEqual(str(row["mark_key"]), "leadership:61")
+            self.assertEqual(int(row["person_id"]), 61)
+            self.assertEqual(str(row["reputation_axis"]), "leadership")
+            self.assertEqual(str(row["reputation_before"]), "low")
+            self.assertEqual(str(row["reputation_after"]), "medium")
+            self.assertEqual(str(row["direction"]), "positive")
+            self.assertGreater(float(row["mark_strength"]), 0.0)
+            self.assertEqual(str(row["region_id"]), "aeria_north")
+            self.assertEqual(
+                str(row["settlement_id"]), "aeria_north:settlement:1"
+            )
+            self.assertEqual(int(row["mark_year"]), 1004)
+            self.assertEqual(
+                json.loads(str(row["details_json"])),
+                {"source_role": "public_virtue_reputation"},
+            )
+            self.assertIsNotNone(processed)
+            self.assertEqual(str(processed["meta_value"]), "9")
+
+    def test_v11_affair_scandal_events_backfill_legal_fallout(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.executescript(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    );
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '11');
+                    PRAGMA user_version = 11;
+
+                    CREATE TABLE simulation_region_lookup (
+                        region_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        region_id TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE simulation_settlement_lookup (
+                        settlement_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        settlement_id TEXT NOT NULL UNIQUE,
+                        region_key INTEGER NOT NULL
+                    );
+                    INSERT INTO simulation_region_lookup (region_key, region_id)
+                    VALUES (1, 'aeria_north');
+                    INSERT INTO simulation_settlement_lookup (
+                        settlement_key, settlement_id, region_key
+                    )
+                    VALUES (1, 'aeria_north:settlement:1', 1);
+
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        primary_person_id INTEGER,
+                        secondary_person_id INTEGER,
+                        settlement_key INTEGER,
+                        region_key INTEGER,
+                        event_origin TEXT NOT NULL DEFAULT 'generated',
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        id, sim_year, event_type, primary_person_id,
+                        secondary_person_id, settlement_key, region_key,
+                        payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        10,
+                        1005,
+                        "affair_scandal",
+                        71,
+                        72,
+                        1,
+                        1,
+                        json.dumps(
+                            {
+                                "accused_person_id": 71,
+                                "betrayed_partner_person_id": 72,
+                                "paramour_person_id": 73,
+                                "betrayed_partner_person_ids": [72],
+                                "incident_kind": "inheritance_scandal",
+                                "historical_importance": 0.42,
+                                "consequences": {
+                                    "ended_paramour": True,
+                                },
+                            },
+                            separators=(",", ":"),
+                        ),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+
+                ensure_checkpoint_schema(conn)
+
+                self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
+                row = conn.execute(
+                    """
+                    SELECT source_event_id, source_event_year, source_event_type,
+                           fallout_key, fallout_type, status,
+                           principal_person_id, opposing_person_id,
+                           related_person_id, region_id, settlement_id, severity,
+                           start_year, expected_resolution_year, details_json
+                    FROM simulation_legal_fallout_readable
+                    """
+                ).fetchone()
+                processed = conn.execute(
+                    """
+                    SELECT meta_value
+                    FROM save_metadata
+                    WHERE meta_key = 'simulation_legal_fallout_backfilled_event_id'
+                    """
+                ).fetchone()
+
+            self.assertIsNotNone(row)
+            self.assertEqual(int(row["source_event_id"]), 10)
+            self.assertEqual(int(row["source_event_year"]), 1005)
+            self.assertEqual(str(row["source_event_type"]), "affair_scandal")
+            self.assertEqual(str(row["fallout_key"]), "inheritance:71:72:73")
+            self.assertEqual(str(row["fallout_type"]), "inheritance_dispute")
+            self.assertEqual(str(row["status"]), "active")
+            self.assertEqual(int(row["principal_person_id"]), 71)
+            self.assertEqual(int(row["opposing_person_id"]), 72)
+            self.assertEqual(int(row["related_person_id"]), 73)
+            self.assertEqual(str(row["region_id"]), "aeria_north")
+            self.assertEqual(str(row["settlement_id"]), "aeria_north:settlement:1")
+            self.assertGreater(float(row["severity"]), 0.0)
+            self.assertEqual(int(row["start_year"]), 1005)
+            self.assertEqual(int(row["expected_resolution_year"]), 1013)
+            self.assertEqual(
+                json.loads(str(row["details_json"])),
+                {
+                    "source_role": "affair_scandal_legal_fallout",
+                    "incident_kind": "inheritance_scandal",
+                    "betrayed_partner_person_ids": [72],
+                },
+            )
+            self.assertIsNotNone(processed)
+            self.assertEqual(str(processed["meta_value"]), "10")
+
     def test_event_record_visibility_state_transitions(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             sav = Path(td) / "save.sqlite"

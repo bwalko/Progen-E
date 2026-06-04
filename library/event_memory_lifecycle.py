@@ -51,11 +51,11 @@ LOSS_POLICIES: dict[str, _TransitionPolicy] = {
     "scandal_record": _TransitionPolicy(18, 0.08),
     "property_crime_record": _TransitionPolicy(18, 0.075),
     "violent_crime_record": _TransitionPolicy(22, 0.06),
-    "work_record": _TransitionPolicy(35, 0.045),
     "household_memory": _TransitionPolicy(45, 0.03),
     "event_memory": _TransitionPolicy(50, 0.02),
     "lineage_memory": _TransitionPolicy(70, 0.012),
     "public_virtue_record": _TransitionPolicy(75, 0.012),
+    "work_record": _TransitionPolicy(85, 0.006),
     "knowledge_record": _TransitionPolicy(90, 0.006),
     "rediscovery_record": _TransitionPolicy(45, 0.006),
     "mortuary_memory": _TransitionPolicy(100, 0.004),
@@ -77,11 +77,11 @@ REDISCOVERY_POLICIES: dict[str, _TransitionPolicy] = {
     "settlement_chronicle": _TransitionPolicy(60, 0.01),
     "public_chronicle": _TransitionPolicy(60, 0.008),
     "household_secret": _TransitionPolicy(12, 0.08),
-    "work_record": _TransitionPolicy(18, 0.06),
     "household_memory": _TransitionPolicy(20, 0.04),
     "event_memory": _TransitionPolicy(24, 0.025),
     "lineage_memory": _TransitionPolicy(40, 0.01),
     "mortuary_memory": _TransitionPolicy(50, 0.01),
+    "work_record": _TransitionPolicy(70, 0.004),
 }
 DEFAULT_REDISCOVERY_POLICY = _TransitionPolicy(30, 0.015)
 

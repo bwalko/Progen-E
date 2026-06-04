@@ -1071,6 +1071,246 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Partner History:\n- 101-115: Bea Forge", share)
         self.assertIn("Paramour History:\n- 103-112: Cato Vale", share)
 
+    def test_person_sheet_prominently_lists_consequence_ledgers(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, 120)")
+        con.execute(
+            """
+            insert into simulation_people (
+                person_id, world, is_founder, father_id, mother_id, is_alive, person_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                3,
+                "test",
+                1,
+                None,
+                None,
+                1,
+                json.dumps({"first_name": "Cato", "last_name": "Vale", "birthyear": 5}),
+            ),
+        )
+        con.execute(
+            """
+            create table simulation_event_people (
+                event_id integer,
+                person_id integer,
+                role text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_events (id, world, sim_year, event_type, payload_json)
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                20,
+                "test",
+                1004,
+                "knowledge_culture",
+                json.dumps(
+                    {
+                        "creator_person_id": 1,
+                        "patron_person_id": 2,
+                        "incident_kind": "improved_plow",
+                        "knowledge_domain": "toolmaking",
+                        "novelty_value": 0.2,
+                        "settlement_id": "aeria_north:settlement:1",
+                        "region_id": "aeria_north",
+                        "consequences": {
+                            "knowledge_state": {
+                                "domain": "toolmaking",
+                                "state_delta": 0.07,
+                            }
+                        },
+                    }
+                ),
+            ),
+        )
+        con.executemany(
+            "insert into simulation_event_people values (?, ?, ?)",
+            [(20, 1, "creator"), (20, 2, "patron")],
+        )
+        con.execute(
+            """
+            create table simulation_obligations_readable (
+                obligation_id integer,
+                source_event_id integer,
+                source_event_year integer,
+                source_event_type text,
+                obligation_key text,
+                obligation_type text,
+                status text,
+                owed_by_person_id integer,
+                owed_to_person_id integer,
+                region_id text,
+                settlement_id text,
+                strength real,
+                start_year integer,
+                expected_end_year integer,
+                resolved_year integer,
+                details_json text,
+                created_at text,
+                updated_at text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_obligations_readable
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                21,
+                1001,
+                "public_virtue",
+                "beneficiary_to_benefactor",
+                "relief_debt",
+                "active",
+                1,
+                2,
+                "aeria_north",
+                "aeria_north:settlement:1",
+                0.35,
+                1001,
+                1013,
+                None,
+                "{}",
+                "now",
+                "now",
+            ),
+        )
+        con.execute(
+            """
+            create table simulation_reputation_marks_readable (
+                reputation_mark_id integer,
+                source_event_id integer,
+                source_event_year integer,
+                source_event_type text,
+                mark_key text,
+                person_id integer,
+                reputation_axis text,
+                reputation_before text,
+                reputation_after text,
+                direction text,
+                mark_strength real,
+                region_id text,
+                settlement_id text,
+                mark_year integer,
+                details_json text,
+                created_at text,
+                updated_at text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_reputation_marks_readable
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                22,
+                1002,
+                "public_virtue",
+                "leadership:1",
+                1,
+                "leadership",
+                "low",
+                "medium",
+                "positive",
+                0.33,
+                "aeria_north",
+                "aeria_north:settlement:1",
+                1002,
+                "{}",
+                "now",
+                "now",
+            ),
+        )
+        con.execute(
+            """
+            create table simulation_legal_fallout_readable (
+                fallout_id integer,
+                source_event_id integer,
+                source_event_year integer,
+                source_event_type text,
+                fallout_key text,
+                fallout_type text,
+                status text,
+                principal_person_id integer,
+                opposing_person_id integer,
+                related_person_id integer,
+                region_id text,
+                settlement_id text,
+                severity real,
+                start_year integer,
+                expected_resolution_year integer,
+                resolved_year integer,
+                details_json text,
+                created_at text,
+                updated_at text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_legal_fallout_readable
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                23,
+                1003,
+                "affair_scandal",
+                "heir_legitimacy:1:3:2",
+                "heir_legitimacy_challenge",
+                "active",
+                1,
+                2,
+                3,
+                "aeria_north",
+                "aeria_north:settlement:1",
+                0.58,
+                1003,
+                1021,
+                None,
+                "{}",
+                "now",
+                "now",
+            ),
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertLess(sheet.index("Consequences"), sheet.index(">Events</h3>"))
+        self.assertLess(sheet.index("Consequences"), sheet.index("Job History"))
+        self.assertIn("Active Obligations", sheet)
+        self.assertIn("Reputation Marks", sheet)
+        self.assertIn("Legal Fallout", sheet)
+        self.assertIn("Knowledge Effects", sheet)
+        self.assertIn("Obligation: relief debt", sheet)
+        self.assertIn("Reputation: leadership", sheet)
+        self.assertIn("Legal Fallout: heir legitimacy challenge", sheet)
+        self.assertIn("Knowledge Effect: toolmaking", sheet)
+        self.assertIn(">Bea Forge", sheet)
+        self.assertIn(">Cato Vale", sheet)
+        self.assertIn("Consequences:\n- Obligations: 1", share)
+        self.assertIn("Reputation marks: 1", share)
+        self.assertIn("Legal fallout: 1", share)
+        self.assertIn("Knowledge effects: 1", share)
+        self.assertIn("Active Obligations:\n- 1001-1013: relief debt", share)
+        self.assertIn("Reputation Marks:\n- 1002: leadership low -> medium", share)
+        self.assertIn("Legal Fallout:\n- 1003-1021: heir legitimacy challenge", share)
+        self.assertIn("Knowledge Effects:\n- 1004: toolmaking", share)
+
     def test_partner_history_ignores_context_events_and_merges_repeated_pair(self) -> None:
         con = _memory_save()
         events = [
