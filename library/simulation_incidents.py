@@ -1294,6 +1294,86 @@ def _apply_region_pool_delta(
     }
 
 
+def _person_faction_key(rec: "SimulationPersonRecord") -> str:
+    person = rec.person
+    place = (
+        person.current_settlement_id
+        or person.birthplace_settlement_id
+        or person.birthplace_region_id
+        or "unknown"
+    )
+    household_anchor = (
+        person.household_purseholder_person_id
+        or person.partner_person_id
+        or rec.person_id
+    )
+    return f"household:{place}:{int(household_anchor)}"
+
+
+def _faction_memory_row(
+    *,
+    memory_type: str,
+    principal: "SimulationPersonRecord",
+    opposing: "SimulationPersonRecord | None",
+    region_id: str,
+    settlement_id: str,
+    strength: float,
+    polarity: str,
+    year: int,
+    duration_years: int,
+    source_role: str,
+    incident_kind: str,
+) -> dict[str, object]:
+    opposing_id = int(opposing.person_id) if opposing is not None else 0
+    return {
+        "memory_key": f"{memory_type}:{int(principal.person_id)}:{opposing_id}:{incident_kind}",
+        "memory_type": memory_type,
+        "status": "active",
+        "faction_a_key": _person_faction_key(principal),
+        "faction_b_key": _person_faction_key(opposing) if opposing is not None else None,
+        "principal_person_id": int(principal.person_id),
+        "opposing_person_id": int(opposing.person_id) if opposing is not None else None,
+        "polarity": polarity,
+        "strength": round(_clamp(strength), 5),
+        "start_year": int(year),
+        "expected_duration_years": int(duration_years),
+        "settlement_id": settlement_id,
+        "region_id": region_id,
+        "source_role": source_role,
+        "incident_kind": incident_kind,
+    }
+
+
+def _apply_murder_consequences(
+    year: int, incident: MurderIncident
+) -> dict[str, object]:
+    memory_type = (
+        "blood_feud"
+        if incident.incident_kind
+        in {"feud_killing", "feud_murder", "kin_killing", "assassination_attempt"}
+        or incident.motive in {"kin_conflict", "partner_conflict", "paramour_conflict"}
+        else "violent_grievance"
+    )
+    strength = 0.45 + float(incident.historical_importance) * 0.45
+    return {
+        "faction_memory": [
+            _faction_memory_row(
+                memory_type=memory_type,
+                principal=incident.victim,
+                opposing=incident.killer,
+                region_id=incident.region_id,
+                settlement_id=incident.settlement_id,
+                strength=strength,
+                polarity="negative",
+                year=int(year),
+                duration_years=32 if memory_type == "blood_feud" else 18,
+                source_role="murder_grievance",
+                incident_kind=incident.incident_kind,
+            )
+        ]
+    }
+
+
 def _relationship_update_at_year(
     ctx: "SimulationContext", year: int, method_name: str, a_id: int, b_id: int
 ) -> dict[str, object]:
@@ -1371,6 +1451,23 @@ def _apply_property_crime_consequences(
             ),
         },
         "settlement": settlement,
+        "faction_memory": [
+            _faction_memory_row(
+                memory_type="property_grievance",
+                principal=incident.target,
+                opposing=incident.perpetrator,
+                region_id=incident.region_id,
+                settlement_id=incident.settlement_id,
+                strength=0.18
+                + float(incident.loss_value) * 2.0
+                + float(incident.historical_importance) * 0.25,
+                polarity="negative",
+                year=int(year),
+                duration_years=10,
+                source_role="property_crime_grievance",
+                incident_kind=incident.incident_kind,
+            )
+        ],
     }
 
 
@@ -1426,6 +1523,21 @@ def _apply_affair_scandal_consequences(
         "ended_paramour": ended_paramour,
         "dissolved_couples": dissolved_couples,
         "settlement": settlement,
+        "faction_memory": [
+            _faction_memory_row(
+                memory_type="household_scandal_memory",
+                principal=incident.accused,
+                opposing=incident.paramour,
+                region_id=incident.region_id,
+                settlement_id=incident.settlement_id,
+                strength=0.20 + float(incident.historical_importance) * 0.55,
+                polarity="negative",
+                year=int(year),
+                duration_years=16,
+                source_role="affair_scandal_memory",
+                incident_kind=incident.incident_kind,
+            )
+        ],
     }
     legal_fallout = _affair_scandal_legal_fallout(int(year), incident)
     if legal_fallout:
@@ -1531,6 +1643,23 @@ def _apply_public_virtue_consequences(
             }
         ],
         "settlement": settlement,
+        "faction_memory": [
+            _faction_memory_row(
+                memory_type="public_trust",
+                principal=incident.beneficiary,
+                opposing=incident.benefactor,
+                region_id=incident.region_id,
+                settlement_id=incident.settlement_id,
+                strength=0.12
+                + float(incident.relief_value) * 1.4
+                + float(incident.historical_importance) * 0.25,
+                polarity="positive",
+                year=int(year),
+                duration_years=20,
+                source_role="public_virtue_trust",
+                incident_kind=incident.incident_kind,
+            )
+        ],
     }
 
 
@@ -1593,6 +1722,108 @@ def _knowledge_state_diffusion(
     return out
 
 
+def _institution_row(
+    *,
+    institution_type: str,
+    focus_domain: str,
+    incident: KnowledgeCultureIncident,
+    year: int,
+    strength_delta: float,
+    source_role: str,
+) -> dict[str, object]:
+    domain = str(focus_domain or incident.knowledge_domain or "knowledge").strip()
+    inst_type = str(institution_type or "institution").strip()
+    return {
+        "institution_key": f"{incident.region_id}:{inst_type}:{domain}",
+        "institution_type": inst_type,
+        "status": "active",
+        "focus_domain": domain,
+        "strength_delta": round(max(0.001, float(strength_delta)), 5),
+        "influence_delta": round(max(0.001, float(strength_delta) * 0.75), 5),
+        "founder_person_id": int(incident.creator.person_id),
+        "patron_person_id": (
+            int(incident.patron.person_id) if incident.patron is not None else None
+        ),
+        "founded_year": int(year),
+        "settlement_id": incident.settlement_id,
+        "region_id": incident.region_id,
+        "source_role": source_role,
+        "incident_kind": incident.incident_kind,
+        "knowledge_domain": incident.knowledge_domain,
+    }
+
+
+def _knowledge_institution_rows(
+    year: int,
+    incident: KnowledgeCultureIncident,
+    primary_delta: float,
+) -> list[dict[str, object]]:
+    kind = str(incident.incident_kind or "").strip()
+    domain = str(incident.knowledge_domain or "").strip()
+    base = max(0.01, float(primary_delta))
+    rows: list[dict[str, object]] = []
+    if kind in SCHOLARLY_KNOWLEDGE_KINDS or domain in {
+        "scholarship",
+        "calendar",
+        "medicine",
+        "natural_history",
+        "writing",
+    }:
+        rows.append(
+            _institution_row(
+                institution_type="school",
+                focus_domain=domain,
+                incident=incident,
+                year=int(year),
+                strength_delta=base * 0.85,
+                source_role="knowledge_school",
+            )
+        )
+    if kind in LEGAL_KNOWLEDGE_KINDS or domain in {"law", "trade_law", "calendar"}:
+        rows.append(
+            _institution_row(
+                institution_type="doctrine",
+                focus_domain=domain,
+                incident=incident,
+                year=int(year),
+                strength_delta=base * 0.95,
+                source_role="knowledge_doctrine",
+            )
+        )
+    if (
+        kind in MERCANTILE_KNOWLEDGE_KINDS
+        or kind in PORTABLE_CRAFT_KNOWLEDGE_KINDS
+        or kind in MARITIME_KNOWLEDGE_KINDS
+        or domain in {"accounting", "trade_law", "navigation", "shipbuilding", "craft"}
+    ):
+        rows.append(
+            _institution_row(
+                institution_type="guild",
+                focus_domain=domain,
+                incident=incident,
+                year=int(year),
+                strength_delta=base * 0.80,
+                source_role="knowledge_guild",
+            )
+        )
+    if (
+        kind in INVENTION_KNOWLEDGE_KINDS
+        or kind in PORTABLE_CRAFT_KNOWLEDGE_KINDS
+        or domain in {"craft", "toolmaking", "shipbuilding", "art"}
+    ):
+        rows.append(
+            _institution_row(
+                institution_type="craft_institution",
+                focus_domain=domain,
+                incident=incident,
+                year=int(year),
+                strength_delta=base * 0.90,
+                source_role="knowledge_craft_institution",
+            )
+        )
+    return rows
+
+
 def _apply_knowledge_culture_consequences(
     ctx: "SimulationContext", year: int, incident: KnowledgeCultureIncident
 ) -> dict[str, object]:
@@ -1647,6 +1878,9 @@ def _apply_knowledge_culture_consequences(
         },
         "knowledge_state_diffusion": _knowledge_state_diffusion(
             ctx, int(year), incident, primary_delta
+        ),
+        "institutions": _knowledge_institution_rows(
+            int(year), incident, primary_delta
         ),
         "patronage": patronage,
         "obligations": obligations,
@@ -2235,6 +2469,7 @@ def _maybe_property_crime_in_settlement(
 def _record_murder_incident(
     ctx: "SimulationContext", year: int, incident: MurderIncident
 ) -> None:
+    consequences = _apply_murder_consequences(int(year), incident)
     ctx._record_simulation_event(
         int(year),
         "murder",
@@ -2251,6 +2486,7 @@ def _record_murder_incident(
             "actor_violent_propensity": round(incident.actor_propensity, 5),
             "resource_pressure": round(incident.resource_pressure, 5),
             "historical_importance": round(incident.historical_importance, 5),
+            "consequences": consequences,
             "genome_signals": incident.genome_signals,
         },
     )

@@ -453,6 +453,14 @@ class TestSimulationIncidents(unittest.TestCase):
             self.assertEqual(int(murder["killer_person_id"]), killer.person_id)
             self.assertEqual(int(murder["victim_person_id"]), victim.person_id)
             self.assertEqual(str(murder["settlement_id"]), settlement.settlement_id)
+            faction_memory = murder["consequences"]["faction_memory"]
+            self.assertEqual(len(faction_memory), 1)
+            self.assertIn(
+                str(faction_memory[0]["memory_type"]),
+                {"blood_feud", "violent_grievance"},
+            )
+            self.assertEqual(int(faction_memory[0]["principal_person_id"]), victim.person_id)
+            self.assertEqual(int(faction_memory[0]["opposing_person_id"]), killer.person_id)
             self.assertIn(
                 str(murder["incident_kind"]),
                 {
@@ -1511,6 +1519,7 @@ class TestSimulationIncidents(unittest.TestCase):
                 payload["consequences"]["knowledge_state"]["domain"],
                 payload["knowledge_domain"],
             )
+            self.assertTrue(payload["consequences"]["institutions"])
             self.assertIsNotNone(domain_row)
             self.assertEqual(str(domain_row["region_id"]), "aeria_north")
             self.assertEqual(str(domain_row["domain"]), payload["knowledge_domain"])

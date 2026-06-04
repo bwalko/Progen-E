@@ -231,7 +231,14 @@ def score_port_network(
         max(0.0, float(domain_scores.get(domain, 0.0)))
         for domain in PORTABLE_KNOWLEDGE_DOMAINS
     )
-    knowledge_score = _clamp01(knowledge_total / 0.45)
+    domain_knowledge_score = _clamp01(knowledge_total / 0.45)
+    try:
+        from library.simulation_innovation import portable_innovation_score_for_region
+
+        portable_innovation_score = portable_innovation_score_for_region(ctx, rid)
+    except Exception:
+        portable_innovation_score = 0.0
+    knowledge_score = max(domain_knowledge_score, _clamp01(portable_innovation_score))
 
     score = round(
         0.35 * geography_score
@@ -245,6 +252,7 @@ def score_port_network(
         "sea_route_centrality": round(route_score, 5),
         "job_market": round(economy_score, 5),
         "portable_knowledge": round(knowledge_score, 5),
+        "portable_innovations": round(portable_innovation_score, 5),
         "job_density": round(job_density, 5),
         "market_signal": round(market_signal, 5),
         "sea_route_count": round(route_count, 5),

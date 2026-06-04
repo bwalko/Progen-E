@@ -17,6 +17,10 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/world_start.csv` | Worlds + mortality + header + **`population_scale`** | One row per `world`. `population_scale` (default `0.05`) is the **shared global** modifier applied to region `carrying_capacity` (see [`library/geography.py`](../library/geography.py)) **and** to `government_polity_types.min_population_to_form` / `max_population_before_split` and to settlement-leadership thresholds in `government_titles.csv`. |
 | `config/incident_rates.csv` | Small + header | Era-tuned detailed-incident knobs per (`world` or `*`, `incident_key`, historical-year band): murder target per 10k/year plus chance/cap multipliers for other incident families. |
 | `config/event_catalog.csv` | Small + header | Authored event/incident kinds per (`event_type`, `incident_kind`): family, display label, context tags, consequence profile, default memory record type/visibility, and selection weight. |
+| `config/innovation_source_rows.csv` | Generated + header | Trace rows parsed from `Timeline of historic inventions.wiki`; source line, headings, normalized dates, cleaned source title/summary, wiki links, and parse notes. |
+| `config/innovations.csv` | Generated/curated + header | Active simulation innovation catalog; local analogue rows drive startup seeding, discovery eligibility, adoption, diffusion, prosperity, and port-network knowledge. |
+| `config/innovation_eras.csv` | Small + header | Historical-year era bands and adoption thresholds for local/place/polity effective innovation era state. |
+| `config/innovation_category_rules.csv` | Small + header | Per-category rank/log-gap gates, discovery/spread multipliers, same-polity diffusion strength, and prosperity weights. |
 | `config/world_geography_continents.csv` | Small + header | One row per (`world`, `continent_id`) |
 | `config/world_geography_regions.csv` | Small + header | One row per (`world`, `region_id`) |
 | `config/world_geography_routes.csv` | Small + header | One directed route per (`world`, `from_region_id`, `to_region_id`) |
@@ -204,6 +208,66 @@ Runtime note: `knowledge_state` event payloads may include
 deltas. Each diffusion item targets a destination region/domain with a reduced
 delta based on route friction. `library.world_save` applies those rows to
 `simulation_domain_states` in addition to the primary region delta.
+
+---
+
+## Innovation Timeline Config
+
+**Purpose:** `Timeline of historic inventions.wiki` is preserved as source
+markup. `utils/util_parse_inventions_wiki.py` parses it into trace rows and a
+curated gameplay catalog. Runtime uses local analogue names from
+`config/innovations.csv`, not literal Earth invention names as event prose truth.
+
+### `config/innovation_source_rows.csv`
+
+Generated trace table. Rebuild with `python utils/util_parse_inventions_wiki.py`
+after changing the wiki source or parser.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `source_id` | string | Stable generated row id (`invsrc_####`). |
+| `source_file` / `source_line` | string / integer | Original wiki file and source line for audit. |
+| `section` / `subsection` | string | Wiki heading context. |
+| `date_text` | string | Original cleaned date expression. |
+| `history_year_from` / `history_year_to` / `history_year` | integer | Signed historical-year range and representative year; BCE is negative. |
+| `date_quality` | string | `exact`, `range`, `approximate`, `century`, `millennium`, or `unparsed`. |
+| `title` / `summary` | string | Cleaned source title and summary text. |
+| `wiki_links` | semicolon list | Extracted wiki link targets. |
+| `parse_notes` | semicolon list | Parser warnings or approximation notes. |
+
+### `config/innovations.csv`
+
+Gameplay truth for innovations. `library.innovation_catalog` loads only
+`curation_status` values `active`, `reviewed`, or `seed`; unreviewed/inactive
+rows are ignored by runtime.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `innovation_id` | string | Stable simulation id. |
+| `source_id` / `source_link` / `source_title` | string | Trace back to `innovation_source_rows.csv` and wiki line. |
+| `analogue_name` | string | Localized name used in simulation payloads/events. |
+| `category` / `domain` | string | Category gates progression; domain feeds `knowledge_culture` domain-state consequences. |
+| `era_id` | string | Must match `innovation_eras.era_id` where possible. |
+| `history_year` / `history_year_from` / `history_year_to` | integer | Historical-year placement used for startup seeding and discovery timing. |
+| `rank` | integer | Per-category frontier rank; military and other strict categories advance by rank. |
+| `spreadability` / `complexity` / `starter_prevalence` | float `0..1` | Diffusion, discovery difficulty, and startup commonness. |
+| `prerequisite_ids` | semicolon list | Required known innovations before discovery. |
+| `curation_status` | string | `active`, `reviewed`, `seed`, `unreviewed`, or `inactive`. |
+| `notes` | string | Curation/balance notes. |
+
+### `config/innovation_eras.csv`
+
+Defines broad historical era bands. `advancement_threshold` is the number of
+adopted active innovations from an era needed for a place/polity to claim that
+effective innovation era in `simulation_innovation_era_state`.
+
+### `config/innovation_category_rules.csv`
+
+Per-category rules used by `library.simulation_innovation`: `max_rank_jump`,
+`max_log_gap` for logarithmic time-gap penalties, `base_discovery_chance`,
+`spread_multiplier`, `polity_spread_multiplier`, and `wealth_weight`. Military
+uses a stricter `max_rank_jump` so one high-propensity creator cannot leapfrog
+multiple weapon frontiers.
 
 ---
 

@@ -1,5 +1,35 @@
 # TODONE
 
+## Innovation Timeline CSV And Driver
+
+- Added a two-layer innovation timeline pipeline:
+  - `Timeline of historic inventions.wiki` remains traceable source markup.
+  - `utils/util_parse_inventions_wiki.py` parses wiki bullets, headings, wiki
+    links, and date expressions into `config/innovation_source_rows.csv`.
+  - The same utility drafts the editable gameplay catalog in
+    `config/innovations.csv` with local analogue names, categories, domains,
+    era ids, ranks, spreadability, complexity, starter prevalence, and curation
+    status.
+- Added innovation config surfaces:
+  - `config/innovation_eras.csv`
+  - `config/innovation_category_rules.csv`
+- Added runtime support:
+  - `library.innovation_catalog` loads active/reviewed/seed catalog rows and
+    ignores unreviewed/inactive rows.
+  - `library.simulation_innovation` seeds startup knowledge from the world's
+    historical equivalent start year, gates discoveries by rank/year/prereq/era,
+    samples high-propensity adults through `knowledge_culture`, diffuses adopted
+    knowledge through polities and routes, updates effective innovation era
+    state, and exposes small economy/trade hooks.
+- Bumped `save.sqlite` to schema v14:
+  - `simulation_innovation_discoveries`
+  - `simulation_innovation_knowledge`
+  - `simulation_innovation_era_state`
+  - readable views for all three
+- Specific innovation discoveries remain factual `knowledge_culture` events, so
+  existing event/domain-state/history machinery keeps working.
+- Added focused regression coverage in `unit_test/test_innovation_timeline.py`.
+
 ## Maritime Mercantile Expansion V1
 
 - Added a generic maritime mercantile expansion archetype inspired by the
@@ -37,6 +67,43 @@
   household founder grouping, settlement-field save/load roundtrip, autonomy,
   successor recentering, portable knowledge selection, and sea-route domain
   diffusion.
+
+## Event System Consequence Deepening
+
+- Bumped `save.sqlite` to schema v13 for deeper durable consequence state.
+- Added faction-memory persistence:
+  - `simulation_faction_memory` and `simulation_faction_memory_readable`
+    preserve event-backed grievances, feud memories, scandal memories, and
+    public-trust memories with faction keys, polarity, strength, place, and
+    decay/resolution years.
+  - Murder, property crime, affair scandal, and public virtue payloads now emit
+    first-version `consequences.faction_memory` rows.
+- Added legal adjudication / inheritance-resolution persistence:
+  - `simulation_legal_adjudications` and
+    `simulation_legal_adjudications_readable` record deterministic resolutions
+    for due active `simulation_legal_fallout` rows.
+  - `SimulationContext.record_year_summary` now runs the bounded annual
+    consequence tick after save persistence and before event-memory aging.
+- Added inter-region domain diffusion:
+  - `simulation_domain_diffusion` and
+    `simulation_domain_diffusion_readable` audit slow annual route-connected
+    spread from accumulated `simulation_domain_states`.
+  - Diffusion updates target regional domain scores without materializing
+    detailed people or flooding event rows.
+- Added knowledge-born institutions:
+  - `simulation_institutions` and `simulation_institutions_readable` persist
+    schools, guilds, doctrine, and craft institutions strengthened by
+    `knowledge_culture` events.
+  - Knowledge events now map scholarship/medicine/calendar/writing to schools,
+    legal/calendar/trade-law knowledge to doctrine, portable trade/craft/maritime
+    knowledge to guilds, and tool/craft/art/shipbuilding knowledge to craft
+    institutions.
+- Added focused regression coverage proving:
+  - event payloads persist readable faction-memory and institution rows;
+  - due inheritance disputes resolve into adjudication rows;
+  - accumulated shipbuilding knowledge diffuses across configured region routes;
+  - live murder and knowledge/culture incident generators emit the new
+    consequence payloads.
 
 ## Better SVG Map Data Plan
 

@@ -1,0 +1,15 @@
+category,max_rank_jump,max_log_gap,base_discovery_chance,spread_multiplier,polity_spread_multiplier,wealth_weight,notes
+military,1,6.7,0.42,0.70,1.45,0.015,Military frontiers advance by adjacent ranks; large leaps are strongly blocked.
+agriculture,3,8.2,0.62,1.10,1.35,0.030,Food systems spread well when settlement patterns can absorb them.
+material,2,7.5,0.52,0.85,1.25,0.025,Materials require craft infrastructure and resource familiarity.
+energy,2,7.0,0.46,0.75,1.20,0.025,Energy systems are infrastructure-heavy and slower to diffuse.
+transport,2,7.4,0.52,0.90,1.25,0.025,Transport ideas spread along routes but depend on terrain and materials.
+maritime,2,7.2,0.50,0.92,1.30,0.025,Maritime skills spread best through port networks and navigable routes.
+communication,3,8.0,0.58,1.05,1.40,0.030,Writing and communication can become cultural currency quickly.
+administration,2,7.6,0.54,0.95,1.50,0.035,Administrative innovations benefit strongly from shared polity institutions.
+medicine,2,7.4,0.50,0.85,1.20,0.020,Medical knowledge spreads unevenly and needs trusted practitioners.
+science,2,7.2,0.46,0.70,1.15,0.020,Formal knowledge needs specialists and often follows institutions.
+craft,3,8.0,0.56,0.95,1.25,0.025,Craft processes spread through apprenticeships and trade.
+culture,3,8.3,0.60,1.10,1.35,0.015,Cultural forms spread readily but give modest direct prosperity.
+computing,2,6.9,0.44,0.65,1.15,0.030,Computing requires a deep supporting technical base.
+domestic,3,8.2,0.60,1.12,1.30,0.020,Household and everyday practices diffuse broadly once useful.

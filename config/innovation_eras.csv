@@ -1,0 +1,11 @@
+era_id,sort_order,history_year_from,history_year_to,advancement_threshold,notes
+paleolithic,0,-9999999,-10001,8,"Old stone-age and hunter-gatherer baseline technologies."
+neolithic,1,-10000,-3301,6,"Farming villages, domestication, storage, and early craft specialization."
+bronze_age,2,-3300,-1201,5,"Early cities, bronze metallurgy, writing, wheels, and state logistics."
+iron_age,3,-1200,-501,5,"Iron tools, expanded warfare, coinage, and broad agrarian polities."
+classical,4,-500,499,5,"Classical administration, engineering, scholarship, roads, and maritime networks."
+medieval,5,500,1499,5,"Post-classical agrarian states, guild craft, navigation, and mechanical improvements."
+early_modern,6,1500,1749,5,"Printing saturation, oceanic navigation, firearms states, and experimental science."
+industrial,7,1750,1899,5,"Mechanization, steam and electric systems, mass production, and modern transport."
+modern,8,1900,1979,5,"Combustion, aviation, electronics, synthetic materials, and mass communication."
+digital,9,1980,999999,5,"Computing, networks, automation, and information-era infrastructure."

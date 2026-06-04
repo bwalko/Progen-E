@@ -66,6 +66,7 @@ from library.world_save import (
     checkpoint_simulation_to_save,
     clear_world_checkpoint,
     ensure_checkpoint_schema_for_file,
+    event_consequence_annual_tick_for_save,
     maybe_import_run_store_events_csv,
     try_load_simulation_checkpoint,
     read_world_map_seed,
@@ -2246,6 +2247,13 @@ class SimulationContext:
         simulation_incidents_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.incidents", tpc() - t0)
+        from library.simulation_innovation import simulation_innovation_annual_tick
+
+        if prof:
+            t0 = tpc()
+        simulation_innovation_annual_tick(self, year)
+        if prof:
+            simulation_timing.accumulate("summary.innovation", tpc() - t0)
         from library.simulation_government import simulation_government_annual_tick
 
         if prof:
@@ -2336,6 +2344,16 @@ class SimulationContext:
             checkpoint_simulation_to_save(
                 self, full_snapshot=self._should_checkpoint_snapshot(year)
             )
+            if prof:
+                t0 = tpc()
+            event_consequence_annual_tick_for_save(
+                self.save_db_path,
+                config_db_path=self.db_path,
+                year=year,
+                world=self.world,
+            )
+            if prof:
+                simulation_timing.accumulate("summary.event_consequences", tpc() - t0)
             from library.event_memory_lifecycle import (
                 event_memory_lifecycle_annual_tick_for_save,
             )

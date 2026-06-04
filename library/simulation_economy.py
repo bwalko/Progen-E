@@ -284,14 +284,23 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
 
     # --- Pull pools toward baselines supported by settlement / region pressure ---
     next_settlements: dict[str, SettlementState] = {}
+    try:
+        from library.simulation_innovation import innovation_wealth_bonus_for_settlement
+    except Exception:
+        innovation_wealth_bonus_for_settlement = None
     for sid, st in ctx.settlements_by_id.items():
         if (st.status or "").strip().lower() != "active":
             next_settlements[sid] = st
             continue
         fp = float(st.food_pressure or 0.0)
         mp = float(st.market_pull or 0.0)
+        innovation_bonus = (
+            innovation_wealth_bonus_for_settlement(ctx, sid)
+            if innovation_wealth_bonus_for_settlement is not None
+            else 0.0
+        )
         settle_target = _clamp(
-            (1.0 - min(1.0, fp)) * 1.05 + mp * 0.38,
+            (1.0 - min(1.0, fp)) * 1.05 + mp * 0.38 + innovation_bonus,
             PROSPERITY_POOL_MIN + 0.02,
             PROSPERITY_POOL_MAX,
         )

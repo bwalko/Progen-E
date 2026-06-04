@@ -20,7 +20,7 @@ from library import simulation_timing
 from library.mind_body import mind_body_from_genome
 from library.passive_population import PassiveCohort, PassivePerson, PassivePersonRecord
 from library.person import Person
-from library.geography import get_region
+from library.geography import get_region, list_routes_from
 from library.settlements import (
     PRIMARY_SETTLEMENT_SUFFIX,
     SettlementState,
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 12
+SAVE_SCHEMA_VERSION = 14
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -42,6 +42,9 @@ DOMAIN_STATES_BACKFILLED_META_KEY = "simulation_domain_states_backfilled_event_i
 OBLIGATIONS_BACKFILLED_META_KEY = "simulation_obligations_backfilled_event_id"
 REPUTATION_MARKS_BACKFILLED_META_KEY = "simulation_reputation_marks_backfilled_event_id"
 LEGAL_FALLOUT_BACKFILLED_META_KEY = "simulation_legal_fallout_backfilled_event_id"
+FACTION_MEMORY_BACKFILLED_META_KEY = "simulation_faction_memory_backfilled_event_id"
+INSTITUTIONS_BACKFILLED_META_KEY = "simulation_institutions_backfilled_event_id"
+INNOVATIONS_BACKFILLED_META_KEY = "simulation_innovations_backfilled_event_id"
 LEGAL_FALLOUT_SCANDAL_KINDS: frozenset[str] = frozenset(
     {"heir_legitimacy_rumor", "inheritance_scandal"}
 )
@@ -79,9 +82,17 @@ _SAVE_REBUILD_TABLES = (
     "simulation_event_people",
     "simulation_event_moves",
     "simulation_event_records",
+    "simulation_domain_states",
+    "simulation_domain_diffusion",
     "simulation_obligations",
     "simulation_reputation_marks",
     "simulation_legal_fallout",
+    "simulation_legal_adjudications",
+    "simulation_faction_memory",
+    "simulation_institutions",
+    "simulation_innovation_discoveries",
+    "simulation_innovation_knowledge",
+    "simulation_innovation_era_state",
     "simulation_regions",
     "simulation_settlements",
     "simulation_polities",
@@ -304,7 +315,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
             f"save.sqlite schema version {version} is newer than supported "
             f"version {SAVE_SCHEMA_VERSION}"
         )
-    if version not in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11, SAVE_SCHEMA_VERSION):
+    if version not in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, SAVE_SCHEMA_VERSION):
         raise RuntimeError(
             f"save.sqlite schema version {version} needs a migration before "
             f"this code can open it"
@@ -2039,6 +2050,1180 @@ def _backfill_simulation_legal_fallout(conn: sqlite3.Connection) -> None:
     _set_legal_fallout_processed_event_id(conn, max_event_id)
 
 
+def _ensure_simulation_faction_memory_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_faction_memory (
+            memory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_event_id INTEGER NOT NULL,
+            memory_key TEXT NOT NULL,
+            memory_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            faction_a_key TEXT NOT NULL,
+            faction_b_key TEXT,
+            principal_person_id INTEGER,
+            opposing_person_id INTEGER,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            polarity TEXT NOT NULL DEFAULT 'negative',
+            strength REAL NOT NULL DEFAULT 0.0,
+            start_year INTEGER,
+            expected_decay_year INTEGER,
+            resolved_year INTEGER,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (source_event_id, memory_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_faction_memory_person
+        ON simulation_faction_memory (principal_person_id, opposing_person_id, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_faction_memory_type
+        ON simulation_faction_memory (memory_type, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_faction_memory_place
+        ON simulation_faction_memory (region_key, settlement_key, status);
+        """
+    )
+    _backfill_simulation_faction_memory(conn)
+
+
+def _processed_event_id_for_meta(conn: sqlite3.Connection, meta_key: str) -> int:
+    _ensure_save_metadata_schema(conn)
+    row = conn.execute(
+        """
+        SELECT meta_value FROM save_metadata
+        WHERE meta_key = ?
+        """,
+        (meta_key,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return 0
+    try:
+        return max(0, int(str(row[0]).strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_processed_event_id_for_meta(
+    conn: sqlite3.Connection, meta_key: str, event_id: int | None
+) -> None:
+    _ensure_save_metadata_schema(conn)
+    processed = max(0, int(event_id or 0))
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+        VALUES (?, ?)
+        """,
+        (meta_key, str(processed)),
+    )
+
+
+def _event_faction_memory_rows_from_payload(
+    event_type: str,
+    payload: dict,
+    *,
+    sim_year: int | None,
+) -> list[dict[str, object]]:
+    consequences = payload.get("consequences")
+    if not isinstance(consequences, dict):
+        consequences = {}
+    raw = consequences.get("faction_memory")
+    if isinstance(raw, list):
+        return [dict(item) for item in raw if isinstance(item, dict)]
+    etype = str(event_type or "").strip()
+    if etype == "murder":
+        killer_id = _coerce_event_person_id(payload.get("killer_person_id"))
+        victim_id = _coerce_event_person_id(payload.get("victim_person_id"))
+        if killer_id is None or victim_id is None:
+            return []
+        kind = str(payload.get("incident_kind") or "murder").strip()
+        importance = _coerce_event_float(payload.get("historical_importance")) or 0.0
+        return [
+            {
+                "memory_key": f"violent_grievance:{victim_id}:{killer_id}:{kind}",
+                "memory_type": "violent_grievance",
+                "principal_person_id": victim_id,
+                "opposing_person_id": killer_id,
+                "faction_a_key": f"person:{victim_id}",
+                "faction_b_key": f"person:{killer_id}",
+                "polarity": "negative",
+                "strength": 0.45 + float(importance) * 0.45,
+                "start_year": sim_year,
+                "expected_duration_years": 18,
+                "source_role": "murder_grievance",
+                "incident_kind": kind,
+            }
+        ]
+    return []
+
+
+def _insert_simulation_faction_memory_rows(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    sim_year: int | None,
+    event_type: str,
+    payload: dict,
+    settlement_key: int | None = None,
+    region_key: int | None = None,
+    created_at: str | None = None,
+) -> None:
+    rows = _event_faction_memory_rows_from_payload(
+        event_type, payload, sim_year=sim_year
+    )
+    if not rows:
+        return
+    _primary, _secondary, payload_settlement_id, payload_region_id = _event_common_columns(
+        payload
+    )
+    ts = created_at or _utc_now_iso()
+    for idx, item in enumerate(rows):
+        memory_type = str(item.get("memory_type") or item.get("kind") or "").strip()
+        if not memory_type:
+            continue
+        principal_id = _coerce_event_person_id(item.get("principal_person_id"))
+        opposing_id = _coerce_event_person_id(item.get("opposing_person_id"))
+        faction_a = str(
+            item.get("faction_a_key")
+            or (f"person:{principal_id}" if principal_id is not None else "")
+        ).strip()
+        if not faction_a:
+            continue
+        faction_b = str(item.get("faction_b_key") or "").strip() or None
+        memory_key = str(
+            item.get("memory_key")
+            or f"{memory_type}:{faction_a}:{faction_b or 'none'}:{idx}"
+        ).strip()
+        status = str(item.get("status") or "active").strip() or "active"
+        polarity = str(item.get("polarity") or "negative").strip() or "negative"
+        strength_raw = _coerce_event_float(item.get("strength"))
+        strength = round(min(1.0, max(0.0, float(strength_raw or 0.0))), 5)
+        start_year = _coerce_event_int(item.get("start_year"))
+        if start_year is None:
+            start_year = sim_year
+        expected_decay_year = _coerce_event_int(item.get("expected_decay_year"))
+        if expected_decay_year is None and start_year is not None:
+            duration = _coerce_event_int(item.get("expected_duration_years"))
+            if duration is not None and duration > 0:
+                expected_decay_year = int(start_year) + int(duration)
+        resolved_year = _coerce_event_int(item.get("resolved_year"))
+        region_id = str(item.get("region_id") or payload_region_id or "").strip()
+        settlement_id = str(
+            item.get("settlement_id") or payload_settlement_id or ""
+        ).strip()
+        item_region_key = region_key
+        if region_id:
+            item_region_key = _lookup_or_insert_region_key(conn, region_id)
+        item_settlement_key = settlement_key
+        if settlement_id:
+            item_settlement_key = _lookup_or_insert_settlement_key(
+                conn, settlement_id, region_id
+            )
+        details = {
+            str(k): v
+            for k, v in item.items()
+            if str(k)
+            not in {
+                "memory_key",
+                "memory_type",
+                "kind",
+                "status",
+                "faction_a_key",
+                "faction_b_key",
+                "principal_person_id",
+                "opposing_person_id",
+                "polarity",
+                "strength",
+                "start_year",
+                "expected_decay_year",
+                "expected_duration_years",
+                "resolved_year",
+                "settlement_id",
+                "region_id",
+            }
+        }
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO simulation_faction_memory (
+                source_event_id, memory_key, memory_type, status,
+                faction_a_key, faction_b_key, principal_person_id,
+                opposing_person_id, region_key, settlement_key, polarity,
+                strength, start_year, expected_decay_year, resolved_year,
+                details_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(event_id),
+                memory_key,
+                memory_type,
+                status,
+                faction_a,
+                faction_b,
+                int(principal_id) if principal_id is not None else None,
+                int(opposing_id) if opposing_id is not None else None,
+                item_region_key,
+                item_settlement_key,
+                polarity,
+                strength,
+                start_year,
+                expected_decay_year,
+                resolved_year,
+                json.dumps(details, separators=(",", ":")),
+                ts,
+                ts,
+            ),
+        )
+
+
+def _backfill_simulation_faction_memory(conn: sqlite3.Connection) -> None:
+    processed_event_id = _processed_event_id_for_meta(
+        conn, FACTION_MEMORY_BACKFILLED_META_KEY
+    )
+    max_row = conn.execute("SELECT MAX(id) FROM simulation_events").fetchone()
+    max_event_id = int(max_row[0] or 0) if max_row is not None else 0
+    if max_event_id <= processed_event_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, sim_year, event_type, settlement_key, region_key,
+               payload_json, created_at
+        FROM simulation_events
+        WHERE id > ?
+        ORDER BY id
+        """,
+        (processed_event_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _insert_simulation_faction_memory_rows(
+            conn,
+            event_id=int(row["id"]),
+            sim_year=row["sim_year"],
+            event_type=str(row["event_type"] or ""),
+            payload=payload,
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            created_at=str(row["created_at"] or "") or None,
+        )
+    _set_processed_event_id_for_meta(
+        conn, FACTION_MEMORY_BACKFILLED_META_KEY, max_event_id
+    )
+
+
+def _ensure_simulation_institution_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_institutions (
+            institution_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            institution_key TEXT NOT NULL UNIQUE,
+            institution_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            region_key INTEGER,
+            settlement_key INTEGER,
+            focus_domain TEXT NOT NULL DEFAULT '',
+            founded_year INTEGER,
+            latest_year INTEGER,
+            founding_event_id INTEGER,
+            latest_event_id INTEGER,
+            founder_person_id INTEGER,
+            patron_person_id INTEGER,
+            strength REAL NOT NULL DEFAULT 0.0,
+            influence_score REAL NOT NULL DEFAULT 0.0,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_institutions_type
+        ON simulation_institutions (institution_type, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_institutions_place
+        ON simulation_institutions (region_key, settlement_key, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_institutions_domain
+        ON simulation_institutions (focus_domain, institution_type);
+        """
+    )
+    _backfill_simulation_institutions(conn)
+
+
+def _event_institution_rows_from_payload(payload: dict) -> list[dict[str, object]]:
+    consequences = payload.get("consequences")
+    if not isinstance(consequences, dict):
+        return []
+    raw = consequences.get("institutions")
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def _upsert_simulation_institution_rows(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    sim_year: int | None,
+    event_type: str,
+    payload: dict,
+    settlement_key: int | None = None,
+    region_key: int | None = None,
+    created_at: str | None = None,
+) -> None:
+    if str(event_type or "").strip() != "knowledge_culture":
+        return
+    rows = _event_institution_rows_from_payload(payload)
+    if not rows:
+        return
+    _primary, _secondary, payload_settlement_id, payload_region_id = _event_common_columns(
+        payload
+    )
+    ts = created_at or _utc_now_iso()
+    for idx, item in enumerate(rows):
+        inst_type = str(
+            item.get("institution_type") or item.get("kind") or ""
+        ).strip()
+        if not inst_type:
+            continue
+        focus_domain = str(
+            item.get("focus_domain")
+            or item.get("knowledge_domain")
+            or payload.get("knowledge_domain")
+            or ""
+        ).strip()
+        inst_key = str(
+            item.get("institution_key")
+            or f"{payload_region_id or 'unknown'}:{inst_type}:{focus_domain or idx}"
+        ).strip()
+        if not inst_key:
+            continue
+        status = str(item.get("status") or "active").strip() or "active"
+        founder_id = _coerce_event_person_id(
+            item.get("founder_person_id") or payload.get("creator_person_id")
+        )
+        patron_id = _coerce_event_person_id(
+            item.get("patron_person_id") or payload.get("patron_person_id")
+        )
+        founded_year = _coerce_event_int(item.get("founded_year"))
+        if founded_year is None:
+            founded_year = sim_year
+        latest_year = _coerce_event_int(item.get("latest_year"))
+        if latest_year is None:
+            latest_year = sim_year
+        strength_delta = _coerce_event_float(item.get("strength_delta"))
+        strength = round(max(0.0, float(strength_delta or 0.0)), 5)
+        influence_delta = _coerce_event_float(item.get("influence_delta"))
+        influence = round(max(0.0, float(influence_delta or strength * 0.75)), 5)
+        region_id = str(item.get("region_id") or payload_region_id or "").strip()
+        settlement_id = str(
+            item.get("settlement_id") or payload_settlement_id or ""
+        ).strip()
+        item_region_key = region_key
+        if region_id:
+            item_region_key = _lookup_or_insert_region_key(conn, region_id)
+        item_settlement_key = settlement_key
+        if settlement_id:
+            item_settlement_key = _lookup_or_insert_settlement_key(
+                conn, settlement_id, region_id
+            )
+        details = {
+            str(k): v
+            for k, v in item.items()
+            if str(k)
+            not in {
+                "institution_key",
+                "institution_type",
+                "kind",
+                "status",
+                "region_id",
+                "settlement_id",
+                "focus_domain",
+                "founded_year",
+                "latest_year",
+                "founder_person_id",
+                "patron_person_id",
+                "strength_delta",
+                "influence_delta",
+            }
+        }
+        conn.execute(
+            """
+            INSERT INTO simulation_institutions (
+                institution_key, institution_type, status, region_key,
+                settlement_key, focus_domain, founded_year, latest_year,
+                founding_event_id, latest_event_id, founder_person_id,
+                patron_person_id, strength, influence_score, details_json,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(institution_key) DO UPDATE SET
+                status = excluded.status,
+                latest_year = excluded.latest_year,
+                latest_event_id = excluded.latest_event_id,
+                patron_person_id = COALESCE(
+                    excluded.patron_person_id,
+                    simulation_institutions.patron_person_id
+                ),
+                strength = round(simulation_institutions.strength + excluded.strength, 5),
+                influence_score = round(
+                    simulation_institutions.influence_score + excluded.influence_score,
+                    5
+                ),
+                details_json = excluded.details_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                inst_key,
+                inst_type,
+                status,
+                item_region_key,
+                item_settlement_key,
+                focus_domain,
+                founded_year,
+                latest_year,
+                int(event_id),
+                int(event_id),
+                int(founder_id) if founder_id is not None else None,
+                int(patron_id) if patron_id is not None else None,
+                strength,
+                influence,
+                json.dumps(details, separators=(",", ":")),
+                ts,
+                ts,
+            ),
+        )
+
+
+def _backfill_simulation_institutions(conn: sqlite3.Connection) -> None:
+    processed_event_id = _processed_event_id_for_meta(
+        conn, INSTITUTIONS_BACKFILLED_META_KEY
+    )
+    max_row = conn.execute("SELECT MAX(id) FROM simulation_events").fetchone()
+    max_event_id = int(max_row[0] or 0) if max_row is not None else 0
+    if max_event_id <= processed_event_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, sim_year, event_type, settlement_key, region_key,
+               payload_json, created_at
+        FROM simulation_events
+        WHERE id > ?
+        ORDER BY id
+        """,
+        (processed_event_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _upsert_simulation_institution_rows(
+            conn,
+            event_id=int(row["id"]),
+            sim_year=row["sim_year"],
+            event_type=str(row["event_type"] or ""),
+            payload=payload,
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            created_at=str(row["created_at"] or "") or None,
+        )
+    _set_processed_event_id_for_meta(conn, INSTITUTIONS_BACKFILLED_META_KEY, max_event_id)
+
+
+def _ensure_simulation_innovation_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_innovation_discoveries (
+            discovery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_event_id INTEGER,
+            innovation_id TEXT NOT NULL,
+            innovation_name TEXT NOT NULL DEFAULT '',
+            category TEXT NOT NULL DEFAULT '',
+            domain TEXT NOT NULL DEFAULT '',
+            era_id TEXT NOT NULL DEFAULT '',
+            discovery_year INTEGER,
+            historical_year INTEGER,
+            discoverer_person_id INTEGER,
+            patron_person_id INTEGER,
+            polity_id INTEGER,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            novelty_score REAL NOT NULL DEFAULT 0.0,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(source_event_id, innovation_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_innovation_discoveries_innovation
+        ON simulation_innovation_discoveries (innovation_id, discovery_year);
+        CREATE INDEX IF NOT EXISTS idx_simulation_innovation_discoveries_place
+        ON simulation_innovation_discoveries (polity_id, region_key, settlement_key);
+
+        CREATE TABLE IF NOT EXISTS simulation_innovation_knowledge (
+            knowledge_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            innovation_id TEXT NOT NULL,
+            innovation_name TEXT NOT NULL DEFAULT '',
+            category TEXT NOT NULL DEFAULT '',
+            domain TEXT NOT NULL DEFAULT '',
+            era_id TEXT NOT NULL DEFAULT '',
+            scope_kind TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'known',
+            adoption_score REAL NOT NULL DEFAULT 0.0,
+            first_known_year INTEGER,
+            latest_known_year INTEGER,
+            first_event_id INTEGER,
+            latest_event_id INTEGER,
+            source_kind TEXT NOT NULL DEFAULT 'generated',
+            polity_id INTEGER,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(innovation_id, scope_kind, scope_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_innovation_knowledge_scope
+        ON simulation_innovation_knowledge (scope_kind, scope_key, status);
+        CREATE INDEX IF NOT EXISTS idx_simulation_innovation_knowledge_place
+        ON simulation_innovation_knowledge (region_key, settlement_key, polity_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_innovation_knowledge_category
+        ON simulation_innovation_knowledge (category, era_id, adoption_score);
+
+        CREATE TABLE IF NOT EXISTS simulation_innovation_era_state (
+            state_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_kind TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            era_id TEXT NOT NULL,
+            era_rank INTEGER NOT NULL DEFAULT 0,
+            adopted_count INTEGER NOT NULL DEFAULT 0,
+            next_era_adopted_count INTEGER NOT NULL DEFAULT 0,
+            latest_year INTEGER,
+            polity_id INTEGER,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(scope_kind, scope_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_innovation_era_scope
+        ON simulation_innovation_era_state (scope_kind, scope_key);
+        CREATE INDEX IF NOT EXISTS idx_simulation_innovation_era_place
+        ON simulation_innovation_era_state (polity_id, region_key, settlement_key);
+        """
+    )
+    _backfill_simulation_innovations(conn)
+
+
+def _event_innovation_adoption(payload: dict) -> dict[str, object]:
+    consequences = payload.get("consequences")
+    if not isinstance(consequences, dict):
+        consequences = {}
+    adoption = consequences.get("innovation_adoption")
+    if not isinstance(adoption, dict):
+        adoption = {}
+    innovation_id = str(
+        payload.get("innovation_id") or adoption.get("innovation_id") or ""
+    ).strip()
+    if not innovation_id:
+        return {}
+    name = str(
+        payload.get("innovation_analogue_name")
+        or adoption.get("analogue_name")
+        or adoption.get("innovation_name")
+        or payload.get("innovation_name")
+        or innovation_id
+    ).strip()
+    category = str(
+        payload.get("innovation_category") or adoption.get("category") or ""
+    ).strip()
+    domain = str(
+        payload.get("knowledge_domain") or adoption.get("domain") or ""
+    ).strip()
+    era_id = str(payload.get("innovation_era_id") or adoption.get("era_id") or "").strip()
+    novelty = _coerce_event_float(payload.get("novelty_value"))
+    adoption_score = _coerce_event_float(adoption.get("adoption_score"))
+    if adoption_score is None:
+        knowledge_state = consequences.get("knowledge_state")
+        if isinstance(knowledge_state, dict):
+            state_delta = _coerce_event_float(knowledge_state.get("state_delta"))
+        else:
+            state_delta = None
+        adoption_score = max(0.08, float(novelty or 0.0) * 2.5, float(state_delta or 0.0) * 4.0)
+    return {
+        "innovation_id": innovation_id,
+        "innovation_name": name or innovation_id,
+        "category": category,
+        "domain": domain,
+        "era_id": era_id,
+        "historical_year": _coerce_event_int(
+            payload.get("historical_year") or adoption.get("history_year")
+        ),
+        "discoverer_person_id": _coerce_event_person_id(payload.get("creator_person_id")),
+        "patron_person_id": _coerce_event_person_id(payload.get("patron_person_id")),
+        "polity_id": _coerce_event_int(payload.get("polity_id") or adoption.get("polity_id")),
+        "novelty_score": round(max(0.0, float(novelty or 0.0)), 5),
+        "adoption_score": round(max(0.0, min(1.0, float(adoption_score or 0.0))), 5),
+        "source_title": str(payload.get("source_innovation_title") or "").strip(),
+    }
+
+
+def _innovation_scope_key(scope_kind: str, key: int) -> str:
+    return f"{scope_kind}:{int(key)}"
+
+
+def _upsert_innovation_knowledge_row(
+    conn: sqlite3.Connection,
+    *,
+    data: dict[str, object],
+    scope_kind: str,
+    scope_key: str,
+    sim_year: int | None,
+    event_id: int | None,
+    source_kind: str,
+    polity_id: int | None = None,
+    region_key: int | None = None,
+    settlement_key: int | None = None,
+    created_at: str | None = None,
+) -> None:
+    ts = created_at or _utc_now_iso()
+    details = {
+        "source_title": data.get("source_title"),
+        "historical_year": data.get("historical_year"),
+    }
+    conn.execute(
+        """
+        INSERT INTO simulation_innovation_knowledge (
+            innovation_id, innovation_name, category, domain, era_id,
+            scope_kind, scope_key, status, adoption_score,
+            first_known_year, latest_known_year, first_event_id, latest_event_id,
+            source_kind, polity_id, region_key, settlement_key, details_json,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(innovation_id, scope_kind, scope_key) DO UPDATE SET
+            innovation_name = excluded.innovation_name,
+            category = excluded.category,
+            domain = excluded.domain,
+            era_id = excluded.era_id,
+            adoption_score = max(
+                simulation_innovation_knowledge.adoption_score,
+                excluded.adoption_score
+            ),
+            latest_known_year = excluded.latest_known_year,
+            latest_event_id = COALESCE(
+                excluded.latest_event_id,
+                simulation_innovation_knowledge.latest_event_id
+            ),
+            source_kind = excluded.source_kind,
+            polity_id = COALESCE(excluded.polity_id, simulation_innovation_knowledge.polity_id),
+            region_key = COALESCE(excluded.region_key, simulation_innovation_knowledge.region_key),
+            settlement_key = COALESCE(
+                excluded.settlement_key,
+                simulation_innovation_knowledge.settlement_key
+            ),
+            details_json = excluded.details_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            str(data["innovation_id"]),
+            str(data.get("innovation_name") or ""),
+            str(data.get("category") or ""),
+            str(data.get("domain") or ""),
+            str(data.get("era_id") or ""),
+            scope_kind,
+            scope_key,
+            "adopted" if float(data.get("adoption_score") or 0.0) >= 0.35 else "known",
+            float(data.get("adoption_score") or 0.0),
+            sim_year,
+            sim_year,
+            int(event_id) if event_id is not None else None,
+            int(event_id) if event_id is not None else None,
+            source_kind,
+            int(polity_id) if polity_id is not None else None,
+            int(region_key) if region_key is not None else None,
+            int(settlement_key) if settlement_key is not None else None,
+            json.dumps(details, separators=(",", ":")),
+            ts,
+            ts,
+        ),
+    )
+
+
+def _upsert_simulation_innovation_rows_from_event(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    sim_year: int | None,
+    event_type: str,
+    payload: dict,
+    settlement_key: int | None = None,
+    region_key: int | None = None,
+    created_at: str | None = None,
+) -> None:
+    if str(event_type or "").strip() != "knowledge_culture":
+        return
+    data = _event_innovation_adoption(payload)
+    if not data:
+        return
+    _primary, _secondary, settlement_id, region_id = _event_common_columns(payload)
+    item_settlement_key = settlement_key
+    item_region_key = region_key
+    if item_settlement_key is None and settlement_id:
+        item_settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+    if item_region_key is None and region_id:
+        item_region_key = _lookup_or_insert_region_key(conn, region_id)
+    ts = created_at or _utc_now_iso()
+    polity_id = data.get("polity_id")
+    details = {
+        "source_title": data.get("source_title"),
+        "historical_year": data.get("historical_year"),
+    }
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO simulation_innovation_discoveries (
+            source_event_id, innovation_id, innovation_name, category, domain, era_id,
+            discovery_year, historical_year, discoverer_person_id, patron_person_id,
+            polity_id, region_key, settlement_key, novelty_score, details_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(event_id),
+            str(data["innovation_id"]),
+            str(data.get("innovation_name") or ""),
+            str(data.get("category") or ""),
+            str(data.get("domain") or ""),
+            str(data.get("era_id") or ""),
+            sim_year,
+            data.get("historical_year"),
+            data.get("discoverer_person_id"),
+            data.get("patron_person_id"),
+            int(polity_id) if polity_id is not None else None,
+            int(item_region_key) if item_region_key is not None else None,
+            int(item_settlement_key) if item_settlement_key is not None else None,
+            float(data.get("novelty_score") or 0.0),
+            json.dumps(details, separators=(",", ":")),
+            ts,
+        ),
+    )
+    if item_settlement_key is not None:
+        _upsert_innovation_knowledge_row(
+            conn,
+            data=data,
+            scope_kind="settlement",
+            scope_key=_innovation_scope_key("settlement", item_settlement_key),
+            sim_year=sim_year,
+            event_id=event_id,
+            source_kind="discovery",
+            polity_id=int(polity_id) if polity_id is not None else None,
+            region_key=item_region_key,
+            settlement_key=item_settlement_key,
+            created_at=ts,
+        )
+    if item_region_key is not None:
+        _upsert_innovation_knowledge_row(
+            conn,
+            data=data,
+            scope_kind="region",
+            scope_key=_innovation_scope_key("region", item_region_key),
+            sim_year=sim_year,
+            event_id=event_id,
+            source_kind="discovery",
+            polity_id=int(polity_id) if polity_id is not None else None,
+            region_key=item_region_key,
+            settlement_key=item_settlement_key,
+            created_at=ts,
+        )
+    if polity_id is not None:
+        _upsert_innovation_knowledge_row(
+            conn,
+            data=data,
+            scope_kind="polity",
+            scope_key=_innovation_scope_key("polity", int(polity_id)),
+            sim_year=sim_year,
+            event_id=event_id,
+            source_kind="discovery",
+            polity_id=int(polity_id),
+            region_key=item_region_key,
+            settlement_key=item_settlement_key,
+            created_at=ts,
+        )
+
+
+def _backfill_simulation_innovations(conn: sqlite3.Connection) -> None:
+    processed_event_id = _processed_event_id_for_meta(
+        conn, INNOVATIONS_BACKFILLED_META_KEY
+    )
+    max_row = conn.execute("SELECT MAX(id) FROM simulation_events").fetchone()
+    max_event_id = int(max_row[0] or 0) if max_row is not None else 0
+    if max_event_id <= processed_event_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, sim_year, event_type, settlement_key, region_key,
+               payload_json, created_at
+        FROM simulation_events
+        WHERE id > ?
+        ORDER BY id
+        """,
+        (processed_event_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _upsert_simulation_innovation_rows_from_event(
+            conn,
+            event_id=int(row["id"]),
+            sim_year=row["sim_year"],
+            event_type=str(row["event_type"] or ""),
+            payload=payload,
+            settlement_key=(
+                int(row["settlement_key"]) if row["settlement_key"] is not None else None
+            ),
+            region_key=int(row["region_key"]) if row["region_key"] is not None else None,
+            created_at=str(row["created_at"] or "") or None,
+        )
+    _set_processed_event_id_for_meta(conn, INNOVATIONS_BACKFILLED_META_KEY, max_event_id)
+
+
+def _ensure_simulation_legal_adjudication_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_legal_adjudications (
+            adjudication_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fallout_id INTEGER NOT NULL,
+            source_event_id INTEGER NOT NULL,
+            adjudication_key TEXT NOT NULL,
+            adjudication_type TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            principal_result TEXT,
+            opposing_result TEXT,
+            adjudication_year INTEGER NOT NULL,
+            principal_person_id INTEGER,
+            opposing_person_id INTEGER,
+            related_person_id INTEGER,
+            region_key INTEGER,
+            settlement_key INTEGER,
+            severity REAL NOT NULL DEFAULT 0.0,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (fallout_id, adjudication_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_legal_adjudications_fallout
+        ON simulation_legal_adjudications (fallout_id);
+        CREATE INDEX IF NOT EXISTS idx_simulation_legal_adjudications_type
+        ON simulation_legal_adjudications (adjudication_type, outcome);
+        CREATE INDEX IF NOT EXISTS idx_simulation_legal_adjudications_place
+        ON simulation_legal_adjudications (region_key, settlement_key, adjudication_year);
+        """
+    )
+
+
+def _legal_adjudication_outcome(
+    fallout_type: str, severity: float
+) -> tuple[str, str, str]:
+    ftype = str(fallout_type or "").strip()
+    sev = float(severity or 0.0)
+    if ftype == "heir_legitimacy_challenge":
+        if sev >= 0.68:
+            return "claim_limited", "legitimacy_clouded", "challenge_partly_upheld"
+        return "claim_dismissed", "legitimacy_reaffirmed", "challenge_rejected"
+    if ftype == "inheritance_dispute":
+        if sev >= 0.58:
+            return "inheritance_split", "share_reduced", "share_recognized"
+        return "inheritance_confirmed", "claim_confirmed", "challenge_rejected"
+    if sev >= 0.65:
+        return "settlement_compromise", "claim_limited", "opposition_partly_upheld"
+    return "case_dismissed", "claim_reaffirmed", "opposition_rejected"
+
+
+def resolve_due_legal_fallout(
+    conn: sqlite3.Connection, *, year: int, limit: int = 200
+) -> int:
+    """Resolve active legal fallout whose expected year has arrived."""
+    _ensure_simulation_legal_adjudication_tables(conn)
+    y = int(year)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM simulation_legal_fallout
+        WHERE status = 'active'
+          AND expected_resolution_year IS NOT NULL
+          AND expected_resolution_year <= ?
+        ORDER BY expected_resolution_year, fallout_id
+        LIMIT ?
+        """,
+        (y, max(1, int(limit))),
+    ).fetchall()
+    if not rows:
+        return 0
+    ts = _utc_now_iso()
+    resolved = 0
+    for row in rows:
+        fallout_id = int(row["fallout_id"])
+        fallout_type = str(row["fallout_type"] or "")
+        severity = float(row["severity"] or 0.0)
+        outcome, principal_result, opposing_result = _legal_adjudication_outcome(
+            fallout_type, severity
+        )
+        adjudication_key = f"fallout:{fallout_id}:resolution"
+        details = {
+            "fallout_key": str(row["fallout_key"] or ""),
+            "expected_resolution_year": (
+                int(row["expected_resolution_year"])
+                if row["expected_resolution_year"] is not None
+                else None
+            ),
+        }
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO simulation_legal_adjudications (
+                fallout_id, source_event_id, adjudication_key, adjudication_type,
+                outcome, principal_result, opposing_result, adjudication_year,
+                principal_person_id, opposing_person_id, related_person_id,
+                region_key, settlement_key, severity, details_json,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fallout_id,
+                int(row["source_event_id"]),
+                adjudication_key,
+                f"{fallout_type}_resolution",
+                outcome,
+                principal_result,
+                opposing_result,
+                y,
+                row["principal_person_id"],
+                row["opposing_person_id"],
+                row["related_person_id"],
+                row["region_key"],
+                row["settlement_key"],
+                severity,
+                json.dumps(details, separators=(",", ":")),
+                ts,
+                ts,
+            ),
+        )
+        if conn.execute("SELECT changes()").fetchone()[0]:
+            resolved += 1
+        conn.execute(
+            """
+            UPDATE simulation_legal_fallout
+            SET status = 'resolved',
+                resolved_year = ?,
+                updated_at = ?
+            WHERE fallout_id = ?
+            """,
+            (y, ts, fallout_id),
+        )
+    return resolved
+
+
+def _ensure_simulation_domain_diffusion_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_domain_diffusion (
+            diffusion_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            diffusion_year INTEGER NOT NULL,
+            domain TEXT NOT NULL,
+            source_region_key INTEGER NOT NULL,
+            target_region_key INTEGER NOT NULL,
+            route_type TEXT,
+            route_friction REAL NOT NULL DEFAULT 0.0,
+            source_domain_score REAL NOT NULL DEFAULT 0.0,
+            target_domain_score_before REAL NOT NULL DEFAULT 0.0,
+            target_domain_score_after REAL NOT NULL DEFAULT 0.0,
+            state_delta REAL NOT NULL DEFAULT 0.0,
+            source_latest_event_id INTEGER,
+            created_at TEXT NOT NULL,
+            UNIQUE (diffusion_year, domain, source_region_key, target_region_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_domain_diffusion_domain
+        ON simulation_domain_diffusion (domain, diffusion_year);
+        CREATE INDEX IF NOT EXISTS idx_simulation_domain_diffusion_target
+        ON simulation_domain_diffusion (target_region_key, domain, diffusion_year);
+        """
+    )
+
+
+def diffuse_domain_states_across_routes(
+    conn: sqlite3.Connection,
+    *,
+    year: int,
+    world: str,
+    config_db_path: Path | str,
+    max_sources: int = 60,
+    max_destinations_per_source: int = 2,
+) -> int:
+    """Spread accumulated domain state to nearby route-connected regions."""
+    _ensure_simulation_domain_diffusion_tables(conn)
+    y = int(year)
+    sources = conn.execute(
+        """
+        SELECT d.region_key, rl.region_id, d.domain, d.domain_score,
+               d.latest_event_id
+        FROM simulation_domain_states d
+        JOIN simulation_region_lookup rl ON rl.region_key = d.region_key
+        WHERE d.domain_score >= 0.05
+        ORDER BY d.domain_score DESC, rl.region_id, d.domain
+        LIMIT ?
+        """,
+        (max(1, int(max_sources)),),
+    ).fetchall()
+    ts = _utc_now_iso()
+    inserted = 0
+    for source in sources:
+        source_region_id = str(source["region_id"] or "").strip()
+        domain = str(source["domain"] or "").strip()
+        if not source_region_id or not domain:
+            continue
+        try:
+            routes = list_routes_from(
+                source_region_id,
+                world=world,
+                db_path=config_db_path,
+                simulation_year=y,
+            )
+        except LookupError:
+            continue
+        routes.sort(key=lambda route: (float(route.friction), route.to_region_id))
+        used = 0
+        source_score = float(source["domain_score"] or 0.0)
+        for route in routes:
+            target_region_id = str(route.to_region_id or "").strip()
+            if not target_region_id or target_region_id == source_region_id:
+                continue
+            target_region_key = _lookup_or_insert_region_key(conn, target_region_id)
+            if target_region_key is None:
+                continue
+            target_row = conn.execute(
+                """
+                SELECT domain_score
+                FROM simulation_domain_states
+                WHERE region_key = ? AND domain = ?
+                """,
+                (target_region_key, domain),
+            ).fetchone()
+            target_before = (
+                float(target_row["domain_score"] or 0.0)
+                if target_row is not None
+                else 0.0
+            )
+            score_gap = source_score - target_before
+            if score_gap <= 0.01:
+                continue
+            friction = max(0.0, float(route.friction))
+            delta = round(
+                min(0.025, max(0.001, score_gap * (0.035 / (1.0 + friction * 0.08)))),
+                5,
+            )
+            target_after = round(target_before + delta, 5)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO simulation_domain_diffusion (
+                    diffusion_year, domain, source_region_key, target_region_key,
+                    route_type, route_friction, source_domain_score,
+                    target_domain_score_before, target_domain_score_after,
+                    state_delta, source_latest_event_id, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    y,
+                    domain,
+                    int(source["region_key"]),
+                    target_region_key,
+                    route.route_type,
+                    round(friction, 5),
+                    round(source_score, 5),
+                    round(target_before, 5),
+                    target_after,
+                    delta,
+                    source["latest_event_id"],
+                    ts,
+                ),
+            )
+            if not conn.execute("SELECT changes()").fetchone()[0]:
+                continue
+            conn.execute(
+                """
+                INSERT INTO simulation_domain_states (
+                    region_key, domain, domain_score, breakthrough_count,
+                    first_event_year, latest_event_year, first_event_id,
+                    latest_event_id, latest_incident_kind,
+                    latest_creator_person_id, latest_settlement_key,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, 0, ?, ?, NULL, ?, 'inter_region_diffusion',
+                        NULL, NULL, ?, ?)
+                ON CONFLICT(region_key, domain) DO UPDATE SET
+                    domain_score = round(
+                        simulation_domain_states.domain_score + excluded.domain_score,
+                        5
+                    ),
+                    latest_event_year = excluded.latest_event_year,
+                    latest_event_id = COALESCE(
+                        excluded.latest_event_id,
+                        simulation_domain_states.latest_event_id
+                    ),
+                    latest_incident_kind = excluded.latest_incident_kind,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    target_region_key,
+                    domain,
+                    delta,
+                    y,
+                    y,
+                    source["latest_event_id"],
+                    ts,
+                    ts,
+                ),
+            )
+            inserted += 1
+            used += 1
+            if used >= max(1, int(max_destinations_per_source)):
+                break
+    return inserted
+
+
+def event_consequence_annual_tick_for_save(
+    save_db_path: Path | str,
+    *,
+    config_db_path: Path | str,
+    year: int,
+    world: str,
+) -> dict[str, int]:
+    """Run bounded annual maintenance for durable event consequences."""
+    with _open_save(save_db_path) as conn:
+        ensure_checkpoint_schema(conn)
+        legal_resolved = resolve_due_legal_fallout(conn, year=int(year))
+        domain_diffusions = diffuse_domain_states_across_routes(
+            conn,
+            year=int(year),
+            world=str(world).strip() or "default",
+            config_db_path=config_db_path,
+        )
+        conn.commit()
+    return {
+        "legal_adjudications": int(legal_resolved),
+        "domain_diffusions": int(domain_diffusions),
+    }
+
+
 _PUBLIC_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "founder_created",
@@ -3037,6 +4222,9 @@ def _write_rebuilt_save_sqlite(
             _backfill_simulation_obligations(conn)
             _backfill_simulation_reputation_marks(conn)
             _backfill_simulation_legal_fallout(conn)
+            _backfill_simulation_faction_memory(conn)
+            _backfill_simulation_institutions(conn)
+            _backfill_simulation_innovations(conn)
             _stamp_save_schema_version(conn, int(target_schema_version))
             conn.commit()
         finally:
@@ -3165,9 +4353,14 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _ensure_place_lookup_schema(conn)
     _ensure_simulation_events_tables(conn)
     _ensure_simulation_domain_state_tables(conn)
+    _ensure_simulation_domain_diffusion_tables(conn)
     _ensure_simulation_obligation_tables(conn)
     _ensure_simulation_reputation_mark_tables(conn)
     _ensure_simulation_legal_fallout_tables(conn)
+    _ensure_simulation_legal_adjudication_tables(conn)
+    _ensure_simulation_faction_memory_tables(conn)
+    _ensure_simulation_institution_tables(conn)
+    _ensure_simulation_innovation_tables(conn)
     _ensure_simulation_people_table(conn)
     _ensure_hybrid_population_tables(conn)
     conn.executescript(_CREATE_SIMULATION_REGIONS)
@@ -3503,6 +4696,9 @@ def _migrate_simulation_regions_region_display_name(conn: sqlite3.Connection) ->
 def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
     """Inspection views that expose normalized place keys as readable slugs."""
     conn.execute("DROP VIEW IF EXISTS simulation_settlements_readable")
+    conn.execute("DROP VIEW IF EXISTS simulation_innovation_discoveries_readable")
+    conn.execute("DROP VIEW IF EXISTS simulation_innovation_knowledge_readable")
+    conn.execute("DROP VIEW IF EXISTS simulation_innovation_era_state_readable")
     conn.executescript(
         """
         CREATE VIEW IF NOT EXISTS simulation_regions_readable AS
@@ -3649,6 +4845,29 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         LEFT JOIN simulation_settlement_lookup sl
             ON sl.settlement_key = d.latest_settlement_key;
 
+        CREATE VIEW IF NOT EXISTS simulation_domain_diffusion_readable AS
+        SELECT
+            dd.diffusion_id,
+            dd.diffusion_year,
+            dd.domain,
+            src.region_id AS source_region_id,
+            dd.source_region_key,
+            dst.region_id AS target_region_id,
+            dd.target_region_key,
+            dd.route_type,
+            dd.route_friction,
+            dd.source_domain_score,
+            dd.target_domain_score_before,
+            dd.target_domain_score_after,
+            dd.state_delta,
+            dd.source_latest_event_id,
+            dd.created_at
+        FROM simulation_domain_diffusion dd
+        JOIN simulation_region_lookup src
+            ON src.region_key = dd.source_region_key
+        JOIN simulation_region_lookup dst
+            ON dst.region_key = dd.target_region_key;
+
         CREATE VIEW IF NOT EXISTS simulation_obligations_readable AS
         SELECT
             o.obligation_id,
@@ -3726,6 +4945,170 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         LEFT JOIN simulation_region_lookup rl ON rl.region_key = f.region_key
         LEFT JOIN simulation_settlement_lookup sl
             ON sl.settlement_key = f.settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_legal_adjudications_readable AS
+        SELECT
+            a.adjudication_id,
+            a.fallout_id,
+            a.source_event_id,
+            e.sim_year AS source_event_year,
+            e.event_type AS source_event_type,
+            a.adjudication_key,
+            a.adjudication_type,
+            a.outcome,
+            a.principal_result,
+            a.opposing_result,
+            a.adjudication_year,
+            a.principal_person_id,
+            a.opposing_person_id,
+            a.related_person_id,
+            rl.region_id,
+            sl.settlement_id,
+            a.severity,
+            a.details_json,
+            a.created_at,
+            a.updated_at
+        FROM simulation_legal_adjudications a
+        JOIN simulation_events e ON e.id = a.source_event_id
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = a.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = a.settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_faction_memory_readable AS
+        SELECT
+            fm.memory_id,
+            fm.source_event_id,
+            e.sim_year AS source_event_year,
+            e.event_type AS source_event_type,
+            fm.memory_key,
+            fm.memory_type,
+            fm.status,
+            fm.faction_a_key,
+            fm.faction_b_key,
+            fm.principal_person_id,
+            fm.opposing_person_id,
+            rl.region_id,
+            sl.settlement_id,
+            fm.polarity,
+            fm.strength,
+            fm.start_year,
+            fm.expected_decay_year,
+            fm.resolved_year,
+            fm.details_json,
+            fm.created_at,
+            fm.updated_at
+        FROM simulation_faction_memory fm
+        JOIN simulation_events e ON e.id = fm.source_event_id
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = fm.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = fm.settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_institutions_readable AS
+        SELECT
+            i.institution_id,
+            i.institution_key,
+            i.institution_type,
+            i.status,
+            rl.region_id,
+            sl.settlement_id,
+            i.focus_domain,
+            i.founded_year,
+            i.latest_year,
+            i.founding_event_id,
+            fe.event_type AS founding_event_type,
+            i.latest_event_id,
+            le.event_type AS latest_event_type,
+            i.founder_person_id,
+            i.patron_person_id,
+            i.strength,
+            i.influence_score,
+            i.details_json,
+            i.created_at,
+            i.updated_at
+        FROM simulation_institutions i
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = i.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = i.settlement_key
+        LEFT JOIN simulation_events fe ON fe.id = i.founding_event_id
+        LEFT JOIN simulation_events le ON le.id = i.latest_event_id;
+
+        CREATE VIEW IF NOT EXISTS simulation_innovation_discoveries_readable AS
+        SELECT
+            d.discovery_id,
+            d.source_event_id,
+            e.event_type AS source_event_type,
+            d.innovation_id,
+            d.innovation_name,
+            d.category,
+            d.domain,
+            d.era_id,
+            d.discovery_year,
+            d.historical_year,
+            d.discoverer_person_id,
+            d.patron_person_id,
+            d.polity_id,
+            rl.region_id,
+            sl.settlement_id,
+            d.novelty_score,
+            d.details_json,
+            d.created_at
+        FROM simulation_innovation_discoveries d
+        LEFT JOIN simulation_events e ON e.id = d.source_event_id
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = d.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = d.settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_innovation_knowledge_readable AS
+        SELECT
+            k.knowledge_id,
+            k.innovation_id,
+            k.innovation_name,
+            k.category,
+            k.domain,
+            k.era_id,
+            k.scope_kind,
+            k.scope_key,
+            k.status,
+            k.adoption_score,
+            k.first_known_year,
+            k.latest_known_year,
+            k.first_event_id,
+            fe.event_type AS first_event_type,
+            k.latest_event_id,
+            le.event_type AS latest_event_type,
+            k.source_kind,
+            k.polity_id,
+            rl.region_id,
+            sl.settlement_id,
+            k.details_json,
+            k.created_at,
+            k.updated_at
+        FROM simulation_innovation_knowledge k
+        LEFT JOIN simulation_events fe ON fe.id = k.first_event_id
+        LEFT JOIN simulation_events le ON le.id = k.latest_event_id
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = k.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = k.settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_innovation_era_state_readable AS
+        SELECT
+            s.state_id,
+            s.scope_kind,
+            s.scope_key,
+            s.era_id,
+            s.era_rank,
+            s.adopted_count,
+            s.next_era_adopted_count,
+            s.latest_year,
+            s.polity_id,
+            rl.region_id,
+            sl.settlement_id,
+            s.created_at,
+            s.updated_at
+        FROM simulation_innovation_era_state s
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = s.region_key
+        LEFT JOIN simulation_settlement_lookup sl
+            ON sl.settlement_key = s.settlement_key;
 
         CREATE VIEW IF NOT EXISTS simulation_people_light_readable AS
         SELECT
@@ -3944,9 +5327,16 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_event_moves")
         conn.execute("DELETE FROM simulation_event_people")
         conn.execute("DELETE FROM simulation_domain_states")
+        conn.execute("DELETE FROM simulation_domain_diffusion")
         conn.execute("DELETE FROM simulation_obligations")
         conn.execute("DELETE FROM simulation_reputation_marks")
         conn.execute("DELETE FROM simulation_legal_fallout")
+        conn.execute("DELETE FROM simulation_legal_adjudications")
+        conn.execute("DELETE FROM simulation_faction_memory")
+        conn.execute("DELETE FROM simulation_institutions")
+        conn.execute("DELETE FROM simulation_innovation_discoveries")
+        conn.execute("DELETE FROM simulation_innovation_knowledge")
+        conn.execute("DELETE FROM simulation_innovation_era_state")
         conn.execute("DELETE FROM simulation_events")
         from library import government_checkpoint as _gov_ckpt
 
@@ -4345,6 +5735,36 @@ def append_simulation_event_rows(
             region_key=region_key,
             created_at=ts,
         )
+        _insert_simulation_faction_memory_rows(
+            conn,
+            event_id=event_id,
+            sim_year=sim_year,
+            event_type=event_type,
+            payload=payload,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            created_at=ts,
+        )
+        _upsert_simulation_institution_rows(
+            conn,
+            event_id=event_id,
+            sim_year=sim_year,
+            event_type=event_type,
+            payload=payload,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            created_at=ts,
+        )
+        _upsert_simulation_innovation_rows_from_event(
+            conn,
+            event_id=event_id,
+            sim_year=sim_year,
+            event_type=event_type,
+            payload=payload,
+            settlement_key=settlement_key,
+            region_key=region_key,
+            created_at=ts,
+        )
         _insert_default_event_record_row(
             conn,
             event_id=event_id,
@@ -4362,6 +5782,15 @@ def append_simulation_event_rows(
         _set_obligations_processed_event_id(conn, max(event_ids))
         _set_reputation_marks_processed_event_id(conn, max(event_ids))
         _set_legal_fallout_processed_event_id(conn, max(event_ids))
+        _set_processed_event_id_for_meta(
+            conn, FACTION_MEMORY_BACKFILLED_META_KEY, max(event_ids)
+        )
+        _set_processed_event_id_for_meta(
+            conn, INSTITUTIONS_BACKFILLED_META_KEY, max(event_ids)
+        )
+        _set_processed_event_id_for_meta(
+            conn, INNOVATIONS_BACKFILLED_META_KEY, max(event_ids)
+        )
     return event_ids
 
 

@@ -23,6 +23,7 @@ from library.world_save import (
     clear_world_checkpoint,
     ensure_checkpoint_schema,
     ensure_checkpoint_schema_for_file,
+    event_consequence_annual_tick_for_save,
     mark_event_record_lost,
     parse_region_effective_cap_multipliers,
     rebuild_save_sqlite_for_schema_upgrade,
@@ -845,6 +846,233 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             self.assertIsNotNone(processed)
             self.assertEqual(str(processed["meta_value"]), "10")
+
+    def test_deep_consequence_payloads_persist_factions_and_institutions(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                murder_id, knowledge_id = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1001,
+                            "murder",
+                            {
+                                "killer_person_id": 1,
+                                "victim_person_id": 2,
+                                "incident_kind": "feud_killing",
+                                "historical_importance": 0.7,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1002,
+                            "knowledge_culture",
+                            {
+                                "creator_person_id": 3,
+                                "patron_person_id": 4,
+                                "incident_kind": "calendar_reform",
+                                "knowledge_domain": "calendar",
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                                "consequences": {
+                                    "knowledge_state": {
+                                        "domain": "calendar",
+                                        "state_delta": 0.12,
+                                    },
+                                    "institutions": [
+                                        {
+                                            "institution_key": "aeria_north:school:calendar",
+                                            "institution_type": "school",
+                                            "focus_domain": "calendar",
+                                            "strength_delta": 0.04,
+                                        },
+                                        {
+                                            "institution_key": "aeria_north:guild:calendar",
+                                            "institution_type": "guild",
+                                            "focus_domain": "calendar",
+                                            "strength_delta": 0.03,
+                                        },
+                                        {
+                                            "institution_key": "aeria_north:doctrine:calendar",
+                                            "institution_type": "doctrine",
+                                            "focus_domain": "calendar",
+                                            "strength_delta": 0.05,
+                                        },
+                                        {
+                                            "institution_key": "aeria_north:craft_institution:calendar",
+                                            "institution_type": "craft_institution",
+                                            "focus_domain": "calendar",
+                                            "strength_delta": 0.02,
+                                        },
+                                    ],
+                                },
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                faction = conn.execute(
+                    """
+                    SELECT source_event_id, memory_type, polarity, strength,
+                           principal_person_id, opposing_person_id, region_id
+                    FROM simulation_faction_memory_readable
+                    WHERE source_event_id = ?
+                    """,
+                    (murder_id,),
+                ).fetchone()
+                institutions = conn.execute(
+                    """
+                    SELECT institution_type, focus_domain, founding_event_id,
+                           latest_event_id, strength, influence_score, region_id
+                    FROM simulation_institutions_readable
+                    WHERE latest_event_id = ?
+                    ORDER BY institution_type
+                    """,
+                    (knowledge_id,),
+                ).fetchall()
+
+            self.assertIsNotNone(faction)
+            self.assertEqual(str(faction["memory_type"]), "violent_grievance")
+            self.assertEqual(str(faction["polarity"]), "negative")
+            self.assertEqual(int(faction["principal_person_id"]), 2)
+            self.assertEqual(int(faction["opposing_person_id"]), 1)
+            self.assertEqual(str(faction["region_id"]), "aeria_north")
+            self.assertGreater(float(faction["strength"]), 0.0)
+            institution_types = {str(row["institution_type"]) for row in institutions}
+            self.assertEqual(
+                institution_types,
+                {"school", "guild", "doctrine", "craft_institution"},
+            )
+            self.assertTrue(all(str(row["focus_domain"]) == "calendar" for row in institutions))
+            self.assertTrue(all(int(row["founding_event_id"]) == knowledge_id for row in institutions))
+            self.assertTrue(all(float(row["strength"]) > 0.0 for row in institutions))
+
+    def test_annual_consequence_tick_resolves_legal_fallout_and_diffuses_domains(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1001,
+                            "affair_scandal",
+                            {
+                                "accused_person_id": 11,
+                                "betrayed_partner_person_id": 12,
+                                "paramour_person_id": 13,
+                                "incident_kind": "inheritance_scandal",
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                                "consequences": {
+                                    "legal_fallout": [
+                                        {
+                                            "fallout_key": "inheritance:11:12:13",
+                                            "fallout_type": "inheritance_dispute",
+                                            "status": "active",
+                                            "principal_person_id": 11,
+                                            "opposing_person_id": 12,
+                                            "related_person_id": 13,
+                                            "severity": 0.72,
+                                            "start_year": 1001,
+                                            "expected_resolution_year": 1002,
+                                            "settlement_id": "aeria_north:settlement:1",
+                                            "region_id": "aeria_north",
+                                        }
+                                    ]
+                                },
+                            },
+                        ),
+                        (
+                            1001,
+                            "knowledge_culture",
+                            {
+                                "creator_person_id": 21,
+                                "incident_kind": "shipbuilding_advance",
+                                "knowledge_domain": "shipbuilding",
+                                "settlement_id": "aeria_port:settlement:1",
+                                "region_id": "aeria_port",
+                                "consequences": {
+                                    "knowledge_state": {
+                                        "domain": "shipbuilding",
+                                        "state_delta": 0.2,
+                                    }
+                                },
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                conn.commit()
+
+            summary = event_consequence_annual_tick_for_save(
+                sav,
+                config_db_path=cfg,
+                year=1002,
+                world="default",
+            )
+
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                fallout = conn.execute(
+                    """
+                    SELECT status, resolved_year
+                    FROM simulation_legal_fallout_readable
+                    WHERE fallout_key = 'inheritance:11:12:13'
+                    """
+                ).fetchone()
+                adjudication = conn.execute(
+                    """
+                    SELECT adjudication_type, outcome, principal_result,
+                           opposing_result, adjudication_year
+                    FROM simulation_legal_adjudications_readable
+                    WHERE fallout_id = (
+                        SELECT fallout_id
+                        FROM simulation_legal_fallout_readable
+                        WHERE fallout_key = 'inheritance:11:12:13'
+                    )
+                    """
+                ).fetchone()
+                diffusion = conn.execute(
+                    """
+                    SELECT source_region_id, target_region_id, domain, state_delta,
+                           target_domain_score_before, target_domain_score_after
+                    FROM simulation_domain_diffusion_readable
+                    WHERE domain = 'shipbuilding'
+                    ORDER BY diffusion_id
+                    """
+                ).fetchone()
+
+            self.assertEqual(summary["legal_adjudications"], 1)
+            self.assertGreaterEqual(summary["domain_diffusions"], 1)
+            self.assertEqual(str(fallout["status"]), "resolved")
+            self.assertEqual(int(fallout["resolved_year"]), 1002)
+            self.assertIsNotNone(adjudication)
+            self.assertEqual(
+                str(adjudication["adjudication_type"]),
+                "inheritance_dispute_resolution",
+            )
+            self.assertEqual(str(adjudication["outcome"]), "inheritance_split")
+            self.assertEqual(int(adjudication["adjudication_year"]), 1002)
+            self.assertIsNotNone(diffusion)
+            self.assertEqual(str(diffusion["source_region_id"]), "aeria_port")
+            self.assertEqual(str(diffusion["domain"]), "shipbuilding")
+            self.assertGreater(float(diffusion["state_delta"]), 0.0)
+            self.assertGreater(
+                float(diffusion["target_domain_score_after"]),
+                float(diffusion["target_domain_score_before"]),
+            )
 
     def test_event_record_visibility_state_transitions(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
