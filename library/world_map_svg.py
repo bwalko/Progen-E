@@ -1431,44 +1431,6 @@ def _site_world_xy(local_geography_json: object, site_slot: object) -> tuple[flo
     return None
 
 
-def _site_anchor_has_source_world(local_geography_json: object, site_slot: object) -> bool:
-    if not local_geography_json:
-        return False
-    try:
-        data = json.loads(str(local_geography_json))
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(data, dict):
-        return False
-    sites = data.get("settlements")
-    features = data.get("features")
-    if not isinstance(sites, list) or not isinstance(features, list):
-        return False
-    try:
-        slot = int(site_slot or 1) - 1
-    except (TypeError, ValueError):
-        slot = 0
-    anchor_id = ""
-    for site in sites:
-        if not isinstance(site, dict):
-            continue
-        try:
-            if int(site.get("settlement_slot", 0)) == slot:
-                anchor_id = str(site.get("anchor_feature_id") or "").strip()
-                break
-        except (TypeError, ValueError):
-            continue
-    if not anchor_id:
-        return False
-    for feature in features:
-        if not isinstance(feature, dict):
-            continue
-        if str(feature.get("feature_id") or "").strip() != anchor_id:
-            continue
-        return feature.get("source_world_x") is not None and feature.get("source_world_y") is not None
-    return False
-
-
 def _named_feature_overlays_from_local_geography(
     *,
     geometry: WorldMapGeometry,
@@ -1599,11 +1561,7 @@ def load_world_map_overlays(
                 if cell is None:
                     continue
                 local = _site_xy(row["local_geography_json"], row["site_slot"])
-                world_xy = (
-                    _site_world_xy(row["local_geography_json"], row["site_slot"])
-                    if _site_anchor_has_source_world(row["local_geography_json"], row["site_slot"])
-                    else None
-                )
+                world_xy = _site_world_xy(row["local_geography_json"], row["site_slot"])
                 if world_xy is None and local is None:
                     rng = random.Random(_stable_seed(geometry.version, row["settlement_id"], "overlay"))
                     local = (0.5 + rng.uniform(-0.16, 0.16), 0.5 + rng.uniform(-0.16, 0.16))

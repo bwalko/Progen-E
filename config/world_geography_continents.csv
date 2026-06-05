@@ -1,4 +1,4 @@
 world,continent_id,continent_name,map_size,map_placement,map_shape,keywords
-default,aeria,Aeria,large,west,ragged_maritime,"mid-latitude maritime; moderate rainfall; ancient uplands; atlantic influence"
+default,aeria,Aeria,huge,west,ragged_maritime,"mid-latitude maritime; moderate rainfall; ancient uplands; atlantic influence"
 default,boreas,Boreas,medium,northeast,shield_fjord,"high latitude; cold humid; boreal shield; low coastal mountains"
 default,cyrene,Cyrene,large,south,arid_rift,"subtropical; interior aridity; monsoon margins; old craton edge"

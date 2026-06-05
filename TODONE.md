@@ -1,5 +1,107 @@
 # TODONE
 
+## Innovation Catalog Curation And Balance Passes
+
+- Curated `config/innovations.csv` after parser generation:
+  - retiered ranks from parser source-order counters to broad per-category era
+    progression so large categories such as `craft` are not 200+ step linear
+    ladders;
+  - tuned spreadability, complexity, and starter prevalence for gameplay
+    balance around the default `history_equivalent_start_year=1000`;
+  - added 137 obvious `prerequisite_ids` links for tool, writing, metallurgy,
+    transport, printing, gunpowder, steam, electrical, computing, and other
+    dependency chains;
+  - replaced many rough Earth-specific or person-title rows with local analogue
+    names such as `balanced thrusting spears`, `atmospheric mine engines`,
+    `periodic news-sheets`, and `single-chip microprocessors`;
+  - marked 25 highly branded, product-specific, or ambiguous rows `unreviewed`
+    so runtime ignores them until they receive better local analogues.
+- Tuned `library.simulation_innovation` portable-innovation scoring so early
+  starter knowledge helps port networks without immediately saturating the score.
+- Added regression coverage in `unit_test/test_innovation_timeline.py` for:
+  checked-in catalog curation/prerequisite/rank expectations, unreviewed-row
+  exclusion, and portable innovation score headroom.
+- Fixed-seed temporary-world smoke comparison for 1000-1002:
+  - startup seed rows: 1164 -> 708;
+  - distinct known innovations: 194 -> 118;
+  - route diffusion rows: 164 -> 44;
+  - early military known innovations remain present: 4 -> 3;
+  - portable port-network score average now has headroom: 1.0 -> 0.62629;
+  - prosperity bonus average stayed capped at 0.12.
+- Completed row-level second/third-pass curation:
+  - all 505 runtime catalog rows are now `reviewed`;
+  - 31 questionable, branded, duplicate, or too-specific rows remain
+    `unreviewed` and ignored by runtime loading;
+  - prerequisite links increased to 300, with no missing, inactive, or
+    future-pointing prerequisites;
+  - active analogue names no longer include parser-action artifacts such as
+    "invented", "developed", "commercially", "launched", or "approved";
+  - source-title/person artifacts were localized into rows such as
+    `electrolysis`, `subsonic ramjets`, `transformer power grids`,
+    `vacuum tube diodes`, `single-wheel handcarts`, and
+    `closed-loop insulin pumps`;
+  - corrected backward dependency chains including liquid-fuel rockets before
+    long-range ballistic rockets and crystal oscillators before quartz clocks.
+- Fixed-seed 1000-1002 smoke after the completed curation pass used three
+  deterministic human port colonies (`aeria_port`, `boreas_port`,
+  `cyrene_port`) because the tiny mixed-species zero-point seed can fail founder
+  generation in `boreas_port`:
+  - 28 people in RAM across 3 settlements and 3 regions after the three-year
+    run;
+  - knowledge rows: 752;
+  - startup seed rows: 708;
+  - distinct known innovations: 118;
+  - discovery rows: 0 in the short 1000-1002 smoke;
+  - route diffusion rows: 44 and same-polity diffusion rows: 0 because no
+    mature polities exist in the smoke;
+  - early military known innovations: 3, max military rank: 1;
+  - portable port-network score average: 0.62951;
+  - prosperity bonus average stayed capped at 0.12.
+- Lowered the detailed-person discovery gate in `library.simulation_innovation`
+  from an unreachable 0.48 to 0.20 after a 60-year diagnostic found late-run
+  actor propensities topping out below the old gate; added a regression that the
+  innovation gate stays no stricter than ordinary knowledge/culture incidents.
+- Verified the current checked-in catalog after the completed curation pass:
+  - 536 total rows;
+  - 505 runtime rows, all `reviewed`;
+  - 31 `unreviewed` rows excluded from runtime loading;
+  - 300 rows with prerequisites;
+  - no active parser-action analogue artifacts, no remaining auto-generated or
+    row-level-review notes, no missing/inactive/future prerequisites, and max
+    active rank 10.
+- Ran a current-state fixed-seed 60-year population-backed medieval sweep
+  (`history_equivalent_start_year=1000`, seed 424242, three deterministic human
+  port colonies, 8 couples per colony, passive scale 0.3, detailed soft cap
+  300):
+  - 158 alive people, 12 settlements, 3 regions;
+  - knowledge rows: 770; distinct known innovations: 127;
+  - discovery records: 9, producing 18 discovery-sourced knowledge rows;
+  - route diffusion rows: 44; startup seed rows: 708;
+  - first discoveries included high-carbon steel, movable type, pivot shears,
+    toe stirrups, ritual tattooing, canal locks, limb surgery, spinning wheels,
+    and glass blowing;
+  - early military frontier stayed conservative at 3 known military
+    innovations, max military rank 1;
+  - portable port-network score average/max: 0.64584 / 0.66626;
+  - prosperity bonus average/max: 0.03467 / 0.12.
+- Ran a current-state fixed-seed 30-year classical/city-state sweep
+  (`history_equivalent_start_year=0`, same seed and colony setup):
+  - 166 alive people, 9 settlements, 4 regions;
+  - 8 active city-state polities;
+  - knowledge rows: 876; distinct known innovations: 119;
+  - discovery records: 3, producing 8 discovery-sourced knowledge rows;
+  - polity integration rows: 154; route diffusion rows: 18; startup seed rows:
+    696;
+  - early military frontier stayed conservative at 3 known military
+    innovations, max military rank 1;
+  - portable port-network score average/max: 0.4665 / 0.63017;
+  - prosperity bonus average/max: 0.04 / 0.12.
+- Added focused same-polity diffusion coverage for a multi-region polity in
+  `unit_test.test_innovation_timeline`; the quick population sweeps naturally
+  form settlement-grain city-states, so multi-region same-polity diffusion is
+  covered as a direct regression rather than hidden behind a long realm-growth
+  setup.
+
 ## Innovation Timeline CSV And Driver
 
 - Added a two-layer innovation timeline pipeline:

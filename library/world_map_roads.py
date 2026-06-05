@@ -55,6 +55,7 @@ class RoadMapEdge:
 class _RoadPath:
     points: list[Point]
     cost: float
+    length: float
 
 
 @dataclass
@@ -73,6 +74,7 @@ class _RoadSegment:
     to_settlement_id: str
     points: list[Point]
     cost: float
+    length: float
     actual_usage: float = 0.0
     implied_usage: float = 0.0
 
@@ -784,17 +786,21 @@ def _route_between_nodes(
     end_point = (b.x, b.y)
     if not geometry.micro_cells:
         distance = math.hypot(a.x - b.x, a.y - b.y)
-        return _RoadPath(points=_dedupe_path_points([start_point, end_point]), cost=distance)
+        points = _dedupe_path_points([start_point, end_point])
+        return _RoadPath(points=points, cost=distance, length=_path_length(points))
     start = _cell_for_point(geometry, start_point, region_id=a.region_id)
     end = _cell_for_point(geometry, end_point, region_id=b.region_id)
     if start is None or end is None:
         return None
     if start.continent_id != end.continent_id:
         return None
+    ford_path = _direct_ford_path(start_point, end_point, ford_points)
     if start.micro_id == end.micro_id:
+        points = _dedupe_path_points([start_point, end_point])
         return _RoadPath(
-            points=_dedupe_path_points([start_point, end_point]),
+            points=points,
             cost=max(0.0001, math.hypot(a.x - b.x, a.y - b.y)),
+            length=_path_length(points),
         )
     by_id = {cell.micro_id: cell for cell in geometry.micro_cells}
     adjacency, shared_midpoints = _micro_adjacency(geometry.micro_cells)
@@ -845,11 +851,94 @@ def _route_between_nodes(
             )
         points.append(ford if ford is not None else midpoint)
     points.append(end_point)
-    return _RoadPath(points=_dedupe_path_points(points), cost=max(0.0001, distances[end.micro_id]))
+    points = _clean_road_points(points, ford_points)
+    route = _RoadPath(
+        points=points,
+        cost=max(0.0001, distances[end.micro_id]),
+        length=_path_length(points),
+    )
+    if ford_path is not None:
+        direct_distance = max(0.0001, math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1]))
+        if route.length / direct_distance >= 1.55 or ford_path.length <= route.length * 0.86:
+            return ford_path
+    return route
 
 
 def _path_length(points: list[Point]) -> float:
     return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(points, points[1:]))
+
+
+def _direct_ford_path(start: Point, end: Point, ford_points: list[Point]) -> _RoadPath | None:
+    if not ford_points:
+        return None
+    direct_distance = math.hypot(start[0] - end[0], start[1] - end[1])
+    if direct_distance <= 1e-7:
+        return None
+    best: tuple[float, float, Point] | None = None
+    endpoint_threshold = max(0.018, min(0.07, direct_distance * 0.55 + 0.014))
+    segment_threshold = max(0.014, min(0.055, direct_distance * 0.36 + 0.01))
+    for ford in ford_points:
+        endpoint_distance = min(
+            math.hypot(ford[0] - start[0], ford[1] - start[1]),
+            math.hypot(ford[0] - end[0], ford[1] - end[1]),
+        )
+        segment_distance = _point_segment_distance(ford, start, end)
+        if endpoint_distance > endpoint_threshold and segment_distance > segment_threshold:
+            continue
+        detour_length = math.hypot(ford[0] - start[0], ford[1] - start[1]) + math.hypot(
+            ford[0] - end[0], ford[1] - end[1]
+        )
+        detour_ratio = detour_length / direct_distance
+        if endpoint_distance > endpoint_threshold and detour_ratio > 1.55:
+            continue
+        candidate = (detour_ratio, segment_distance, ford)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        return None
+    ford = best[2]
+    points = _clean_road_points([start, ford, end], [ford])
+    length = _path_length(points)
+    return _RoadPath(points=points, cost=max(0.0001, length * 0.94), length=length)
+
+
+def _is_preserved_point(point: Point, preserve_points: list[Point], *, tolerance: float) -> bool:
+    return any(math.hypot(point[0] - x, point[1] - y) <= tolerance for x, y in preserve_points)
+
+
+def _clean_road_points(points: list[Point], preserve_points: list[Point] | None = None) -> list[Point]:
+    """Remove tiny out-and-back artifacts before SVG smoothing amplifies them."""
+    preserve_points = preserve_points or []
+    out: list[Point] = []
+    loop_tolerance = 0.004
+    for point in _dedupe_path_points(points):
+        if (
+            len(out) >= 2
+            and math.hypot(point[0] - out[-2][0], point[1] - out[-2][1]) <= loop_tolerance
+            and not _is_preserved_point(out[-1], preserve_points, tolerance=loop_tolerance)
+        ):
+            out.pop()
+            if math.hypot(point[0] - out[-1][0], point[1] - out[-1][1]) > 1e-7:
+                out.append(point)
+            continue
+        out.append(point)
+
+    if len(out) < 3:
+        return out
+
+    simplified = [out[0]]
+    collinear_tolerance = 0.0016
+    for idx, point in enumerate(out[1:-1], start=1):
+        prior = simplified[-1]
+        nxt = out[idx + 1]
+        if (
+            not _is_preserved_point(point, preserve_points, tolerance=loop_tolerance)
+            and _point_segment_distance(point, prior, nxt) <= collinear_tolerance
+        ):
+            continue
+        simplified.append(point)
+    simplified.append(out[-1])
+    return _dedupe_path_points(simplified)
 
 
 def _point_polyline_distance(point: Point, points: list[Point]) -> float:
@@ -862,11 +951,11 @@ def _network_route(
     segments: dict[tuple[str, str], _RoadSegment],
     start: str,
     end: str,
-) -> tuple[float, list[tuple[str, str]]] | None:
-    adjacency: dict[str, list[tuple[str, float]]] = {}
+) -> tuple[float, float, list[tuple[str, str]]] | None:
+    adjacency: dict[str, list[tuple[str, float, float]]] = {}
     for (a, b), segment in segments.items():
-        adjacency.setdefault(a, []).append((b, segment.cost))
-        adjacency.setdefault(b, []).append((a, segment.cost))
+        adjacency.setdefault(a, []).append((b, segment.length, segment.cost))
+        adjacency.setdefault(b, []).append((a, segment.length, segment.cost))
     if start not in adjacency or end not in adjacency:
         return None
     queue: list[tuple[float, str]] = [(0.0, start)]
@@ -878,8 +967,8 @@ def _network_route(
             continue
         if node_id == end:
             break
-        for other, step in adjacency.get(node_id, []):
-            nd = cost + step
+        for other, length, _step_cost in adjacency.get(node_id, []):
+            nd = cost + length
             if nd < distances.get(other, float("inf")):
                 distances[other] = nd
                 previous[other] = node_id
@@ -894,7 +983,8 @@ def _network_route(
         node_path.append(prior)
     node_path.reverse()
     pairs = [_pair_key(a, b) for a, b in zip(node_path, node_path[1:])]
-    return distances[end], pairs
+    route_cost = sum(segments[pair].cost for pair in pairs if pair in segments)
+    return route_cost, distances[end], pairs
 
 
 def _add_usage_to_segments(
@@ -933,6 +1023,7 @@ def _ensure_segment(
         to_settlement_id=key[1],
         points=route.points,
         cost=route.cost,
+        length=route.length,
     )
     return key
 
@@ -947,24 +1038,34 @@ def _best_via_node(
     a = nodes[a_id]
     c = nodes[c_id]
     direct_line_distance = max(0.0001, math.hypot(a.x - c.x, a.y - c.y))
-    max_offset = max(0.035, direct_line_distance * 0.16)
-    best: tuple[float, str] | None = None
+    max_offset = max(0.025, min(0.085, direct_line_distance * 0.18))
+    best: tuple[float, float, float, str] | None = None
     for b_id, node in nodes.items():
         if b_id in direct_key:
             continue
-        if _point_polyline_distance((node.x, node.y), direct_route.points) > max_offset:
+        node_point = (node.x, node.y)
+        line_offset = _point_segment_distance(node_point, (a.x, a.y), (c.x, c.y))
+        route_offset = _point_polyline_distance(node_point, direct_route.points)
+        if min(line_offset, route_offset) > max_offset:
             continue
         first = routes.get(_pair_key(a_id, b_id))
         second = routes.get(_pair_key(b_id, c_id))
         if first is None or second is None:
             continue
-        ratio = (first.cost + second.cost) / max(0.0001, direct_route.cost)
-        candidate = (ratio, b_id)
+        settlement_ratio = (
+            math.hypot(a.x - node.x, a.y - node.y)
+            + math.hypot(node.x - c.x, node.y - c.y)
+        ) / direct_line_distance
+        routed_ratio = (first.length + second.length) / max(direct_line_distance, direct_route.length, 0.0001)
+        if routed_ratio > 1.85 and settlement_ratio > 1.08:
+            continue
+        geometry_ratio = routed_ratio if route_offset <= max_offset else settlement_ratio
+        candidate = (geometry_ratio, settlement_ratio, routed_ratio, min(line_offset, route_offset), b_id)
         if best is None or candidate < best:
             best = candidate
     if best is None:
         return None
-    return (best[1], best[0])
+    return (best[4], best[0])
 
 
 def _finalize_edges(segments: dict[tuple[str, str], _RoadSegment]) -> list[RoadMapEdge]:
@@ -1039,11 +1140,15 @@ def build_settlement_road_overlays(
     segments: dict[tuple[str, str], _RoadSegment] = {}
     for key, demand in ordered:
         direct_route = routes[key]
+        direct_settlement_distance = max(
+            0.0001,
+            math.hypot(nodes[key[0]].x - nodes[key[1]].x, nodes[key[0]].y - nodes[key[1]].y),
+        )
         strong_actual = demand.actual_usage >= max(3.0, max_actual * 0.25)
         network = _network_route(segments, key[0], key[1])
         if network is not None:
-            network_cost, network_segments = network
-            network_ratio = network_cost / max(0.0001, direct_route.cost)
+            _network_cost, network_length, network_segments = network
+            network_ratio = network_length / direct_settlement_distance
             if network_ratio <= 1.2 or (network_ratio <= 1.45 and not strong_actual):
                 _add_usage_to_segments(segments, network_segments, demand)
                 continue
@@ -1066,6 +1171,11 @@ def build_settlement_road_overlays(
                     _add_usage_to_segments(segments, (first, second), demand)
                     continue
 
+        direct_route_ratio = direct_route.length / direct_settlement_distance
+        if demand.actual_usage <= 0.0 and direct_route_ratio > 2.2:
+            continue
+        if not strong_actual and direct_route_ratio > 3.2:
+            continue
         direct = _ensure_segment(segments, routes, geometry, nodes, ford_points, key[0], key[1])
         if direct is not None:
             _add_usage_to_segments(segments, (direct,), demand)

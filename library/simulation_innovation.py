@@ -22,10 +22,11 @@ STARTUP_SEED_META_PREFIX = "innovation_startup_seeded"
 INNOVATION_RNG_STREAM = 2_000_113
 INNOVATION_SAMPLE_STREAM = 2_000_179
 INNOVATION_SETTLEMENT_SAMPLE_CAP = 240
-INNOVATION_PROPENSITY_THRESHOLD = 0.48
+INNOVATION_PROPENSITY_THRESHOLD = 0.20
 INNOVATION_MAX_DISCOVERIES_PER_YEAR = 2
 STARTER_PREVALENCE_MIN = 0.22
 ADOPTED_SCORE_MIN = 0.35
+PORTABLE_INNOVATION_SCORE_WEIGHT = 0.035
 PORTABLE_INNOVATION_DOMAINS = frozenset(
     {
         "navigation",
@@ -1077,7 +1078,7 @@ def _build_portable_innovation_score_cache(ctx: "SimulationContext") -> dict[str
         rid = region_by_key.get(row["region_key"])
         if not rid:
             continue
-        scores[rid] = scores.get(rid, 0.0) + float(row["adoption_score"] or 0.0) * 0.12
+        scores[rid] = scores.get(rid, 0.0) + float(row["adoption_score"] or 0.0) * PORTABLE_INNOVATION_SCORE_WEIGHT
     return {rid: round(min(1.0, value), 5) for rid, value in scores.items()}
 
 

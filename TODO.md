@@ -11,21 +11,6 @@
   explicit TODO before extending the current geography/job/knowledge-driven
   trade-network model into commodity production, cargo, prices, or supply chains.
 
-## Follow-Up: Innovation Catalog Curation And Balance
-
-- Review `config/innovations.csv` after parser generation:
-  - replace rough Earth-specific source titles with stronger local analogue
-    names where needed;
-  - mark questionable rows `unreviewed` or `inactive`;
-  - add `prerequisite_ids` for obvious dependencies;
-  - tune category ranks, starter prevalence, spreadability, and complexity for
-    gameplay rather than source-order fidelity.
-- Run a short fixed-seed smoke after major catalog edits and compare:
-  - startup seeded innovation counts by year;
-  - military frontier advancement rates;
-  - same-polity vs route diffusion counts;
-  - prosperity and port-network score deltas from adopted innovations.
-
 ## Primary Task: Genome-Driven Events, Lost Records, And Chronicle Prose
 
 Build a simulation layer where genomes, relationships, offices, household stress,

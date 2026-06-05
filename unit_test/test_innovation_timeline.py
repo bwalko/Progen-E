@@ -1,4 +1,7 @@
+import contextlib
+import io
 import random
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -11,11 +14,17 @@ from library.innovation_catalog import (
     InnovationCategoryRule,
     InnovationEra,
 )
+from library.config_import import load_all_csvs_into_sqlite
 from library.simulation_innovation import (
+    INNOVATION_PROPENSITY_THRESHOLD,
+    _spread_polity_knowledge,
     innovation_candidate_allowed,
+    portable_innovation_score_for_region,
     seed_starting_innovations_for_save,
     update_innovation_era_state_for_save,
 )
+from library.simulation_incidents import KNOWLEDGE_PROPENSITY_THRESHOLD
+from library.polity import TerritoryOpenRow
 from library.world_save import append_simulation_event_rows, ensure_checkpoint_schema
 from utils.util_parse_inventions_wiki import clean_wiki_markup, normalize_date_text
 
@@ -151,6 +160,108 @@ class InnovationTimelineTests(unittest.TestCase):
             catalog = InnovationCatalog.load(db)
             self.assertEqual([i.innovation_id for i in catalog.active_innovations()], ["active_item"])
 
+    def test_checked_in_catalog_has_curated_curation_balance(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "config.sqlite"
+            with contextlib.redirect_stdout(io.StringIO()):
+                load_all_csvs_into_sqlite(db)
+            conn = sqlite3.connect(db)
+            conn.row_factory = sqlite3.Row
+            try:
+                all_rows = conn.execute(
+                    """
+                    SELECT innovation_id, analogue_name, curation_status, notes,
+                           prerequisite_ids, history_year
+                    FROM innovations
+                    """
+                ).fetchall()
+                active_rows = conn.execute(
+                    """
+                    SELECT innovation_id, analogue_name, curation_status, notes,
+                           prerequisite_ids, history_year
+                    FROM innovations
+                    WHERE curation_status IN ('active', 'reviewed', 'seed')
+                    """
+                ).fetchall()
+                prereq_rows = conn.execute(
+                    """
+                    SELECT count(1) AS n
+                    FROM innovations
+                    WHERE trim(coalesce(prerequisite_ids, '')) <> ''
+                    """
+                ).fetchone()
+                status_rows = conn.execute(
+                    """
+                    SELECT curation_status, count(1) AS n
+                    FROM innovations
+                    GROUP BY curation_status
+                    """
+                ).fetchall()
+            finally:
+                conn.close()
+            catalog = InnovationCatalog.load(db)
+
+        statuses = {str(row["curation_status"]): int(row["n"]) for row in status_rows}
+        by_id = {str(row["innovation_id"]): row for row in all_rows}
+        runtime_statuses = {"active", "reviewed", "seed"}
+        self.assertGreaterEqual(int(prereq_rows["n"]), 300)
+        self.assertEqual(statuses.get("active", 0), 0)
+        self.assertGreaterEqual(statuses.get("reviewed", 0), 500)
+        self.assertGreaterEqual(statuses.get("unreviewed", 0), 30)
+        self.assertFalse(any("auto-generated" in str(row["notes"]) for row in active_rows))
+        self.assertFalse(any("needs row-level analogue review" in str(row["notes"]) for row in active_rows))
+        parser_artifact = re.compile(
+            r"\b(invented|developed|patented|first|demonstrated|commercially|called|launched|pioneered|approved)\b",
+            re.IGNORECASE,
+        )
+        self.assertFalse(any(parser_artifact.search(str(row["analogue_name"])) for row in active_rows))
+        for row in all_rows:
+            for prereq_id in [part.strip() for part in str(row["prerequisite_ids"] or "").split(";") if part.strip()]:
+                self.assertIn(prereq_id, by_id)
+                self.assertIn(str(by_id[prereq_id]["curation_status"]), runtime_statuses)
+                self.assertLessEqual(int(by_id[prereq_id]["history_year"]), int(row["history_year"]))
+        self.assertLessEqual(max(item.rank for item in catalog.active_innovations()), 10)
+        self.assertIsNone(
+            catalog.innovation_by_id("openai_demonstrated_an_artificial_intelligence_model_called_gpt_3")
+        )
+        self.assertIsNone(catalog.innovation_by_id("charles_babbage_2"))
+        printing_press = catalog.innovation_by_id("printing_press")
+        self.assertIsNotNone(printing_press)
+        self.assertEqual(set(printing_press.prerequisite_ids), {"movable_type", "paper"})
+        steam_engine = catalog.innovation_by_id("thomas_newcomen")
+        self.assertIsNotNone(steam_engine)
+        self.assertEqual(steam_engine.analogue_name, "atmospheric mine engines")
+        microprocessor = catalog.innovation_by_id("single_chip_microprocessor_the_intel_4004_is_invented")
+        self.assertIsNotNone(microprocessor)
+        self.assertEqual(microprocessor.category, "computing")
+        early_military = catalog.innovation_by_id("schoningen_spears")
+        self.assertIsNotNone(early_military)
+        self.assertGreaterEqual(early_military.starter_prevalence, 0.22)
+        steam_hammer = catalog.innovation_by_id("james_nasmyth_invents_the_steam_hammer")
+        self.assertIsNotNone(steam_hammer)
+        self.assertEqual(steam_hammer.analogue_name, "steam hammers")
+        self.assertEqual(steam_hammer.prerequisite_ids, ("thomas_newcomen",))
+        web = catalog.innovation_by_id("world_wide_web_is_invented")
+        self.assertIsNotNone(web)
+        self.assertEqual(web.analogue_name, "hypertext web protocols")
+        self.assertEqual(web.prerequisite_ids, ("transmission_control_program",))
+        wheelbarrow = catalog.innovation_by_id("wheelbarrow")
+        self.assertIsNotNone(wheelbarrow)
+        self.assertEqual(wheelbarrow.analogue_name, "single-wheel handcarts")
+        self.assertEqual(wheelbarrow.category, "transport")
+        ramjet = catalog.innovation_by_id("fr_maurice_roy")
+        self.assertIsNotNone(ramjet)
+        self.assertEqual(ramjet.analogue_name, "subsonic ramjets")
+        quartz_clock = catalog.innovation_by_id("quartz_clock")
+        self.assertIsNotNone(quartz_clock)
+        self.assertEqual(quartz_clock.prerequisite_ids, ("crystal_oscillator_is_invented_by_alexander_m",))
+        liquid_rocket = catalog.innovation_by_id("robert_h")
+        self.assertIsNotNone(liquid_rocket)
+        self.assertEqual(liquid_rocket.prerequisite_ids, ("rocket",))
+        ballistic_rocket = catalog.innovation_by_id("v_2_rocket")
+        self.assertIsNotNone(ballistic_rocket)
+        self.assertEqual(ballistic_rocket.prerequisite_ids, ("robert_h",))
+
     def test_startup_seeds_only_eligible_common_innovations(self) -> None:
         @dataclass
         class Settlement:
@@ -227,6 +338,71 @@ class InnovationTimelineTests(unittest.TestCase):
         }
         self.assertTrue(innovation_candidate_allowed(catalog.innovations[0], **common))
         self.assertFalse(innovation_candidate_allowed(catalog.innovations[1], **common))
+
+    def test_innovation_propensity_gate_allows_ordinary_knowledge_actors(self) -> None:
+        self.assertLessEqual(INNOVATION_PROPENSITY_THRESHOLD, KNOWLEDGE_PROPENSITY_THRESHOLD)
+
+    def test_same_polity_diffusion_reaches_multi_region_polity(self) -> None:
+        class FakeContext:
+            gov_territory_rows = (
+                TerritoryOpenRow(1, "region", "r1", 1),
+                TerritoryOpenRow(1, "region", "r2", 1),
+            )
+            settlements_by_id = {}
+
+        base = InnovationCatalog.load(Path("__missing_innovation_catalog__.sqlite"))
+        catalog = InnovationCatalog(
+            (
+                _innovation(
+                    "shared_craft",
+                    category="craft",
+                    domain="craft",
+                    era_id="medieval",
+                    history_year=1000,
+                    rank=1,
+                ),
+            ),
+            base.eras,
+            base.category_rules,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            save = Path(td) / "save.sqlite"
+            conn = sqlite3.connect(save)
+            conn.row_factory = sqlite3.Row
+            ensure_checkpoint_schema(conn)
+            conn.executemany(
+                "INSERT INTO simulation_region_lookup (region_id) VALUES (?)",
+                [("r1",), ("r2",)],
+            )
+            conn.execute(
+                """
+                INSERT INTO simulation_innovation_knowledge (
+                    innovation_id, innovation_name, category, domain, era_id,
+                    scope_kind, scope_key, status, adoption_score,
+                    first_known_year, latest_known_year, source_kind,
+                    polity_id, details_json, created_at, updated_at
+                )
+                VALUES (
+                    'shared_craft', 'Shared Craft', 'craft', 'craft', 'medieval',
+                    'polity', 'polity:1', 'adopted', 1.0,
+                    1, 1, 'test', 1, '{}', 'now', 'now'
+                )
+                """
+            )
+
+            spread = _spread_polity_knowledge(conn, FakeContext(), catalog, 2)
+            rows = conn.execute(
+                """
+                SELECT scope_kind, source_kind, count(1) AS n
+                FROM simulation_innovation_knowledge
+                WHERE source_kind = 'same_polity_diffusion'
+                GROUP BY scope_kind, source_kind
+                """
+            ).fetchall()
+            conn.close()
+
+        self.assertEqual(spread, 2)
+        self.assertEqual([(str(row["scope_kind"]), int(row["n"])) for row in rows], [("region", 2)])
 
     def test_innovation_event_writes_attribution_knowledge_and_domain_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -319,6 +495,43 @@ class InnovationTimelineTests(unittest.TestCase):
             self.assertEqual(str(state["era_id"]), "neolithic")
             self.assertEqual(int(state["era_rank"]), 1)
             conn.close()
+
+    def test_portable_innovation_score_does_not_saturate_from_few_common_rows(self) -> None:
+        class FakeContext:
+            def __init__(self, save_db_path: Path) -> None:
+                self.save_db_path = save_db_path
+
+        with tempfile.TemporaryDirectory() as td:
+            save = Path(td) / "save.sqlite"
+            conn = sqlite3.connect(save)
+            conn.row_factory = sqlite3.Row
+            ensure_checkpoint_schema(conn)
+            conn.execute("INSERT INTO simulation_region_lookup (region_id) VALUES ('r1')")
+            region_key = int(
+                conn.execute(
+                    "SELECT region_key FROM simulation_region_lookup WHERE region_id = 'r1'"
+                ).fetchone()["region_key"]
+            )
+            conn.executemany(
+                """
+                INSERT INTO simulation_innovation_knowledge (
+                    innovation_id, innovation_name, category, domain, era_id,
+                    scope_kind, scope_key, adoption_score,
+                    first_known_year, latest_known_year, source_kind,
+                    region_key, details_json, created_at, updated_at
+                )
+                VALUES (?, ?, 'craft', 'navigation', 'paleolithic',
+                        'region', ?, 1.0, 1, 1, 'test', ?, '{}', 'now', 'now')
+                """,
+                [(f"portable_{idx}", f"Portable {idx}", f"region:{region_key}", region_key) for idx in range(10)],
+            )
+            conn.commit()
+            conn.close()
+
+            score = portable_innovation_score_for_region(FakeContext(save), "r1")
+
+        self.assertGreater(score, 0.0)
+        self.assertLess(score, 0.5)
 
 
 if __name__ == "__main__":

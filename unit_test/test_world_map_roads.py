@@ -6,7 +6,8 @@ from contextlib import closing
 from pathlib import Path
 
 from library.world_map_geometry import MicroRegionCell, RegionCell, WorldMapGeometry
-from library.world_map_roads import RoadMapEdge, build_settlement_road_overlays
+from library.world_map_svg import load_world_map_overlays
+from library.world_map_roads import RoadMapEdge, _clean_road_points, build_settlement_road_overlays
 
 
 def _region_cell() -> RegionCell:
@@ -49,6 +50,9 @@ def _micro_cell(
     is_channel: bool = False,
     river_flow: float = 0.0,
     river_side: float = 0.0,
+    elevation: float = 0.25,
+    moisture: float = 0.55,
+    terrain_family: str | None = None,
 ) -> MicroRegionCell:
     return MicroRegionCell(
         micro_id=micro_id,
@@ -57,9 +61,9 @@ def _micro_cell(
         center_x=(x0 + x1) / 2.0,
         center_y=(y0 + y1) / 2.0,
         polygon=[(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
-        elevation=0.25,
-        moisture=0.55,
-        terrain_family="riverland" if is_channel else "plains",
+        elevation=elevation,
+        moisture=moisture,
+        terrain_family=terrain_family or ("riverland" if is_channel else "plains"),
         is_coastal=False,
         river_distance=0.0 if is_channel else 0.2,
         river_flow=river_flow,
@@ -131,7 +135,40 @@ def _fine_grid_with_channel(*, river_flow: float = 1.0) -> list[MicroRegionCell]
     return cells
 
 
-def _settlement_json(x: float, y: float, *, ford: tuple[float, float] | None = None) -> str:
+def _grid_with_bad_middle_corridor() -> list[MicroRegionCell]:
+    cells: list[MicroRegionCell] = []
+    step = 0.1
+    for iy in range(10):
+        for ix in range(10):
+            x0 = ix * step
+            y0 = iy * step
+            x1 = x0 + step
+            y1 = y0 + step
+            awkward_middle = iy in {4, 5} and ix not in {0, 9}
+            cells.append(
+                _micro_cell(
+                    f"bm{ix}_{iy}",
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    is_channel=awkward_middle,
+                    river_flow=0.75 if awkward_middle else 0.0,
+                    terrain_family="riverland" if awkward_middle else "plains",
+                    elevation=0.2 if not awkward_middle else 0.3,
+                    moisture=0.5 if not awkward_middle else 0.95,
+                )
+            )
+    return cells
+
+
+def _settlement_json(
+    x: float,
+    y: float,
+    *,
+    ford: tuple[float, float] | None = None,
+    world: tuple[float, float] | None = None,
+) -> str:
     features = []
     if ford is not None:
         features.append(
@@ -143,10 +180,14 @@ def _settlement_json(x: float, y: float, *, ford: tuple[float, float] | None = N
                 "display_name": "North Ford",
             }
         )
+    site: dict[str, object] = {"settlement_slot": 0, "x": x, "y": y}
+    if world is not None:
+        site["world_x"] = world[0]
+        site["world_y"] = world[1]
     return json.dumps(
         {
             "features": features,
-            "settlements": [{"settlement_slot": 0, "x": x, "y": y}],
+            "settlements": [site],
         }
     )
 
@@ -158,6 +199,7 @@ def _make_save(
     *,
     current_year: int = 10,
     ford: tuple[float, float] | None = None,
+    world_points: dict[str, tuple[float, float]] | None = None,
 ) -> Path:
     path = root / "save.sqlite"
     with closing(sqlite3.connect(path)) as con:
@@ -195,7 +237,12 @@ def _make_save(
                     sid,
                     sid.upper(),
                     20 + idx,
-                    _settlement_json(x, y, ford=ford if idx == 1 else None),
+                    _settlement_json(
+                        x,
+                        y,
+                        ford=ford if idx == 1 else None,
+                        world=(world_points or {}).get(sid),
+                    ),
                     sid,
                 ),
             )
@@ -237,6 +284,25 @@ def _edge(edges: list[RoadMapEdge], a: str, b: str) -> RoadMapEdge | None:
 
 
 class TestWorldMapRoads(unittest.TestCase):
+    def test_world_map_settlement_markers_use_saved_world_anchor_like_roads(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.1, 0.1), "b": (0.2, 0.2)},
+                [(10, "a", "b", 2)],
+                world_points={"a": (0.8, 0.75), "b": (0.65, 0.6)},
+            )
+
+            overlays = load_world_map_overlays(geometry=_geometry(), save_db_path=save)
+
+        marker_a = next(s for s in overlays.settlements if s.settlement_id == "a")
+        road = _edge(overlays.roads, "a", "b")
+        self.assertAlmostEqual(marker_a.x, 0.8, places=6)
+        self.assertAlmostEqual(marker_a.y, 0.75, places=6)
+        self.assertIsNotNone(road)
+        self.assertAlmostEqual(road.points[0][0], marker_a.x, places=6)
+        self.assertAlmostEqual(road.points[0][1], marker_a.y, places=6)
+
     def test_latest_year_movement_only(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             save = _make_save(
@@ -314,6 +380,30 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertIsNotNone(_edge(roads, "a", "b"))
         self.assertIsNotNone(_edge(roads, "b", "c"))
 
+    def test_reuses_midpoint_town_by_geometric_circuity_when_terrain_path_bends(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.05, 0.5), "b": (0.5, 0.5), "c": (0.95, 0.5)},
+                [(10, "a", "c", 2)],
+            )
+
+            roads = build_settlement_road_overlays(
+                geometry=_geometry(micro_cells=_grid_with_bad_middle_corridor()),
+                save_db_path=save,
+            )
+
+        self.assertIsNone(_edge(roads, "a", "c"))
+        self.assertIsNotNone(_edge(roads, "a", "b"))
+        self.assertIsNotNone(_edge(roads, "b", "c"))
+
+    def test_road_point_cleanup_prunes_tiny_hairpin_before_svg_smoothing(self) -> None:
+        points = [(0.1, 0.1), (0.125, 0.102), (0.1008, 0.1006), (0.18, 0.12)]
+
+        cleaned = _clean_road_points(points)
+
+        self.assertEqual(cleaned, [(0.1, 0.1), (0.18, 0.12)])
+
     def test_direct_road_when_indirect_circuity_is_high(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             save = _make_save(
@@ -373,6 +463,63 @@ class TestWorldMapRoads(unittest.TestCase):
             min(((x - distant_ford[0]) ** 2 + (y - distant_ford[1]) ** 2) ** 0.5 for x, y in road.points),
             0.08,
         )
+
+    def test_route_to_ford_endpoint_does_not_loop_around_micro_cells(self) -> None:
+        ford = (0.5, 0.62)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.44, 0.5), "b": ford},
+                [(10, "a", "b", 2)],
+                ford=ford,
+            )
+
+            roads = build_settlement_road_overlays(
+                geometry=_geometry(micro_cells=_fine_grid_with_channel(river_flow=0.9)),
+                save_db_path=save,
+            )
+
+        road = _edge(roads, "a", "b")
+        self.assertIsNotNone(road)
+        direct = ((0.44 - ford[0]) ** 2 + (0.5 - ford[1]) ** 2) ** 0.5
+        length = sum(((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5 for (ax, ay), (bx, by) in zip(road.points, road.points[1:]))
+        self.assertLess(length / direct, 1.25)
+
+    def test_reuses_ford_town_when_terrain_route_passes_through_it(self) -> None:
+        ford = (0.5, 0.9)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.1, 0.1), "b": ford, "c": (0.9, 0.1)},
+                [(10, "a", "c", 2)],
+                ford=ford,
+            )
+
+            roads = build_settlement_road_overlays(
+                geometry=_geometry(micro_cells=_grid_with_channel()),
+                save_db_path=save,
+            )
+
+        self.assertIsNone(_edge(roads, "a", "c"))
+        self.assertIsNotNone(_edge(roads, "a", "b"))
+        self.assertIsNotNone(_edge(roads, "b", "c"))
+
+    def test_implied_only_extreme_detour_is_omitted_without_reuse(self) -> None:
+        ford = (0.5, 0.9)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.1, 0.1), "c": (0.9, 0.1)},
+                [],
+                ford=ford,
+            )
+
+            roads = build_settlement_road_overlays(
+                geometry=_geometry(micro_cells=_grid_with_channel()),
+                save_db_path=save,
+            )
+
+        self.assertIsNone(_edge(roads, "a", "c"))
 
 
 if __name__ == "__main__":
