@@ -348,6 +348,9 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
         self.assertGreater(second_total, 0)
         self.assertEqual({c.sim_year for c in ctx.passive_cohorts}, {START_YEAR + 1})
         self.assertTrue(any(c.age_band == "0" and c.birth_count > 0 for c in latest))
+        self.assertFalse(
+            any(c.species == "human" and c.culture == "human" for c in latest)
+        )
         self.assertTrue(any(c.death_count > 0 for c in latest))
         self.assertTrue(any(c.age_band == "31" for c in latest))
 
@@ -413,6 +416,55 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
             self.assertTrue(
                 any(e[1] == "passive_person_promoted" for e in ctx._pending_simulation_events)
             )
+
+    def test_legacy_generic_passive_species_ethnic_promotes_as_human(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=START_YEAR,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            sid = "region:s1"
+            ctx.settlements_by_id[sid] = SettlementState(
+                region_id="region",
+                settlement_id=sid,
+                status="active",
+            )
+            ctx.add_passive_cohort(
+                PassiveCohort(
+                    sim_year=START_YEAR,
+                    region_id="region",
+                    settlement_id=sid,
+                    age_band="30",
+                    gender="Female",
+                    species="human",
+                    culture="human",
+                    job_family="trade",
+                    status_bucket="single",
+                    population_count=1,
+                )
+            )
+
+            promoted = promote_passive_candidate_for_office(
+                ctx,
+                year=START_YEAR,
+                settlement_id=sid,
+                min_age=18,
+            )
+
+            self.assertIsNotNone(promoted)
+            assert promoted is not None
+            self.assertEqual(promoted.person.species, "Human")
+            self.assertNotEqual(promoted.person.ethnic.lower(), "human")
+            self.assertEqual(promoted.person.current_settlement_id, sid)
 
     def test_pairing_prefers_same_settlement_before_same_region_fallback(self) -> None:
         ctx = SimulationContext(

@@ -6038,6 +6038,15 @@ def _compact_event_payload(event_type: str, payload: dict) -> dict:
     drop_keys: set[str] = set(_EVENT_SETTLEMENT_KEYS)
     drop_keys.update(_EVENT_REGION_KEYS)
     drop_keys.update(_EVENT_PAYLOAD_META_KEYS)
+    if str(event_type or "").strip() == "job_seeker_migration":
+        drop_keys.difference_update(
+            {
+                "from_settlement_id",
+                "to_settlement_id",
+                "from_region_id",
+                "to_region_id",
+            }
+        )
     if str(event_type or "").strip() == "settlement_moved":
         drop_keys.update(_EVENT_MOVE_DETAIL_KEYS)
     return {

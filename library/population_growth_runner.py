@@ -899,7 +899,7 @@ def _passive_species_culture_for_settlement(
     records = ctx.current_people_by_settlement().get(settlement_id, ())
     if records:
         p = records[0].person
-        return (p.species or "human", p.ethnic or "human")
+        return (p.species or "", p.ethnic or "")
     latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
     for cohort in ctx.passive_cohorts:
         if latest_year is None or int(cohort.sim_year) != int(latest_year):
@@ -1198,8 +1198,8 @@ def refresh_passive_background_cohorts(
                 key = (
                     str(cohort.region_id or ""),
                     str(cohort.settlement_id or ""),
-                    str(cohort.species or "human"),
-                    str(cohort.culture or "human"),
+                    str(cohort.species or ""),
+                    str(cohort.culture or ""),
                 )
                 births_by_place[key] = births_by_place.get(key, 0) + births
             next_age = min(_PASSIVE_AGE_MAX, age + 1)

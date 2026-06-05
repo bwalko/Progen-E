@@ -10,6 +10,7 @@ from typing import Any
 from library.generator import generate_person_random
 from library.person import Person
 from library.random_names import choose_random_first_last
+from library.random_traits import normalize_species_ethnic_filters
 
 
 @dataclass(frozen=True)
@@ -89,9 +90,14 @@ def passive_person_to_detailed_person(
     """Generate full mutable ``Person`` state from persisted low-detail facts."""
     age = max(0, int(simulation_year) - int(passive.birthyear))
     gender = normalize_passive_gender(passive.gender)
-    generated = generate_person_random(
+    species, ethnic = normalize_species_ethnic_filters(
         species=passive.species,
         ethnic=passive.ethnic,
+        db_path=simulation_context.db_path,
+    )
+    generated = generate_person_random(
+        species=species,
+        ethnic=ethnic,
         gender=gender,
         age=age,
         birthyear=int(passive.birthyear),

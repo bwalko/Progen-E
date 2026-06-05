@@ -1770,6 +1770,130 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("r1:s1", shown_html)
         self.assertIn("r2:s3", shown_html)
 
+    def test_job_seeker_migration_keeps_route_details_for_display(self) -> None:
+        con = _test_connect(":memory:")
+        con.row_factory = sqlite3.Row
+        ensure_checkpoint_schema(con)
+        _insert_compact_person(con, 1, "Ada", "Forge")
+        append_simulation_event_rows(
+            con,
+            "default",
+            [
+                (
+                    1034,
+                    "job_seeker_migration",
+                    {
+                        "year": 1034,
+                        "person_id": 1,
+                        "moved_person_ids": [1],
+                        "from_settlement_id": "r1:s1",
+                        "to_settlement_id": "r2:s3",
+                        "from_region_id": "r1",
+                        "to_region_id": "r2",
+                        "move_reason": "job_seeker_migration",
+                    },
+                )
+            ],
+        )
+
+        rows = _person_event_rows(con, "default", 1)
+        text = _event_sentence(con, "default", rows[0], 1)
+        shown_html = _event_sentence_html(con, "default", rows[0], 1)
+        payload = json.loads(
+            str(
+                con.execute(
+                    """
+                    select payload_json
+                    from simulation_events
+                    where event_type = 'job_seeker_migration'
+                    """
+                ).fetchone()["payload_json"]
+            )
+        )
+
+        self.assertEqual(payload["from_settlement_id"], "r1:s1")
+        self.assertEqual(payload["to_settlement_id"], "r2:s3")
+        self.assertIn("planned a job seeker move from r1:s1 to r2:s3", text)
+        self.assertNotIn("unknown to unknown", text)
+        self.assertIn("planned a job seeker move from r1:s1 to r2:s3", shown_html)
+
+    def test_compact_job_seeker_migration_uses_related_move_rows(self) -> None:
+        con = _test_connect(":memory:")
+        con.row_factory = sqlite3.Row
+        ensure_checkpoint_schema(con)
+        _insert_compact_person(con, 1, "Ada", "Forge")
+        _insert_compact_person(con, 2, "Bea", "Forge")
+        job_event_id = append_simulation_event_rows(
+            con,
+            "default",
+            [
+                (
+                    1034,
+                    "job_seeker_migration",
+                    {
+                        "year": 1034,
+                        "person_id": 1,
+                        "moved_person_ids": [1, 2],
+                        "from_settlement_id": "r1:s1",
+                        "to_settlement_id": "r2:s3",
+                        "from_region_id": "r1",
+                        "to_region_id": "r2",
+                        "move_reason": "job_seeker_migration",
+                    },
+                )
+            ],
+        )[0]
+        con.execute(
+            """
+            update simulation_events
+            set payload_json = ?
+            where id = ?
+            """,
+            (
+                json.dumps(
+                    {
+                        "year": 1034,
+                        "person_id": 1,
+                        "moved_person_ids": [1, 2],
+                        "move_reason": "job_seeker_migration",
+                    },
+                    separators=(",", ":"),
+                ),
+                job_event_id,
+            ),
+        )
+        append_simulation_event_rows(
+            con,
+            "default",
+            [
+                (
+                    1035,
+                    "settlement_moved",
+                    {
+                        "moved_person_ids": [1, 2],
+                        "from_settlement_id": "r1:s1",
+                        "to_settlement_id": "r2:s3",
+                        "from_region_id": "r1",
+                        "to_region_id": "r2",
+                        "move_reason": "job_seeker_migration",
+                        "requested_year": 1034,
+                        "planned_apply_year": 1035,
+                        "source_event": "job_seeker_migration",
+                        "group_id": "job_seeker:1:1034",
+                    },
+                )
+            ],
+        )
+
+        rows = _person_event_rows(con, "default", 1)
+        job_row = next(row for row in rows if row["event_type"] == "job_seeker_migration")
+        text = _event_sentence(con, "default", job_row, 1)
+        shown_html = _event_sentence_html(con, "default", job_row, 1)
+
+        self.assertIn("planned a job seeker move from r1:s1 to r2:s3", text)
+        self.assertNotIn("unknown to unknown", text)
+        self.assertIn("planned a job seeker move from r1:s1 to r2:s3", shown_html)
+
     def test_closest_to_ideal_can_prefer_optimal_trait_phrase(self) -> None:
         con = _memory_save()
         labels = {"generosity": _genome_row(con)}
@@ -1813,6 +1937,56 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         )
 
         self.assertEqual(shown, "-4.0")
+
+    def test_person_sheet_genome_traits_follow_config_order(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, 120)")
+        con.execute(
+            """
+            create table cfg.genome_save_columns (
+                slot text,
+                trait text,
+                sort_order integer
+            )
+            """
+        )
+        con.executemany(
+            "insert into cfg.genome_save_columns values (?, ?, ?)",
+            [
+                ("a", "physical", 1),
+                ("b", "courage", 2),
+                ("c", "wit", 3),
+                ("d", "curiosity", 4),
+            ],
+        )
+        con.execute(
+            "update simulation_people set person_json = ? where person_id = 1",
+            (
+                json.dumps(
+                    {
+                        "first_name": "Ada",
+                        "last_name": "Forge",
+                        "birthyear": 0,
+                        "mind_body": {
+                            "wit": 95.0,
+                            "physical": -10.0,
+                            "curiosity": 0.0,
+                            "courage": 40.0,
+                        },
+                    }
+                ),
+            ),
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        trait_grid = sheet[sheet.index('<div class="trait-grid">'):]
+
+        self.assertLess(trait_grid.index(">physical<"), trait_grid.index(">courage<"))
+        self.assertLess(trait_grid.index(">courage<"), trait_grid.index(">wit<"))
+        self.assertLess(trait_grid.index(">wit<"), trait_grid.index(">curiosity<"))
 
     def test_region_sheet_summarizes_settlements_jobs_and_map(self) -> None:
         con = _memory_place_save()
@@ -2245,6 +2419,113 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn('class="micro-cell terrain-', shown)
         self.assertIn('onclick="', shown)
         self.assertIn("map-open-selection", shown)
+
+    def test_world_map_html_renders_roads_and_checkbox_hides_them(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            cfg = root / "config.sqlite"
+            cfg.touch()
+            save = root / "save.sqlite"
+            with closing(sqlite3.connect(save)) as con:
+                con.execute("create table world_state (id integer primary key, current_year integer)")
+                con.execute("insert into world_state values (1, 42)")
+                con.execute(
+                    """
+                    create table simulation_settlements (
+                        settlement_id text,
+                        region_id text,
+                        display_name text,
+                        population_cap integer,
+                        status text,
+                        site_slot integer,
+                        local_geography_json text
+                    )
+                    """
+                )
+                for settlement_id, name, x, y in (
+                    ("r1:a", "Aston", 0.18, 0.48),
+                    ("r1:b", "Barton", 0.72, 0.52),
+                ):
+                    con.execute(
+                        "insert into simulation_settlements values (?, 'r1', ?, 25, 'active', 1, ?)",
+                        (
+                            settlement_id,
+                            name,
+                            json.dumps(
+                                {
+                                    "features": [],
+                                    "settlements": [{"settlement_slot": 0, "x": x, "y": y}],
+                                }
+                            ),
+                        ),
+                    )
+                con.execute(
+                    """
+                    create table simulation_event_moves_readable (
+                        event_id integer,
+                        sim_year integer,
+                        event_type text,
+                        moved_person_id integer,
+                        from_settlement_id text,
+                        to_settlement_id text,
+                        move_reason text
+                    )
+                    """
+                )
+                for event_id in range(1, 4):
+                    con.execute(
+                        """
+                        insert into simulation_event_moves_readable values (
+                            ?, 42, 'settlement_moved', ?, 'r1:a', 'r1:b', 'unit_test'
+                        )
+                        """,
+                        (event_id, event_id),
+                    )
+                con.commit()
+            geometry = WorldMapGeometry(
+                world="test",
+                version="unit",
+                width=1.0,
+                height=1.0,
+                cells=[
+                    RegionCell(
+                        region_id="r1",
+                        continent_id="test",
+                        center_x=0.5,
+                        center_y=0.5,
+                        polygon=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                        elevation=0.0,
+                        moisture=0.0,
+                        ruggedness=0.0,
+                        terrain_family="plains",
+                        is_coastal=False,
+                        feature_ids=[],
+                    )
+                ],
+                micro_cells=[],
+                features=[],
+                edges=[],
+                rivers=[],
+            )
+
+            original_db_path = gdb._db_path
+            original_geometry_cache = gdb._cached_world_map_geometry
+            gdb._db_path = lambda world, db_kind: cfg if db_kind == "Config DB" else save
+            gdb._cached_world_map_geometry = lambda *args, **kwargs: geometry
+            gdb._render_world_map_html_cached.cache_clear()
+            try:
+                shown = render_world_map_html("test", include_overlays=True, include_roads=True)
+                hidden = render_world_map_html("test", include_overlays=True, include_roads=False)
+            finally:
+                gdb._db_path = original_db_path
+                gdb._cached_world_map_geometry = original_geometry_cache
+                gdb._render_world_map_html_cached.cache_clear()
+
+        self.assertIn('class="road road-line"', shown)
+        self.assertIn("data-road-usage=", shown)
+        self.assertIn('data-road-actual="3.0000"', shown)
+        self.assertNotIn('class="road road-line"', hidden)
+        self.assertNotIn("data-road-usage", hidden)
 
     def test_world_map_selection_opens_existing_region_or_town_sheet(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

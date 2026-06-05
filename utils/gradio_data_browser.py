@@ -724,6 +724,7 @@ def render_world_map_html(
     noisy_edges: bool = True,
     labels: bool = True,
     include_inactive_settlements: bool = False,
+    include_roads: bool = True,
 ) -> str:
     world_id = (world or "").strip() or "default"
     cfg = _db_path(world_id, "Config DB")
@@ -738,6 +739,7 @@ def render_world_map_html(
         world_id,
         bool(include_overlays),
         bool(include_inactive_settlements),
+        bool(include_roads),
         bool(noisy_edges),
         bool(labels),
         str(cfg),
@@ -752,6 +754,7 @@ def _render_world_map_html_cached(
     world_id: str,
     include_overlays: bool,
     include_inactive_settlements: bool,
+    include_roads: bool,
     noisy_edges: bool,
     labels: bool,
     cfg_path: str,
@@ -774,6 +777,7 @@ def _render_world_map_html_cached(
                 geometry=geometry,
                 save_db_path=save,
                 include_inactive_settlements=include_inactive_settlements,
+                include_roads=include_roads,
             )
             if include_overlays
             else None
@@ -796,6 +800,8 @@ def _render_world_map_html_cached(
         overlay_text = "active and inactive settlements plus polities"
     else:
         overlay_text = "active settlements and polities" if include_overlays else "base geography only"
+    if include_overlays and include_roads:
+        overlay_text = overlay_text.replace("settlements", "settlements, roads")
     zoom_sync = world_map_zoom_sync_script("s")
     controls = (
         '<div class="map-controls">'
@@ -2588,6 +2594,121 @@ def _event_move_payload(
     return merged
 
 
+def _event_readable_place_payload(
+    con: sqlite3.Connection,
+    event: sqlite3.Row,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    event_id = _event_id(event)
+    if event_id is None or not _has_relation(con, "simulation_events_readable"):
+        return payload
+    try:
+        row = con.execute(
+            """
+            select settlement_id, region_id
+            from simulation_events_readable
+            where id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        return payload
+    if not row:
+        return payload
+    merged = dict(payload)
+    if merged.get("to_settlement_id") in (None, "") and row["settlement_id"]:
+        merged["to_settlement_id"] = row["settlement_id"]
+    if merged.get("to_region_id") in (None, "") and row["region_id"]:
+        merged["to_region_id"] = row["region_id"]
+    return merged
+
+
+def _event_job_seeker_move_payload(
+    con: sqlite3.Connection,
+    event: sqlite3.Row,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> dict[str, object]:
+    merged = dict(payload)
+    if merged.get("from_settlement_id") not in (None, "") and merged.get("to_settlement_id") not in (None, ""):
+        return merged
+    event_year = _event_year(event)
+    rows: list[sqlite3.Row] = []
+    if event_year is not None and _has_relation(con, "simulation_event_moves_readable"):
+        person_id = payload.get("person_id") or focus_person_id
+        group_id = f"job_seeker:{person_id}:{event_year}" if person_id not in (None, "") else ""
+        try:
+            if group_id:
+                rows = con.execute(
+                    """
+                    select *
+                    from simulation_event_moves_readable
+                    where source_event = 'job_seeker_migration'
+                      and group_id = ?
+                    order by
+                      case when moved_person_id = ? then 0 else 1 end,
+                      moved_person_id
+                    """,
+                    (group_id, focus_person_id),
+                ).fetchall()
+            if not rows:
+                moved_ids = payload.get("moved_person_ids")
+                if isinstance(moved_ids, list):
+                    person_ids = [
+                        int(pid)
+                        for pid in moved_ids
+                        if str(pid).strip().lstrip("-").isdigit()
+                    ]
+                else:
+                    person_ids = []
+                if not person_ids and person_id not in (None, ""):
+                    person_ids = [int(person_id)]
+                if person_ids:
+                    placeholders = ",".join("?" for _ in person_ids)
+                    rows = con.execute(
+                        f"""
+                        select *
+                        from simulation_event_moves_readable
+                        where source_event = 'job_seeker_migration'
+                          and requested_year = ?
+                          and moved_person_id in ({placeholders})
+                        order by
+                          case when moved_person_id = ? then 0 else 1 end,
+                          planned_apply_year,
+                          event_id,
+                          moved_person_id
+                        """,
+                        (int(event_year), *person_ids, focus_person_id),
+                    ).fetchall()
+        except (sqlite3.Error, TypeError, ValueError):
+            rows = []
+    if rows:
+        first = rows[0]
+        for key in (
+            "from_settlement_id",
+            "to_settlement_id",
+            "from_region_id",
+            "to_region_id",
+            "move_reason",
+        ):
+            if merged.get(key) in (None, "") and key in first.keys():
+                merged[key] = first[key]
+        if not isinstance(merged.get("moved_person_ids"), list):
+            merged["moved_person_ids"] = [row["moved_person_id"] for row in rows if row["moved_person_id"] is not None]
+        return merged
+    return _event_readable_place_payload(con, event, merged)
+
+
+def _movement_phrase(action: str, from_place: str, to_place: str) -> str:
+    if from_place and to_place:
+        return f"{action} from {from_place} to {to_place}"
+    if to_place:
+        return f"{action} to {to_place}"
+    if from_place:
+        return f"{action} from {from_place}"
+    return action
+
+
 def _event_murder_sentence(
     con: sqlite3.Connection,
     world: str,
@@ -2710,9 +2831,13 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
     if event_type in {"settlement_moved", "job_seeker_migration"}:
         if event_type == "settlement_moved":
             payload = _event_move_payload(con, event, payload, focus_person_id)
-        from_place = _settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or "unknown")
-        to_place = _settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or "unknown")
+        else:
+            payload = _event_job_seeker_move_payload(con, event, payload, focus_person_id)
+        from_place = _settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or "")
+        to_place = _settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or "")
         reason = str(payload.get("move_reason") or event_type).replace("_", " ")
+        action = "moved" if event_type == "settlement_moved" else "planned a job seeker move"
+        movement = _movement_phrase(action, from_place, to_place)
         moved_ids = payload.get("moved_person_ids")
         if isinstance(moved_ids, list) and len(moved_ids) > 1:
             moved = ", ".join(
@@ -2721,8 +2846,8 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
             )
             if len(moved_ids) > 6:
                 moved += f", and {len(moved_ids) - 6} more"
-            return f"{moved} moved from {from_place} to {to_place}; reason: {reason}."
-        return f"{person} moved from {from_place} to {to_place}; reason: {reason}."
+            return f"{moved} {movement}; reason: {reason}."
+        return f"{person} {movement}; reason: {reason}."
 
     if event_type == "partner_residence_reconciled":
         moved = _short_person_for_event(con, world, payload.get("moved_person_id") or focus_person_id, focus_person_id)
@@ -2881,9 +3006,13 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
     if event_type in {"settlement_moved", "job_seeker_migration"}:
         if event_type == "settlement_moved":
             payload = _event_move_payload(con, event, payload, focus_person_id)
-        from_place = html.escape(_settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or "unknown"))
-        to_place = html.escape(_settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or "unknown"))
+        else:
+            payload = _event_job_seeker_move_payload(con, event, payload, focus_person_id)
+        from_place = html.escape(_settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or ""))
+        to_place = html.escape(_settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or ""))
         reason = html.escape(str(payload.get("move_reason") or event_type).replace("_", " "))
+        action = "moved" if event_type == "settlement_moved" else "planned a job seeker move"
+        movement = _movement_phrase(action, from_place, to_place)
         moved_ids = payload.get("moved_person_ids")
         if isinstance(moved_ids, list) and len(moved_ids) > 1:
             moved = ", ".join(
@@ -2892,8 +3021,8 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             )
             if len(moved_ids) > 6:
                 moved += f", and {len(moved_ids) - 6} more"
-            return f"{moved} moved from {from_place} to {to_place}; reason: {reason}."
-        return f"{person} moved from {from_place} to {to_place}; reason: {reason}."
+            return f"{moved} {movement}; reason: {reason}."
+        return f"{person} {movement}; reason: {reason}."
 
     if event_type == "partner_residence_reconciled":
         moved = _short_person_html_for_event(con, world, payload.get("moved_person_id") or focus_person_id, focus_person_id)
@@ -3640,9 +3769,50 @@ def _person_knowledge_effect_lines(
 def _genome_labels(con: sqlite3.Connection) -> dict[str, sqlite3.Row]:
     return {
         str(row["trait"]): row
-        for row in con.execute("select * from cfg.genome")
+        for row in con.execute("select * from cfg.genome order by rowid")
         if row["trait"]
     }
+
+
+def _genome_trait_order(con: sqlite3.Connection) -> dict[str, int]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    queries = (
+        """
+        select trait
+        from cfg.genome_save_columns
+        where trait is not null and trim(trait) <> ''
+        order by cast(sort_order as integer), slot
+        """,
+        """
+        select trait
+        from cfg.genome
+        where trait is not null and trim(trait) <> ''
+        order by rowid
+        """,
+    )
+    for query in queries:
+        try:
+            rows = con.execute(query).fetchall()
+        except sqlite3.Error:
+            continue
+        for row in rows:
+            trait = str(row["trait"] or "").strip()
+            if trait and trait not in seen:
+                seen.add(trait)
+                ordered.append(trait)
+    return {trait: index for index, trait in enumerate(ordered)}
+
+
+def _ordered_genome_trait_names(
+    traits: Iterable[object],
+    trait_order: dict[str, int],
+) -> list[str]:
+    ordered_tail = len(trait_order)
+    return sorted(
+        {str(trait) for trait in traits if trait not in (None, "")},
+        key=lambda trait: (trait_order.get(trait, ordered_tail), trait.casefold(), trait),
+    )
 
 
 def _trait_phrase(
@@ -3860,23 +4030,24 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         event_items = ['<div class="relation muted">No matching events found</div>']
 
     labels = _genome_labels(con)
+    trait_order = _genome_trait_order(con)
     base_genome = person.get("genome") or {}
     current_genome = person.get("mind_body") or base_genome
     legacy_scores_html = _render_legacy_scores(current_genome)
     trait_rows: list[str] = []
     if isinstance(current_genome, dict) or isinstance(base_genome, dict):
-        traits = sorted(
-            set(current_genome if isinstance(current_genome, dict) else {})
-            | set(base_genome if isinstance(base_genome, dict) else {})
+        trait_names = _ordered_genome_trait_names(
+            (
+                set(current_genome if isinstance(current_genome, dict) else {})
+                | set(base_genome if isinstance(base_genome, dict) else {})
+            ),
+            trait_order,
         )
         display_rows = [
             (trait, *_trait_display_values(str(trait), current_genome, base_genome))
-            for trait in traits
+            for trait in trait_names
         ]
-        for trait, value, base_value, shown_value in sorted(
-            display_rows,
-            key=lambda item: -abs(float(item[1] if item[1] is not None else item[2] or 0)),
-        ):
+        for trait, value, base_value, shown_value in display_rows:
             if value is None:
                 continue
             pos = max(0, min(100, (value + 100) / 2))
@@ -6402,6 +6573,7 @@ def render_world_map_with_detail_reset(
     include_inactive_settlements: bool = False,
     noisy_edges: bool = True,
     labels: bool = True,
+    include_roads: bool = True,
 ) -> tuple[str, str]:
     return (
         render_world_map_html(
@@ -6410,6 +6582,7 @@ def render_world_map_with_detail_reset(
             noisy_edges=noisy_edges,
             labels=labels,
             include_inactive_settlements=include_inactive_settlements,
+            include_roads=include_roads,
         ),
         '<div class="place-sheet muted">Click a region, settlement, or named feature on the map to inspect it.</div>',
     )
@@ -6932,6 +7105,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                 map_world = gr.Dropdown(worlds, value=initial_world, label="World")
                 map_include_overlays = gr.Checkbox(value=True, label="Settlements and Polities")
                 map_include_inactive_settlements = gr.Checkbox(value=False, label="Inactive Settlements")
+                map_include_roads = gr.Checkbox(value=True, label="Roads")
                 map_noisy_edges = gr.Checkbox(value=True, label="Noisy Edges")
                 map_labels = gr.Checkbox(value=True, label="Labels")
                 map_refresh = gr.Button("Render Map", variant="primary")
@@ -7132,6 +7306,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             map_include_inactive_settlements,
             map_noisy_edges,
             map_labels,
+            map_include_roads,
         ]
         map_outputs = [world_map_html, map_sheet]
         map_refresh.click(render_world_map_with_detail_reset, map_inputs, map_outputs)

@@ -177,6 +177,56 @@ def species_ethnic_exists(*, species: str, ethnic: str, db_path: Path | str | No
     return key in _species_ethnic_keyset(str(path.resolve()))
 
 
+def normalize_species_ethnic_filters(
+    *,
+    species: str | None,
+    ethnic: str | None,
+    db_path: Path | str | None = None,
+) -> tuple[str | None, str | None]:
+    """Return valid generation filters for possibly-low-detail species facts.
+
+    Passive population rows can contain generic placeholders from older saves,
+    such as ``human`` / ``human``. Keep any known canonical species or ethnic
+    value, but avoid passing impossible exact pairs into ``choose_species_row``.
+    """
+    species_s = str(species or "").strip()
+    ethnic_s = str(ethnic or "").strip()
+    if not species_s and not ethnic_s:
+        return None, None
+
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    rows = _species_rows(str(path.resolve()))
+    species_by_lower: dict[str, str] = {}
+    ethnic_by_lower: dict[str, str] = {}
+    valid_pairs: set[tuple[str, str]] = set()
+    for row in rows:
+        row_species = str(row["species"] or "").strip()
+        row_ethnic = str(row["ethnic"] or "").strip()
+        if row_species:
+            species_by_lower.setdefault(row_species.lower(), row_species)
+        if row_ethnic:
+            ethnic_by_lower.setdefault(row_ethnic.lower(), row_ethnic)
+        if row_species and row_ethnic:
+            valid_pairs.add((row_species, row_ethnic))
+
+    normalized_species = species_by_lower.get(species_s.lower(), species_s)
+    normalized_ethnic = ethnic_by_lower.get(ethnic_s.lower(), ethnic_s)
+    species_known = bool(species_s) and normalized_species.lower() in species_by_lower
+    ethnic_known = bool(ethnic_s) and normalized_ethnic.lower() in ethnic_by_lower
+
+    if (
+        species_known
+        and ethnic_known
+        and (normalized_species, normalized_ethnic) in valid_pairs
+    ):
+        return normalized_species, normalized_ethnic
+    if species_known:
+        return normalized_species, None
+    if ethnic_known:
+        return None, normalized_ethnic
+    return None, None
+
+
 def preload_trait_cache(*, db_path: Path | str | None = None, world: str = "default") -> None:
     """Warm trait/species caches once for simulation startup."""
     path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
