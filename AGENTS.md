@@ -33,6 +33,13 @@ Use this file first when starting a new session in this repository.
 
 4. **Working set vs save.sqlite (long runs):** Full checkpoints **upsert** `simulation_people` and `simulation_settlements` (historical rows stay in `save.sqlite`; no blanket `DELETE` those tables on snap). After each full snapshot, **`prune_ancient_dead_from_ram`** drops from `ctx.people` anyone dead longer than **`working_set_dead_retention_years`** (default **20**). **`try_load_simulation_checkpoint`** only hydrates alive + recent-dead into RAM; **`simulation_events`** remain append-only. New simulation features that add per-person state should stay compatible with this pattern (bounded RAM, full history on disk).
 
+## Tracking Docs
+
+- `TODO.md` should contain only actionable remaining work plus the minimum context needed to choose and implement the next task.
+- Completed functionality belongs in `TODONE.md`, not as long "already done" prose in `TODO.md`.
+- If completed context must remain in `TODO.md` because later work depends on it, label it clearly as context for completed functionality needed by next functionality.
+- Every workstream must have a realistic completion boundary. Do not turn a completed workstream into a never-ending list of speculative follow-ups; create a new TODO only when the next item is concrete, useful, and worth the added runtime or maintenance cost.
+
 ## Project Facts To Preserve
 
 - **Progen-E** layout: each world has a folder under `worlds/<world_id>/` with **`config.sqlite`** (imported from `config/*.csv`, not written during simulation) and **`save.sqlite`** (mutable simulation state: `world_state` clock plus **`simulation_*`** checkpoint/state tables for people, settlements, couples, event records, regional domain states, obligation ledgers, reputation marks, legal fallout rows, and append-only **`simulation_events`**). `SimulationContext.record_year_summary` and **`finalize_run()`** persist to the save DB.

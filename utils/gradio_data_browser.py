@@ -123,6 +123,35 @@ HISTORY_BROWSER_HEADERS = [
     "Admin Summary",
 ]
 HISTORY_SUMMARY_HEADERS = ["Section", "Key", "Count", "Value"]
+HISTORY_LENS_CHOICES = ["Person", "Family", "Household", "Settlement", "Region", "Polity"]
+HISTORY_LENS_HEADERS = [
+    "Year",
+    "Event ID",
+    "Record ID",
+    "Lens",
+    "Focus",
+    "Event Type",
+    "Visibility",
+    "Public Stage",
+    "Record Type",
+    "Role",
+    "Prose",
+    "Admin Summary",
+]
+REDISCOVERY_DETAIL_HEADERS = [
+    "Year",
+    "Event ID",
+    "Record ID",
+    "Event Type",
+    "Visibility",
+    "Public Stage",
+    "Confidence",
+    "Source",
+    "Preserved At",
+    "Distortion",
+    "Rediscovery Summary",
+    "Admin Summary",
+]
 
 from library.world_map_geometry import (  # noqa: E402
     WorldMapGeometry,
@@ -1082,6 +1111,14 @@ def _history_record_row(row: EventRecordProse) -> dict[str, object]:
     }
 
 
+def _history_lens_empty_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=HISTORY_LENS_HEADERS)
+
+
+def _rediscovery_detail_empty_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=REDISCOVERY_DETAIL_HEADERS)
+
+
 def _history_empty_frame() -> gr.Dataframe:
     return gr.Dataframe(value=[], headers=HISTORY_BROWSER_HEADERS)
 
@@ -1151,6 +1188,33 @@ def _history_summary_rows(report: object) -> list[dict[str, object]]:
             {
                 "Section": "Metrics",
                 "Key": f"{metric.event_type} {metric.metric}",
+                "Count": int(metric.count),
+                "Value": (
+                    f"avg={metric.average:.4f} "
+                    f"min={metric.minimum:.4f} max={metric.maximum:.4f}"
+                ),
+            }
+        )
+    for row in sorted(
+        getattr(report, "consequence_counts", ()),
+        key=lambda item: (item.keys, item.count),
+    ):
+        rows.append(
+            {
+                "Section": "Consequences",
+                "Key": " / ".join(row.keys),
+                "Count": int(row.count),
+                "Value": "",
+            }
+        )
+    for metric in sorted(
+        getattr(report, "consequence_metric_summaries", ()),
+        key=lambda item: (item.section, item.key, item.metric),
+    ):
+        rows.append(
+            {
+                "Section": "Consequence Metrics",
+                "Key": f"{metric.section} / {metric.key} / {metric.metric}",
                 "Count": int(metric.count),
                 "Value": (
                     f"avg={metric.average:.4f} "
@@ -1330,6 +1394,882 @@ def load_history_browser(
         f"| filters: {', '.join(filter_bits)}{saved_world_note}."
     )
     return _dataframe(values, HISTORY_BROWSER_HEADERS), status
+
+
+def _coerce_int_or_none(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _display_token(value: object) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_display_token(item) for item in value)
+    if isinstance(value, dict):
+        return "; ".join(
+            f"{_display_token(key)}: {_display_token(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+    return str(value).replace("_", " ")
+
+
+def _display_title(value: object) -> str:
+    return " ".join(part.capitalize() for part in _display_token(value).split())
+
+
+def _history_settlement_label(
+    con: sqlite3.Connection,
+    world: str,
+    settlement_id: object,
+) -> str:
+    sid = str(settlement_id or "").strip()
+    if not sid:
+        return ""
+    label = _settlement_name(con, world, sid) if _has_table(con, "simulation_settlements") else sid
+    if label and label != sid:
+        return label
+    marker = ":settlement:"
+    if marker in sid:
+        region, slot = sid.split(marker, 1)
+        return f"Settlement {slot} of {_display_title(region)}"
+    return _display_title(sid)
+
+
+def _history_region_label(
+    con: sqlite3.Connection,
+    world: str,
+    region_id: object,
+) -> str:
+    rid = str(region_id or "").strip()
+    if not rid:
+        return ""
+    if _has_relation(con, "simulation_regions_readable"):
+        row = con.execute(
+            """
+            SELECT region_display_name
+            FROM simulation_regions_readable
+            WHERE region_id = ?
+            """,
+            (rid,),
+        ).fetchone()
+        if row and str(row["region_display_name"] or "").strip():
+            return str(row["region_display_name"]).strip()
+    config_name = _config_region_display_name(world, rid)
+    return config_name or _display_title(rid)
+
+
+def _history_polity_label(
+    con: sqlite3.Connection,
+    world: str,
+    polity_id: object,
+) -> str:
+    pid = _coerce_int_or_none(polity_id)
+    if pid is None:
+        return str(polity_id or "").strip()
+    if _has_table(con, "simulation_polities"):
+        where, params = _world_where(con, "simulation_polities", world)
+        row = con.execute(
+            f"""
+            SELECT name, polity_type_id
+            FROM simulation_polities
+            WHERE {where} AND polity_id = ?
+            """,
+            (*params, pid),
+        ).fetchone()
+        if row:
+            name = str(row["name"] or "").strip()
+            if name:
+                return f"{name} (#{pid})"
+            ptype = str(row["polity_type_id"] or "").strip()
+            if ptype:
+                return f"{_display_title(ptype)} #{pid}"
+    return f"Polity #{pid}"
+
+
+def _history_sql_in_placeholders(values: Iterable[object]) -> tuple[str, list[object]]:
+    clean = list(values)
+    return ", ".join("?" for _ in clean), clean
+
+
+def _history_event_ids_from_person_ids(
+    con: sqlite3.Connection,
+    world: str,
+    person_ids: set[int],
+) -> set[int]:
+    if not person_ids or not _has_table(con, "simulation_events"):
+        return set()
+    event_ids: set[int] = set()
+    placeholders, person_params = _history_sql_in_placeholders(sorted(person_ids))
+    events_where, events_params = _world_where(con, "simulation_events", world)
+
+    if _has_table(con, "simulation_event_people"):
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT ep.event_id
+            FROM simulation_event_people ep
+            JOIN simulation_events e ON e.id = ep.event_id
+            WHERE ep.person_id IN ({placeholders})
+              AND {events_where}
+            """,
+            (*person_params, *events_params),
+        ).fetchall()
+        event_ids.update(int(row["event_id"]) for row in rows if row["event_id"] is not None)
+
+    scalar_fields = (
+        "person_id",
+        "person_a_id",
+        "person_b_id",
+        "child_id",
+        "victim_person_id",
+        "killer_person_id",
+        "perpetrator_person_id",
+        "target_person_id",
+        "accused_person_id",
+        "paramour_person_id",
+        "benefactor_person_id",
+        "beneficiary_person_id",
+        "creator_person_id",
+        "patron_person_id",
+        "source_person_id",
+        "purseholder_person_id",
+        "moved_person_id",
+        "holder_person_id",
+        "previous_holder_id",
+        "prior_head_person_id",
+        "claimant_id",
+    )
+    array_fields = (
+        "household_member_ids",
+        "dependent_minor_ids",
+        "moved_person_ids",
+        "witness_person_ids",
+        "betrayed_partner_person_ids",
+    )
+    scalar_clauses: list[str] = []
+    scalar_params: list[object] = []
+    for field in scalar_fields:
+        scalar_clauses.append(f"json_extract(payload_json, '$.{field}') IN ({placeholders})")
+        scalar_params.extend(person_params)
+    for field in array_fields:
+        scalar_clauses.append(
+            "EXISTS ("
+            f"SELECT 1 FROM json_each(payload_json, '$.{field}') "
+            f"WHERE json_each.value IN ({placeholders})"
+            ")"
+        )
+        scalar_params.extend(person_params)
+    rows = con.execute(
+        f"""
+        SELECT DISTINCT id
+        FROM simulation_events
+        WHERE {events_where}
+          AND ({' OR '.join(scalar_clauses)})
+        """,
+        (*events_params, *scalar_params),
+    ).fetchall()
+    event_ids.update(int(row["id"]) for row in rows if row["id"] is not None)
+
+    if _has_relation(con, "simulation_event_records_readable"):
+        record_clauses = [
+            f"source_person_id IN ({placeholders})",
+            f"public_actor_person_id IN ({placeholders})",
+            f"public_victim_person_id IN ({placeholders})",
+        ]
+        record_params: list[object] = []
+        for _ in record_clauses:
+            record_params.extend(person_params)
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT r.event_id
+            FROM simulation_event_records_readable r
+            JOIN simulation_events e ON e.id = r.event_id
+            WHERE {events_where}
+              AND ({' OR '.join(record_clauses)})
+            """,
+            (*events_params, *record_params),
+        ).fetchall()
+        event_ids.update(int(row["event_id"]) for row in rows if row["event_id"] is not None)
+    return event_ids
+
+
+def _history_event_ids_from_settlement(
+    con: sqlite3.Connection,
+    world: str,
+    settlement_id: str,
+) -> set[int]:
+    sid = str(settlement_id or "").strip()
+    if not sid or not _has_table(con, "simulation_events"):
+        return set()
+    event_ids: set[int] = set()
+    events_where, events_params = _world_where(con, "simulation_events", world)
+    settlement_fields = (
+        "settlement_id",
+        "birthplace_settlement_id",
+        "current_settlement_id",
+        "from_settlement_id",
+        "to_settlement_id",
+        "preserving_settlement_id",
+        "capital_settlement_id",
+        "scope_settlement_id",
+        "target_settlement_id",
+    )
+    clauses = [f"json_extract(payload_json, '$.{field}') = ?" for field in settlement_fields]
+    readable_clauses = [
+        f"json_extract(er.payload_json, '$.{field}') = ?"
+        for field in settlement_fields
+    ]
+    params: list[object] = [sid for _ in settlement_fields]
+    if _has_relation(con, "simulation_events_readable"):
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT er.id
+            FROM simulation_events_readable er
+            JOIN simulation_events e ON e.id = er.id
+            WHERE {events_where}
+              AND (
+                er.settlement_id = ?
+                OR {' OR '.join(readable_clauses)}
+              )
+            """,
+            (*events_params, sid, *params),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT id
+            FROM simulation_events
+            WHERE {events_where}
+              AND ({' OR '.join(clauses)})
+            """,
+            (*events_params, *params),
+        ).fetchall()
+    event_ids.update(int(row[0]) for row in rows if row[0] is not None)
+
+    if _has_relation(con, "simulation_event_moves_readable"):
+        rows = con.execute(
+            """
+            SELECT DISTINCT event_id
+            FROM simulation_event_moves_readable
+            WHERE from_settlement_id = ? OR to_settlement_id = ?
+            """,
+            (sid, sid),
+        ).fetchall()
+        event_ids.update(int(row["event_id"]) for row in rows if row["event_id"] is not None)
+
+    if _has_relation(con, "simulation_event_records_readable"):
+        rows = con.execute(
+            """
+            SELECT DISTINCT event_id
+            FROM simulation_event_records_readable
+            WHERE preserving_settlement_id = ?
+            """,
+            (sid,),
+        ).fetchall()
+        event_ids.update(int(row["event_id"]) for row in rows if row["event_id"] is not None)
+    return event_ids
+
+
+def _history_event_ids_from_region(
+    con: sqlite3.Connection,
+    world: str,
+    region_id: str,
+) -> set[int]:
+    rid = str(region_id or "").strip()
+    if not rid or not _has_table(con, "simulation_events"):
+        return set()
+    event_ids: set[int] = set()
+    events_where, events_params = _world_where(con, "simulation_events", world)
+    region_fields = (
+        "region_id",
+        "birthplace_region_id",
+        "current_region_id",
+        "from_region_id",
+        "to_region_id",
+        "preserving_region_id",
+        "target_region_id",
+    )
+    clauses = [f"json_extract(payload_json, '$.{field}') = ?" for field in region_fields]
+    readable_clauses = [
+        f"json_extract(er.payload_json, '$.{field}') = ?"
+        for field in region_fields
+    ]
+    params: list[object] = [rid for _ in region_fields]
+    if _has_relation(con, "simulation_events_readable"):
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT er.id
+            FROM simulation_events_readable er
+            JOIN simulation_events e ON e.id = er.id
+            WHERE {events_where}
+              AND (
+                er.region_id = ?
+                OR {' OR '.join(readable_clauses)}
+              )
+            """,
+            (*events_params, rid, *params),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT id
+            FROM simulation_events
+            WHERE {events_where}
+              AND ({' OR '.join(clauses)})
+            """,
+            (*events_params, *params),
+        ).fetchall()
+    event_ids.update(int(row[0]) for row in rows if row[0] is not None)
+
+    if _has_relation(con, "simulation_event_moves_readable"):
+        rows = con.execute(
+            """
+            SELECT DISTINCT event_id
+            FROM simulation_event_moves_readable
+            WHERE from_region_id = ? OR to_region_id = ?
+            """,
+            (rid, rid),
+        ).fetchall()
+        event_ids.update(int(row["event_id"]) for row in rows if row["event_id"] is not None)
+
+    if _has_relation(con, "simulation_event_records_readable"):
+        rows = con.execute(
+            """
+            SELECT DISTINCT event_id
+            FROM simulation_event_records_readable
+            WHERE preserving_region_id = ?
+            """,
+            (rid,),
+        ).fetchall()
+        event_ids.update(int(row["event_id"]) for row in rows if row["event_id"] is not None)
+    return event_ids
+
+
+def _history_event_ids_from_polity(
+    con: sqlite3.Connection,
+    world: str,
+    polity_id: int,
+) -> set[int]:
+    if not _has_table(con, "simulation_events"):
+        return set()
+    event_ids: set[int] = set()
+    events_where, events_params = _world_where(con, "simulation_events", world)
+    polity_fields = (
+        "polity_id",
+        "parent_polity_id",
+        "child_polity_id",
+        "attacker_polity_id",
+        "defender_polity_id",
+        "prior_polity_id",
+        "new_polity_id",
+        "suzerain_polity_id",
+        "vassal_polity_id",
+        "polity_a_id",
+        "polity_b_id",
+    )
+    clauses = [f"json_extract(payload_json, '$.{field}') = ?" for field in polity_fields]
+    params: list[object] = [polity_id for _ in polity_fields]
+    rows = con.execute(
+        f"""
+        SELECT DISTINCT id
+        FROM simulation_events
+        WHERE {events_where}
+          AND ({' OR '.join(clauses)})
+        """,
+        (*events_params, *params),
+    ).fetchall()
+    event_ids.update(int(row["id"]) for row in rows if row["id"] is not None)
+
+    campaign_ids: set[int] = set()
+    if _has_table(con, "simulation_campaigns"):
+        rows = con.execute(
+            """
+            SELECT campaign_id
+            FROM simulation_campaigns
+            WHERE attacker_polity_id = ? OR defender_polity_id = ?
+            """,
+            (polity_id, polity_id),
+        ).fetchall()
+        campaign_ids.update(int(row["campaign_id"]) for row in rows if row["campaign_id"] is not None)
+    if campaign_ids:
+        placeholders, campaign_params = _history_sql_in_placeholders(sorted(campaign_ids))
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT id
+            FROM simulation_events
+            WHERE {events_where}
+              AND json_extract(payload_json, '$.campaign_id') IN ({placeholders})
+            """,
+            (*events_params, *campaign_params),
+        ).fetchall()
+        event_ids.update(int(row["id"]) for row in rows if row["id"] is not None)
+    return event_ids
+
+
+def _person_current_settlement_id(
+    con: sqlite3.Connection,
+    row: sqlite3.Row | None,
+    person: dict[str, object],
+) -> str:
+    value = person.get("current_settlement_id") or person.get("birthplace_settlement_id")
+    if value:
+        return str(value)
+    if row is not None and "current_settlement_id" in row.keys() and row["current_settlement_id"]:
+        return str(row["current_settlement_id"])
+    key = None
+    if row is not None and "current_settlement_key" in row.keys():
+        key = row["current_settlement_key"]
+    if key is None and row is not None and "birthplace_settlement_key" in row.keys():
+        key = row["birthplace_settlement_key"]
+    if key is not None and _has_table(con, "simulation_settlement_lookup"):
+        lookup = con.execute(
+            "SELECT settlement_id FROM simulation_settlement_lookup WHERE settlement_key = ?",
+            (key,),
+        ).fetchone()
+        if lookup and lookup["settlement_id"]:
+            return str(lookup["settlement_id"])
+    return ""
+
+
+def _history_family_person_ids(
+    con: sqlite3.Connection,
+    world: str,
+    focus_person_id: int,
+) -> tuple[set[int], str]:
+    row, person = _lookup_person(con, world, focus_person_id)
+    if not row:
+        return set(), f"person {focus_person_id}"
+    ids = {focus_person_id}
+    for key in ("father_id", "mother_id"):
+        if key in row.keys():
+            related = _coerce_int_or_none(row[key])
+            if related is not None:
+                ids.add(related)
+    for key in ("partner_person_id", "paramour_person_id"):
+        related = _coerce_int_or_none(person.get(key))
+        if related is not None:
+            ids.add(related)
+    if _has_table(con, "simulation_people"):
+        people_where, people_params = _world_where(con, "simulation_people", world)
+        rows = con.execute(
+            f"""
+            SELECT person_id
+            FROM simulation_people
+            WHERE {people_where}
+              AND (father_id = ? OR mother_id = ?)
+            """,
+            (*people_params, focus_person_id, focus_person_id),
+        ).fetchall()
+        ids.update(int(child["person_id"]) for child in rows if child["person_id"] is not None)
+    return ids, _person_name(person)
+
+
+def _history_household_person_ids(
+    con: sqlite3.Connection,
+    world: str,
+    focus_person_id: int,
+) -> tuple[set[int], str]:
+    row, person = _lookup_person(con, world, focus_person_id)
+    if not row:
+        return set(), f"person {focus_person_id}"
+    focus_home = _person_current_settlement_id(con, row, person)
+    family_ids, focus_name = _history_family_person_ids(con, world, focus_person_id)
+    if not focus_home:
+        return family_ids or {focus_person_id}, focus_name
+    household_ids: set[int] = {focus_person_id}
+    for pid in family_ids:
+        relative_row, relative = _lookup_person(con, world, pid)
+        if relative_row and _person_current_settlement_id(con, relative_row, relative) == focus_home:
+            household_ids.add(pid)
+    return household_ids, focus_name
+
+
+def _history_lens_event_ids(
+    con: sqlite3.Connection,
+    world: str,
+    lens: str,
+    focus: object,
+) -> tuple[set[int], set[int], str, str]:
+    selected = lens if lens in HISTORY_LENS_CHOICES else "Person"
+    raw_focus = str(focus or "").strip()
+    if selected == "Settlement":
+        if not raw_focus:
+            return set(), set(), "Settlement", "Enter a settlement id."
+        label = _history_settlement_label(con, world, raw_focus)
+        return (
+            _history_event_ids_from_settlement(con, world, raw_focus),
+            set(),
+            f"Settlement: {label}",
+            "",
+        )
+    if selected == "Region":
+        if not raw_focus:
+            return set(), set(), "Region", "Enter a region id."
+        label = _history_region_label(con, world, raw_focus)
+        return (
+            _history_event_ids_from_region(con, world, raw_focus),
+            set(),
+            f"Region: {label}",
+            "",
+        )
+    if selected == "Polity":
+        focus_polity_id = _coerce_int_or_none(raw_focus)
+        if focus_polity_id is None:
+            return set(), set(), "Polity", "Enter a polity id."
+        label = _history_polity_label(con, world, focus_polity_id)
+        return (
+            _history_event_ids_from_polity(con, world, focus_polity_id),
+            set(),
+            f"Polity: {label}",
+            "",
+        )
+
+    focus_person_id = _coerce_int_or_none(raw_focus)
+    if focus_person_id is None:
+        return set(), set(), selected, "Enter a person id."
+    if selected == "Person":
+        row, person = _lookup_person(con, world, focus_person_id)
+        if not row:
+            return set(), set(), f"Person {focus_person_id}", "No matching person."
+        person_ids = {focus_person_id}
+        label = f"Person: {_person_name(person)} (#{focus_person_id})"
+    elif selected == "Family":
+        person_ids, focus_name = _history_family_person_ids(con, world, focus_person_id)
+        if not person_ids:
+            return set(), set(), f"Family of person {focus_person_id}", "No matching person."
+        label = f"Family of {focus_name} (#{focus_person_id}, {len(person_ids)} people)"
+    else:
+        person_ids, focus_name = _history_household_person_ids(con, world, focus_person_id)
+        if not person_ids:
+            return set(), set(), f"Household of person {focus_person_id}", "No matching person."
+        label = f"Household of {focus_name} (#{focus_person_id}, {len(person_ids)} people)"
+    return _history_event_ids_from_person_ids(con, world, person_ids), person_ids, label, ""
+
+
+def _history_roles_for_events(
+    con: sqlite3.Connection,
+    event_ids: set[int],
+    person_ids: set[int],
+) -> dict[int, str]:
+    if not event_ids or not person_ids or not _has_table(con, "simulation_event_people"):
+        return {}
+    event_placeholders, event_params = _history_sql_in_placeholders(sorted(event_ids))
+    person_placeholders, person_params = _history_sql_in_placeholders(sorted(person_ids))
+    rows = con.execute(
+        f"""
+        SELECT event_id, person_id, role
+        FROM simulation_event_people
+        WHERE event_id IN ({event_placeholders})
+          AND person_id IN ({person_placeholders})
+        ORDER BY event_id, person_id, role
+        """,
+        (*event_params, *person_params),
+    ).fetchall()
+    grouped: dict[int, list[str]] = {}
+    for row in rows:
+        event_id = int(row["event_id"])
+        role = str(row["role"] or "participant").replace("_", " ")
+        grouped.setdefault(event_id, []).append(f"{role} #{row['person_id']}")
+    return {event_id: ", ".join(parts) for event_id, parts in grouped.items()}
+
+
+def _history_lens_row(
+    base: dict[str, object],
+    *,
+    lens_label: str,
+    role: str,
+) -> dict[str, object]:
+    return {
+        "Year": base.get("Year", ""),
+        "Event ID": base.get("Event ID", ""),
+        "Record ID": base.get("Record ID", ""),
+        "Lens": base.get("Visibility", ""),
+        "Focus": lens_label,
+        "Event Type": base.get("Event Type", ""),
+        "Visibility": base.get("Visibility", ""),
+        "Public Stage": base.get("Public Stage", ""),
+        "Record Type": base.get("Record Type", ""),
+        "Role": role,
+        "Prose": base.get("Prose", ""),
+        "Admin Summary": base.get("Admin Summary", ""),
+    }
+
+
+def load_history_lens(
+    world: str,
+    lens: str,
+    focus: object,
+    event_type_text: object,
+    search: str,
+    limit: object,
+    offset: object,
+) -> tuple[gr.Dataframe, str]:
+    selected = lens if str(lens or "") in HISTORY_LENS_CHOICES else "Person"
+    if not world:
+        return _history_lens_empty_frame(), "Choose a world."
+    row_limit = _safe_int(limit, 100, 1, 500)
+    row_offset = _safe_int(offset, 0, 0, 10_000_000)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _history_lens_empty_frame(), f"{path} is missing. Run a simulation first."
+
+    event_types = _history_event_type_filter(event_type_text)
+    with _connect_readonly(path) as con:
+        if not _has_relation(con, "simulation_events_readable"):
+            return (
+                _history_lens_empty_frame(),
+                "No simulation_events_readable view found. Ensure or rebuild the save schema.",
+            )
+        if not _has_relation(con, "simulation_event_records_readable"):
+            return (
+                _history_lens_empty_frame(),
+                "No simulation_event_records_readable view found. Ensure or rebuild the save schema.",
+            )
+        saved_world = _resolve_saved_world(con, world)
+        event_ids, person_ids, lens_label, warning = _history_lens_event_ids(
+            con, saved_world, selected, focus
+        )
+        if warning:
+            return _history_lens_empty_frame(), warning
+        if not event_ids:
+            return (
+                _history_lens_empty_frame(),
+                f"{path.name}: no events matched {lens_label}.",
+            )
+        role_by_event = _history_roles_for_events(con, event_ids, person_ids)
+        fetch_limit = min(MAX_LIMIT, max(row_limit + row_offset, row_limit) * 4)
+        place_chronicle_lens = selected in {"Settlement", "Region", "Polity"}
+        admin_rows = []
+        if not place_chronicle_lens:
+            admin_rows = [
+                _history_lens_row(
+                    _history_admin_row(summary),
+                    lens_label=lens_label,
+                    role=role_by_event.get(summary.event_id, "matched event"),
+                )
+                for summary in load_admin_event_summaries(
+                    con,
+                    event_ids=event_ids,
+                    event_types=event_types,
+                    search=search,
+                    limit=fetch_limit,
+                    offset=0,
+                )
+            ]
+        record_loader = load_public_chronicle_prose if place_chronicle_lens else load_event_record_prose_rows
+        record_rows = [
+            _history_lens_row(
+                _history_record_row(record),
+                lens_label=lens_label,
+                role=role_by_event.get(
+                    record.event_id,
+                    "visible memory" if place_chronicle_lens else "matched event",
+                ),
+            )
+            for record in record_loader(
+                con,
+                event_ids=event_ids,
+                event_types=event_types,
+                search=search,
+                limit=fetch_limit,
+                offset=0,
+            )
+        ]
+
+    rows = sorted(
+        [*admin_rows, *record_rows],
+        key=lambda row: (
+            int(row["Year"] or 0),
+            int(row["Event ID"] or 0),
+            str(row["Visibility"]),
+            int(row["Record ID"] or 0),
+        ),
+    )
+    values = rows[row_offset : row_offset + row_limit]
+    filter_bits: list[str] = [selected, lens_label]
+    if event_types:
+        filter_bits.append("types=" + ", ".join(sorted(event_types)))
+    if search:
+        filter_bits.append(f"search={search!r}")
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} of {len(rows)} lens rows at offset {row_offset} "
+        f"| filters: {', '.join(filter_bits)}{saved_world_note}."
+    )
+    return _dataframe(values, HISTORY_LENS_HEADERS), status
+
+
+def _rediscovery_distortion_text(raw: object) -> str:
+    distortion = _load_json_object(raw)
+    if not distortion:
+        return "None recorded"
+    parts = []
+    for key, value in sorted(distortion.items(), key=lambda item: str(item[0])):
+        parts.append(f"{_display_token(key)}: {_display_token(value)}")
+    return "; ".join(parts)
+
+
+def _rediscovery_source_text(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row,
+) -> str:
+    parts: list[str] = []
+    source_person_id = _coerce_int_or_none(row["source_person_id"])
+    if source_person_id is not None:
+        parts.append(_short_person(con, world, source_person_id))
+    institution = str(row["source_institution_id"] or "").strip()
+    if institution:
+        parts.append(_display_token(institution))
+    return "; ".join(parts) if parts else "Source not recorded"
+
+
+def _rediscovery_preserved_at_text(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row,
+) -> str:
+    settlement_id = str(row["preserving_settlement_id"] or "").strip()
+    if settlement_id:
+        return _history_settlement_label(con, world, settlement_id)
+    region_id = str(row["preserving_region_id"] or "").strip()
+    return _display_token(region_id) if region_id else "Place not recorded"
+
+
+def _rediscovery_detail_row(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row,
+) -> dict[str, object]:
+    source = _rediscovery_source_text(con, world, row)
+    preserved_at = _rediscovery_preserved_at_text(con, world, row)
+    distortion = _rediscovery_distortion_text(row["distortion_json"])
+    confidence = ""
+    if row["confidence"] not in (None, ""):
+        confidence = f"{float(row['confidence']):.2f}"
+    summary = (
+        f"{row['rediscovered_year'] or row['sim_year']}: {source} recovered "
+        f"{_display_token(row['event_type'])} record {row['record_key'] or row['record_id']} "
+        f"with confidence {confidence or 'unknown'}; preserved at {preserved_at}; "
+        f"distortion: {distortion}."
+    )
+    rendered = load_event_record_prose_rows(
+        con,
+        event_ids={row["event_id"]},
+        visibility_states={"rediscovered"},
+        limit=50,
+        offset=0,
+    )
+    admin_summary = ""
+    for record in rendered:
+        if record.record_id == row["record_id"]:
+            admin_summary = record.admin_summary
+            break
+    return {
+        "Year": row["sim_year"],
+        "Event ID": row["event_id"],
+        "Record ID": row["record_id"],
+        "Event Type": row["event_type"],
+        "Visibility": row["visibility_state"],
+        "Public Stage": row["public_knowledge_stage"],
+        "Confidence": confidence,
+        "Source": source,
+        "Preserved At": preserved_at,
+        "Distortion": distortion,
+        "Rediscovery Summary": summary,
+        "Admin Summary": admin_summary,
+    }
+
+
+def load_rediscovery_details(
+    world: str,
+    event_type_text: object,
+    search: str,
+    limit: object,
+    offset: object,
+) -> tuple[gr.Dataframe, str]:
+    if not world:
+        return _rediscovery_detail_empty_frame(), "Choose a world."
+    row_limit = _safe_int(limit, 100, 1, 500)
+    row_offset = _safe_int(offset, 0, 0, 10_000_000)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _rediscovery_detail_empty_frame(), f"{path} is missing. Run a simulation first."
+
+    event_types = _history_event_type_filter(event_type_text)
+    with _connect_readonly(path) as con:
+        if not _has_relation(con, "simulation_events_readable"):
+            return (
+                _rediscovery_detail_empty_frame(),
+                "No simulation_events_readable view found. Ensure or rebuild the save schema.",
+            )
+        if not _has_relation(con, "simulation_event_records_readable"):
+            return (
+                _rediscovery_detail_empty_frame(),
+                "No simulation_event_records_readable view found. Ensure or rebuild the save schema.",
+            )
+        saved_world = _resolve_saved_world(con, world)
+        clauses = ["r.visibility_state = 'rediscovered'"]
+        params: list[object] = []
+        if event_types:
+            placeholders, type_params = _history_sql_in_placeholders(sorted(event_types))
+            clauses.append(f"e.event_type IN ({placeholders})")
+            params.extend(type_params)
+        if str(search or "").strip():
+            like = f"%{str(search).strip()}%"
+            clauses.append(
+                "("
+                "e.event_type LIKE ? OR e.payload_json LIKE ? OR "
+                "r.record_type LIKE ? OR r.source_institution_id LIKE ? OR "
+                "r.distortion_json LIKE ?"
+                ")"
+            )
+            params.extend([like] * 5)
+        params.extend([row_limit, row_offset])
+        rows = con.execute(
+            f"""
+            SELECT
+                e.id AS event_id,
+                e.sim_year,
+                e.event_type,
+                e.payload_json,
+                r.record_id,
+                r.record_key,
+                r.record_type,
+                r.visibility_state,
+                r.public_knowledge_stage,
+                r.rediscovered_year,
+                r.confidence,
+                r.source_person_id,
+                r.source_institution_id,
+                r.preserving_settlement_id,
+                r.preserving_region_id,
+                r.distortion_json
+            FROM simulation_event_records_readable r
+            JOIN simulation_events_readable e ON e.id = r.event_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY COALESCE(r.rediscovered_year, e.sim_year), e.sim_year, e.id, r.record_id
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        ).fetchall()
+        values = [_rediscovery_detail_row(con, saved_world, row) for row in rows]
+
+    filter_bits: list[str] = ["rediscovered records"]
+    if event_types:
+        filter_bits.append("types=" + ", ".join(sorted(event_types)))
+    if search:
+        filter_bits.append(f"search={search!r}")
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} rediscovery detail rows at offset {row_offset} "
+        f"| filters: {', '.join(filter_bits)}{saved_world_note}."
+    )
+    return _dataframe(values, REDISCOVERY_DETAIL_HEADERS), status
 
 
 def _load_json_object(raw: object) -> dict[str, object]:
@@ -7162,6 +8102,54 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                 interactive=False,
                 wrap=True,
             )
+            with gr.Row(elem_classes=["world-browser"]):
+                history_lens_kind = gr.Radio(
+                    HISTORY_LENS_CHOICES,
+                    value="Person",
+                    label="Lens",
+                )
+                history_lens_focus = gr.Textbox(
+                    value="",
+                    label="Focus ID",
+                    placeholder="Person id or settlement id",
+                )
+                history_lens_event_type = gr.Textbox(
+                    value="",
+                    label="Lens Event Type",
+                    placeholder="All, murder, property_crime...",
+                )
+                history_lens_limit = gr.Number(value=100, label="Lens Limit", precision=0)
+                history_lens_offset = gr.Number(value=0, label="Lens Offset", precision=0)
+            history_lens_search = gr.Textbox(
+                label="Search Lens",
+                placeholder="Event type, place, payload value, visibility, source...",
+            )
+            history_lens_load = gr.Button("Load Lens")
+            history_lens_status = gr.Textbox(label="Lens Status", interactive=False)
+            history_lens_table = gr.Dataframe(
+                label="History Lens Rows",
+                interactive=False,
+                wrap=True,
+            )
+            with gr.Row(elem_classes=["world-browser"]):
+                rediscovery_event_type = gr.Textbox(
+                    value="",
+                    label="Rediscovery Event Type",
+                    placeholder="All, birth, murder...",
+                )
+                rediscovery_limit = gr.Number(value=100, label="Rediscovery Limit", precision=0)
+                rediscovery_offset = gr.Number(value=0, label="Rediscovery Offset", precision=0)
+            rediscovery_search = gr.Textbox(
+                label="Search Rediscoveries",
+                placeholder="Event type, source, distortion, payload value...",
+            )
+            rediscovery_detail_load = gr.Button("Load Rediscovery Details")
+            rediscovery_detail_status = gr.Textbox(label="Rediscovery Detail Status", interactive=False)
+            rediscovery_detail_table = gr.Dataframe(
+                label="Rediscovery Details",
+                interactive=False,
+                wrap=True,
+            )
 
         with gr.Tab("Raw Data Browser"):
             with gr.Tab("SQLite"):
@@ -7328,6 +8316,37 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             load_history_summary,
             [history_world],
             [history_summary_table, history_summary_status],
+        )
+        history_lens_inputs = [
+            history_world,
+            history_lens_kind,
+            history_lens_focus,
+            history_lens_event_type,
+            history_lens_search,
+            history_lens_limit,
+            history_lens_offset,
+        ]
+        history_lens_outputs = [history_lens_table, history_lens_status]
+        history_lens_load.click(load_history_lens, history_lens_inputs, history_lens_outputs)
+        history_lens_search.submit(load_history_lens, history_lens_inputs, history_lens_outputs)
+        history_lens_focus.submit(load_history_lens, history_lens_inputs, history_lens_outputs)
+        rediscovery_detail_inputs = [
+            history_world,
+            rediscovery_event_type,
+            rediscovery_search,
+            rediscovery_limit,
+            rediscovery_offset,
+        ]
+        rediscovery_detail_outputs = [rediscovery_detail_table, rediscovery_detail_status]
+        rediscovery_detail_load.click(
+            load_rediscovery_details,
+            rediscovery_detail_inputs,
+            rediscovery_detail_outputs,
+        )
+        rediscovery_search.submit(
+            load_rediscovery_details,
+            rediscovery_detail_inputs,
+            rediscovery_detail_outputs,
         )
         world.change(refresh_sqlite_tables, [world, db_kind], [table, sqlite_status])
         db_kind.change(refresh_sqlite_tables, [world, db_kind], [table, sqlite_status])

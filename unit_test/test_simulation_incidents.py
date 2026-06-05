@@ -21,6 +21,8 @@ from library.incident_rates import (
 )
 from library.simulation_context import SimulationContext
 from library.simulation_incidents import (
+    _build_incident_scoring_facts,
+    _incident_context_map,
     _knowledge_culture_kind,
     _knowledge_domain,
     _murder_annual_event_cap,
@@ -32,6 +34,7 @@ from library.simulation_incidents import (
     simulation_incidents_annual_tick,
     violent_actor_propensity,
 )
+from library.polity import OfficeSeatState
 from library.world_save import checkpoint_simulation_to_save
 
 
@@ -194,6 +197,33 @@ class TestSimulationIncidents(unittest.TestCase):
         )
         return ctx.add_person(person=person, is_founder=True)
 
+    def _add_child(
+        self,
+        ctx: SimulationContext,
+        *,
+        genome: dict[str, float],
+        gender: str,
+        settlement_id: str,
+        region_id: str,
+        father_id: int | None = None,
+        mother_id: int | None = None,
+    ):
+        person = generate_person_random(
+            simulation_context=ctx,
+            simulation_year=1000,
+            age=6,
+            gender=gender,
+            genome=genome,
+            birthplace_region_id=region_id,
+            birthplace_settlement_id=settlement_id,
+        )
+        return ctx.add_person(
+            person=person,
+            is_founder=False,
+            father_id=father_id,
+            mother_id=mother_id,
+        )
+
     def test_murder_population_rate_helpers_scale_above_review_sample_cap(self) -> None:
         residents = [object()] * 20_000
         settlements = [("large_city", residents)]
@@ -279,6 +309,86 @@ class TestSimulationIncidents(unittest.TestCase):
 
             self.assertGreater(property_crime_propensity(actor), 0.75)
             self.assertLess(property_crime_propensity(peaceful), 0.05)
+
+    def test_incident_context_map_uses_pressure_offices_and_family_indexes(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            settlement.food_pressure = 1.35
+            settlement.stability = 0.25
+            settlement.prosperity_pool = 1.4
+            actor = self._add_adult(
+                ctx,
+                genome=_genome(
+                    justice=-45,
+                    honesty=-45,
+                    persuasion=50,
+                    ambition=45,
+                    frugality=45,
+                ),
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id="aeria_north",
+            )
+            witness = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id="aeria_north",
+            )
+            self._add_child(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id="aeria_north",
+                father_id=actor.person_id,
+            )
+            actor.person = replace(
+                actor.person,
+                job="market trader",
+                unemployment_started_year=1000,
+                job_prosperity_01=0.10,
+                household_prosperity=0.40,
+                status_tendency="low",
+                household_purseholder_person_id=actor.person_id,
+            )
+            ctx.gov_office_seats[1] = OfficeSeatState(
+                seat_id=1,
+                polity_id=1,
+                title_id="head_chief",
+                scope_settlement_id=settlement.settlement_id,
+                holder_person_id=actor.person_id,
+            )
+
+            facts = _build_incident_scoring_facts(ctx, 1001)
+            contexts = _incident_context_map(
+                ctx,
+                facts,
+                year=1001,
+                settlement_id=settlement.settlement_id,
+                records=[actor, witness],
+                event_family="property_crime",
+                pressure=settlement.food_pressure,
+            )
+            scoring_context = contexts[int(actor.person_id)]
+
+            self.assertIn("parent", scoring_context.role_tags)
+            self.assertIn("ruler", scoring_context.role_tags)
+            self.assertIn("title_holder", scoring_context.role_tags)
+            self.assertIn("trader", scoring_context.role_tags)
+            self.assertIn("scarcity", scoring_context.pressure_tags)
+            self.assertIn("debt", scoring_context.pressure_tags)
+            self.assertIn("status_fall", scoring_context.pressure_tags)
+            self.assertIn("market_day", scoring_context.opportunity_tags)
+            self.assertIn("storehouse_access", scoring_context.opportunity_tags)
+            self.assertIn("court", scoring_context.opportunity_tags)
+            self.assertIn("shared_household", scoring_context.opportunity_tags)
+            self.assertGreater(
+                property_crime_propensity(actor, context=scoring_context),
+                property_crime_propensity(actor),
+            )
 
     def test_scandal_exposure_propensity_separates_extreme_and_stable_genomes(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

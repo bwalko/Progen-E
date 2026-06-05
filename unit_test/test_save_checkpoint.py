@@ -13,7 +13,11 @@ from pathlib import Path
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
 from library.geography import _population_scale_cache, get_region
-from library.passive_population import PassiveCohort, PassivePerson
+from library.passive_population import (
+    PassiveCohort,
+    PassivePerson,
+    promote_passive_person_for_focus,
+)
 from library.simulation_context import SimulationContext
 from library.world_save import (
     SAVE_SCHEMA_VERSION,
@@ -303,6 +307,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                                preserving_region_id, public_actor_person_id,
                                prose_variant_key
                         FROM simulation_event_records_readable
+                        WHERE record_key = 'default'
                         ORDER BY event_id
                         """
                     )
@@ -355,6 +360,198 @@ class TestSaveCheckpoint(unittest.TestCase):
                 ),
                 "boreas_port",
             )
+
+    def test_active_public_events_create_default_uncertainty_stage_records(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                death_id, move_id, office_id, campaign_id = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "death",
+                            {
+                                "person_id": 11,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1001,
+                            "settlement_moved",
+                            {
+                                "person_id": 12,
+                                "from_settlement_id": "aeria_north:settlement:1",
+                                "to_settlement_id": "boreas_port:settlement:1",
+                                "from_region_id": "aeria_north",
+                                "to_region_id": "boreas_port",
+                                "move_reason": "resource_pressure_migration",
+                            },
+                        ),
+                        (
+                            1002,
+                            "office_succession",
+                            {
+                                "holder_person_id": 13,
+                                "previous_holder_id": 14,
+                                "title_id": "thane",
+                                "via": "hereditary",
+                            },
+                        ),
+                        (
+                            1003,
+                            "campaign_started",
+                            {
+                                "campaign_id": 3,
+                                "kind": "civil_war",
+                                "claimant_id": 15,
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                rows = {
+                    (int(r["event_id"]), str(r["record_key"])): r
+                    for r in conn.execute(
+                        """
+                        SELECT event_id, event_type, record_key, record_type,
+                               visibility_state, public_knowledge_stage,
+                               public_actor_person_id, public_victim_person_id,
+                               distortion_json
+                        FROM simulation_event_records_readable
+                        ORDER BY event_id, record_key
+                        """
+                    )
+                }
+
+            death_unknown = rows[(death_id, "public_cause_unknown")]
+            self.assertEqual(str(death_unknown["visibility_state"]), "public_unknown")
+            self.assertEqual(str(death_unknown["record_type"]), "mortuary_uncertainty")
+            self.assertEqual(int(death_unknown["public_victim_person_id"]), 11)
+            self.assertEqual(
+                json.loads(str(death_unknown["distortion_json"]))["uncertain_fields"],
+                ["cause"],
+            )
+            move_unknown = rows[(move_id, "public_move_unclear")]
+            move_rumor = rows[(move_id, "public_move_rumor")]
+            self.assertEqual(str(move_unknown["public_knowledge_stage"]), "unknown")
+            self.assertEqual(str(move_rumor["visibility_state"]), "rumored")
+            self.assertEqual(
+                json.loads(str(move_rumor["distortion_json"]))["rumored_cause"],
+                "resource pressure migration",
+            )
+            office_rumor = rows[(office_id, "public_succession_rumor")]
+            self.assertEqual(str(office_rumor["record_type"]), "court_rumor")
+            self.assertEqual(
+                json.loads(str(office_rumor["distortion_json"]))["rumored_cause"],
+                "hereditary",
+            )
+            campaign_unknown = rows[(campaign_id, "public_war_cause_unclear")]
+            campaign_rumor = rows[(campaign_id, "public_war_rumor")]
+            self.assertEqual(str(campaign_unknown["visibility_state"]), "public_unknown")
+            self.assertEqual(
+                json.loads(str(campaign_rumor["distortion_json"]))["rumored_cause"],
+                "civil war",
+            )
+
+    def test_existing_public_events_backfill_uncertainty_stage_records(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.executescript(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    );
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '14');
+                    PRAGMA user_version = 14;
+
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        primary_person_id INTEGER,
+                        secondary_person_id INTEGER,
+                        settlement_key INTEGER,
+                        region_key INTEGER,
+                        event_origin TEXT NOT NULL DEFAULT 'generated',
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    INSERT INTO simulation_events (
+                        sim_year, event_type, primary_person_id, event_origin,
+                        payload_json, created_at
+                    )
+                    VALUES (
+                        1000, 'death', 44, 'generated', '{"person_id":44}',
+                        '2026-01-01T00:00:00+00:00'
+                    );
+                    CREATE TABLE simulation_event_records (
+                        record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_id INTEGER NOT NULL,
+                        record_key TEXT NOT NULL DEFAULT 'default',
+                        record_type TEXT NOT NULL,
+                        visibility_state TEXT NOT NULL,
+                        known_since_year INTEGER,
+                        lost_year INTEGER,
+                        rediscovered_year INTEGER,
+                        confidence REAL NOT NULL DEFAULT 1.0,
+                        source_person_id INTEGER,
+                        source_institution_id TEXT,
+                        preserving_settlement_key INTEGER,
+                        preserving_region_key INTEGER,
+                        public_actor_person_id INTEGER,
+                        public_victim_person_id INTEGER,
+                        distortion_json TEXT,
+                        prose_variant_key TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE (event_id, record_key)
+                    );
+                    INSERT INTO simulation_event_records (
+                        event_id, record_key, record_type, visibility_state,
+                        known_since_year, confidence, public_victim_person_id,
+                        prose_variant_key, created_at, updated_at
+                    )
+                    VALUES (
+                        1, 'default', 'mortuary_memory', 'public_known',
+                        1000, 1.0, 44, 'mortuary_memory.public_known.default',
+                        '2026-01-01T00:00:00+00:00',
+                        '2026-01-01T00:00:00+00:00'
+                    );
+                    """
+                )
+                ensure_checkpoint_schema(conn)
+                row = conn.execute(
+                    """
+                    SELECT visibility_state, public_victim_person_id, distortion_json
+                    FROM simulation_event_records_readable
+                    WHERE event_id = 1 AND record_key = 'public_cause_unknown'
+                    """
+                ).fetchone()
+                meta = conn.execute(
+                    """
+                    SELECT meta_value
+                    FROM save_metadata
+                    WHERE meta_key = 'simulation_event_public_stage_records_backfilled'
+                    """
+                ).fetchone()
+
+            self.assertIsNotNone(row)
+            self.assertEqual(str(row["visibility_state"]), "public_unknown")
+            self.assertEqual(int(row["public_victim_person_id"]), 44)
+            self.assertEqual(
+                json.loads(str(row["distortion_json"]))["uncertain_fields"],
+                ["cause"],
+            )
+            self.assertEqual(str(meta["meta_value"]), "1")
 
     def test_v8_knowledge_events_backfill_domain_state(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -1094,7 +1291,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                     """
                     SELECT visibility_state, lost_year, prose_variant_key
                     FROM simulation_event_records_readable
-                    WHERE event_id = ?
+                    WHERE event_id = ? AND record_key = 'default'
                     """,
                     (event_id,),
                 ).fetchone()
@@ -1116,7 +1313,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                     SELECT visibility_state, lost_year, source_institution_id,
                            prose_variant_key
                     FROM simulation_event_records_readable
-                    WHERE event_id = ?
+                    WHERE event_id = ? AND record_key = 'default'
                     """,
                     (event_id,),
                 ).fetchone()
@@ -1141,7 +1338,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                     SELECT visibility_state, known_since_year, confidence,
                            source_person_id, distortion_json, prose_variant_key
                     FROM simulation_event_records_readable
-                    WHERE event_id = ?
+                    WHERE event_id = ? AND record_key = 'default'
                     """,
                     (event_id,),
                 ).fetchone()
@@ -1158,7 +1355,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                     SELECT visibility_state, public_knowledge_stage, confidence,
                            public_victim_person_id, distortion_json, prose_variant_key
                     FROM simulation_event_records_readable
-                    WHERE event_id = ?
+                    WHERE event_id = ? AND record_key = 'default'
                     """,
                     (event_id,),
                 ).fetchone()
@@ -1182,7 +1379,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                            public_victim_person_id, distortion_json,
                            prose_variant_key
                     FROM simulation_event_records_readable
-                    WHERE event_id = ?
+                    WHERE event_id = ? AND record_key = 'default'
                     """,
                     (event_id,),
                 ).fetchone()
@@ -1265,7 +1462,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                            preserving_settlement_id, preserving_region_id,
                            distortion_json, prose_variant_key
                     FROM simulation_event_records_readable
-                    WHERE event_id = ?
+                    WHERE event_id = ? AND record_key = 'default'
                     """,
                     (original_event_id,),
                 ).fetchone()
@@ -1402,6 +1599,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                                preserving_settlement_id, preserving_region_id,
                                public_actor_person_id, public_victim_person_id
                         FROM simulation_event_records_readable
+                        WHERE record_key = 'default'
                         ORDER BY event_id
                         """
                     )
@@ -2009,6 +2207,82 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertNotIn("event_origin", payload)
             self.assertEqual(payload["person_id"], 123)
 
+    def test_event_memory_schema_stores_template_keys_not_rendered_prose(self) -> None:
+        prose_text_columns = {
+            "admin_prose",
+            "admin_summary",
+            "chronicle_prose",
+            "chronicle_text",
+            "public_prose",
+            "public_summary",
+            "public_text",
+            "rendered_prose",
+            "rendered_text",
+            "summary_text",
+        }
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "property_crime",
+                            {
+                                "person_id": 1,
+                                "target_person_id": 2,
+                                "loss_value": 4.0,
+                                "motive": "winter_need",
+                            },
+                        )
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+
+                columns_by_relation = {
+                    relation: {
+                        str(row["name"])
+                        for row in conn.execute(f"PRAGMA table_info({relation})")
+                    }
+                    for relation in (
+                        "simulation_events",
+                        "simulation_events_readable",
+                        "simulation_event_records",
+                        "simulation_event_records_readable",
+                    )
+                }
+                memory_row = conn.execute(
+                    """
+                    SELECT prose_variant_key, distortion_json
+                    FROM simulation_event_records_readable
+                    WHERE event_type = 'property_crime'
+                    """
+                ).fetchone()
+
+            self.assertIn(
+                "prose_variant_key",
+                columns_by_relation["simulation_event_records"],
+            )
+            self.assertIn(
+                "prose_variant_key",
+                columns_by_relation["simulation_event_records_readable"],
+            )
+            for relation, columns in columns_by_relation.items():
+                self.assertEqual(
+                    columns & prose_text_columns,
+                    set(),
+                    msg=f"{relation} stores rendered prose-like text columns",
+                )
+            self.assertEqual(
+                str(memory_row["prose_variant_key"]),
+                "property_crime_record.rumored.default",
+            )
+            self.assertIsNone(memory_row["distortion_json"])
+
     def test_passive_people_checkpoint_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
@@ -2274,6 +2548,166 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertEqual(
                 family_payloads["promotion_backfill_children"]["child_birthyears"],
                 [1041, 1044],
+            )
+
+    def test_focus_promotion_selectors_persist_reason_and_backfilled_events(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="promofocus",
+                world="default",
+                start_year=1050,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            st = ctx.ensure_active_settlement_for_region("aeria_north")
+            direct_sid = f"{st.region_id}:focus_direct"
+            region_sid = f"{st.region_id}:focus_region"
+            direct = ctx.add_passive_person(
+                PassivePerson(
+                    name="Direct Focus",
+                    birthyear=1020,
+                    gender="Female",
+                    birthplace_region_id=st.region_id,
+                    birthplace_settlement_id=direct_sid,
+                    current_settlement_id=direct_sid,
+                    job_family="farm",
+                )
+            )
+            settlement = ctx.add_passive_person(
+                PassivePerson(
+                    name="Settlement Focus",
+                    birthyear=1018,
+                    gender="Male",
+                    birthplace_region_id=st.region_id,
+                    birthplace_settlement_id=st.settlement_id,
+                    current_settlement_id=st.settlement_id,
+                    job_family="trade",
+                )
+            )
+            region = ctx.add_passive_person(
+                PassivePerson(
+                    name="Region Focus",
+                    birthyear=1016,
+                    gender="Female",
+                    birthplace_region_id=st.region_id,
+                    birthplace_settlement_id=region_sid,
+                    current_settlement_id=region_sid,
+                    job_family="craft",
+                )
+            )
+
+            promoted_direct = promote_passive_person_for_focus(
+                ctx,
+                year=1050,
+                focus="inspection",
+                passive_person_id=direct.person_id,
+                source={"ui_surface": "people_grid"},
+            )
+            promoted_settlement = promote_passive_person_for_focus(
+                ctx,
+                year=1050,
+                focus="spotlight",
+                settlement_id=st.settlement_id,
+            )
+            promoted_region = promote_passive_person_for_focus(
+                ctx,
+                year=1050,
+                focus="inspection",
+                region_id=st.region_id,
+            )
+
+            self.assertEqual(promoted_direct.person_id, direct.person_id)
+            self.assertEqual(promoted_settlement.person_id, settlement.person_id)
+            self.assertEqual(promoted_region.person_id, region.person_id)
+            self.assertEqual(ctx.passive_people, {})
+
+            checkpoint_simulation_to_save(ctx, full_snapshot=True)
+            checkpoint_simulation_to_save(ctx, full_snapshot=True)
+
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                log_rows = conn.execute(
+                    """
+                    SELECT person_id, sim_year, reason, synthesized_json
+                    FROM simulation_promotion_log
+                    ORDER BY person_id
+                    """
+                ).fetchall()
+                event_rows = conn.execute(
+                    """
+                    SELECT event_type, event_origin, payload_json
+                    FROM simulation_events
+                    WHERE event_type IN (
+                        'passive_person_promoted',
+                        'promotion_backfill_birth'
+                    )
+                    ORDER BY id
+                    """
+                ).fetchall()
+
+            self.assertEqual(len(log_rows), 3)
+            reasons_by_person = {
+                int(row["person_id"]): str(row["reason"]) for row in log_rows
+            }
+            self.assertEqual(
+                reasons_by_person,
+                {
+                    direct.person_id: "user_inspection",
+                    settlement.person_id: "narrative_spotlight",
+                    region.person_id: "user_inspection",
+                },
+            )
+            synthesized_by_person = {
+                int(row["person_id"]): json.loads(str(row["synthesized_json"]))
+                for row in log_rows
+            }
+            self.assertEqual(
+                synthesized_by_person[direct.person_id]["source"]["selector"],
+                "person_id",
+            )
+            self.assertEqual(
+                synthesized_by_person[settlement.person_id]["source"]["focus"],
+                "spotlight",
+            )
+            self.assertEqual(
+                synthesized_by_person[region.person_id]["source"]["selector"],
+                "region_id",
+            )
+
+            promotion_payloads = [
+                json.loads(str(row["payload_json"]))
+                for row in event_rows
+                if str(row["event_type"]) == "passive_person_promoted"
+            ]
+            birth_payloads = [
+                json.loads(str(row["payload_json"]))
+                for row in event_rows
+                if str(row["event_type"]) == "promotion_backfill_birth"
+            ]
+            self.assertEqual(len(promotion_payloads), 3)
+            self.assertEqual(len(birth_payloads), 3)
+            self.assertTrue(
+                all(str(row["event_origin"]) == "inferred" for row in event_rows)
+            )
+            promotion_by_person = {
+                int(payload["person_id"]): payload for payload in promotion_payloads
+            }
+            self.assertEqual(
+                promotion_by_person[direct.person_id]["source"]["ui_surface"],
+                "people_grid",
+            )
+            self.assertEqual(
+                promotion_by_person[settlement.person_id]["reason"],
+                "narrative_spotlight",
+            )
+            self.assertTrue(
+                any(payload["reason"] == "user_inspection" for payload in birth_payloads)
             )
 
     def test_region_effective_cap_multiplier_roundtrip_on_resume(self) -> None:

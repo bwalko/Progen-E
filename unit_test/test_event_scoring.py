@@ -9,14 +9,18 @@ from library.event_scoring import (
     EventPropensitySpec,
     EventScoringContext,
     TraitFactor,
+    contextual_propensity_by_person_id,
     eligible_records_by_threshold,
     ideal_strength,
     infer_role_tags,
     negative_extreme,
     positive_extreme,
     pressure_excess,
+    political_crime_propensity,
+    private_life_seed_propensity,
     property_crime_propensity,
     propensity_by_person_id,
+    religious_cultural_conflict_propensity,
     score_propensity,
     threshold_excess_weights,
     violent_actor_propensity,
@@ -31,12 +35,21 @@ class PersonStub:
     partner_person_id: int | None = None
     unemployment_started_year: int | None = None
     job: str = ""
+    birthplace_region_id: str | None = None
+    birthplace_settlement_id: str | None = None
+    current_settlement_id: str | None = None
+    household_purseholder_person_id: int | None = None
 
 
 @dataclass
 class RecordStub:
     person_id: int
     person: PersonStub
+
+
+@dataclass
+class CareIndexesStub:
+    children_by_parent: dict[int, frozenset[int]]
 
 
 def _record(person_id: int, genome: dict[str, float], **person_kwargs: object) -> RecordStub:
@@ -81,6 +94,34 @@ class TestEventScoring(unittest.TestCase):
         self.assertIn("unemployed", roles)
         self.assertGreater(score_propensity(rec, spec, context=ctx), 0.55)
 
+    def test_role_inference_accepts_cached_family_and_office_context(self) -> None:
+        rec = _record(
+            5,
+            {},
+            birthyear=940,
+            partner_person_id=7,
+            job="heir guard",
+            birthplace_settlement_id="old_hill",
+            current_settlement_id="new_port",
+            household_purseholder_person_id=5,
+        )
+
+        roles = infer_role_tags(
+            rec,
+            year=1010,
+            care_indexes=CareIndexesStub({5: frozenset({9, 10})}),
+            office_holder_ids={5},
+        )
+
+        self.assertIn("elder", roles)
+        self.assertIn("spouse", roles)
+        self.assertIn("parent", roles)
+        self.assertIn("title_holder", roles)
+        self.assertIn("heir", roles)
+        self.assertIn("soldier", roles)
+        self.assertIn("household_head", roles)
+        self.assertIn("migrant", roles)
+
     def test_shared_propensity_functions_keep_vertical_slice_separation(self) -> None:
         violent = _record(
             1,
@@ -113,6 +154,100 @@ class TestEventScoring(unittest.TestCase):
         self.assertGreater(property_crime_propensity(property_actor), 0.75)
         self.assertLess(property_crime_propensity(stable), 0.05)
 
+    def test_new_workstream_propensity_specs_cover_future_event_families(self) -> None:
+        political_actor = _record(
+            10,
+            {
+                "ambition": 95,
+                "loyalty": -95,
+                "justice": -90,
+                "honesty": -90,
+                "persuasion": 95,
+                "discipline": 90,
+                "courage": 85,
+                "civics": -85,
+            },
+            genome_composite_names=("Legitimacy Seizer",),
+            job="heir noble",
+        )
+        religious_actor = _record(
+            11,
+            {
+                "justice": 95,
+                "loyalty": 90,
+                "civics": 90,
+                "empathy": -95,
+                "persuasion": 95,
+                "creativity": 90,
+                "discipline": 85,
+                "courage": 80,
+                "adaptability": -90,
+            },
+            genome_composite_names=("Fanatic", "Cult Leader"),
+            job="village priest",
+        )
+        private_seed_actor = _record(
+            12,
+            {
+                "patience": -95,
+                "temperance": -90,
+                "justice": 90,
+                "empathy": -80,
+                "loyalty": -80,
+                "honesty": -95,
+                "persuasion": 95,
+                "perception": 90,
+                "ambition": 90,
+                "neurochemical": 90,
+                "humility": 90,
+            },
+            genome_composite_names=("Hidden Manipulator",),
+            partner_person_id=13,
+        )
+        stable = _record(13, {})
+
+        political_context = EventScoringContext(
+            role_tags=infer_role_tags(
+                political_actor,
+                year=1010,
+                office_holder_ids={10},
+            ),
+            pressure_tags=frozenset({"succession_crisis", "office_tension"}),
+            opportunity_tags=frozenset({"court", "office_access", "faction_network"}),
+        )
+        religious_context = EventScoringContext(
+            role_tags=infer_role_tags(religious_actor, year=1010),
+            pressure_tags=frozenset({"doctrine_tension", "social_stress"}),
+            opportunity_tags=frozenset({"temple", "crowd"}),
+        )
+        private_context = EventScoringContext(
+            role_tags=infer_role_tags(
+                private_seed_actor,
+                year=1010,
+                parent_ids={12},
+            ),
+            pressure_tags=frozenset({"relationship_strain", "status_fall"}),
+            opportunity_tags=frozenset({"shared_household", "privacy", "secret_access"}),
+        )
+
+        self.assertGreater(
+            political_crime_propensity(political_actor, context=political_context),
+            0.85,
+        )
+        self.assertLess(political_crime_propensity(stable), 0.05)
+        self.assertGreater(
+            religious_cultural_conflict_propensity(
+                religious_actor, context=religious_context
+            ),
+            0.75,
+        )
+        self.assertLess(religious_cultural_conflict_propensity(stable), 0.05)
+        self.assertGreater(
+            private_life_seed_propensity(private_seed_actor, context=private_context),
+            0.65,
+        )
+        self.assertLess(private_life_seed_propensity(stable), 0.15)
+
     def test_shared_propensity_functions_accept_event_context(self) -> None:
         rec = _record(
             4,
@@ -129,6 +264,93 @@ class TestEventScoring(unittest.TestCase):
         self.assertGreater(
             property_crime_propensity(rec, context=ctx),
             property_crime_propensity(rec),
+        )
+
+    def test_contextual_propensity_map_supports_future_bounded_candidate_pools(self) -> None:
+        political_actor = _record(
+            20,
+            {
+                "ambition": 95,
+                "loyalty": -95,
+                "justice": -90,
+                "honesty": -85,
+                "persuasion": 90,
+                "discipline": 85,
+            },
+            genome_composite_names=("Legitimacy Seizer",),
+            job="heir noble",
+        )
+        religious_actor = _record(
+            21,
+            {
+                "justice": 95,
+                "loyalty": 90,
+                "civics": 90,
+                "empathy": -90,
+                "persuasion": 90,
+                "creativity": 90,
+                "adaptability": -90,
+            },
+            genome_composite_names=("Cult Leader",),
+            job="priest",
+        )
+        private_actor = _record(
+            22,
+            {
+                "patience": -95,
+                "temperance": -85,
+                "honesty": -90,
+                "persuasion": 90,
+                "perception": 85,
+                "ambition": 85,
+            },
+            genome_composite_names=("Hidden Manipulator",),
+            partner_person_id=23,
+        )
+        stable = _record(23, {})
+        records = [political_actor, religious_actor, private_actor, stable]
+        contexts = {
+            20: EventScoringContext(
+                role_tags=infer_role_tags(
+                    political_actor, year=1010, office_holder_ids={20}
+                ),
+                pressure_tags=frozenset({"succession_crisis", "office_tension"}),
+                opportunity_tags=frozenset({"court", "office_access"}),
+            ),
+            21: EventScoringContext(
+                role_tags=infer_role_tags(religious_actor, year=1010),
+                pressure_tags=frozenset({"doctrine_tension", "social_stress"}),
+                opportunity_tags=frozenset({"temple", "crowd"}),
+            ),
+            22: EventScoringContext(
+                role_tags=infer_role_tags(private_actor, year=1010),
+                pressure_tags=frozenset({"relationship_strain"}),
+                opportunity_tags=frozenset({"shared_household", "privacy"}),
+            ),
+            23: EventScoringContext(),
+        }
+
+        political_scores = contextual_propensity_by_person_id(
+            records, political_crime_propensity, contexts
+        )
+        religious_scores = contextual_propensity_by_person_id(
+            records, religious_cultural_conflict_propensity, contexts
+        )
+        private_scores = contextual_propensity_by_person_id(
+            records, private_life_seed_propensity, contexts
+        )
+
+        self.assertEqual(
+            [rec.person_id for rec in eligible_records_by_threshold(records, political_scores, 0.50)],
+            [20],
+        )
+        self.assertEqual(
+            [rec.person_id for rec in eligible_records_by_threshold(records, religious_scores, 0.45)],
+            [21],
+        )
+        self.assertEqual(
+            [rec.person_id for rec in eligible_records_by_threshold(records, private_scores, 0.35)],
+            [22],
         )
 
     def test_candidate_threshold_helpers_are_deterministic(self) -> None:

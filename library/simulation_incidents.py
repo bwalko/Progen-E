@@ -10,14 +10,16 @@ from typing import TYPE_CHECKING
 from library import simulation_timing
 from library.event_catalog import choose_event_catalog_kind
 from library.event_scoring import (
+    EventScoringContext,
     clamp01 as _clamp,
+    contextual_propensity_by_person_id,
     eligible_records_by_threshold,
     ideal_strength as _ideal_strength,
+    infer_role_tags,
     knowledge_culture_propensity,
     negative_extreme as _negative_extreme,
     positive_extreme as _positive_extreme,
     property_crime_propensity,
-    propensity_by_person_id,
     public_virtue_propensity,
     scandal_exposure_propensity,
     threshold_excess_value_weights,
@@ -164,6 +166,17 @@ class KnowledgeCultureIncident:
     historical_importance: float
     novelty_value: float
     genome_signals: dict[str, float]
+
+
+@dataclass(frozen=True)
+class IncidentScoringFacts:
+    care_indexes: object | None
+    office_holder_ids: frozenset[int]
+    ruler_ids: frozenset[int]
+    court_settlement_ids: frozenset[str]
+    succession_crisis_region_ids: frozenset[str]
+    faction_tension_region_ids: frozenset[str]
+    war_region_ids: frozenset[str]
 
 
 def _residence_settlement_id(rec: "SimulationPersonRecord") -> str:
@@ -445,6 +458,333 @@ def _settlement_pressure(
         return float(getattr(st, "food_pressure", 0.0) or 0.0) if st else 0.0
 
 
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _settlement_region_id(ctx: "SimulationContext", settlement_id: str) -> str:
+    sid = str(settlement_id or "").strip()
+    if not sid:
+        return ""
+    st = ctx.settlements_by_id.get(sid)
+    return str(getattr(st, "region_id", "") or "").strip() if st is not None else ""
+
+
+def _polity_scope_region_ids(ctx: "SimulationContext", polity_id: int) -> set[str]:
+    out: set[str] = set()
+    for terr in getattr(ctx, "gov_territory_rows", []) or []:
+        if _int_or_none(getattr(terr, "polity_id", None)) != int(polity_id):
+            continue
+        target_kind = str(getattr(terr, "target_kind", "") or "").strip().lower()
+        target_id = str(getattr(terr, "target_id", "") or "").strip()
+        if not target_id:
+            continue
+        if target_kind == "region":
+            out.add(target_id)
+        elif target_kind == "settlement":
+            rid = _settlement_region_id(ctx, target_id)
+            if rid:
+                out.add(rid)
+    pol = getattr(ctx, "gov_polities", {}).get(int(polity_id))
+    cap = str(getattr(pol, "capital_settlement_id", "") or "").strip()
+    if cap:
+        rid = _settlement_region_id(ctx, cap)
+        if rid:
+            out.add(rid)
+    return out
+
+
+def _build_incident_scoring_facts(
+    ctx: "SimulationContext", year: int
+) -> IncidentScoringFacts:
+    try:
+        care_indexes = ctx.annual_care_indexes(int(year))
+    except Exception:
+        care_indexes = None
+    office_holder_ids: set[int] = set()
+    ruler_ids: set[int] = set()
+    court_settlement_ids: set[str] = set()
+    vacant_polity_ids: set[int] = set()
+    ruler_title_tokens = (
+        "head",
+        "ruler",
+        "king",
+        "queen",
+        "duke",
+        "count",
+        "chief",
+        "mayor",
+        "monarch",
+    )
+    for seat in getattr(ctx, "gov_office_seats", {}).values():
+        if str(getattr(seat, "status", "active") or "").strip().lower() != "active":
+            continue
+        holder_id = _int_or_none(getattr(seat, "holder_person_id", None))
+        polity_id = _int_or_none(getattr(seat, "polity_id", None))
+        title_id = str(getattr(seat, "title_id", "") or "").strip().lower()
+        scope_sid = str(getattr(seat, "scope_settlement_id", "") or "").strip()
+        if scope_sid:
+            court_settlement_ids.add(scope_sid)
+        if holder_id is None:
+            if polity_id is not None:
+                vacant_polity_ids.add(polity_id)
+            continue
+        office_holder_ids.add(holder_id)
+        if any(token in title_id for token in ruler_title_tokens):
+            ruler_ids.add(holder_id)
+    for pol in getattr(ctx, "gov_polities", {}).values():
+        if str(getattr(pol, "status", "active") or "").strip().lower() != "active":
+            continue
+        cap = str(getattr(pol, "capital_settlement_id", "") or "").strip()
+        if cap:
+            court_settlement_ids.add(cap)
+    succession_regions: set[str] = set()
+    for polity_id in vacant_polity_ids:
+        succession_regions.update(_polity_scope_region_ids(ctx, polity_id))
+    war_regions: set[str] = set()
+    for campaign in getattr(ctx, "gov_campaigns", []) or []:
+        if getattr(campaign, "end_sim_year", None) is not None:
+            continue
+        outcome = str(getattr(campaign, "outcome", "ongoing") or "").strip().lower()
+        if outcome not in {"", "ongoing", "active"}:
+            continue
+        for attr in ("attacker_polity_id", "defender_polity_id"):
+            polity_id = _int_or_none(getattr(campaign, attr, None))
+            if polity_id is not None:
+                war_regions.update(_polity_scope_region_ids(ctx, polity_id))
+    faction_regions: set[str] = set(war_regions)
+    for alliance in getattr(ctx, "gov_alliances", []) or []:
+        until = _int_or_none(getattr(alliance, "until_sim_year", None))
+        if until is not None and until <= int(year):
+            continue
+        try:
+            loyalty = float(getattr(alliance, "loyalty_score", 1.0))
+        except (TypeError, ValueError):
+            loyalty = 1.0
+        if loyalty >= 0.35:
+            continue
+        for attr in ("polity_a_id", "polity_b_id"):
+            polity_id = _int_or_none(getattr(alliance, attr, None))
+            if polity_id is not None:
+                faction_regions.update(_polity_scope_region_ids(ctx, polity_id))
+    return IncidentScoringFacts(
+        care_indexes=care_indexes,
+        office_holder_ids=frozenset(office_holder_ids),
+        ruler_ids=frozenset(ruler_ids),
+        court_settlement_ids=frozenset(court_settlement_ids),
+        succession_crisis_region_ids=frozenset(succession_regions),
+        faction_tension_region_ids=frozenset(faction_regions),
+        war_region_ids=frozenset(war_regions),
+    )
+
+
+def _job_tokens(rec: "SimulationPersonRecord") -> str:
+    return str(rec.person.job or "").strip().lower()
+
+
+def _person_has_household_tie(facts: IncidentScoringFacts, person_id: int) -> bool:
+    care_indexes = facts.care_indexes
+    if care_indexes is None:
+        return False
+    hids = getattr(care_indexes, "household_ids_by_adult", {}).get(int(person_id), ())
+    return len(tuple(hids or ())) > 1
+
+
+def _incident_pressure_tags(
+    ctx: "SimulationContext",
+    facts: IncidentScoringFacts,
+    rec: "SimulationPersonRecord",
+    *,
+    settlement_id: str,
+    region_id: str,
+    event_family: str,
+    pressure: float,
+    adults_count: int,
+) -> frozenset[str]:
+    tags: set[str] = set()
+    st = ctx.settlements_by_id.get(settlement_id)
+    stability = float(getattr(st, "stability", 0.5) or 0.5) if st is not None else 0.5
+    prosperity = (
+        float(getattr(st, "prosperity_pool", 1.0) or 1.0) if st is not None else 1.0
+    )
+    if pressure >= 0.75:
+        tags.add("scarcity")
+    if pressure >= 1.20:
+        tags.add("disaster")
+    if pressure >= 1.00 or adults_count >= 90:
+        tags.add("crowding")
+    if region_id in facts.war_region_ids:
+        tags.add("war")
+    if region_id in facts.succession_crisis_region_ids:
+        tags.update({"succession_crisis", "office_tension"})
+    if region_id in facts.faction_tension_region_ids:
+        tags.add("faction_tension")
+    job_prosperity = float(rec.person.job_prosperity_01 or 0.35)
+    household_prosperity = float(rec.person.household_prosperity or 1.0)
+    if (
+        rec.person.unemployment_started_year is not None
+        or job_prosperity < 0.24
+        or household_prosperity < 0.55
+    ):
+        tags.add("debt")
+    status = str(rec.person.status_tendency or "").strip().lower()
+    if status in {"low", "very low", "fallen"} or (
+        rec.person.unemployment_started_year is not None and job_prosperity < 0.35
+    ):
+        tags.add("status_fall")
+    if pressure >= 1.05 or stability < 0.34:
+        tags.update({"social_stress", "civic_need"})
+    if rec.person.paramour_person_id is not None or (
+        event_family == "affair_scandal" and rec.person.partner_person_id is not None
+    ):
+        tags.add("relationship_strain")
+    if event_family == "affair_scandal" and int(rec.person_id) in (
+        facts.office_holder_ids | facts.ruler_ids
+    ):
+        tags.add("status_pressure")
+    if event_family == "knowledge_culture" and (
+        prosperity >= 1.20
+        or settlement_id in facts.court_settlement_ids
+        or int(rec.person_id) in facts.office_holder_ids
+    ):
+        tags.add("patronage")
+    return frozenset(tags)
+
+
+def _incident_opportunity_tags(
+    facts: IncidentScoringFacts,
+    rec: "SimulationPersonRecord",
+    *,
+    settlement_id: str,
+    event_family: str,
+    pressure: float,
+    adults_count: int,
+) -> frozenset[str]:
+    tags: set[str] = {"same_settlement"}
+    pid = int(rec.person_id)
+    job = _job_tokens(rec)
+    has_household_tie = (
+        rec.person.partner_person_id is not None
+        or rec.person.paramour_person_id is not None
+        or _person_has_household_tie(facts, pid)
+    )
+    if has_household_tie:
+        tags.update({"shared_household", "co_residence", "privacy"})
+    if adults_count >= 4:
+        tags.update({"public_witness", "witnessed_need", "crowd"})
+    else:
+        tags.add("isolated")
+    if settlement_id in facts.court_settlement_ids or pid in facts.office_holder_ids:
+        tags.update({"court", "office_access", "document_access"})
+    if pid in facts.office_holder_ids or pid in facts.ruler_ids:
+        tags.add("faction_network")
+    if any(token in job for token in ("merchant", "trader", "market", "sailor", "ship")):
+        tags.add("market_day")
+    if any(
+        token in job
+        for token in ("farmer", "herder", "merchant", "trader", "store", "granary")
+    ):
+        tags.add("storehouse_access")
+    if any(
+        token in job
+        for token in (
+            "smith",
+            "weaver",
+            "potter",
+            "carpenter",
+            "scribe",
+            "ship",
+            "artisan",
+            "craft",
+        )
+    ):
+        tags.add("workshop")
+    if any(token in job for token in ("scribe", "priest", "judge", "scholar", "oracle")):
+        tags.add("archive")
+    if event_family == "public_virtue" and pressure >= 0.85:
+        tags.add("public_crisis")
+    return frozenset(tags)
+
+
+def _incident_context_for_record(
+    ctx: "SimulationContext",
+    facts: IncidentScoringFacts,
+    *,
+    year: int,
+    settlement_id: str,
+    rec: "SimulationPersonRecord",
+    event_family: str,
+    pressure: float,
+    adults_count: int,
+) -> EventScoringContext:
+    region_id = _residence_region_id(ctx, rec) or _settlement_region_id(ctx, settlement_id)
+    role_tags = infer_role_tags(
+        rec,
+        year=int(year),
+        care_indexes=facts.care_indexes,
+        office_holder_ids=facts.office_holder_ids,
+        ruler_ids=facts.ruler_ids,
+    )
+    st = ctx.settlements_by_id.get(settlement_id)
+    prosperity = (
+        float(getattr(st, "prosperity_pool", 1.0) or 1.0) if st is not None else None
+    )
+    return EventScoringContext(
+        role_tags=role_tags,
+        pressure_tags=_incident_pressure_tags(
+            ctx,
+            facts,
+            rec,
+            settlement_id=settlement_id,
+            region_id=region_id,
+            event_family=event_family,
+            pressure=pressure,
+            adults_count=adults_count,
+        ),
+        opportunity_tags=_incident_opportunity_tags(
+            facts,
+            rec,
+            settlement_id=settlement_id,
+            event_family=event_family,
+            pressure=pressure,
+            adults_count=adults_count,
+        ),
+        resource_pressure=float(pressure),
+        crowding=_clamp((float(adults_count) - 1.0) / 100.0),
+        prosperity=prosperity,
+        witness_count=max(0, int(adults_count) - 1),
+    )
+
+
+def _incident_context_map(
+    ctx: "SimulationContext",
+    facts: IncidentScoringFacts,
+    *,
+    year: int,
+    settlement_id: str,
+    records: list["SimulationPersonRecord"] | tuple["SimulationPersonRecord", ...],
+    event_family: str,
+    pressure: float,
+) -> dict[int, EventScoringContext]:
+    adults_count = len(records)
+    return {
+        int(rec.person_id): _incident_context_for_record(
+            ctx,
+            facts,
+            year=year,
+            settlement_id=settlement_id,
+            rec=rec,
+            event_family=event_family,
+            pressure=pressure,
+            adults_count=adults_count,
+        )
+        for rec in records
+    }
+
+
 def _choose_witnesses(
     residents: list["SimulationPersonRecord"],
     *,
@@ -491,6 +831,7 @@ def _maybe_murder_in_settlement(
     rng: random.Random,
     already_dead: set[int],
     rate: IncidentRateParams | None = None,
+    scoring_facts: IncidentScoringFacts | None = None,
 ) -> MurderIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -508,7 +849,19 @@ def _maybe_murder_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     scarcity = _clamp((pressure - 0.75) / 0.75)
-    propensities = propensity_by_person_id(adults, violent_actor_propensity)
+    facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
+    contexts = _incident_context_map(
+        ctx,
+        facts,
+        year=year,
+        settlement_id=settlement_id,
+        records=adults,
+        event_family="murder",
+        pressure=pressure,
+    )
+    propensities = contextual_propensity_by_person_id(
+        adults, violent_actor_propensity, contexts
+    )
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 80.0, 0.05, 1.0)
     population_rate_chance = (
@@ -1892,6 +2245,7 @@ def _maybe_affair_scandal_in_settlement(
     *,
     rng: random.Random,
     rate: IncidentRateParams | None = None,
+    scoring_facts: IncidentScoringFacts | None = None,
 ) -> AffairScandalIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -1928,8 +2282,19 @@ def _maybe_affair_scandal_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     social_pressure = _clamp((pressure - 0.55) / 1.0)
-    propensities = propensity_by_person_id(
-        adult_by_id.values(), scandal_exposure_propensity
+    facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
+    adult_records = list(adult_by_id.values())
+    contexts = _incident_context_map(
+        ctx,
+        facts,
+        year=year,
+        settlement_id=settlement_id,
+        records=adult_records,
+        event_family="affair_scandal",
+        pressure=pressure,
+    )
+    propensities = contextual_propensity_by_person_id(
+        adult_records, scandal_exposure_propensity, contexts
     )
     pair_scores: list[float] = []
     for a, b, betrayed_ids in candidate_pairs:
@@ -2023,6 +2388,7 @@ def _maybe_public_virtue_in_settlement(
     *,
     rng: random.Random,
     rate: IncidentRateParams | None = None,
+    scoring_facts: IncidentScoringFacts | None = None,
 ) -> PublicVirtueIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -2036,7 +2402,19 @@ def _maybe_public_virtue_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     hardship = _clamp((pressure - 0.45) / 1.0)
-    propensities = propensity_by_person_id(adults, public_virtue_propensity)
+    facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
+    contexts = _incident_context_map(
+        ctx,
+        facts,
+        year=year,
+        settlement_id=settlement_id,
+        records=adults,
+        event_family="public_virtue",
+        pressure=pressure,
+    )
+    propensities = contextual_propensity_by_person_id(
+        adults, public_virtue_propensity, contexts
+    )
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 70.0, 0.05, 1.0)
     raw_chance = (
@@ -2123,6 +2501,7 @@ def _maybe_knowledge_culture_in_settlement(
     *,
     rng: random.Random,
     rate: IncidentRateParams | None = None,
+    scoring_facts: IncidentScoringFacts | None = None,
 ) -> KnowledgeCultureIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -2135,7 +2514,19 @@ def _maybe_knowledge_culture_in_settlement(
     if len(adults) < 2:
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
-    propensities = propensity_by_person_id(adults, knowledge_culture_propensity)
+    facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
+    contexts = _incident_context_map(
+        ctx,
+        facts,
+        year=year,
+        settlement_id=settlement_id,
+        records=adults,
+        event_family="knowledge_culture",
+        pressure=pressure,
+    )
+    propensities = contextual_propensity_by_person_id(
+        adults, knowledge_culture_propensity, contexts
+    )
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 90.0, 0.05, 1.0)
     raw_chance = (
@@ -2227,6 +2618,7 @@ def _maybe_property_crime_in_settlement(
     *,
     rng: random.Random,
     rate: IncidentRateParams | None = None,
+    scoring_facts: IncidentScoringFacts | None = None,
 ) -> TheftFraudIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -2240,7 +2632,19 @@ def _maybe_property_crime_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     scarcity = _clamp((pressure - 0.65) / 0.85)
-    propensities = propensity_by_person_id(adults, property_crime_propensity)
+    facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
+    contexts = _incident_context_map(
+        ctx,
+        facts,
+        year=year,
+        settlement_id=settlement_id,
+        records=adults,
+        event_family="property_crime",
+        pressure=pressure,
+    )
+    propensities = contextual_propensity_by_person_id(
+        adults, property_crime_propensity, contexts
+    )
     max_propensity = max(propensities.values(), default=0.0)
     population_factor = _clamp((len(adults) - 1) / 60.0, 0.05, 1.0)
     raw_chance = (
@@ -2530,6 +2934,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     knowledge_culture_event_limit = _annual_event_limit(
         KNOWLEDGE_MAX_EVENTS_PER_YEAR, knowledge_culture_rate
     )
+    scoring_facts = _build_incident_scoring_facts(ctx, y)
     if prof:
         simulation_timing.accumulate("incidents.setup", tpc() - t0)
         t0 = tpc()
@@ -2545,6 +2950,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 rng=rng,
                 already_dead=dead_ids,
                 rate=murder_rate,
+                scoring_facts=scoring_facts,
             )
             if incident is None:
                 continue
@@ -2559,6 +2965,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 residents,
                 rng=theft_rng,
                 rate=property_crime_rate,
+                scoring_facts=scoring_facts,
             )
             if property_crime is not None:
                 _record_property_crime_incident(ctx, y, property_crime)
@@ -2571,6 +2978,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 residents,
                 rng=scandal_rng,
                 rate=scandal_rate,
+                scoring_facts=scoring_facts,
             )
             if scandal is not None:
                 _record_affair_scandal_incident(ctx, y, scandal)
@@ -2583,6 +2991,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 residents,
                 rng=virtue_rng,
                 rate=public_virtue_rate,
+                scoring_facts=scoring_facts,
             )
             if virtue is not None:
                 _record_public_virtue_incident(ctx, y, virtue)
@@ -2595,6 +3004,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 residents,
                 rng=knowledge_rng,
                 rate=knowledge_culture_rate,
+                scoring_facts=scoring_facts,
             )
             if knowledge is not None:
                 _record_knowledge_culture_incident(ctx, y, knowledge)

@@ -38,6 +38,9 @@ SAVE_SCHEMA_VERSION = 14
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
+EVENT_PUBLIC_STAGE_RECORDS_BACKFILLED_META_KEY = (
+    "simulation_event_public_stage_records_backfilled"
+)
 DOMAIN_STATES_BACKFILLED_META_KEY = "simulation_domain_states_backfilled_event_id"
 OBLIGATIONS_BACKFILLED_META_KEY = "simulation_obligations_backfilled_event_id"
 REPUTATION_MARKS_BACKFILLED_META_KEY = "simulation_reputation_marks_backfilled_event_id"
@@ -3350,6 +3353,189 @@ def _event_record_public_people(
     return primary_person_id, secondary_person_id
 
 
+_DEFAULT_PUBLIC_STAGE_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "death",
+        "settlement_move_planned",
+        "settlement_move_dropped",
+        "settlement_moved",
+        "office_selection",
+        "office_succession",
+        "polity_promoted",
+        "polity_split_vassal",
+        "polity_named",
+        "polity_dissolved",
+        "campaign_started",
+        "campaign_ended",
+        "battle_fought",
+        "dynastic_marriage_alliance",
+    }
+)
+
+
+def _clean_stage_payload(payload: dict | None) -> dict:
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _stage_label(value: object) -> str:
+    return str(value or "").strip().replace("_", " ")
+
+
+def _default_public_stage_record_specs(
+    event_type: str,
+    event_origin: str,
+    payload: dict | None,
+) -> list[dict[str, object]]:
+    et = str(event_type or "").strip()
+    origin = str(event_origin or "").strip().lower()
+    if origin in {"inferred", "backfilled"} or et not in _DEFAULT_PUBLIC_STAGE_EVENT_TYPES:
+        return []
+    p = _clean_stage_payload(payload)
+    specs: list[dict[str, object]] = []
+
+    def add(
+        *,
+        record_key: str,
+        public_stage: str,
+        record_type: str,
+        confidence: float,
+        distortion: dict[str, object],
+    ) -> None:
+        specs.append(
+            {
+                "record_key": record_key,
+                "public_stage": public_stage,
+                "record_type": record_type,
+                "confidence": confidence,
+                "distortion": distortion,
+            }
+        )
+
+    if et == "death":
+        add(
+            record_key="public_cause_unknown",
+            public_stage="unknown",
+            record_type="mortuary_uncertainty",
+            confidence=0.35,
+            distortion={"uncertain_fields": ["cause"], "public_cause": "unknown"},
+        )
+    elif et in {"settlement_move_planned", "settlement_move_dropped", "settlement_moved"}:
+        add(
+            record_key="public_move_unclear",
+            public_stage="unknown",
+            record_type="settlement_movement_notice",
+            confidence=0.45,
+            distortion={
+                "uncertain_fields": ["route", "cause"],
+                "public_cause": "unknown",
+            },
+        )
+        reason = _stage_label(p.get("move_reason") or p.get("source_event"))
+        if reason and reason != "unknown":
+            add(
+                record_key="public_move_rumor",
+                public_stage="rumored",
+                record_type="settlement_movement_rumor",
+                confidence=0.5,
+                distortion={"rumored_cause": reason},
+            )
+    elif et in {"office_selection", "office_succession"}:
+        add(
+            record_key="public_succession_unclear",
+            public_stage="unknown",
+            record_type="court_uncertainty",
+            confidence=0.5,
+            distortion={
+                "uncertain_fields": ["claim", "selection_rule"],
+                "public_cause": "unknown",
+            },
+        )
+        via = _stage_label(p.get("via") or p.get("selection_rule"))
+        if via and via != "unknown":
+            add(
+                record_key="public_succession_rumor",
+                public_stage="rumored",
+                record_type="court_rumor",
+                confidence=0.55,
+                distortion={"rumored_cause": via},
+            )
+    elif et.startswith("polity_") or et == "dynastic_marriage_alliance":
+        add(
+            record_key="public_polity_change_unclear",
+            public_stage="unknown",
+            record_type="court_uncertainty",
+            confidence=0.55,
+            distortion={
+                "uncertain_fields": ["cause", "terms"],
+                "public_cause": "unknown",
+            },
+        )
+        reason = _stage_label(
+            p.get("reason")
+            or p.get("from_polity_type_id")
+            or p.get("to_polity_type_id")
+            or p.get("name")
+        )
+        if reason and reason != "unknown":
+            add(
+                record_key="public_polity_change_rumor",
+                public_stage="rumored",
+                record_type="court_rumor",
+                confidence=0.55,
+                distortion={"rumored_cause": reason},
+            )
+    elif et.startswith("campaign_") or et == "battle_fought":
+        uncertain = "outcome" if et == "campaign_ended" else "cause"
+        if et == "battle_fought":
+            uncertain = "casualties"
+        add(
+            record_key=f"public_war_{uncertain}_unclear",
+            public_stage="unknown",
+            record_type="war_uncertainty",
+            confidence=0.5,
+            distortion={
+                "uncertain_fields": [uncertain],
+                "public_cause": "unknown",
+            },
+        )
+        rumor_value = _stage_label(
+            p.get("outcome")
+            if et == "campaign_ended"
+            else p.get("kind") or p.get("battle_outcome")
+        )
+        if rumor_value and rumor_value != "unknown":
+            add(
+                record_key="public_war_rumor",
+                public_stage="rumored",
+                record_type="war_rumor",
+                confidence=0.55,
+                distortion={
+                    "rumored_outcome" if et == "campaign_ended" else "rumored_cause": rumor_value
+                },
+            )
+    return specs
+
+
+def _insert_default_public_stage_record_rows(
+    conn: sqlite3.Connection,
+    *,
+    event_id: int,
+    event_type: str,
+    event_origin: str,
+    payload: dict | None,
+) -> None:
+    for spec in _default_public_stage_record_specs(event_type, event_origin, payload):
+        upsert_public_event_record(
+            conn,
+            int(event_id),
+            public_stage=str(spec["public_stage"]),
+            record_key=str(spec["record_key"]),
+            record_type=str(spec["record_type"]),
+            confidence=float(spec["confidence"]),
+            distortion=dict(spec["distortion"]),
+        )
+
+
 def _insert_default_event_record_row(
     conn: sqlite3.Connection,
     *,
@@ -3362,6 +3548,7 @@ def _insert_default_event_record_row(
     region_key: int | None,
     event_origin: str,
     created_at: str,
+    payload: dict | None = None,
 ) -> None:
     record_type, visibility_state, confidence = _event_record_kind_for_type(
         event_type, event_origin
@@ -3394,6 +3581,13 @@ def _insert_default_event_record_row(
             created_at,
             created_at,
         ),
+    )
+    _insert_default_public_stage_record_rows(
+        conn,
+        event_id=int(event_id),
+        event_type=event_type,
+        event_origin=event_origin,
+        payload=payload,
     )
 
 
@@ -3948,6 +4142,7 @@ def _ensure_simulation_events_tables(conn: sqlite3.Connection) -> None:
     _backfill_simulation_event_people(conn)
     _backfill_simulation_event_moves(conn)
     _backfill_simulation_event_records(conn)
+    _backfill_simulation_event_public_stage_records(conn)
 
 
 def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
@@ -4065,7 +4260,7 @@ def _backfill_simulation_event_records(conn: sqlite3.Connection) -> None:
         """
         SELECT e.id, e.sim_year, e.event_type, e.primary_person_id,
                e.secondary_person_id, e.settlement_key, e.region_key,
-               e.event_origin, e.created_at
+               e.event_origin, e.payload_json, e.created_at
         FROM simulation_events e
         LEFT JOIN simulation_event_records r
           ON r.event_id = e.id AND r.record_key = 'default'
@@ -4073,6 +4268,12 @@ def _backfill_simulation_event_records(conn: sqlite3.Connection) -> None:
         """
     ).fetchall()
     for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
         _insert_default_event_record_row(
             conn,
             event_id=int(row["id"]),
@@ -4096,6 +4297,7 @@ def _backfill_simulation_event_records(conn: sqlite3.Connection) -> None:
             region_key=int(row["region_key"]) if row["region_key"] is not None else None,
             event_origin=str(row["event_origin"] or "generated"),
             created_at=str(row["created_at"] or _utc_now_iso()),
+            payload=payload,
         )
     if _table_exists(conn, "save_metadata"):
         conn.execute(
@@ -4104,6 +4306,51 @@ def _backfill_simulation_event_records(conn: sqlite3.Connection) -> None:
             VALUES (?, '1')
             """,
             (EVENT_RECORDS_BACKFILLED_META_KEY,),
+        )
+
+
+def _backfill_simulation_event_public_stage_records(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "save_metadata"):
+        done = conn.execute(
+            """
+            SELECT meta_value FROM save_metadata
+            WHERE meta_key = ?
+            """,
+            (EVENT_PUBLIC_STAGE_RECORDS_BACKFILLED_META_KEY,),
+        ).fetchone()
+        if done is not None and str(done[0]).strip() == "1":
+            return
+    placeholders = ", ".join("?" for _ in _DEFAULT_PUBLIC_STAGE_EVENT_TYPES)
+    rows = conn.execute(
+        f"""
+        SELECT e.id, e.event_type, e.event_origin, e.payload_json
+        FROM simulation_events e
+        WHERE e.event_type IN ({placeholders})
+        ORDER BY e.id
+        """,
+        tuple(sorted(_DEFAULT_PUBLIC_STAGE_EVENT_TYPES)),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        _insert_default_public_stage_record_rows(
+            conn,
+            event_id=int(row["id"]),
+            event_type=str(row["event_type"] or ""),
+            event_origin=str(row["event_origin"] or "generated"),
+            payload=payload,
+        )
+    if _table_exists(conn, "save_metadata"):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO save_metadata (meta_key, meta_value)
+            VALUES (?, '1')
+            """,
+            (EVENT_PUBLIC_STAGE_RECORDS_BACKFILLED_META_KEY,),
         )
 
 
@@ -4447,6 +4694,7 @@ def _write_rebuilt_save_sqlite(
             _backfill_simulation_event_people(conn)
             _backfill_simulation_event_moves(conn)
             _backfill_simulation_event_records(conn)
+            _backfill_simulation_event_public_stage_records(conn)
             _backfill_simulation_domain_states(conn)
             _backfill_simulation_obligations(conn)
             _backfill_simulation_reputation_marks(conn)
@@ -6015,6 +6263,7 @@ def append_simulation_event_rows(
             region_key=region_key,
             event_origin=event_origin,
             created_at=ts,
+            payload=payload,
         )
     if event_ids:
         _set_domain_states_processed_event_id(conn, max(event_ids))
@@ -6151,6 +6400,9 @@ def flush_simulation_meta_checkpoint(ctx: "SimulationContext") -> None:
             VALUES (?, ?)
             """,
             (WORLD_MAP_SEED_META_KEY, _ctx_world_map_seed(ctx)),
+        )
+        _flush_passive_promotion_log_entries(
+            conn, getattr(ctx, "passive_promotion_log", ())
         )
         conn.commit()
     _profile_accumulate("checkpoint.meta_only", t0)
@@ -6747,6 +6999,69 @@ def _passive_cohort_from_checkpoint_row(
     )
 
 
+def _flush_passive_promotion_log_entries(
+    conn: sqlite3.Connection,
+    entries: object,
+) -> None:
+    ts = _utc_now_iso()
+    for entry in entries or ():
+        try:
+            person_id = int(getattr(entry, "person_id"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            sim_year_raw = getattr(entry, "sim_year")
+            sim_year = int(sim_year_raw) if sim_year_raw is not None else None
+        except (TypeError, ValueError):
+            sim_year = None
+        reason = str(getattr(entry, "reason", "") or "").strip()
+        if person_id <= 0 or not reason:
+            continue
+        try:
+            source_event_raw = getattr(entry, "source_event_id", None)
+            source_event_id = (
+                int(source_event_raw) if source_event_raw is not None else None
+            )
+        except (TypeError, ValueError):
+            source_event_id = None
+        synthesized = getattr(entry, "synthesized", {})
+        if not isinstance(synthesized, dict):
+            synthesized = {}
+        synthesized_json = json.dumps(
+            synthesized,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=str,
+        )
+        conn.execute(
+            """
+            INSERT INTO simulation_promotion_log (
+                person_id, sim_year, reason, source_event_id, synthesized_json, created_at
+            )
+            SELECT ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM simulation_promotion_log
+                WHERE person_id = ?
+                  AND reason = ?
+                  AND ((sim_year IS NULL AND ? IS NULL) OR sim_year = ?)
+            )
+            """,
+            (
+                person_id,
+                sim_year,
+                reason,
+                source_event_id,
+                synthesized_json,
+                ts,
+                person_id,
+                reason,
+                sim_year,
+                sim_year,
+            ),
+        )
+
+
 def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
     """Upsert archival rows for people and settlements; rewrite derived snapshot slices.
 
@@ -6883,6 +7198,11 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 _passive_cohort_values(conn, cohort),
             )
         t0 = _profile_accumulate("checkpoint.snapshot_passive_cohorts", t0)
+
+        _flush_passive_promotion_log_entries(
+            conn, getattr(ctx, "passive_promotion_log", ())
+        )
+        t0 = _profile_accumulate("checkpoint.snapshot_promotion_log", t0)
 
         by_region: dict[str, list[SettlementState]] = defaultdict(list)
         for settlement_id, st in ctx.settlements_by_id.items():

@@ -177,15 +177,18 @@ even quieter than the old undercounted murder slice. Re-run
 ## `config/event_catalog.csv`
 
 **Purpose:** Authored catalog rows for detailed event/incident kinds used by
-`library.event_catalog` and `library.simulation_incidents`. The simulator still
-chooses broad incident families through bounded trait/context logic; catalog
-rows provide concrete `incident_kind` variants within those families.
+`library.event_catalog` and `library.simulation_incidents`. The active simulator
+still chooses broad incident families through bounded trait/context logic;
+catalog rows provide concrete `incident_kind` variants within those families.
+The catalog also contains dormant Workstream 1 rows for future political,
+religious/cultural, and private-life generators so every ontology key has a
+curated catalog entry before sampling code exists.
 
 | Column | Type / role | Notes |
 |--------|-------------|-------|
-| `event_type` | string | Factual event type such as `murder`, `property_crime`, `affair_scandal`, `public_virtue`, or `knowledge_culture`. |
+| `event_type` | string | Active factual event type such as `murder`, `property_crime`, `affair_scandal`, `public_virtue`, or `knowledge_culture`, or a dormant broad family such as `political_crime`, `religious_cultural_conflict`, or `private_life` for future generators. |
 | `incident_kind` | string | Concrete subtype stored in event payloads, e.g. `storehouse_robbery`, `river_rescue`, `succession_precedent`. |
-| `event_family` | string | Broad authoring family such as `violent_crime`, `property_crime`, `household_scandal`, `public_virtue`, `knowledge_culture`. |
+| `event_family` | string | Broad authoring family such as `violent_crime`, `property_survival_crime`, `household_scandal`, `political_crime`, `religious_cultural_conflict`, `public_virtue`, `knowledge_culture`, or `private_life`. |
 | `display_name` | string | Human-readable label. Prose currently falls back to labelizing `incident_kind`, but this is the authoring surface for future template selection. |
 | `context_tags` | semicolon-separated strings | Tags used by generator classifiers to pick variant pools, e.g. `theft;scarcity`, `rescue;danger`, `legal;succession`. Matching is any-tag. |
 | `consequence_profile` | string | Current profiles include `death`, `property_loss`, `relationship_fallout`, `public_relief`, and `knowledge_state`. |
@@ -195,7 +198,12 @@ rows provide concrete `incident_kind` variants within those families.
 | `notes` | string | Human tuning notes only; ignored by runtime logic. |
 
 Rows currently expand the initial vertical slices with more crime, rescue,
-legal, invention, and succession-adjacent variants. The `knowledge_culture`
+legal, invention, and succession-adjacent variants, and now cover every
+Workstream 1 ontology key as an authored catalog row. Some alias rows such as
+`rescue`, `mercy`, and `arbitration` have zero active selection weight because
+the current generator uses concrete variants such as `heroic_rescue`,
+`public_mercy`, and `public_arbitration`; keep those weights at zero unless the
+runtime selector and tests are intentionally retuned. The `knowledge_culture`
 slice includes portable mercantile/maritime variants such as
 `shipbuilding_advance`, `navigation_discovery`, `writing_system`,
 `accounting_method`, `trade_law_precedent`, `standard_container`, and

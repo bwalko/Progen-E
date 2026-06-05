@@ -39,6 +39,17 @@ class MetricSummary:
 
 
 @dataclass(frozen=True)
+class ConsequenceMetricSummary:
+    section: str
+    key: str
+    metric: str
+    count: int
+    minimum: float
+    maximum: float
+    average: float
+
+
+@dataclass(frozen=True)
 class EventHistoryReport:
     total_events: int
     total_records: int
@@ -47,6 +58,8 @@ class EventHistoryReport:
     event_counts_by_year_type: tuple[CountRow, ...]
     visibility_counts: tuple[CountRow, ...]
     metric_summaries: tuple[MetricSummary, ...]
+    consequence_counts: tuple[CountRow, ...]
+    consequence_metric_summaries: tuple[ConsequenceMetricSummary, ...]
     public_samples: tuple[EventRecordProse, ...]
 
 
@@ -72,6 +85,8 @@ def build_event_history_report(
         event_counts_by_year_type=tuple(_event_counts_by_year_type(conn)),
         visibility_counts=tuple(_visibility_counts(conn)),
         metric_summaries=tuple(_metric_summaries(conn)),
+        consequence_counts=tuple(_consequence_counts(conn)),
+        consequence_metric_summaries=tuple(_consequence_metric_summaries(conn)),
         public_samples=tuple(
             load_public_chronicle_prose(
                 conn,
@@ -107,6 +122,14 @@ def write_event_history_report(report: EventHistoryReport, output_dir: Path) -> 
         _tracked_incident_counts(report),
     )
     _write_metric_summaries(output_dir / "event_metric_summaries.tsv", report.metric_summaries)
+    _write_consequence_counts(
+        output_dir / "event_consequence_counts.tsv",
+        report.consequence_counts,
+    )
+    _write_consequence_metric_summaries(
+        output_dir / "event_consequence_metrics.tsv",
+        report.consequence_metric_summaries,
+    )
     _write_public_samples(output_dir / "public_chronicle_samples.tsv", report.public_samples)
     (output_dir / "summary.txt").write_text(format_event_history_summary(report), encoding="utf-8")
 
@@ -141,6 +164,29 @@ def format_event_history_summary(report: EventHistoryReport) -> str:
             lines.append(
                 f"- {metric.event_type} {metric.metric}: n={metric.count} "
                 f"avg={metric.average:.4f} min={metric.minimum:.4f} max={metric.maximum:.4f}"
+            )
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("Consequence Counts")
+    if report.consequence_counts:
+        for row in sorted(report.consequence_counts, key=lambda item: (item.keys, item.count)):
+            section = row.keys[0]
+            key = " / ".join(row.keys[1:])
+            lines.append(f"- {section} / {key}: {row.count}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("Consequence Metrics")
+    if report.consequence_metric_summaries:
+        for metric in sorted(
+            report.consequence_metric_summaries,
+            key=lambda item: (item.section, item.key, item.metric),
+        ):
+            lines.append(
+                f"- {metric.section} / {metric.key} / {metric.metric}: "
+                f"n={metric.count} avg={metric.average:.4f} "
+                f"min={metric.minimum:.4f} max={metric.maximum:.4f}"
             )
     else:
         lines.append("- none")
@@ -251,6 +297,204 @@ def _metric_summaries(conn: sqlite3.Connection) -> list[MetricSummary]:
     return out
 
 
+_CONSEQUENCE_COUNT_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "Domain States",
+        "simulation_domain_states_readable",
+        ("domain", "latest_incident_kind"),
+    ),
+    (
+        "Faction Memory",
+        "simulation_faction_memory_readable",
+        ("memory_type", "status", "polarity"),
+    ),
+    (
+        "Obligations",
+        "simulation_obligations_readable",
+        ("obligation_type", "status"),
+    ),
+    (
+        "Reputation Marks",
+        "simulation_reputation_marks_readable",
+        ("reputation_axis", "direction"),
+    ),
+    (
+        "Legal Fallout",
+        "simulation_legal_fallout_readable",
+        ("fallout_type", "status"),
+    ),
+    (
+        "Legal Adjudications",
+        "simulation_legal_adjudications_readable",
+        ("adjudication_type", "outcome"),
+    ),
+    (
+        "Domain Diffusion",
+        "simulation_domain_diffusion_readable",
+        ("domain", "route_type"),
+    ),
+    (
+        "Institutions",
+        "simulation_institutions_readable",
+        ("institution_type", "status", "focus_domain"),
+    ),
+    (
+        "Innovation Discoveries",
+        "simulation_innovation_discoveries_readable",
+        ("category", "domain", "era_id"),
+    ),
+    (
+        "Innovation Knowledge",
+        "simulation_innovation_knowledge_readable",
+        ("category", "domain", "status"),
+    ),
+    (
+        "Innovation Era State",
+        "simulation_innovation_era_state_readable",
+        ("era_id", "scope_kind"),
+    ),
+)
+
+
+_CONSEQUENCE_METRIC_SPECS: tuple[
+    tuple[str, str, tuple[str, ...], tuple[str, ...]], ...
+] = (
+    (
+        "Domain States",
+        "simulation_domain_states_readable",
+        ("domain", "latest_incident_kind"),
+        ("domain_score", "breakthrough_count"),
+    ),
+    (
+        "Faction Memory",
+        "simulation_faction_memory_readable",
+        ("memory_type", "status"),
+        ("strength",),
+    ),
+    (
+        "Obligations",
+        "simulation_obligations_readable",
+        ("obligation_type", "status"),
+        ("strength",),
+    ),
+    (
+        "Reputation Marks",
+        "simulation_reputation_marks_readable",
+        ("reputation_axis", "direction"),
+        ("mark_strength",),
+    ),
+    (
+        "Legal Fallout",
+        "simulation_legal_fallout_readable",
+        ("fallout_type", "status"),
+        ("severity",),
+    ),
+    (
+        "Legal Adjudications",
+        "simulation_legal_adjudications_readable",
+        ("adjudication_type", "outcome"),
+        ("severity",),
+    ),
+    (
+        "Domain Diffusion",
+        "simulation_domain_diffusion_readable",
+        ("domain", "route_type"),
+        ("route_friction", "state_delta"),
+    ),
+    (
+        "Institutions",
+        "simulation_institutions_readable",
+        ("institution_type", "status", "focus_domain"),
+        ("strength", "influence_score"),
+    ),
+    (
+        "Innovation Discoveries",
+        "simulation_innovation_discoveries_readable",
+        ("category", "domain"),
+        ("novelty_score",),
+    ),
+    (
+        "Innovation Knowledge",
+        "simulation_innovation_knowledge_readable",
+        ("category", "domain", "status"),
+        ("adoption_score",),
+    ),
+    (
+        "Innovation Era State",
+        "simulation_innovation_era_state_readable",
+        ("era_id", "scope_kind"),
+        ("adopted_count", "next_era_adopted_count"),
+    ),
+)
+
+
+def _consequence_counts(conn: sqlite3.Connection) -> list[CountRow]:
+    out: list[CountRow] = []
+    for section, relation, columns in _CONSEQUENCE_COUNT_SPECS:
+        if not _relation_exists(conn, relation):
+            continue
+        select_cols = ", ".join(
+            f"COALESCE(CAST({col} AS TEXT), '') AS c{i}"
+            for i, col in enumerate(columns)
+        )
+        group_cols = ", ".join(f"c{i}" for i, _col in enumerate(columns))
+        for row in conn.execute(
+            f"""
+            SELECT {select_cols}, COUNT(*) AS n
+            FROM {relation}
+            GROUP BY {group_cols}
+            ORDER BY {group_cols}
+            """
+        ):
+            values = tuple(_summary_key(row[f"c{i}"]) for i, _col in enumerate(columns))
+            out.append(CountRow((section, *values), int(row["n"])))
+    return out
+
+
+def _consequence_metric_summaries(
+    conn: sqlite3.Connection,
+) -> list[ConsequenceMetricSummary]:
+    out: list[ConsequenceMetricSummary] = []
+    for section, relation, key_columns, metric_columns in _CONSEQUENCE_METRIC_SPECS:
+        if not _relation_exists(conn, relation):
+            continue
+        key_select = ", ".join(
+            f"COALESCE(CAST({col} AS TEXT), '') AS c{i}"
+            for i, col in enumerate(key_columns)
+        )
+        group_cols = ", ".join(f"c{i}" for i, _col in enumerate(key_columns))
+        for metric in metric_columns:
+            for row in conn.execute(
+                f"""
+                SELECT {key_select},
+                       COUNT({metric}) AS n,
+                       MIN({metric}) AS min_value,
+                       MAX({metric}) AS max_value,
+                       AVG({metric}) AS avg_value
+                FROM {relation}
+                WHERE {metric} IS NOT NULL
+                GROUP BY {group_cols}
+                HAVING COUNT({metric}) > 0
+                ORDER BY {group_cols}
+                """
+            ):
+                values = tuple(
+                    _summary_key(row[f"c{i}"]) for i, _col in enumerate(key_columns)
+                )
+                out.append(
+                    ConsequenceMetricSummary(
+                        section=section,
+                        key=" / ".join(values),
+                        metric=metric,
+                        count=int(row["n"]),
+                        minimum=float(row["min_value"]),
+                        maximum=float(row["max_value"]),
+                        average=float(row["avg_value"]),
+                    )
+                )
+    return out
+
+
 def _write_counts(path: Path, headers: Sequence[str], rows: Sequence[CountRow]) -> None:
     lines = ["\t".join(headers)]
     for row in rows:
@@ -265,6 +509,42 @@ def _write_metric_summaries(path: Path, rows: Sequence[MetricSummary]) -> None:
             "\t".join(
                 [
                     row.event_type,
+                    row.metric,
+                    str(row.count),
+                    f"{row.minimum:.6f}",
+                    f"{row.maximum:.6f}",
+                    f"{row.average:.6f}",
+                ]
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_consequence_counts(path: Path, rows: Sequence[CountRow]) -> None:
+    lines = ["section\tkey\tcount"]
+    for row in rows:
+        lines.append(
+            "\t".join(
+                [
+                    row.keys[0],
+                    _tsv_text(" / ".join(row.keys[1:])),
+                    str(row.count),
+                ]
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_consequence_metric_summaries(
+    path: Path, rows: Sequence[ConsequenceMetricSummary]
+) -> None:
+    lines = ["section\tkey\tmetric\tcount\tmin\tmax\tavg"]
+    for row in rows:
+        lines.append(
+            "\t".join(
+                [
+                    row.section,
+                    _tsv_text(row.key),
                     row.metric,
                     str(row.count),
                     f"{row.minimum:.6f}",
@@ -322,6 +602,17 @@ def _require_relation(conn: sqlite3.Connection, name: str) -> None:
         raise RuntimeError(f"missing required event-history relation: {name}")
 
 
+def _relation_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1 FROM sqlite_master
+        WHERE type IN ('table', 'view') AND name = ?
+        """,
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
 def _payload(raw: object) -> dict[str, object]:
     if not raw:
         return {}
@@ -343,3 +634,8 @@ def _float(value: object) -> float | None:
 
 def _tsv_text(value: object) -> str:
     return str(value or "").replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+
+def _summary_key(value: object) -> str:
+    text = str(value or "").strip()
+    return text or "(blank)"

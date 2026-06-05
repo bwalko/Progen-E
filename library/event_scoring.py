@@ -121,10 +121,40 @@ def score_named_composites(subject: Any, weights: Mapping[str, float]) -> float:
     )
 
 
-def infer_role_tags(subject: Any, *, year: int | None = None) -> frozenset[str]:
+def _subject_person_id(subject: Any) -> int | None:
+    raw = getattr(subject, "person_id", None)
+    if raw is None:
+        person = getattr(subject, "person", subject)
+        raw = getattr(person, "person_id", None)
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _id_set(values: Iterable[int] | None) -> frozenset[int]:
+    out: set[int] = set()
+    for value in values or ():
+        try:
+            out.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return frozenset(out)
+
+
+def infer_role_tags(
+    subject: Any,
+    *,
+    year: int | None = None,
+    care_indexes: Any | None = None,
+    office_holder_ids: Iterable[int] | None = None,
+    ruler_ids: Iterable[int] | None = None,
+    parent_ids: Iterable[int] | None = None,
+) -> frozenset[str]:
     """Infer coarse role tags without requiring a full simulation context."""
 
     person = getattr(subject, "person", subject)
+    person_id = _subject_person_id(subject)
     tags: set[str] = set()
     birthyear = getattr(person, "birthyear", None)
     if year is not None and birthyear is not None:
@@ -141,10 +171,54 @@ def infer_role_tags(subject: Any, *, year: int | None = None) -> frozenset[str]:
         tags.add("spouse")
     if getattr(person, "unemployment_started_year", None) is not None:
         tags.add("unemployed")
+    if person_id is not None:
+        if person_id in _id_set(parent_ids):
+            tags.add("parent")
+        children_by_parent = getattr(care_indexes, "children_by_parent", None)
+        if children_by_parent is not None and children_by_parent.get(person_id):
+            tags.add("parent")
+        if person_id in _id_set(office_holder_ids):
+            tags.add("title_holder")
+        if person_id in _id_set(ruler_ids):
+            tags.add("ruler")
+            tags.add("title_holder")
+        purseholder = getattr(person, "household_purseholder_person_id", None)
+        try:
+            if purseholder is not None and int(purseholder) == person_id:
+                tags.add("household_head")
+        except (TypeError, ValueError):
+            pass
+    current_settlement = str(getattr(person, "current_settlement_id", "") or "").strip()
+    birth_settlement = str(getattr(person, "birthplace_settlement_id", "") or "").strip()
+    current_region = str(getattr(person, "current_region_id", "") or "").strip()
+    birth_region = str(getattr(person, "birthplace_region_id", "") or "").strip()
+    if (current_settlement and birth_settlement and current_settlement != birth_settlement) or (
+        current_region and birth_region and current_region != birth_region
+    ):
+        tags.add("migrant")
     job = str(getattr(person, "job", "") or "").strip().lower()
     if job:
         if any(token in job for token in ("ruler", "chief", "king", "queen", "duke")):
             tags.add("ruler")
+            tags.add("title_holder")
+        if any(
+            token in job
+            for token in (
+                "count",
+                "mayor",
+                "judge",
+                "officer",
+                "noble",
+                "guild master",
+                "settlement leader",
+            )
+        ):
+            tags.add("title_holder")
+        if "heir" in job:
+            tags.add("heir")
+            tags.add("title_holder")
+        if "household head" in job:
+            tags.add("household_head")
         if any(token in job for token in ("priest", "shaman", "druid", "oracle")):
             tags.add("priest")
         if any(token in job for token in ("guard", "soldier", "warrior", "militia")):
@@ -208,6 +282,21 @@ def propensity_by_person_id(
         if pid is None:
             continue
         out[int(pid)] = clamp01(score_fn(rec))
+    return out
+
+
+def contextual_propensity_by_person_id(
+    records: Iterable[Any],
+    score_fn: Callable[..., float],
+    context_by_person_id: Mapping[int, EventScoringContext],
+) -> dict[int, float]:
+    out: dict[int, float] = {}
+    for rec in records:
+        pid = getattr(rec, "person_id", None)
+        if pid is None:
+            continue
+        ipid = int(pid)
+        out[ipid] = clamp01(score_fn(rec, context=context_by_person_id.get(ipid)))
     return out
 
 
@@ -442,6 +531,161 @@ KNOWLEDGE_CULTURE_SPEC = EventPropensitySpec(
 )
 
 
+POLITICAL_CRIME_SPEC = EventPropensitySpec(
+    key="political_crime",
+    risk_factors=(
+        TraitFactor("ambition", "positive_extreme", 0.16),
+        TraitFactor("loyalty", "negative_extreme", 0.14),
+        TraitFactor("justice", "negative_extreme", 0.10),
+        TraitFactor("honesty", "negative_extreme", 0.09),
+        TraitFactor("persuasion", "positive_extreme", 0.11),
+        TraitFactor("discipline", "positive_extreme", 0.07),
+        TraitFactor("courage", "positive_extreme", 0.06),
+        TraitFactor("civics", "negative_extreme", 0.05),
+    ),
+    protective_factors=(
+        TraitFactor("loyalty", "ideal_strength", 0.14),
+        TraitFactor("justice", "ideal_strength", 0.10),
+        TraitFactor("honesty", "ideal_strength", 0.08),
+        TraitFactor("empathy", "ideal_strength", 0.06),
+        TraitFactor("civics", "ideal_strength", 0.06),
+    ),
+    composite_weights={
+        "tyrant": 0.05,
+        "criminal mastermind": 0.06,
+        "demagogue": 0.05,
+        "hidden manipulator": 0.05,
+        "legitimacy seizer": 0.06,
+        "self-anointed": 0.05,
+        "procedural predator": 0.05,
+    },
+    role_weights={
+        "ruler": 0.03,
+        "title_holder": 0.05,
+        "heir": 0.06,
+        "soldier": 0.02,
+        "trader": 0.01,
+    },
+    pressure_weights={
+        "succession_crisis": 0.08,
+        "office_tension": 0.07,
+        "faction_tension": 0.05,
+        "status_fall": 0.05,
+        "war": 0.04,
+        "debt": 0.03,
+    },
+    opportunity_weights={
+        "court": 0.05,
+        "office_access": 0.06,
+        "faction_network": 0.05,
+        "document_access": 0.04,
+        "guard_gap": 0.03,
+    },
+)
+
+RELIGIOUS_CULTURAL_CONFLICT_SPEC = EventPropensitySpec(
+    key="religious_cultural_conflict",
+    risk_factors=(
+        TraitFactor("justice", "positive_extreme", 0.12),
+        TraitFactor("loyalty", "positive_extreme", 0.09),
+        TraitFactor("civics", "positive_extreme", 0.08),
+        TraitFactor("empathy", "negative_extreme", 0.11),
+        TraitFactor("persuasion", "positive_extreme", 0.11),
+        TraitFactor("creativity", "positive_extreme", 0.08),
+        TraitFactor("discipline", "positive_extreme", 0.06),
+        TraitFactor("courage", "positive_extreme", 0.05),
+        TraitFactor("adaptability", "negative_extreme", 0.05),
+    ),
+    protective_factors=(
+        TraitFactor("empathy", "ideal_strength", 0.14),
+        TraitFactor("temperance", "ideal_strength", 0.10),
+        TraitFactor("adaptability", "ideal_strength", 0.08),
+        TraitFactor("honesty", "ideal_strength", 0.06),
+    ),
+    composite_weights={
+        "fanatic": 0.07,
+        "fanatical loyalist": 0.06,
+        "cult leader": 0.07,
+        "false revelator": 0.06,
+        "pious aggressor": 0.06,
+        "moral scold": 0.04,
+        "mystic": 0.03,
+    },
+    role_weights={
+        "priest": 0.06,
+        "ruler": 0.03,
+        "title_holder": 0.02,
+        "elder": 0.02,
+    },
+    pressure_weights={
+        "doctrine_tension": 0.07,
+        "social_stress": 0.05,
+        "disaster": 0.05,
+        "war": 0.04,
+        "scarcity": 0.03,
+    },
+    opportunity_weights={
+        "temple": 0.05,
+        "ritual_site": 0.05,
+        "crowd": 0.04,
+        "court": 0.03,
+        "scribe_network": 0.03,
+    },
+)
+
+PRIVATE_LIFE_SEED_SPEC = EventPropensitySpec(
+    key="private_life_seed",
+    risk_factors=(
+        TraitFactor("patience", "negative_extreme", 0.08),
+        TraitFactor("temperance", "negative_extreme", 0.06),
+        TraitFactor("justice", "positive_extreme", 0.06),
+        TraitFactor("empathy", "negative_extreme", 0.06),
+        TraitFactor("loyalty", "negative_extreme", 0.05),
+        TraitFactor("honesty", "negative_extreme", 0.06),
+        TraitFactor("persuasion", "positive_extreme", 0.06),
+        TraitFactor("perception", "positive_extreme", 0.05),
+        TraitFactor("ambition", "positive_extreme", 0.05),
+        TraitFactor("neurochemical", "positive_extreme", 0.05),
+        TraitFactor("empathy", "ideal_strength", 0.04),
+        TraitFactor("nurturance", "ideal_strength", 0.04),
+        TraitFactor("humility", "positive_extreme", 0.04),
+        TraitFactor("resilience", "positive_extreme", 0.03),
+    ),
+    protective_cap=0.35,
+    composite_weights={
+        "jealous rival": 0.05,
+        "hidden manipulator": 0.04,
+        "truth-teller": 0.03,
+        "good neighbor": 0.03,
+        "hermit": 0.04,
+        "mystic": 0.03,
+        "gentle mentor": 0.03,
+    },
+    role_weights={
+        "spouse": 0.03,
+        "parent": 0.03,
+        "household_head": 0.03,
+        "migrant": 0.03,
+        "elder": 0.02,
+        "artisan": 0.02,
+    },
+    pressure_weights={
+        "relationship_strain": 0.06,
+        "bereavement": 0.05,
+        "scarcity": 0.04,
+        "status_fall": 0.04,
+        "debt": 0.03,
+    },
+    opportunity_weights={
+        "shared_household": 0.05,
+        "privacy": 0.04,
+        "mentor_access": 0.03,
+        "secret_access": 0.04,
+        "travel_route": 0.03,
+    },
+)
+
+
 def property_crime_skill_factor(subject: Any) -> float:
     predatory_intent = clamp01(
         negative_extreme(subject, "justice")
@@ -488,3 +732,23 @@ def knowledge_culture_propensity(
     subject: Any, *, context: EventScoringContext | None = None
 ) -> float:
     return score_propensity(subject, KNOWLEDGE_CULTURE_SPEC, context=context)
+
+
+def political_crime_propensity(
+    subject: Any, *, context: EventScoringContext | None = None
+) -> float:
+    return score_propensity(subject, POLITICAL_CRIME_SPEC, context=context)
+
+
+def religious_cultural_conflict_propensity(
+    subject: Any, *, context: EventScoringContext | None = None
+) -> float:
+    return score_propensity(
+        subject, RELIGIOUS_CULTURAL_CONFLICT_SPEC, context=context
+    )
+
+
+def private_life_seed_propensity(
+    subject: Any, *, context: EventScoringContext | None = None
+) -> float:
+    return score_propensity(subject, PRIVATE_LIFE_SEED_SPEC, context=context)

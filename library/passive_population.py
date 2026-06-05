@@ -279,6 +279,125 @@ def promote_passive_candidate_for_settlement_context(
     )
 
 
+def promote_passive_person_for_focus(
+    ctx: Any,
+    *,
+    year: int,
+    focus: str,
+    passive_person_id: int | None = None,
+    settlement_id: str | None = None,
+    region_id: str | None = None,
+    source: dict[str, Any] | None = None,
+) -> Any | None:
+    """Promote an existing passive person for user inspection or narrative spotlight."""
+    focus_kind, reason = _focus_promotion_reason(focus)
+    sid = (settlement_id or "").strip()
+    rid = (region_id or "").strip()
+    source_payload = dict(source or {})
+
+    rec: Any | None = None
+    selector_kind = ""
+    if passive_person_id is not None:
+        try:
+            pid = int(passive_person_id)
+        except (TypeError, ValueError):
+            return None
+        rec = getattr(ctx, "passive_people", {}).get(pid)
+        if rec is None:
+            return None
+        if sid and _passive_person_settlement_id(rec.person) != sid:
+            return None
+        if rid and _passive_person_region_id(rec.person) != rid:
+            return None
+        selector_kind = "person_id"
+    else:
+        if not sid and not rid:
+            return None
+        candidates = [
+            candidate
+            for candidate in getattr(ctx, "passive_people", {}).values()
+            if _passive_person_matches_focus_scope(
+                candidate.person,
+                year=int(year),
+                settlement_id=sid,
+                region_id=rid,
+            )
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda candidate: int(candidate.person_id))
+        seed = _stable_seed(
+            "|".join(
+                (
+                    str(getattr(ctx, "world", "")),
+                    str(getattr(ctx, "placename_rng_salt", 0)),
+                    str(year),
+                    focus_kind,
+                    sid,
+                    rid,
+                    str(len(candidates)),
+                )
+            )
+        )
+        rec = random.Random(seed).choice(candidates)
+        selector_kind = "settlement_id" if sid else "region_id"
+
+    return ctx.promote_passive_person(
+        rec.person_id,
+        year=int(year),
+        reason=reason,
+        source={
+            **source_payload,
+            "focus": focus_kind,
+            "selector": selector_kind,
+            "requested_person_id": (
+                int(passive_person_id) if passive_person_id is not None else None
+            ),
+            "requested_settlement_id": sid or None,
+            "requested_region_id": rid or None,
+        },
+    )
+
+
+def _focus_promotion_reason(focus: str) -> tuple[str, str]:
+    raw = (focus or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"inspection", "inspect", "user_inspection"}:
+        return "inspection", "user_inspection"
+    if raw in {"spotlight", "narrative_spotlight", "narrative_spotlighting"}:
+        return "spotlight", "narrative_spotlight"
+    raise ValueError("focus must be 'inspection' or 'spotlight'")
+
+
+def _passive_person_settlement_id(person: PassivePerson) -> str:
+    return (person.current_settlement_id or person.birthplace_settlement_id or "").strip()
+
+
+def _passive_person_region_id(person: PassivePerson) -> str:
+    rid = (person.birthplace_region_id or "").strip()
+    if rid:
+        return rid
+    sid = _passive_person_settlement_id(person)
+    if ":" in sid:
+        return sid.split(":", 1)[0].strip()
+    return ""
+
+
+def _passive_person_matches_focus_scope(
+    person: PassivePerson,
+    *,
+    year: int,
+    settlement_id: str,
+    region_id: str,
+) -> bool:
+    if person.deathyear is not None and int(person.deathyear) <= int(year):
+        return False
+    if settlement_id and _passive_person_settlement_id(person) != settlement_id:
+        return False
+    if region_id and _passive_person_region_id(person) != region_id:
+        return False
+    return True
+
+
 def build_passive_office_candidate_index(ctx: Any) -> PassiveOfficeCandidateIndex:
     """Index latest passive cohorts for repeated office-promotion lookups."""
     latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)

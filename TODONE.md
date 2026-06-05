@@ -1,5 +1,350 @@
 # TODONE
 
+## Genome And Context Scoring Workstream Completion
+
+- Completed Workstream 2 for the current event-system scoring foundation.
+- `library.event_scoring` now supports reusable contextual propensity maps:
+  signed genome basis functions, role/pressure/opportunity `EventScoringContext`
+  tags, composite-name weights, deterministic threshold/weight helpers, and
+  political, religious/cultural, and private-life scoring entrypoints for future
+  generators.
+- Active incident generators now score candidates with per-year contextual maps
+  instead of raw trait-only propensity calls:
+  - cached household/care indexes supply parent and household/support facts;
+  - government state supplies office holder, ruler, court/capital,
+    succession-crisis, faction-tension, and war-region signals;
+  - settlement facts supply resource pressure, stability/prosperity, crowding,
+    debt/status pressure, witness density, market, storehouse, workshop,
+    archive, household, and public-crisis opportunity tags.
+- The richer context is wired through all five current annual incident families:
+  murder, property crime, affair scandal, public virtue, and knowledge/culture.
+- Added focused regression coverage:
+  - `unit_test.test_event_scoring` proves future-family propensity entrypoints
+    work with bounded contextual candidate pools;
+  - `unit_test.test_simulation_incidents` proves live incident context maps use
+    pressure, office/court, and family/care facts and raise contextual
+    propensity over raw trait-only scoring where appropriate.
+- Ran a bounded Workstream 2 tuning smoke on this laptop:
+  `python utils/run_population_simulation.py --world-id event_tuning_w2_context
+  --reset-world --years 40 --starting-couples 80 --seed 20260605
+  --skip-report-files --profile-last-years 3 --passive-population-scale 0
+  --detailed-active-soft-cap 0`.
+- Sample result:
+  - completed in 162.36 seconds;
+  - final detailed alive count was 364;
+  - last-three-year profile total was 13.744 seconds, about 4.5814
+    seconds/year;
+  - `summary.incidents` was 0.523 seconds total and `incidents.generate` was
+    0.480 seconds total across the profiled years.
+- Generated the current event-history report with
+  `python utils/util_event_history_report.py --world event_tuning_w2_context
+  --sample-limit 12 --ensure-schema`.
+- Current W2 report evidence:
+  - 7,055 factual events and 9,646 event-memory records;
+  - 8,585,216 byte save;
+  - tracked incident counts: `murder` 2, `property_crime` 17,
+    `affair_scandal` 2, `public_virtue` 1, `knowledge_culture` 4;
+  - reportable visibility states and public chronicle samples still exist for
+    all tracked slices;
+  - consequence ledgers remained reportable for faction memory, legal fallout,
+    domain state/diffusion, obligations, reputation marks, and innovation state.
+- Verified with `python -m py_compile library\event_scoring.py
+  library\simulation_incidents.py unit_test\test_event_scoring.py
+  unit_test\test_simulation_incidents.py`,
+  `python -m unittest unit_test.test_event_scoring`, the focused live-context
+  regression test, and the forced-generator slice for all five active incident
+  families.
+- No further Workstream 2 TODO remains for the current contextual scoring
+  foundation. Future scoring work should be opened only for a concrete new event
+  generator, measured tuning issue, or new shared context fact needed by
+  implemented behavior.
+
+## Tests And Tuning Workstream Completion
+
+- Completed Workstream 8 for the current event-system test/tuning foundation.
+- Current focused coverage exists for the five active event families:
+  - `unit_test.test_simulation_incidents` has forced-generation/regression tests
+    for `murder`, `property_crime`, `affair_scandal`, `public_virtue`, and
+    `knowledge_culture`;
+  - those tests assert payload shape, normalized readable rows, memory record
+    type/visibility, public actor/victim fields, and consequence ledgers where
+    the family currently owns consequences;
+  - `unit_test.test_event_prose` covers state-specific payload-backed prose for
+    active incident families;
+  - `unit_test.test_event_history_report` covers report counts, save-size
+    capture, visibility/metric summaries, consequence summaries, and public
+    samples;
+  - `unit_test.test_gradio_data_browser` covers the History Summary browser
+    surface for report counts and lifecycle visibility.
+- Ran the current W8 seeded multi-year sample on this laptop:
+  `python utils/run_population_simulation.py --world-id event_tuning_w8_current
+  --reset-world --years 80 --starting-couples 120 --seed 20260605
+  --skip-report-files --profile-last-years 5 --passive-population-scale 0
+  --detailed-active-soft-cap 0 --progress`.
+- Sample result:
+  - completed in 298.744 seconds;
+  - final detailed alive count was 900;
+  - last-five-year profile total was 41.267669 seconds, about 8.2535
+    seconds/year;
+  - event generation remained bounded in the profile:
+    `summary.incidents` 0.859732 seconds total, `incidents.generate` 0.823093
+    seconds total;
+  - event-memory lifecycle remained bounded in the profile:
+    `summary.event_memory_lifecycle` 0.453761 seconds total, with the final
+    profiled year reviewing 802 lifecycle candidates, losing 3 records, and
+    rediscovering 0.
+- Generated the current event-history report with
+  `python utils/util_event_history_report.py --world event_tuning_w8_current
+  --sample-limit 16 --ensure-schema`.
+- Current W8 report evidence:
+  - 24,864 factual events and 35,255 event-memory records;
+  - 29,618,176 byte save;
+  - tracked incident counts: `murder` 15, `property_crime` 48,
+    `affair_scandal` 3, `public_virtue` 8, `knowledge_culture` 57;
+  - visibility lifecycle states are present in the report, including lost
+    mortuary/household/violent-crime records and current public
+    unknown/rumored/known rows;
+  - public chronicle samples are reviewable and include data-backed
+    knowledge/culture, property-crime, murder, and public-virtue prose.
+- Verified the focused test slice with
+  `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_murder_tick_records_event_kills_victim_and_persists_rumor
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_property_crime_records_nonlethal_rumor
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_affair_scandal_records_rumored_household_scandal
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_public_virtue_records_public_known_good_deed
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_knowledge_culture_records_public_known_breakthrough
+  unit_test.test_event_prose.TestEventProse.test_active_incident_families_have_state_specific_payload_prose
+  unit_test.test_event_history_report.TestEventHistoryReport.test_build_report_counts_visibility_metrics_and_samples
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_history_summary_exposes_report_counts_and_lifecycle_visibility`
+  (8 tests, 223.548 seconds, OK).
+- No further Workstream 8 TODO remains for the current foundation. Future tests
+  or tuning samples should be opened only for concrete new event families,
+  browser/report surfaces, ledgers/consequence changes, or measured tuning
+  problems.
+
+## Persistence Save Size Performance Workstream Completion
+
+- Completed Workstream 7 for the current event-system storage/performance
+  foundation.
+- Current event persistence keeps common query fields normalized while leaving
+  payload JSON for sparse details:
+  - factual `simulation_events` rows carry typed person/place/origin fields;
+  - high-volume movement details live in `simulation_event_moves`;
+  - in-world memory state lives in `simulation_event_records` plus readable
+    views.
+- Rendered prose remains derived, not persisted as large text columns:
+  `simulation_event_records` stores compact state, distortion JSON, and
+  `prose_variant_key`, while `library.event_prose` renders admin/public text
+  from event/readable rows on demand.
+- Current event generation and lifecycle work are bounded:
+  - `library.simulation_incidents` uses per-settlement candidate samples and
+    annual caps for murder, property crime, affair scandal, public virtue, and
+    knowledge/culture slices;
+  - passive/cohort populations only become detailed through explicit
+    promotion/focus paths;
+  - `library.event_memory_lifecycle` reviews deterministic shards with a
+    candidate limit and records lifecycle gauges for reviewed/lost/rediscovered
+    rows.
+- Event-history reporting now exposes `save_size_bytes` alongside counts,
+  visibility, metric, consequence, and public-chronicle samples. The
+  lifecycle-tuned fixed-seed sample recorded in this log produced 17,363
+  events/records in a 17,252,352 byte save.
+- Added focused W7 regression coverage:
+  - `unit_test.test_event_memory_lifecycle` proves the lifecycle candidate
+    limit bounds the loss scan even when every reviewed row would transition;
+  - `unit_test.test_save_checkpoint` proves the event-memory save schema stores
+    template keys instead of rendered prose-like text columns;
+  - `unit_test.test_event_history_report` continues to assert save-size capture.
+- Verified with
+  `python -m unittest unit_test.test_event_memory_lifecycle.TestEventMemoryLifecycle.test_lifecycle_candidate_limit_bounds_loss_scan
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_event_memory_schema_stores_template_keys_not_rendered_prose`
+  and
+  `python -m unittest unit_test.test_event_history_report.TestEventHistoryReport.test_build_report_counts_visibility_metrics_and_samples`.
+- No further Workstream 7 TODO remains for the current foundation. Reopen only
+  for a measured bottleneck, save-growth regression, or concrete new
+  high-volume event feature that needs storage/performance design.
+
+## Admin Browser Query Workstream Completion
+
+- Completed Workstream 6 for the current admin/browser/query foundation.
+- Extended `utils.gradio_data_browser` History tab with explicit-load query
+  surfaces:
+  - `Load Lens` supports a person timeline that combines factual admin-truth
+    rows with in-world event records involving that person;
+  - the same lens loader supports settlement, region, and polity chronicle
+    views scoped to visible public memory;
+  - `Load Rediscovery Details` exposes rediscovered-record source
+    person/institution, confidence, preserving place, and distortion details
+    without requiring raw table inspection.
+- Kept the surfaces behind button/submit controls with event-type filters,
+  search, limits, and offsets, preserving the Gradio tab-autoload caution.
+- Extended `library.event_prose` loaders with optional `event_ids` filters so
+  browser lenses reuse the same deterministic prose rendering path instead of
+  duplicating prose logic in UI code.
+- Added regression coverage in `unit_test.test_gradio_data_browser` for:
+  - person timeline rows containing both `admin_truth` and in-world records;
+  - settlement, region, and polity visible-memory chronicle lenses;
+  - rediscovery source/confidence/distortion detail rows.
+- Verified with `python -m py_compile library\event_prose.py
+  utils\gradio_data_browser.py unit_test\test_gradio_data_browser.py` and
+  `python -m unittest unit_test.test_gradio_data_browser
+  unit_test.test_event_prose unit_test.test_event_history_report`.
+- No further Workstream 6 TODO remains for the current browser/query
+  foundation. Future browser work should be opened only for a concrete
+  inspection need or measured usability issue.
+
+## Poetic Prose Workstream Completion
+
+- Completed Workstream 5 for the current authored prose foundation.
+- Expanded `library.event_prose` so deterministic prose variants are selected
+  from event id, record id, visibility state, and `prose_variant_key`, while
+  still deriving text only from structured event payloads and readable
+  event-record rows.
+- Added richer data-grounded prose for the five active incident families:
+  murder, property crime, affair scandal, public virtue, and knowledge/culture.
+  Current templates now use available names, places, motives, witnesses,
+  betrayed partners, loss/relief/novelty values, patrons, knowledge domains,
+  innovation analogues, source people/institutions, and preserving places.
+- Added state-specific authored prose for admin truth, public known,
+  public-unknown, rumor, misattribution, lost, sealed, and rediscovered records.
+  Lost/sealed/rediscovered text now has distinct archive/source language instead
+  of a single generic fallback.
+- Tightened ordinary public-event prose for death, settlement moves, office
+  succession/selection, polity/court changes, warfare, and rediscovery rows
+  where the payload exposes titles, causes, routes, outcomes, or source facts.
+- Reviewed and regenerated public chronicle samples:
+  - existing samples under `temp/event_history_report/event_tuning_sample*`;
+  - focused W5 incident sample under
+    `temp/event_history_report/event_tuning_sample_w5_incidents`;
+  - the refreshed sample shows varied data-backed wording for property crime,
+    knowledge/culture, public virtue, scandal, and murder rows.
+- Added focused regression coverage in `unit_test.test_event_prose` proving all
+  active incident families render payload-backed prose across public unknown,
+  rumored, misattributed, public known, lost, sealed, and rediscovered states.
+  Updated event-history report assertions so prose samples are checked by
+  factual payload details rather than one fixed old phrase.
+- Verified with `python -m py_compile library\event_prose.py` and
+  `python -m unittest unit_test.test_event_prose unit_test.test_event_history_report`.
+- No further Workstream 5 TODO remains for the current authored-template
+  foundation. The optional local-model paraphrase spike remains non-required and
+  should be opened only as a contained display-only task.
+
+## Consequence Feedback Workstream Completion
+
+- Completed Workstream 4 for the current consequence/feedback foundation.
+- Advanced the shared event-history reporting surface so durable consequence
+  ledgers are visible through report files and the Gradio History Summary:
+  - `library.event_history_report` now reports consequence counts and numeric
+    summaries for domain states, domain diffusion, obligations, reputation
+    marks, legal fallout/adjudications, faction memory, institutions,
+    innovation discoveries, innovation knowledge, and innovation era state;
+  - report writing emits `event_consequence_counts.tsv` and
+    `event_consequence_metrics.tsv`;
+  - `utils.gradio_data_browser` surfaces those rows through its existing
+    explicit-load History Summary table.
+- Ran the fixed-seed `event_tuning_sample` scenario with 80 years, 80 starting
+  couples, seed `20260603`, passive population disabled, and detailed soft cap
+  disabled. The sample completed through simulation year 1079 and the report
+  artifacts live under `temp/event_history_report/event_tuning_sample_w4`.
+- Current sample evidence:
+  - tracked incidents: murder 12, property_crime 47, affair_scandal 3,
+    public_virtue 5, knowledge_culture 49;
+  - durable ledgers: domain_states 44, domain_diffusion 122, faction_memory 67,
+    institutions 4, obligations 9, reputation_marks 5,
+    innovation_discoveries 45, innovation_knowledge 515, innovation_era_state
+    14;
+  - legal_fallout and legal_adjudications were 0 in this seed because the
+    generated scandal variants were `affair_exposed` / `double_affair_exposed`;
+    the legal fallout/adjudication path remains covered by focused tests and is
+    now visible in the shared report when rows exist.
+- Audited current active vertical slices for first-order simulation feedback:
+  murder applies death/faction memory, property crime applies household/local
+  prosperity plus grievance memory, affair scandal applies relationship/local
+  fallout plus legal fallout for legal variants, public virtue applies
+  prosperity/reputation/obligation/trust, knowledge culture applies local and
+  regional knowledge/economy/institution/patronage effects, and the innovation
+  driver persists discovery/knowledge/era-state feedback.
+- No further Workstream 4 TODO remains for the current foundation. Future
+  consequence work should be opened only for a concrete new generator, ledger,
+  browser/report surface, or measured tuning need.
+
+## Event Visibility, Distortion, And Rediscovery Workstream Completion
+
+- Completed Workstream 3's current event-memory foundation:
+  - factual/admin truth remains append-only in `simulation_events`;
+  - in-world/admin memory remains in `simulation_event_records` and readable
+    views;
+  - public records can represent `public_unknown`, `rumored`, `misattributed`,
+    `public_known`, `lost`, `sealed`, and `rediscovered` states;
+  - rediscovery can still log a linked factual `event_rediscovered` row.
+- Added default public uncertainty/rumor stage rows for active ordinary public
+  event families:
+  - ordinary deaths get a `public_cause_unknown` mortuary uncertainty row;
+  - settlement moves/plans/drops get unclear-route/cause notices and move rumors
+    when a reason is available;
+  - office selection/succession gets unclear-claim notices and succession rumors
+    when the selection path is known;
+  - polity/court changes and warfare events get default uncertainty rows and
+    rumors where the payload carries a reason, kind, outcome, or name.
+- Added one-time existing-save backfill for these public stage rows using
+  `simulation_event_public_stage_records_backfilled`, so older saves with only
+  default records gain the new public uncertainty layer without rewriting factual
+  events.
+- Extended `library.event_prose` so public unknown/rumor/known prose for deaths,
+  settlement moves, office succession, polity changes, and warfare uses
+  event-specific language instead of a generic fallback.
+- Added focused regression coverage:
+  - `unit_test.test_save_checkpoint` covers default stage-row creation,
+    existing-save backfill, default-record transitions, rediscovery, and v7
+    default-memory backfill;
+  - `unit_test.test_event_prose` covers rendered uncertainty and rumor prose for
+    the newly staged active event families.
+- Workstream 3 is closed for current functionality. Future visibility work
+  should be opened only for a concrete new generator, prose/browser/report
+  consumer, or measured tuning need.
+
+## Event Scoring Future-Family Foundation
+
+This records completed Workstream 2 foundation work, not full Workstream 2
+completion.
+
+- Started Workstream 2 beyond the initial five vertical slices:
+  - added reusable `political_crime_propensity`,
+    `religious_cultural_conflict_propensity`, and
+    `private_life_seed_propensity` specs in `library.event_scoring`;
+  - based the formulas on real genome traits plus checked-in composite names
+    such as `Legitimacy Seizer`, `Fanatic`, `Cult Leader`, `Hidden Manipulator`,
+    `Good Neighbor`, and related Workstream 1 catalog signals;
+  - expanded `infer_role_tags` so callers can pass cached care indexes or
+    precomputed parent/office/ruler id sets and derive `parent`, `title_holder`,
+    `heir`, `household_head`, and `migrant` tags without per-candidate global
+    scans;
+  - left the dormant Workstream 1 families as scoring-ready but not yet live
+    annual generators.
+- Added focused regression coverage in `unit_test/test_event_scoring.py` for
+  expanded role inference and the new political, religious/cultural, and
+  private-life propensity families.
+
+## Event Ontology And Catalog Workstream Completion
+
+- Completed Workstream 1's authored catalog coverage:
+  - expanded `config/event_catalog.csv` so every `config/event_ontology.csv`
+    event key has a matching catalog `incident_kind`;
+  - added dormant catalog rows for future violent-crime, political-crime,
+    religious/cultural-conflict, household-scandal, property/survival-crime, and
+    private-life generators while preserving the active five generator variant
+    pools;
+  - kept `rescue`, `mercy`, and `arbitration` as zero-weight ontology aliases
+    because the current public-virtue selector still uses concrete rows such as
+    `heroic_rescue`, `public_mercy`, and `public_arbitration`;
+  - updated `dev_rules/config_schemas.md` to document the active-vs-dormant
+    catalog-row distinction.
+- Added regression coverage in `unit_test/test_event_catalog.py` proving the
+  SQLite-loaded catalog covers every Workstream 1 ontology key and family.
+- Updated `TODO.md` so Workstream 1 is marked complete for the foundation; future
+  event-system work is now generator implementation, consequence/prose
+  deepening, and tuning rather than basic ontology/catalog completion.
+
 ## Innovation Catalog Curation And Balance Passes
 
 - Curated `config/innovations.csv` after parser generation:
@@ -265,6 +610,33 @@
   - the dissolved boundary layer renders under coast and lake styling so coastline/water presentation stays authoritative
 - Preserved micro-edge segments for terrain blending, hillshade, and coast rendering.
 - Confirmed explicit ocean and lake water-cell layers remain part of the SVG/debug test surface.
+
+### Completed Map Follow-Up Closures
+
+- Closed the explicit lake/ocean styling TODO:
+  - `library.world_map_svg` renders lake and ocean water cells with distinct
+    `water-cell lake` / `water-cell ocean` semantics, ocean shelf styling, and
+    lake/coast layering.
+  - focused SVG regression coverage asserts the lake/ocean classes and nearby
+    terrain/river styling remain present.
+- Closed the graph-backend decision TODO:
+  - `library.world_map_geometry` deliberately keeps the deterministic
+    lightweight micro-cell graph because settlement projection, route paths,
+    water carving, road routing, SVG fills, and tests already share it.
+  - `build_world_map_debug_data()` exposes the decision as
+    `keep_lightweight_micro_cell_graph` so future revisits have a stable
+    inspection point.
+- Closed the richer debug-data export TODO:
+  - `build_world_map_debug_data()` now reports graph backend metadata, terrain
+    counts, water counts, river lengths, river-mouth/coastal distances, QA
+    checks, moisture, and elevation summaries.
+  - `utils/util_export_world_map_svg.py --debug-output ...` writes that debug
+    JSON next to generated SVGs for multi-seed tuning.
+- Closed the map-seed comparison fixture TODO:
+  - focused geometry tests compare multiple seeds through stable debug metrics
+    instead of brittle full-SVG goldens.
+  - the remaining open work is visual tuning of terrain, rivers, elevation, and
+    moisture against more generated SVGs.
 
 ## Scale Population Simulation Toward Millions
 
@@ -865,6 +1237,13 @@
   - after normal same-settlement and same-region pairing, a bounded fallback can promote single adult passive people as spouses for unmatched detailed adults;
   - the source aggregate cohort is decremented and the promoted person enters the normal detailed couple path;
   - regression coverage verifies the passive spouse promotion, cohort decrement, and `marriage_into_detailed_family` promotion event.
+
+- Added passive-to-detailed focus promotion for user inspection and narrative spotlighting:
+  - `promote_passive_person_for_focus(...)` can promote an existing passive person by passive `person_id`, settlement id, or region id;
+  - focus reasons normalize to `user_inspection` or `narrative_spotlight`;
+  - `SimulationContext.promote_passive_person(...)` records append-only `simulation_promotion_log` rows with the promotion reason and synthesized/source metadata;
+  - focus promotion still emits inferred `passive_person_promoted` and `promotion_backfill_birth` events, plus existing family backfill events when passive family anchors are present;
+  - regression coverage verifies all three selector modes, persisted promotion-log reasons, inferred backfill events, and duplicate-safe checkpoint persistence.
 
 - Added `utils/run_mixed_mode_scale_smoke.py` for hardware-friendly scale preflights:
   - seeds one active aggregate settlement per configured region;

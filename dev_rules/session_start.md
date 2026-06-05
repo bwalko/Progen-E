@@ -34,3 +34,10 @@ Use this checklist at the beginning of every coding session.
 - Prefer function parameters/overrides for experiments (for example simulation year, couple count in runtime command wrappers) over editing constants unless requested.
 - Keep outputs deterministic in tests via explicit RNG seeding.
 - **Production simulator vs tests:** Implement simulation behavior in `library/` (and in `utils/` only for maintained CLIs that call into `library`). `unit_test/` should construct real `SimulationContext` / checkpoint paths, call production APIs, and assert outcomes. Use `unittest.mock` to stub side effects or prove a hook is still wired—not to host logic that the running simulator never executes. If a helper is needed (serialization, payload fields, resume hydration), add it next to the owning module in `library/` (private functions are fine); avoid parallel implementations under `unit_test/` or one-off copies under `temp/` that drift from production.
+
+## 5) Tracking-doc discipline
+
+- `TODO.md` should contain only actionable remaining work plus the minimum context needed to choose and implement the next task.
+- Completed functionality belongs in `TODONE.md`, not as long "already done" prose in `TODO.md`.
+- If completed context must remain in `TODO.md` because later work depends on it, label it clearly as context for completed functionality needed by the next task.
+- Every workstream should have a realistic completion boundary. Do not turn a completed workstream into a never-ending list of speculative follow-ups; create a new TODO only when the next item is concrete, useful, and worth the added runtime or maintenance cost.

@@ -806,7 +806,8 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual([row["Event Type"] for row in lost_rows], ["birth"])
         self.assertEqual(lost_rows[0]["Visibility"], "lost")
         self.assertEqual(lost_rows[0]["Public Stage"], "not_public")
-        self.assertIn("No living chronicle preserved", lost_rows[0]["Prose"])
+        self.assertIn("Lio Dawn", lost_rows[0]["Prose"])
+        self.assertIn("lost", lost_rows[0]["Prose"])
         self.assertIn("Lost History", lost_status)
 
     def test_history_browser_separates_public_unknown_rumored_known_and_admin_truth(
@@ -901,7 +902,9 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("taken by a monster", rumor_rows[0]["Prose"])
         self.assertIn("Public Rumors", rumor_status)
         self.assertEqual(known_rows[0]["Public Stage"], "known")
-        self.assertIn("Fred Vale as the killer of Lio Reed", known_rows[0]["Prose"])
+        self.assertIn("Fred Vale", known_rows[0]["Prose"])
+        self.assertIn("Lio Reed", known_rows[0]["Prose"])
+        self.assertIn("murder", known_rows[0]["Prose"])
         self.assertIn("Public Known", known_status)
         self.assertEqual(admin_rows[0]["Visibility"], "admin_truth")
         self.assertIn("Fred Vale killed Lio Reed", admin_rows[0]["Admin Summary"])
@@ -985,7 +988,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 _insert_compact_person(con, 2, "Pell", "Ash")
                 _insert_compact_person(con, 3, "Ira", "Marsh")
                 _insert_compact_person(con, 4, "Lio", "Dawn")
-                birth_id, _crime_id, _virtue_id = append_simulation_event_rows(
+                birth_id, crime_id, virtue_id = append_simulation_event_rows(
                     con,
                     "default",
                     [
@@ -1034,6 +1037,98 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     preserving_settlement_id="aeria_north:settlement:1",
                     confidence=0.82,
                 )
+                aeria_region_key = con.execute(
+                    """
+                    SELECT region_key FROM simulation_region_lookup
+                    WHERE region_id = 'aeria_north'
+                    """
+                ).fetchone()["region_key"]
+                aeria_settlement_key = con.execute(
+                    """
+                    SELECT settlement_key FROM simulation_settlement_lookup
+                    WHERE settlement_id = 'aeria_north:settlement:1'
+                    """
+                ).fetchone()["settlement_key"]
+                con.execute(
+                    """
+                    INSERT INTO simulation_faction_memory (
+                        source_event_id, memory_key, memory_type, status,
+                        faction_a_key, faction_b_key, principal_person_id,
+                        opposing_person_id, region_key, settlement_key,
+                        polarity, strength, start_year, expected_decay_year,
+                        details_json, created_at, updated_at
+                    )
+                    VALUES (?, 'trust:1:2', 'public_trust_memory', 'active',
+                            'person:1', 'person:2', 1, 2, ?, ?,
+                            'positive', 0.42, 1001, 1041, '{}',
+                            '2026-01-01T00:00:00+00:00',
+                            '2026-01-01T00:00:00+00:00')
+                    """,
+                    (crime_id, aeria_region_key, aeria_settlement_key),
+                )
+                con.execute(
+                    """
+                    INSERT INTO simulation_domain_states (
+                        region_key, domain, domain_score, breakthrough_count,
+                        first_event_year, latest_event_year, first_event_id,
+                        latest_event_id, latest_incident_kind,
+                        latest_creator_person_id, latest_settlement_key,
+                        created_at, updated_at
+                    )
+                    VALUES (?, 'medicine', 0.27, 1, 1002, 1002, ?, ?,
+                            'medicinal_discovery', 3, ?,
+                            '2026-01-01T00:00:00+00:00',
+                            '2026-01-01T00:00:00+00:00')
+                    """,
+                    (aeria_region_key, virtue_id, virtue_id, aeria_settlement_key),
+                )
+                con.execute(
+                    """
+                    INSERT INTO simulation_obligations (
+                        source_event_id, obligation_key, obligation_type,
+                        status, owed_by_person_id, owed_to_person_id,
+                        region_key, settlement_key, strength, start_year,
+                        expected_end_year, details_json, created_at, updated_at
+                    )
+                    VALUES (?, 'relief:4:3', 'relief_debt', 'active',
+                            4, 3, ?, ?, 0.29, 1002, 1014, '{}',
+                            '2026-01-01T00:00:00+00:00',
+                            '2026-01-01T00:00:00+00:00')
+                    """,
+                    (virtue_id, aeria_region_key, aeria_settlement_key),
+                )
+                con.execute(
+                    """
+                    INSERT INTO simulation_reputation_marks (
+                        source_event_id, mark_key, person_id, reputation_axis,
+                        reputation_before, reputation_after, direction,
+                        mark_strength, region_key, settlement_key, mark_year,
+                        details_json, created_at, updated_at
+                    )
+                    VALUES (?, 'leadership:3', 3, 'leadership', 'low',
+                            'medium', 'positive', 0.31, ?, ?, 1002, '{}',
+                            '2026-01-01T00:00:00+00:00',
+                            '2026-01-01T00:00:00+00:00')
+                    """,
+                    (virtue_id, aeria_region_key, aeria_settlement_key),
+                )
+                con.execute(
+                    """
+                    INSERT INTO simulation_legal_fallout (
+                        source_event_id, fallout_key, fallout_type, status,
+                        principal_person_id, opposing_person_id,
+                        related_person_id, region_key, settlement_key,
+                        severity, start_year, expected_resolution_year,
+                        details_json, created_at, updated_at
+                    )
+                    VALUES (?, 'inheritance:1:2:4',
+                            'inheritance_dispute', 'active', 1, 2, 4,
+                            ?, ?, 0.58, 1001, 1009, '{}',
+                            '2026-01-01T00:00:00+00:00',
+                            '2026-01-01T00:00:00+00:00')
+                    """,
+                    (crime_id, aeria_region_key, aeria_settlement_key),
+                )
                 con.commit()
 
             original_db_path = gdb._db_path
@@ -1076,7 +1171,286 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 "Value"
             ],
         )
+        self.assertEqual(
+            by_section_key[
+                (
+                    "Consequences",
+                    "Faction Memory / public_trust_memory / active / positive",
+                )
+            ]["Count"],
+            1,
+        )
+        self.assertEqual(
+            by_section_key[
+                (
+                    "Consequences",
+                    "Domain States / medicine / medicinal_discovery",
+                )
+            ]["Count"],
+            1,
+        )
+        self.assertEqual(
+            by_section_key[
+                ("Consequences", "Legal Fallout / inheritance_dispute / active")
+            ]["Count"],
+            1,
+        )
+        self.assertEqual(
+            by_section_key[("Consequences", "Obligations / relief_debt / active")][
+                "Count"
+            ],
+            1,
+        )
+        self.assertEqual(
+            by_section_key[
+                ("Consequences", "Reputation Marks / leadership / positive")
+            ]["Count"],
+            1,
+        )
+        self.assertIn(
+            "avg=0.4200",
+            by_section_key[
+                (
+                    "Consequence Metrics",
+                    "Faction Memory / public_trust_memory / active / strength",
+                )
+            ]["Value"],
+        )
+        self.assertIn(
+            "avg=0.5800",
+            by_section_key[
+                (
+                    "Consequence Metrics",
+                    "Legal Fallout / inheritance_dispute / active / severity",
+                )
+            ]["Value"],
+        )
         self.assertIn("history summary rows", summary_status)
+
+    def test_history_lenses_combine_admin_truth_and_event_records(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Ada", "Forge")
+                _insert_compact_person(con, 2, "Bea", "Forge")
+                _insert_compact_person(con, 3, "Cato", "Vale")
+                _insert_compact_person(con, 4, "Dana", "Forge")
+                event_ids = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 1,
+                                "target_person_id": 3,
+                                "incident_kind": "storehouse_robbery",
+                                "motive": "scarcity",
+                                "loss_value": 0.18,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1001,
+                            "public_virtue",
+                            {
+                                "benefactor_person_id": 2,
+                                "beneficiary_person_id": 4,
+                                "incident_kind": "famine_mercy",
+                                "motive": "mercy",
+                                "relief_value": 0.12,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1002,
+                            "settlement_moved",
+                            {
+                                "person_id": 3,
+                                "from_settlement_id": "aeria_north:settlement:1",
+                                "to_settlement_id": "boreas_port:settlement:1",
+                                "move_reason": "resource_pressure_migration",
+                                "from_region_id": "aeria_north",
+                                "to_region_id": "boreas_port",
+                            },
+                        ),
+                        (
+                            1003,
+                            "polity_named",
+                            {
+                                "polity_id": 7,
+                                "name": "County of Aeria North",
+                                "region_id": "aeria_north",
+                                "settlement_id": "aeria_north:settlement:1",
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                self.assertEqual(len(event_ids), 4)
+                con.execute(
+                    """
+                    INSERT INTO simulation_polities (
+                        polity_id, polity_type_id, name, capital_settlement_id,
+                        founded_sim_year, status, notes_json
+                    )
+                    VALUES (7, 'county', 'County of Aeria North',
+                            'aeria_north:settlement:1', 1003, 'active', '{}')
+                    """
+                )
+                con.execute("UPDATE simulation_people SET partner_person_id = 2 WHERE person_id = 1")
+                con.execute("UPDATE simulation_people SET partner_person_id = 1 WHERE person_id = 2")
+                con.execute("UPDATE simulation_people SET father_id = 1, mother_id = 2 WHERE person_id = 4")
+                people_columns = {
+                    row["name"] for row in con.execute("PRAGMA table_info(simulation_people)")
+                }
+                home = con.execute(
+                    """
+                    SELECT settlement_key FROM simulation_settlement_lookup
+                    WHERE settlement_id = 'aeria_north:settlement:1'
+                    """
+                ).fetchone()["settlement_key"]
+                if "current_settlement_key" in people_columns:
+                    con.execute(
+                        "UPDATE simulation_people SET current_settlement_key = ? WHERE person_id IN (1, 2, 4)",
+                        (home,),
+                    )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                person_table, person_status = gdb.load_history_lens(
+                    "default", "Person", "1", "property_crime", "", 50, 0
+                )
+                family_table, family_status = gdb.load_history_lens(
+                    "default", "Family", "1", "public_virtue", "", 50, 0
+                )
+                household_table, household_status = gdb.load_history_lens(
+                    "default", "Household", "1", "public_virtue", "", 50, 0
+                )
+                settlement_table, settlement_status = gdb.load_history_lens(
+                    "default", "Settlement", "aeria_north:settlement:1", "", "", 50, 0
+                )
+                region_table, region_status = gdb.load_history_lens(
+                    "default", "Region", "aeria_north", "", "", 50, 0
+                )
+                polity_table, polity_status = gdb.load_history_lens(
+                    "default", "Polity", "7", "", "", 50, 0
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        person_rows = self._history_table_rows(person_table)
+        family_rows = self._history_table_rows(family_table)
+        household_rows = self._history_table_rows(household_table)
+        settlement_rows = self._history_table_rows(settlement_table)
+        region_rows = self._history_table_rows(region_table)
+        polity_rows = self._history_table_rows(polity_table)
+        self.assertEqual(person_table["headers"], gdb.HISTORY_LENS_HEADERS)
+        self.assertIn("Person: Ada Forge", person_status)
+        self.assertEqual({row["Event Type"] for row in person_rows}, {"property_crime"})
+        self.assertIn("admin_truth", {row["Visibility"] for row in person_rows})
+        self.assertIn("rumored", {row["Visibility"] for row in person_rows})
+        self.assertTrue(any("perpetrator #1" in row["Role"] for row in person_rows))
+        self.assertIn("Family of Ada Forge", family_status)
+        self.assertEqual({row["Event Type"] for row in family_rows}, {"public_virtue"})
+        self.assertIn("public_known", {row["Visibility"] for row in family_rows})
+        self.assertIn("Household of Ada Forge", household_status)
+        self.assertEqual({row["Event Type"] for row in household_rows}, {"public_virtue"})
+        self.assertIn("Settlement: Settlement 1 of Aeria North", settlement_status)
+        self.assertTrue(
+            {"property_crime", "public_virtue", "settlement_moved", "polity_named"}.issubset(
+                {row["Event Type"] for row in settlement_rows}
+            )
+        )
+        self.assertNotIn("admin_truth", {row["Visibility"] for row in settlement_rows})
+        self.assertIn("Region: Aeria North", region_status)
+        self.assertTrue(
+            {"property_crime", "public_virtue", "settlement_moved", "polity_named"}.issubset(
+                {row["Event Type"] for row in region_rows}
+            )
+        )
+        self.assertNotIn("admin_truth", {row["Visibility"] for row in region_rows})
+        self.assertIn("Polity: County of Aeria North (#7)", polity_status)
+        self.assertEqual({row["Event Type"] for row in polity_rows}, {"polity_named"})
+        self.assertIn("public_known", {row["Visibility"] for row in polity_rows})
+        self.assertNotIn("admin_truth", {row["Visibility"] for row in polity_rows})
+
+    def test_rediscovery_details_explain_source_confidence_and_distortion(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 10, "Lio", "Reed")
+                _insert_compact_person(con, 41, "Sera", "Archivist")
+                original_event_id = append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            990,
+                            "birth",
+                            {
+                                "person_id": 10,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        )
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )[0]
+                mark_event_record_lost(con, original_event_id, lost_year=1040)
+                rediscover_event_record(
+                    con,
+                    original_event_id,
+                    rediscovered_year=1100,
+                    source_person_id=41,
+                    source_institution_id="temple_ledger",
+                    preserving_settlement_id="aeria_north:settlement:1",
+                    confidence=0.82,
+                    distortion={
+                        "public_cause": "river flood",
+                        "uncertain_fields": ["cause"],
+                    },
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                table, status = gdb.load_rediscovery_details(
+                    "default", "birth", "temple", 50, 0
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        rows = self._history_table_rows(table)
+        self.assertEqual(table["headers"], gdb.REDISCOVERY_DETAIL_HEADERS)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Event Type"], "birth")
+        self.assertEqual(rows[0]["Confidence"], "0.82")
+        self.assertIn("Sera Archivist", rows[0]["Source"])
+        self.assertIn("temple ledger", rows[0]["Source"])
+        self.assertIn("Aeria North", rows[0]["Preserved At"])
+        self.assertIn("public cause: river flood", rows[0]["Distortion"])
+        self.assertIn("uncertain fields: cause", rows[0]["Distortion"])
+        self.assertIn("confidence 0.82", rows[0]["Rediscovery Summary"])
+        self.assertIn("rediscovery detail rows", status)
 
     def test_job_event_fitness_uses_event_payload_not_current_person_score(self) -> None:
         con = _memory_save()

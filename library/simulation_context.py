@@ -147,6 +147,17 @@ class PendingSettlementMove:
     group_id: str | None = None
 
 
+@dataclass(frozen=True)
+class PassivePromotionLogEntry:
+    """Append-only audit row for a passive person materialized into detail."""
+
+    person_id: int
+    sim_year: int
+    reason: str
+    source_event_id: int | None = None
+    synthesized: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class SimulationContext:
     """Reusable simulation context with preloaded config and runtime state.
@@ -166,6 +177,7 @@ class SimulationContext:
     people: list[SimulationPersonRecord] = field(default_factory=list)
     passive_people: dict[int, PassivePersonRecord] = field(default_factory=dict)
     passive_cohorts: list[PassiveCohort] = field(default_factory=list)
+    passive_promotion_log: list[PassivePromotionLogEntry] = field(default_factory=list)
     current_people_ids: set[int] = field(default_factory=set)
     couples: list[tuple[int, int]] = field(default_factory=list)
     paramours: list[tuple[int, int]] = field(default_factory=list)
@@ -765,6 +777,8 @@ class SimulationContext:
         source: dict[str, Any] | None = None,
     ) -> SimulationPersonRecord:
         """Materialize a passive person into the detailed annual simulation."""
+        reason_text = str(reason).strip() or "passive_promotion"
+        source_payload = dict(source or {})
         prec = self.passive_people.pop(int(passive_id))
         person = passive_person_to_detailed_person(
             prec.person,
@@ -806,13 +820,32 @@ class SimulationContext:
         payload = {
             "year": int(year),
             "person_id": int(rec.person_id),
-            "reason": str(reason),
+            "reason": reason_text,
             "birthyear": int(person.birthyear),
             "settlement_id": person.current_settlement_id,
             "region_id": person.birthplace_region_id,
-            "source": source or {},
+            "source": source_payload,
         }
         self._record_inferred_simulation_event(year, "passive_person_promoted", payload)
+        source_event_raw = source_payload.get("source_event_id")
+        try:
+            source_event_id = int(source_event_raw) if source_event_raw is not None else None
+        except (TypeError, ValueError):
+            source_event_id = None
+        self.passive_promotion_log.append(
+            PassivePromotionLogEntry(
+                person_id=int(rec.person_id),
+                sim_year=int(year),
+                reason=reason_text,
+                source_event_id=source_event_id,
+                synthesized={
+                    "birthyear": int(person.birthyear),
+                    "settlement_id": person.current_settlement_id,
+                    "region_id": person.birthplace_region_id,
+                    "source": source_payload,
+                },
+            )
+        )
         if prec.person.partner_name or prec.person.partner_person_id is not None:
             self._record_inferred_simulation_event(
                 prec.person.partnership_start_year or year,
@@ -825,7 +858,7 @@ class SimulationContext:
                     "partner_deathyear": prec.person.partner_deathyear,
                     "partnership_start_year": prec.person.partnership_start_year,
                     "partnership_end_year": prec.person.partnership_end_year,
-                    "reason": str(reason),
+                    "reason": reason_text,
                 },
             )
         if prec.person.child_count or prec.person.child_birthyears or prec.person.child_person_ids:
@@ -837,7 +870,7 @@ class SimulationContext:
                     "child_count": int(prec.person.child_count),
                     "child_ids": list(prec.person.child_person_ids),
                     "child_birthyears": list(prec.person.child_birthyears),
-                    "reason": str(reason),
+                    "reason": reason_text,
                 },
             )
         self._record_inferred_simulation_event(
@@ -848,7 +881,7 @@ class SimulationContext:
                 "birthyear": int(person.birthyear),
                 "father_id": rec.father_id,
                 "mother_id": rec.mother_id,
-                "reason": str(reason),
+                "reason": reason_text,
             },
         )
         return rec

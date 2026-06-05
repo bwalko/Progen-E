@@ -377,6 +377,57 @@ class TestEventMemoryLifecycle(unittest.TestCase):
             self.assertEqual(str(rows[crime_id]["visibility_state"]), "rediscovered")
             self.assertEqual(int(rows[crime_id]["rediscovered_year"]), 1080)
 
+    def test_lifecycle_candidate_limit_bounds_loss_scan(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                event_ids = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1000 + idx,
+                            "property_crime",
+                            {
+                                "person_id": idx + 1,
+                                "target_person_id": idx + 101,
+                                "loss_value": 1.0 + idx,
+                            },
+                        )
+                        for idx in range(9)
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+
+                summary = event_memory_lifecycle_annual_tick(
+                    conn,
+                    year=1100,
+                    candidate_limit=3,
+                    shards=1,
+                    rediscovery_shards=1,
+                    loss_chance_multiplier=1000.0,
+                    rediscovery_chance_multiplier=0.0,
+                )
+                visibility_counts = {
+                    str(row["visibility_state"]): int(row["n"])
+                    for row in conn.execute(
+                        """
+                        SELECT visibility_state, COUNT(*) AS n
+                        FROM simulation_event_records
+                        WHERE event_id IN ({})
+                        GROUP BY visibility_state
+                        """.format(",".join("?" for _ in event_ids)),
+                        tuple(event_ids),
+                    )
+                }
+
+            self.assertEqual(summary.candidates_reviewed, 3)
+            self.assertEqual(summary.records_lost, 3)
+            self.assertEqual(visibility_counts.get("lost"), 3)
+            self.assertEqual(visibility_counts.get("rumored"), 6)
+
     def test_record_year_summary_runs_memory_lifecycle_after_save_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
