@@ -1,0 +1,242 @@
+{
+  "coastal_feature_distances": [
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "aeria_north:wf0",
+      "kind": "coast",
+      "region_id": "aeria_north"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "aeria_north:wf1",
+      "kind": "bay",
+      "region_id": "aeria_north"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "aeria_port:wf0",
+      "kind": "coast",
+      "region_id": "aeria_port"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "aeria_port:wf1",
+      "kind": "harbor",
+      "region_id": "aeria_port"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "boreas_fjord_shore:wf0",
+      "kind": "coast",
+      "region_id": "boreas_fjord_shore"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "boreas_fjord_shore:wf1",
+      "kind": "bay",
+      "region_id": "boreas_fjord_shore"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "boreas_port:wf0",
+      "kind": "coast",
+      "region_id": "boreas_port"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "boreas_port:wf1",
+      "kind": "harbor",
+      "region_id": "boreas_port"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "cyrene_delta_mouth:wf0",
+      "kind": "coast",
+      "region_id": "cyrene_delta_mouth"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "cyrene_delta_mouth:wf1",
+      "kind": "bay",
+      "region_id": "cyrene_delta_mouth"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "cyrene_leeward_littoral:wf0",
+      "kind": "coast",
+      "region_id": "cyrene_leeward_littoral"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "cyrene_leeward_littoral:wf1",
+      "kind": "bay",
+      "region_id": "cyrene_leeward_littoral"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "cyrene_port:wf0",
+      "kind": "coast",
+      "region_id": "cyrene_port"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "feature_id": "cyrene_port:wf1",
+      "kind": "harbor",
+      "region_id": "cyrene_port"
+    }
+  ],
+  "counts": {
+    "channel_cells": 153,
+    "features": 77,
+    "floodplain_cells": 800,
+    "micro_cells": 2460,
+    "regions": 26,
+    "river_channels": 13,
+    "rivers": 13,
+    "water_cells": 802
+  },
+  "elevation": {
+    "avg": 0.4394,
+    "bands": {
+      "gte_0_52": 823,
+      "gte_0_58": 551,
+      "gte_0_64": 358,
+      "gte_0_7": 221,
+      "gte_0_78": 70
+    },
+    "max": 0.9488,
+    "min": 0.1219
+  },
+  "graph_backend": {
+    "decision": "keep_lightweight_micro_cell_graph",
+    "reason": "Voronoi micro-cells already drive settlement projection, routes, river carving, SVG fills, and deterministic tests; a reusable Delaunay/corner graph can be revisited after visuals stabilize."
+  },
+  "major_rivers": 9,
+  "moisture": {
+    "avg": 0.6963,
+    "max": 1.0,
+    "min": 0.1145
+  },
+  "qa": {
+    "max_coastal_feature_distance": 0.0,
+    "max_river_mouth_distance": 0.0,
+    "missing_coastal_feature_edges": 0,
+    "missing_river_mouth_edges": 0
+  },
+  "river_lengths": [
+    0.13842,
+    0.17507,
+    0.10907,
+    0.10954,
+    0.13193,
+    0.09686,
+    0.04764,
+    0.03781,
+    0.10029,
+    0.15242,
+    0.08943,
+    0.13035,
+    0.07261
+  ],
+  "river_mouth_distances": [
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.6666666666666666,
+      "river_id": "aeria:micro_river:0",
+      "sink_region_id": "aeria_midland_basin"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 1.0,
+      "river_id": "aeria:micro_river:1",
+      "sink_region_id": "aeria_midland_basin"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.6666666666666666,
+      "river_id": "aeria:micro_river:2",
+      "sink_region_id": "aeria_eastwater_river"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.5833333333333334,
+      "river_id": "aeria:micro_river:3",
+      "sink_region_id": "aeria_south"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.75,
+      "river_id": "aeria:micro_river:4",
+      "sink_region_id": "aeria_south"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 1.0,
+      "river_id": "boreas:micro_river:0",
+      "sink_region_id": "boreas_port"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.5833333333333334,
+      "river_id": "boreas:micro_river:1",
+      "sink_region_id": "boreas_clear_river"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.4166666666666667,
+      "river_id": "boreas:micro_river:2",
+      "sink_region_id": "boreas_port"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 1.0,
+      "river_id": "boreas:micro_river:3",
+      "sink_region_id": "boreas_clear_river"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 1.0,
+      "river_id": "cyrene:micro_river:0",
+      "sink_region_id": "cyrene_port"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.6666666666666666,
+      "river_id": "cyrene:micro_river:1",
+      "sink_region_id": "cyrene_river"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.9166666666666666,
+      "river_id": "cyrene:micro_river:2",
+      "sink_region_id": "cyrene_delta_mouth"
+    },
+    {
+      "distance_to_coast": 0.0,
+      "flow": 0.5,
+      "river_id": "cyrene:micro_river:3",
+      "sink_region_id": "cyrene_white_fork"
+    }
+  ],
+  "river_mouth_shapes": {
+    "avg_water_area": 4.116e-05,
+    "max_water_area": 5.416e-05,
+    "min_bank_points": 8,
+    "min_water_points": 8,
+    "mouths": 13
+  },
+  "terrain_counts": {
+    "coast": 441,
+    "drylands": 183,
+    "forest": 430,
+    "highlands": 257,
+    "plains": 743,
+    "riverland": 406
+  },
+  "version": "polygonal-v10",
+  "water_counts": {
+    "lake": 15,
+    "ocean": 787
+  },
+  "world": "default"
+}

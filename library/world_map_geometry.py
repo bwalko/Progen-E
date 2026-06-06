@@ -1369,7 +1369,7 @@ def _generated_terrain_family(*, elevation: float, moisture: float, coastal: boo
         return "riverland"
     if moisture >= 0.68:
         return "forest"
-    if moisture <= 0.32 and elevation <= 0.66:
+    if moisture <= 0.36 and elevation <= 0.66:
         return "drylands"
     return "plains"
 
@@ -1828,6 +1828,8 @@ def _assign_regions_to_micro_cells(
         regions=regions,
         micro_cells=assigned_cells,
         min_target=min_target,
+        river_cell_ids=river_cell_ids,
+        region_hints=region_hints,
     )
     assigned_cells = _repair_small_region_footprints(
         regions=regions,
@@ -1838,6 +1840,22 @@ def _assign_regions_to_micro_cells(
         regions=regions,
         micro_cells=assigned_cells,
         min_target=min_target,
+        river_cell_ids=river_cell_ids,
+        region_hints=region_hints,
+    )
+    assigned_cells = _repair_region_feature_constraints(
+        regions=regions,
+        micro_cells=assigned_cells,
+        river_cell_ids=river_cell_ids,
+        region_hints=region_hints,
+        min_target=min_target,
+    )
+    assigned_cells = _repair_disconnected_region_footprints(
+        regions=regions,
+        micro_cells=assigned_cells,
+        min_target=min_target,
+        river_cell_ids=river_cell_ids,
+        region_hints=region_hints,
     )
     return assigned_cells
 
@@ -1933,9 +1951,14 @@ def _repair_disconnected_region_footprints(
     regions: list[Region],
     micro_cells: list[MicroRegionCell],
     min_target: int,
+    river_cell_ids: set[str] | None = None,
+    region_hints: dict[str, _RegionMapHint] | None = None,
 ) -> list[MicroRegionCell]:
     out = list(micro_cells)
     region_ids = {r.region_id for r in regions}
+    region_by_id = {r.region_id: r for r in regions}
+    river_cell_ids = river_cell_ids or set()
+    region_hints = region_hints or {}
     for _ in range(max(1, len(regions)) * 3):
         by_id = {c.micro_id: c for c in out}
         idx_by_id = {c.micro_id: i for i, c in enumerate(out)}
@@ -1951,8 +1974,24 @@ def _repair_disconnected_region_footprints(
             components = _region_components(rid, owned.get(rid, set()), adjacency)
             if len(components) <= 1:
                 continue
-            keep = components[0]
-            for fragment in components[1:]:
+            region = region_by_id.get(rid)
+            hint = region_hints.get(rid)
+            needs_coast = _region_wants_coast(region, hint) if region is not None else False
+            needs_river = _region_wants_river(region, hint) if region is not None else False
+
+            def component_constraint_score(component: set[str]) -> tuple[int, int, str]:
+                comp_cells = [by_id[mid] for mid in component]
+                score = 0
+                if needs_coast and any(c.is_coastal for c in comp_cells):
+                    score += 1
+                if needs_river and any(
+                    c.micro_id in river_cell_ids or c.moisture >= 0.78 for c in comp_cells
+                ):
+                    score += 1
+                return (score, len(component), min(component) if component else "")
+
+            keep = max(components, key=component_constraint_score)
+            for fragment in [component for component in components if component is not keep]:
                 if counts.get(rid, 0) - len(fragment) < min_target:
                     queue = [(mid, [mid]) for mid in sorted(fragment)]
                     seen = set(fragment)
@@ -2232,7 +2271,9 @@ def _build_micro_rivers(micro_cells: list[MicroRegionCell]) -> tuple[list[RiverP
             ),
             key=lambda c: (-c.elevation, c.micro_id),
         )
-        river_count = max(2, min(6, len(cells) // 24))
+        # River density should follow the generated relief instead of assigning
+        # every continent the same maximum just because it has enough cells.
+        river_count = max(2, min(6, 2 + len(source_pool) // 72))
         used_channels: set[str] = set()
         used_outlets: list[Point] = []
         selected_sources: list[MicroRegionCell] = []
@@ -2786,7 +2827,9 @@ def _apply_river_influence_to_micro_cells(
     if not river_segments:
         return micro_cells
 
-    influence_radius = 0.030
+    # Keep floodplain styling close to the routed river path. Broad hydrology
+    # already comes from _moisten_micro_cells; this pass is the visual corridor.
+    influence_radius = 0.022
     out: list[MicroRegionCell] = []
     for cell in micro_cells:
         center = (cell.center_x, cell.center_y)
@@ -2805,15 +2848,15 @@ def _apply_river_influence_to_micro_cells(
             best_side = 1.0 if cross >= 0.0 else -1.0
 
         is_channel = cell.micro_id in channel_ids or best_distance <= 0.0038 + best_flow * 0.0025
-        floodplain_radius = influence_radius + best_flow * 0.010
+        floodplain_radius = influence_radius + best_flow * 0.006
         is_floodplain = is_channel or best_distance <= floodplain_radius
         if not is_floodplain and best_flow <= 0.0:
             out.append(cell)
             continue
 
         river_strength = _clamp(1.0 - best_distance / max(1e-6, floodplain_radius), 0.0, 1.0)
-        moisture = _clamp(cell.moisture + river_strength * (0.20 + best_flow * 0.08), 0.0, 1.0)
-        elevation = _clamp(cell.elevation - river_strength * (0.018 + best_flow * 0.010), 0.0, 1.0)
+        moisture = _clamp(cell.moisture + river_strength * (0.14 + best_flow * 0.055), 0.0, 1.0)
+        elevation = _clamp(cell.elevation - river_strength * (0.014 + best_flow * 0.007), 0.0, 1.0)
         family = cell.terrain_family
         if is_floodplain and not cell.is_coastal and cell.terrain_family in {"drylands", "plains", "forest"}:
             family = _generated_terrain_family(elevation=elevation, moisture=moisture, coastal=False)
@@ -2896,7 +2939,13 @@ def _offset_polyline(points: list[Point], *, amount: float) -> list[Point]:
     return out
 
 
-def _river_mouth_polygons_for_path(points: list[Point], *, width: float) -> tuple[list[Point], list[Point]]:
+def _river_mouth_polygons_for_path(
+    points: list[Point],
+    *,
+    river_id: str,
+    width: float,
+    flow: float,
+) -> tuple[list[Point], list[Point]]:
     points = _dedupe_polyline_points(points)
     if len(points) < 2:
         return ([], [])
@@ -2909,29 +2958,54 @@ def _river_mouth_polygons_for_path(points: list[Point], *, width: float) -> tupl
         return ([], [])
     nx = -dy / length
     ny = dx / length
-    start = (ax + (bx - ax) * 0.26, ay + (by - ay) * 0.26)
-    mouth_tip = (bx + dx / length * width * 0.64, by + dy / length * width * 0.64)
-    mid = (start[0] + (mouth_tip[0] - start[0]) * 0.62, start[1] + (mouth_tip[1] - start[1]) * 0.62)
-    inner_neck = width * 0.54
-    inner_mid = width * 1.08
-    inner_mouth = width * 1.55
-    outer_neck = width * 0.98
-    outer_mid = width * 1.55
-    outer_mouth = width * 2.15
+    ux = dx / length
+    uy = dy / length
+    skew = ((_stable_seed("river-mouth", river_id) % 1001) / 1000.0 - 0.5) * 0.42
+    flow_scale = math.sqrt(max(0.0, min(1.0, flow)))
+
+    def center_at(t: float, bend: float) -> Point:
+        return (
+            ax + (bx - ax) * t + nx * width * skew * bend,
+            ay + (by - ay) * t + ny * width * skew * bend,
+        )
+
+    start = center_at(0.16, 0.15)
+    throat = center_at(0.42, 0.38)
+    shoulder = center_at(0.78, 0.82)
+    mouth_tip = (
+        bx + ux * width * (0.78 + flow_scale * 0.26) + nx * width * skew,
+        by + uy * width * (0.78 + flow_scale * 0.26) + ny * width * skew,
+    )
+    inner_neck = width * 0.50
+    inner_throat = width * (0.86 + flow_scale * 0.12)
+    inner_shoulder_left = width * (1.30 + flow_scale * 0.22 + max(0.0, skew) * 0.42)
+    inner_shoulder_right = width * (1.30 + flow_scale * 0.22 + max(0.0, -skew) * 0.42)
+    inner_mouth_left = width * (1.82 + flow_scale * 0.32 + max(0.0, skew) * 0.52)
+    inner_mouth_right = width * (1.82 + flow_scale * 0.32 + max(0.0, -skew) * 0.52)
+    outer_neck = width * 0.94
+    outer_throat = width * (1.42 + flow_scale * 0.14)
+    outer_shoulder_left = width * (1.96 + flow_scale * 0.30 + max(0.0, skew) * 0.56)
+    outer_shoulder_right = width * (1.96 + flow_scale * 0.30 + max(0.0, -skew) * 0.56)
+    outer_mouth_left = width * (2.48 + flow_scale * 0.42 + max(0.0, skew) * 0.64)
+    outer_mouth_right = width * (2.48 + flow_scale * 0.42 + max(0.0, -skew) * 0.64)
     water = [
         (start[0] + nx * inner_neck, start[1] + ny * inner_neck),
-        (mid[0] + nx * inner_mid, mid[1] + ny * inner_mid),
-        (mouth_tip[0] + nx * inner_mouth, mouth_tip[1] + ny * inner_mouth),
-        (mouth_tip[0] - nx * inner_mouth, mouth_tip[1] - ny * inner_mouth),
-        (mid[0] - nx * inner_mid, mid[1] - ny * inner_mid),
+        (throat[0] + nx * inner_throat, throat[1] + ny * inner_throat),
+        (shoulder[0] + nx * inner_shoulder_left, shoulder[1] + ny * inner_shoulder_left),
+        (mouth_tip[0] + nx * inner_mouth_left, mouth_tip[1] + ny * inner_mouth_left),
+        (mouth_tip[0] - nx * inner_mouth_right, mouth_tip[1] - ny * inner_mouth_right),
+        (shoulder[0] - nx * inner_shoulder_right, shoulder[1] - ny * inner_shoulder_right),
+        (throat[0] - nx * inner_throat, throat[1] - ny * inner_throat),
         (start[0] - nx * inner_neck, start[1] - ny * inner_neck),
     ]
     bank = [
         (start[0] + nx * outer_neck, start[1] + ny * outer_neck),
-        (mid[0] + nx * outer_mid, mid[1] + ny * outer_mid),
-        (mouth_tip[0] + nx * outer_mouth, mouth_tip[1] + ny * outer_mouth),
-        (mouth_tip[0] - nx * outer_mouth, mouth_tip[1] - ny * outer_mouth),
-        (mid[0] - nx * outer_mid, mid[1] - ny * outer_mid),
+        (throat[0] + nx * outer_throat, throat[1] + ny * outer_throat),
+        (shoulder[0] + nx * outer_shoulder_left, shoulder[1] + ny * outer_shoulder_left),
+        (mouth_tip[0] + nx * outer_mouth_left, mouth_tip[1] + ny * outer_mouth_left),
+        (mouth_tip[0] - nx * outer_mouth_right, mouth_tip[1] - ny * outer_mouth_right),
+        (shoulder[0] - nx * outer_shoulder_right, shoulder[1] - ny * outer_shoulder_right),
+        (throat[0] - nx * outer_throat, throat[1] - ny * outer_throat),
         (start[0] - nx * outer_neck, start[1] - ny * outer_neck),
     ]
     return (
@@ -2964,7 +3038,12 @@ def _build_river_channels(rivers: list[RiverPath]) -> list[RiverChannel]:
             end_width=water_width,
         )
         mouth_bank, mouth_water = (
-            _river_mouth_polygons_for_path(points, width=water_width)
+            _river_mouth_polygons_for_path(
+                points,
+                river_id=river.river_id,
+                width=water_width,
+                flow=flow,
+            )
             if len(points) >= 2 and points[-1] != points[-2]
             else ([], [])
         )
@@ -2994,6 +3073,15 @@ def _valid_polygon(points: list[Point]) -> ShapelyPolygon | None:
     if poly.is_empty or not isinstance(poly, ShapelyPolygon) or poly.area <= 1e-12:
         return None
     return poly
+
+
+def _polygon_area_abs(points: list[Point]) -> float:
+    if len(points) < 3:
+        return 0.0
+    area = 0.0
+    for a, b in zip(points, points[1:] + points[:1]):
+        area += a[0] * b[1] - b[0] * a[1]
+    return abs(area) / 2.0
 
 
 def _polygons_from_geometry(geom: object) -> list[ShapelyPolygon]:
@@ -3247,6 +3335,27 @@ def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
         )
         for r in geometry.rivers
     ]
+    mouth_water_point_counts = [
+        len(channel.mouth_water_polygon)
+        for channel in geometry.river_channels
+        if channel.mouth_water_polygon
+    ]
+    mouth_bank_point_counts = [
+        len(channel.mouth_bank_polygon)
+        for channel in geometry.river_channels
+        if channel.mouth_bank_polygon
+    ]
+    mouth_water_areas = [
+        _polygon_area_abs(channel.mouth_water_polygon)
+        for channel in geometry.river_channels
+        if channel.mouth_water_polygon
+    ]
+    elevation_bands = {
+        f"gte_{str(level).replace('.', '_')}": sum(
+            1 for cell in geometry.micro_cells if not cell.is_coastal and cell.elevation >= level
+        )
+        for level in (0.52, 0.58, 0.64, 0.70, 0.78)
+    }
     coastal_feature_distances = _coastal_feature_distances(geometry)
     river_mouth_distances = _river_mouth_distances(geometry)
     coastal_feature_values = [
@@ -3272,12 +3381,24 @@ def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
             "water_cells": len(geometry.water_cells),
             "rivers": len(geometry.rivers),
             "river_channels": len(geometry.river_channels),
+            "floodplain_cells": sum(1 for c in geometry.micro_cells if c.is_floodplain),
+            "channel_cells": sum(1 for c in geometry.micro_cells if c.is_channel),
             "features": len(geometry.features),
         },
         "terrain_counts": dict(sorted(terrain_counts.items())),
         "water_counts": dict(sorted(water_counts.items())),
         "river_lengths": river_lengths,
         "major_rivers": sum(1 for r in geometry.rivers if r.river_class == "major_river"),
+        "river_mouth_shapes": {
+            "mouths": len(mouth_water_point_counts),
+            "min_water_points": min(mouth_water_point_counts, default=0),
+            "min_bank_points": min(mouth_bank_point_counts, default=0),
+            "avg_water_area": round(
+                sum(mouth_water_areas) / max(1, len(mouth_water_areas)),
+                8,
+            ),
+            "max_water_area": round(max(mouth_water_areas, default=0.0), 8),
+        },
         "coastal_feature_distances": coastal_feature_distances,
         "river_mouth_distances": river_mouth_distances,
         "qa": {
@@ -3305,6 +3426,7 @@ def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
                 sum(c.elevation for c in geometry.micro_cells) / max(1, len(geometry.micro_cells)),
                 4,
             ),
+            "bands": elevation_bands,
         },
     }
 

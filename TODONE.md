@@ -637,6 +637,109 @@ completion.
     instead of brittle full-SVG goldens.
   - the remaining open work is visual tuning of terrain, rivers, elevation, and
     moisture against more generated SVGs.
+- Tuned generated river density from measured debug output:
+  - `_build_micro_rivers` now sizes per-continent river counts from available
+    upland source terrain instead of assigning every large continent the same
+    maximum river count.
+  - the default debug export moved from 18 rivers / 18 channels to 13 rivers /
+    13 channels, average moisture from 0.7591 to 0.7233, drylands from 83 to
+    115 cells, and plains from 625 to 710 cells while preserving zero reported
+    river-mouth and coastal-feature QA distance.
+  - five seed probes now vary from 12 to 15 rivers instead of saturating all
+    sampled worlds at 18.
+  - the map-seed debug fixture now asserts sampled seeds do not collapse to the
+    same river count.
+- Preserved anchored settlement/feature overlay projection after the terrain
+  tuning changed generated geometry enough to expose the drift:
+  - `load_world_map_overlays` reuses the settlement's projected point for a
+    named feature when that settlement slot declares `anchor_feature_id`.
+  - anchored feature overlays take precedence over duplicate non-anchored
+    feature rows from the same local geography JSON.
+  - verified with `unit_test.test_world_map_geometry.TestWorldMapGeometry.test_local_anchor_settlement_and_feature_share_projection`.
+- Tuned river-corridor moisture spread and dryland legibility:
+  - `_apply_river_influence_to_micro_cells` now keeps floodplain styling closer
+    to the routed river path, leaving broad hydrology to `_moisten_micro_cells`.
+  - drylands now classify at a modestly broader low-moisture threshold so arid
+    patches remain visible after river/coast moisture spread.
+  - `build_world_map_debug_data()` now includes `floodplain_cells` and
+    `channel_cells` counts for future corridor-width tuning.
+  - the default no-overlay debug export moved from average moisture 0.7233 to
+    0.6963, drylands 115 to 183 cells, plains 710 to 743 cells, forest 505 to
+    430 cells, and riverland 432 to 406 cells while preserving 13 rivers and
+    zero coastal-feature / river-mouth QA misses.
+  - five seed probes now show 12-15 rivers, 765-914 floodplain cells, 52-231
+    dryland cells, and zero sampled coastal-feature or river-mouth QA misses.
+- Made authored coastal/river constraints survive footprint repair:
+  - disconnected-region repair now prefers the component that satisfies a
+    region's coastal/river requirement instead of blindly keeping the largest
+    component.
+  - this keeps generated port/coastal regions attached to real coastline after
+    later small-footprint and connectivity cleanup.
+  - seed `terrain-river-c` now gives `aeria_port` 33 coastal micro-cells, with
+    22 carrying exterior boundary edges, and no longer reports a missing
+    coastal feature edge.
+- Extended map debug regression coverage:
+  - the map-seed fixture now samples `terrain-river-c` in addition to
+    `campaign-a` and `campaign-b`.
+  - tests assert meaningful dryland counts, channel/floodplain debug counts,
+    bounded floodplain coverage, and zero coastal-feature / river-mouth QA
+    misses across sampled seeds.
+- Tuned river-mouth shape:
+  - `_river_mouth_polygons_for_path` now generates eight-point estuary fans
+    instead of symmetric six-point wedges.
+  - river mouths include a longer throat, wider shoulders, and a stable
+    per-river asymmetry derived from the river ID so adjacent mouths do not look
+    stamped from the same shape.
+  - `build_world_map_debug_data()` now reports `river_mouth_shapes` with mouth
+    count, minimum water/bank point counts, and water-area summaries.
+  - the default no-overlay debug export now reports 13 mouth shapes for 13
+    river channels, minimum 8 water points, minimum 8 bank points, average mouth
+    water area 0.00004116, maximum mouth water area 0.00005416, and zero
+    coastal-feature / river-mouth QA misses.
+  - six seed probes preserved clean coastal-feature and river-mouth QA while
+    reporting 8-point mouth water/bank polygons for every river channel.
+- Tuned elevation-gradient rendering:
+  - `library.world_map_svg` now renders a subtle `terrain-contour-layer` from
+    noisy shared micro-cell edges where non-coastal neighbors cross high
+    elevation bands.
+  - contour rendering uses the `0.64`, `0.70`, and `0.78` elevation thresholds,
+    leaving the lower `0.58` band as debug-only context to avoid a dense hatch
+    effect.
+  - `build_world_map_debug_data()` now reports elevation band counts for
+    non-coastal cells at `0.52`, `0.58`, `0.64`, `0.70`, and `0.78`.
+  - the default no-overlay SVG now has 736 terrain-contour paths; debug reports
+    358 non-coastal cells at elevation >= 0.64, 221 at >= 0.70, and 70 at >=
+    0.78, with zero coastal-feature / river-mouth QA misses.
+  - sampled seeds rendered 762-950 terrain-contour paths after dropping the
+    lower contour threshold, keeping the contour layer under half of the
+    micro-cell count.
+- Tuned terrain-family texture rendering:
+  - `library.world_map_svg` now uses terrain-specific mottle profiles instead
+    of applying the same generic ellipse treatment to every non-coastal family.
+  - forests render denser canopy mottles, drylands render smaller scrub marks,
+    highlands render sparse ridge-like marks, riverlands/floodplains render
+    alluvial marks, and plains render lighter meadow texture.
+  - mottle colors are now terrain-aware, preserving the underlying terrain fill
+    while pushing forests darker/greener, drylands sandier, highlands lighter or
+    stonier, and riverlands more alluvial.
+  - rendered texture ellipses carry `data-texture-kind` and
+    `data-terrain-family` attributes for SVG inspection.
+  - the sampled seeds moved from roughly 1,352-1,364 generic mottle ellipses to
+    1,119-1,158 terrain-specific marks, reducing overall noise while making
+    terrain families more visually distinct.
+  - the default no-overlay SVG now renders 1,158 terrain-specific mottle marks:
+    350 canopy, 129 ridge, 107 scrub, 331 alluvial, and 241 meadow.
+- Closed the broad polygonal map tuning TODO:
+  - completed measured passes now cover river density, moisture/floodplain
+    spread, authored coastal/river footprint repair, river-mouth shape,
+    elevation-contour rendering, and terrain-family texture treatment.
+  - future map work should be filed as a fresh concrete TODO only when a new
+    generated SVG, map debug JSON, browser behavior, or map-seed fixture exposes
+    a specific visual/debug gap.
+- Verified the current polygonal map pass with:
+  - `python -m py_compile library\world_map_geometry.py library\world_map_svg.py`
+  - `python -m unittest unit_test.test_world_map_geometry.TestWorldMapGeometry.test_local_anchor_settlement_and_feature_share_projection unit_test.test_world_map_geometry.TestWorldMapGeometry.test_map_seed_debug_fixtures_capture_stable_comparison_metrics`
+  - `python -m unittest unit_test.test_world_map_geometry`
 
 ## Scale Population Simulation Toward Millions
 
@@ -687,6 +790,78 @@ completion.
 - Cached species/life-stage lookup data for `refresh_current_people_life_stages`:
   - context now builds one `(species, ethnic) -> species row` lookup from cached species config
   - annual life-stage refresh reuses that lookup for every living person instead of querying SQLite per person
+
+- Cached restriction-filtered career job options for annual assignment:
+  - `choose_career_assignment` now reuses era/job-entry tuples after applying
+    a person's male/female restriction allowance profile instead of rebuilding
+    filtered tuples for every job seeker
+  - a focused benchmark of 20,000 medieval allowance lookups kept the same
+    1,800,000 option rows and reduced repeated filtering from 1.222506s to
+    0.002011s after cache warmup
+  - verified with `unit_test.test_simulation_careers`,
+    `unit_test.test_population_growth_determinism`, and
+    `unit_test.test_simulation_government`
+
+- Re-ran the mixed-mode scale smoke after the career-cache change:
+  - `utils/run_mixed_mode_scale_smoke.py --years 5 --targets 100000,1000000,10000000`
+  - the 10,000,000 target ended with 9,921,295 aggregate alive people, 24,752
+    cohort rows, and 0.372847s elapsed in the smoke utility
+
+- Added an upper-bound rejection gate for rare incident generation:
+  - murder, property crime, public virtue, and knowledge/culture incidents now
+    draw the same chance roll before building per-person scoring contexts, skip
+    immediately when even max propensity could not pass the capped chance, and
+    only score candidates for surviving rolls
+  - the affair-scandal path keeps its pair-based scoring path, with an added
+    participant-threshold guard so two stable low-propensity people do not
+    become eligible only because their pair score is summed
+  - a current-code 5-year `default_diag_profile` resume dropped
+    `incidents.generate` from 41.971246s to 11.129776s versus the immediately
+    preceding pre-patch baseline group
+  - wall time for comparable 5-year profiled resume slices went from 435.545s
+    pre-patch to 115.022s on the final current-code run
+  - verified with `unit_test.test_simulation_incidents`,
+    `unit_test.test_event_scoring`, and `py_compile`
+
+- Batched and cached checkpoint event flushing:
+  - `append_simulation_event_rows` now prepares pending event rows once,
+    bulk-inserts core `simulation_events` rows, derives the contiguous inserted
+    IDs, and bulk-links `simulation_event_people` plus default event records
+    before running the existing richer side-table upserts
+  - event place normalization now uses a flush-local region/settlement key cache
+    so high-volume event batches do not repeat the same lookup-table
+    `SELECT`/`INSERT OR IGNORE` work for every payload
+  - side-table handlers for move rows, domain states, obligations, reputation
+    marks, legal fallout, faction memory, institutions, and innovation
+    discoveries reuse the same cache when they need additional place keys
+  - a measured public-stage record batching experiment was rejected after it
+    worsened the real `default_diag_profile` flush profile
+  - final current-code 5-year `default_diag_profile` resume
+    (`2026-06-06T01:48:29.676323+00:00`, years >= 562, 75,383 flushed events)
+    measured `checkpoint.flush_events` at 7.556001s, down from 10.409684s in
+    the immediately preceding current-code checkpoint baseline
+    (`2026-06-06T01:15:25.697746+00:00`)
+  - verified with `unit_test.test_save_checkpoint`,
+    `unit_test.test_event_memory_lifecycle`, `unit_test.test_simulation_incidents`,
+    and `py_compile`
+
+- Ran a fresh full 250-year / 250-couple production-scale timing comparison:
+  - command used the bundled Python runtime with
+    `utils/run_population_simulation.py --world-id prod_timing_250_foreground --reset-world --years 250 --starting-couples 250 --seed 320062422 --progress --profile-last-years 10`
+  - the scratch world avoided wiping `worlds/default/save.sqlite` while using
+    the same default-world config data and the same seed as the previous
+    post-indexing baseline row
+  - the run completed in 1,089.742s, about 18 minutes 10 seconds, and ended
+    with 13,598 detailed alive people plus 20,378 passive-cohort alive people
+  - the previous same-seed post-indexing baseline was 1,470.000s and ended with
+    14,513 alive people, so the current measured run is about 25.9% faster
+    despite carrying the newer event-memory/consequence/innovation save
+    surfaces
+  - the final 10-year profile row
+    (`2026-06-06T02:33:21.528152+00:00`) recorded the largest buckets as
+    `summary.incidents` 19.905s, `incidents.generate` 17.794s,
+    `careers.assign_rehire` 14.189s, `summary.innovation` 9.384s,
+    `checkpoint.flush_events` 9.307s, and `summary.trade_networks` 7.449s
 
 - Measured checkpoint and file-store cost separately from simulation logic:
   - yearly file-store timing is split into yearly-summary staging, current-people snapshot staging, and flush-if-due

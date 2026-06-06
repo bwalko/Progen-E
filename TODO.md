@@ -24,24 +24,25 @@ tuning problem, or performance regression to handle.
 
 ## Polygonal World Map Generation
 
-Context for completed functionality needed by remaining map work: the first
-polygonal terrain pass is implemented in `library.world_map_geometry`; see
-`TODONE.md` for the completed geometry/rendering details.
+Context for completed functionality: polygonal map generation and the current
+terrain/river/texture tuning pass are implemented; see `TODONE.md` for the
+completed geometry/rendering/debug details.
 
-Remaining map work:
-
-1. Continue terrain classification, elevation gradients, river density, river
-   mouth shape, and moisture-spread visual tuning against generated SVGs from
-   multiple map seeds, preferably on Nazuna or another fast machine.
-2. Use the existing map debug JSON and map-seed comparison fixtures to drive any
-   future rendering, storage, or sampling changes from measured visual/debug
-   gaps rather than speculative architecture work.
+Future map work should be added as a fresh concrete TODO only when there is a
+specific measured visual/debug gap from generated SVGs, map debug JSON, browser
+behavior, or map-seed comparison fixtures. Do not keep a broad "continue map
+tuning" item open without a concrete symptom and completion boundary.
 
 ## Scale Population Simulation Toward Millions
 
 ### Current Baseline And Targets
 
-- A post-indexing 250-year run with 250 starting couples took about 24 minutes 30 seconds and ended with 14,513 alive people (`unit_test/population_sim_timing.tsv`).
+- A fresh post-optimization 250-year run with 250 starting couples took about
+  18 minutes 10 seconds and ended with 13,598 detailed alive people
+  (`unit_test/population_sim_timing.tsv`, `prod_timing_250_foreground`,
+  seed `320062422`).
+- The previous post-indexing 250-year / 250-couple baseline took about
+  24 minutes 30 seconds and ended with 14,513 alive people.
 - An older pre-indexing 250-year / 250-couple run took about 2 hours 26 minutes and ended with 115,976 total people / 17,926 alive.
 - Late-run cost is still too high: roughly 15K active people can make the final 10-year slices take tens of minutes.
 - Near-term target: make 15K active people run the late 10 years in under 5 minutes.
@@ -90,13 +91,15 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 
 ### Immediate Performance Work
 
-- Run late-year profiling on the next serious population run; profile rows are now recorded in `unit_test/population_sim_profile.tsv`:
+- Use the latest 250-year profile row
+  (`2026-06-06T02:33:21.528152+00:00`) to choose the next measured hot path.
+  The largest late-year buckets are currently incident generation, career
+  reassignment, innovation, checkpoint event flushing, household-care indexes,
+  job migration, government scoring, and trade networks.
 
-  ```powershell
-  python utils/run_population_simulation.py --years 250 --starting-couples 250 --progress --profile-last-years 10
-  ```
-
-- Run a fresh full 250-year / 250-couple production-scale timing comparison only after meaningful new performance changes; use the post-indexing `unit_test/population_sim_timing.tsv` row as the current baseline.
+- Run another fresh full 250-year / 250-couple production-scale timing
+  comparison only after the next meaningful performance changes; use the
+  1,089.742 second `prod_timing_250_foreground` row as the current baseline.
 
 ### Hybrid Population Architecture
 

@@ -1,0 +1,4 @@
+target_population	years	world	region_count	base_capacity	passive_population_scale	elapsed_s	cohort_rows	aggregate_alive	aggregate_births	aggregate_deaths	aggregate_partnered
+100000	5	default	26	23390	4.27533134	0.271991	16336	99170	1646	1204	51916
+1000000	5	default	26	23390	42.75331338	0.351229	22019	992193	16498	16012	519914
+10000000	5	default	26	23390	427.53313382	0.372847	24752	9921295	165061	166356	5198419

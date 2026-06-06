@@ -878,6 +878,36 @@ def _career_job_options_for_era(
     return tuple(options)
 
 
+@lru_cache(maxsize=160)
+def _career_job_options_for_era_and_allowance(
+    db_path_s: str,
+    era_key: str,
+    allow_male_restricted: bool,
+    allow_female_restricted: bool,
+) -> tuple[CareerGenomeJobOption, ...]:
+    def allowed(restriction: str | None) -> bool:
+        if restriction == "male":
+            return bool(allow_male_restricted)
+        if restriction == "female":
+            return bool(allow_female_restricted)
+        return True
+
+    out: list[CareerGenomeJobOption] = []
+    for option in _career_job_options_for_era(db_path_s, era_key):
+        common_entries = tuple(e for e in option.common_entries if allowed(e.restriction))
+        premium_entries = tuple(e for e in option.premium_entries if allowed(e.restriction))
+        if not common_entries and not premium_entries:
+            continue
+        out.append(
+            replace(
+                option,
+                common_entries=common_entries,
+                premium_entries=premium_entries,
+            )
+        )
+    return tuple(out)
+
+
 @lru_cache(maxsize=8)
 def _genome_composite_rows(db_path_s: str) -> tuple[dict[str, Any], ...]:
     path = Path(db_path_s)
@@ -1301,11 +1331,16 @@ def choose_career_assignment(
     path = Path(db_path)
     db_path_s = str(path.resolve())
     era_key = (era or "").strip().lower()
-    options = _career_job_options_for_era(db_path_s, era_key)
-    if not options:
-        return None
     traits = trait_values if trait_values is not None else work_trait_values(person)
     allowed_by_restriction = _job_restriction_allowance(person, traits)
+    options = _career_job_options_for_era_and_allowance(
+        db_path_s,
+        era_key,
+        bool(allowed_by_restriction.get("male", False)),
+        bool(allowed_by_restriction.get("female", False)),
+    )
+    if not options:
+        return None
     if prof:
         simulation_timing.accumulate("careers.assignment_setup", tpc() - t0)
         t0 = tpc()
@@ -1321,16 +1356,8 @@ def choose_career_assignment(
     for option in options:
         if option.trait not in traits:
             continue
-        common_entries = tuple(
-            entry
-            for entry in option.common_entries
-            if allowed_by_restriction.get(entry.restriction, True)
-        )
-        premium_entries = tuple(
-            entry
-            for entry in option.premium_entries
-            if allowed_by_restriction.get(entry.restriction, True)
-        )
+        common_entries = option.common_entries
+        premium_entries = option.premium_entries
         if not common_entries and not premium_entries:
             continue
         score = score_genome_job_row(

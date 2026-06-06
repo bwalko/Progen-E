@@ -267,6 +267,65 @@ def _murder_settlement_trial_count(residents: list["SimulationPersonRecord"]) ->
     return max(1, min(int(MURDER_MAX_SETTLEMENT_TRIALS), trials))
 
 
+def _murder_chance_from_propensity(
+    *,
+    adults_count: int,
+    scarcity: float,
+    max_propensity: float,
+    rate: IncidentRateParams | None,
+) -> float:
+    population_factor = _clamp((int(adults_count) - 1) / 80.0, 0.05, 1.0)
+    population_rate_chance = (
+        _murder_target_per_10k(rate)
+        / 10_000.0
+        * min(int(adults_count), max(1, int(MURDER_SETTLEMENT_TRIAL_POPULATION)))
+    )
+    raw_chance = (
+        MURDER_BASE_SETTLEMENT_CHANCE
+        * (0.35 + population_factor)
+        * (1.0 + float(scarcity) * 3.0)
+        * (0.35 + float(max_propensity) * 2.5)
+        + population_rate_chance
+        * MURDER_RATE_CONTEXT_MULTIPLIER
+        * (0.50 + float(max_propensity) * 2.0)
+        * (1.0 + float(scarcity) * 1.5)
+    )
+    return min(
+        _scaled_chance_cap(MURDER_SETTLEMENT_CHANCE_CAP, rate),
+        raw_chance * _incident_chance_multiplier(rate),
+    )
+
+
+def _scored_family_chance_from_propensity(
+    *,
+    base_chance: float,
+    population_denominator: float,
+    population_base: float,
+    pressure_base: float,
+    pressure_factor: float,
+    pressure_weight: float,
+    propensity_base: float,
+    propensity_weight: float,
+    max_propensity: float,
+    adults_count: int,
+    chance_cap: float,
+    rate: IncidentRateParams | None,
+) -> float:
+    population_factor = _clamp(
+        (int(adults_count) - 1) / float(population_denominator), 0.05, 1.0
+    )
+    raw_chance = (
+        float(base_chance)
+        * (float(population_base) + population_factor)
+        * (float(pressure_base) + float(pressure_factor) * float(pressure_weight))
+        * (float(propensity_base) + float(max_propensity) * float(propensity_weight))
+    )
+    return min(
+        _scaled_chance_cap(chance_cap, rate),
+        raw_chance * _incident_chance_multiplier(rate),
+    )
+
+
 def _relationship_motive(
     killer: "SimulationPersonRecord", victim: "SimulationPersonRecord"
 ) -> tuple[str, float]:
@@ -849,6 +908,14 @@ def _maybe_murder_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     scarcity = _clamp((pressure - 0.75) / 0.75)
+    chance_roll = rng.random()
+    if chance_roll >= _murder_chance_from_propensity(
+        adults_count=len(adults),
+        scarcity=scarcity,
+        max_propensity=1.0,
+        rate=rate,
+    ):
+        return None
     facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
     contexts = _incident_context_map(
         ctx,
@@ -863,27 +930,13 @@ def _maybe_murder_in_settlement(
         adults, violent_actor_propensity, contexts
     )
     max_propensity = max(propensities.values(), default=0.0)
-    population_factor = _clamp((len(adults) - 1) / 80.0, 0.05, 1.0)
-    population_rate_chance = (
-        _murder_target_per_10k(rate)
-        / 10_000.0
-        * min(len(adults), max(1, int(MURDER_SETTLEMENT_TRIAL_POPULATION)))
+    chance = _murder_chance_from_propensity(
+        adults_count=len(adults),
+        scarcity=scarcity,
+        max_propensity=max_propensity,
+        rate=rate,
     )
-    raw_chance = (
-        MURDER_BASE_SETTLEMENT_CHANCE
-        * (0.35 + population_factor)
-        * (1.0 + scarcity * 3.0)
-        * (0.35 + max_propensity * 2.5)
-        + population_rate_chance
-        * MURDER_RATE_CONTEXT_MULTIPLIER
-        * (0.50 + max_propensity * 2.0)
-        * (1.0 + scarcity * 1.5)
-    )
-    chance = min(
-        _scaled_chance_cap(MURDER_SETTLEMENT_CHANCE_CAP, rate),
-        raw_chance * _incident_chance_multiplier(rate),
-    )
-    if rng.random() >= chance:
+    if chance_roll >= chance:
         return None
     candidate_killers = eligible_records_by_threshold(
         adults, propensities, MURDER_PROPENSITY_THRESHOLD
@@ -2318,14 +2371,22 @@ def _maybe_affair_scandal_in_settlement(
     )
     if rng.random() >= chance:
         return None
-    eligible = [
-        item
-        for item, score in zip(candidate_pairs, pair_scores)
-        if score >= SCANDAL_PROPENSITY_THRESHOLD
-    ]
-    eligible_scores = [
-        score for score in pair_scores if score >= SCANDAL_PROPENSITY_THRESHOLD
-    ]
+    eligible: list[
+        tuple["SimulationPersonRecord", "SimulationPersonRecord", tuple[int, ...]]
+    ] = []
+    eligible_scores: list[float] = []
+    for item, score in zip(candidate_pairs, pair_scores):
+        a, b, _betrayed_ids = item
+        if score < SCANDAL_PROPENSITY_THRESHOLD:
+            continue
+        participant_score = max(
+            propensities.get(int(a.person_id), 0.0),
+            propensities.get(int(b.person_id), 0.0),
+        )
+        if participant_score < SCANDAL_PROPENSITY_THRESHOLD:
+            continue
+        eligible.append(item)
+        eligible_scores.append(score)
     if not eligible:
         return None
     chosen = rng.choices(
@@ -2402,6 +2463,22 @@ def _maybe_public_virtue_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     hardship = _clamp((pressure - 0.45) / 1.0)
+    chance_roll = rng.random()
+    if chance_roll >= _scored_family_chance_from_propensity(
+        base_chance=VIRTUE_BASE_SETTLEMENT_CHANCE,
+        population_denominator=70.0,
+        population_base=0.40,
+        pressure_base=1.0,
+        pressure_factor=hardship,
+        pressure_weight=1.7,
+        propensity_base=0.35,
+        propensity_weight=2.2,
+        max_propensity=1.0,
+        adults_count=len(adults),
+        chance_cap=VIRTUE_SETTLEMENT_CHANCE_CAP,
+        rate=rate,
+    ):
+        return None
     facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
     contexts = _incident_context_map(
         ctx,
@@ -2416,18 +2493,21 @@ def _maybe_public_virtue_in_settlement(
         adults, public_virtue_propensity, contexts
     )
     max_propensity = max(propensities.values(), default=0.0)
-    population_factor = _clamp((len(adults) - 1) / 70.0, 0.05, 1.0)
-    raw_chance = (
-        VIRTUE_BASE_SETTLEMENT_CHANCE
-        * (0.40 + population_factor)
-        * (1.0 + hardship * 1.7)
-        * (0.35 + max_propensity * 2.2)
+    chance = _scored_family_chance_from_propensity(
+        base_chance=VIRTUE_BASE_SETTLEMENT_CHANCE,
+        population_denominator=70.0,
+        population_base=0.40,
+        pressure_base=1.0,
+        pressure_factor=hardship,
+        pressure_weight=1.7,
+        propensity_base=0.35,
+        propensity_weight=2.2,
+        max_propensity=max_propensity,
+        adults_count=len(adults),
+        chance_cap=VIRTUE_SETTLEMENT_CHANCE_CAP,
+        rate=rate,
     )
-    chance = min(
-        _scaled_chance_cap(VIRTUE_SETTLEMENT_CHANCE_CAP, rate),
-        raw_chance * _incident_chance_multiplier(rate),
-    )
-    if rng.random() >= chance:
+    if chance_roll >= chance:
         return None
     candidates = eligible_records_by_threshold(
         adults, propensities, VIRTUE_PROPENSITY_THRESHOLD
@@ -2514,6 +2594,23 @@ def _maybe_knowledge_culture_in_settlement(
     if len(adults) < 2:
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
+    prosperity_factor = max(0.0, 1.0 - min(1.4, pressure))
+    chance_roll = rng.random()
+    if chance_roll >= _scored_family_chance_from_propensity(
+        base_chance=KNOWLEDGE_BASE_SETTLEMENT_CHANCE,
+        population_denominator=90.0,
+        population_base=0.35,
+        pressure_base=0.75,
+        pressure_factor=prosperity_factor,
+        pressure_weight=0.25,
+        propensity_base=0.35,
+        propensity_weight=2.5,
+        max_propensity=1.0,
+        adults_count=len(adults),
+        chance_cap=KNOWLEDGE_SETTLEMENT_CHANCE_CAP,
+        rate=rate,
+    ):
+        return None
     facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
     contexts = _incident_context_map(
         ctx,
@@ -2528,18 +2625,21 @@ def _maybe_knowledge_culture_in_settlement(
         adults, knowledge_culture_propensity, contexts
     )
     max_propensity = max(propensities.values(), default=0.0)
-    population_factor = _clamp((len(adults) - 1) / 90.0, 0.05, 1.0)
-    raw_chance = (
-        KNOWLEDGE_BASE_SETTLEMENT_CHANCE
-        * (0.35 + population_factor)
-        * (0.75 + max(0.0, 1.0 - min(1.4, pressure)) * 0.25)
-        * (0.35 + max_propensity * 2.5)
+    chance = _scored_family_chance_from_propensity(
+        base_chance=KNOWLEDGE_BASE_SETTLEMENT_CHANCE,
+        population_denominator=90.0,
+        population_base=0.35,
+        pressure_base=0.75,
+        pressure_factor=prosperity_factor,
+        pressure_weight=0.25,
+        propensity_base=0.35,
+        propensity_weight=2.5,
+        max_propensity=max_propensity,
+        adults_count=len(adults),
+        chance_cap=KNOWLEDGE_SETTLEMENT_CHANCE_CAP,
+        rate=rate,
     )
-    chance = min(
-        _scaled_chance_cap(KNOWLEDGE_SETTLEMENT_CHANCE_CAP, rate),
-        raw_chance * _incident_chance_multiplier(rate),
-    )
-    if rng.random() >= chance:
+    if chance_roll >= chance:
         return None
     candidates = eligible_records_by_threshold(
         adults, propensities, KNOWLEDGE_PROPENSITY_THRESHOLD
@@ -2632,6 +2732,22 @@ def _maybe_property_crime_in_settlement(
         return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     scarcity = _clamp((pressure - 0.65) / 0.85)
+    chance_roll = rng.random()
+    if chance_roll >= _scored_family_chance_from_propensity(
+        base_chance=THEFT_BASE_SETTLEMENT_CHANCE,
+        population_denominator=60.0,
+        population_base=0.45,
+        pressure_base=1.0,
+        pressure_factor=scarcity,
+        pressure_weight=2.2,
+        propensity_base=0.35,
+        propensity_weight=2.4,
+        max_propensity=1.0,
+        adults_count=len(adults),
+        chance_cap=THEFT_SETTLEMENT_CHANCE_CAP,
+        rate=rate,
+    ):
+        return None
     facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
     contexts = _incident_context_map(
         ctx,
@@ -2646,18 +2762,21 @@ def _maybe_property_crime_in_settlement(
         adults, property_crime_propensity, contexts
     )
     max_propensity = max(propensities.values(), default=0.0)
-    population_factor = _clamp((len(adults) - 1) / 60.0, 0.05, 1.0)
-    raw_chance = (
-        THEFT_BASE_SETTLEMENT_CHANCE
-        * (0.45 + population_factor)
-        * (1.0 + scarcity * 2.2)
-        * (0.35 + max_propensity * 2.4)
+    chance = _scored_family_chance_from_propensity(
+        base_chance=THEFT_BASE_SETTLEMENT_CHANCE,
+        population_denominator=60.0,
+        population_base=0.45,
+        pressure_base=1.0,
+        pressure_factor=scarcity,
+        pressure_weight=2.2,
+        propensity_base=0.35,
+        propensity_weight=2.4,
+        max_propensity=max_propensity,
+        adults_count=len(adults),
+        chance_cap=THEFT_SETTLEMENT_CHANCE_CAP,
+        rate=rate,
     )
-    chance = min(
-        _scaled_chance_cap(THEFT_SETTLEMENT_CHANCE_CAP, rate),
-        raw_chance * _incident_chance_multiplier(rate),
-    )
-    if rng.random() >= chance:
+    if chance_roll >= chance:
         return None
     candidates = eligible_records_by_threshold(
         adults, propensities, THEFT_PROPENSITY_THRESHOLD

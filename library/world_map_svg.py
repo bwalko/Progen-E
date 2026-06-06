@@ -69,6 +69,16 @@ class WorldMapOverlays:
     roads: list[RoadMapEdge] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _TerrainTextureProfile:
+    kind: str
+    density: float
+    rx_range: tuple[float, float]
+    ry_range: tuple[float, float]
+    angle_range: tuple[float, float]
+    opacity_range: tuple[float, float]
+
+
 _CELL_COLORS = {
     "coast": "#c8b889",
     "riverland": "#6fa65f",
@@ -77,6 +87,8 @@ _CELL_COLORS = {
     "drylands": "#b1a070",
     "plains": "#86ad67",
 }
+
+_ELEVATION_CONTOUR_LEVELS = (0.64, 0.70, 0.78)
 
 _FEATURE_COLORS = {
     "coast": "#4e5558",
@@ -576,11 +588,32 @@ def _micro_blend_fill(
 def _micro_mottle_fill(cell: MicroRegionCell, overlays: WorldMapOverlays | None) -> str:
     base = _micro_cell_fill(cell, overlays)
     grain = (_stable_seed("terrain-mottle", cell.micro_id) % 1000) / 999.0
-    if grain < 0.42:
-        return _mix_color(base, "#223f35", 0.18 + grain * 0.12)
-    if grain > 0.72:
-        return _mix_color(base, "#d8d5b9", 0.10 + (grain - 0.72) * 0.18)
-    return _mix_color(base, "#6b8558", 0.10)
+    if cell.terrain_family == "forest":
+        target = "#193f31" if grain < 0.62 else "#6f965b"
+        return _mix_color(base, target, 0.16 + abs(grain - 0.5) * 0.18)
+    if cell.terrain_family == "drylands":
+        target = "#d5c78c" if grain > 0.46 else "#786e4b"
+        return _mix_color(base, target, 0.14 + abs(grain - 0.5) * 0.16)
+    if cell.terrain_family == "highlands":
+        target = "#e4dfc3" if grain > 0.52 else "#666654"
+        return _mix_color(base, target, 0.13 + abs(grain - 0.5) * 0.15)
+    if cell.terrain_family == "riverland" or getattr(cell, "is_floodplain", False):
+        target = "#315f48" if grain < 0.58 else "#a4a66e"
+        return _mix_color(base, target, 0.12 + abs(grain - 0.5) * 0.14)
+    target = "#5d7f45" if grain < 0.54 else "#c8bd86"
+    return _mix_color(base, target, 0.08 + abs(grain - 0.5) * 0.12)
+
+
+def _terrain_texture_profile(cell: MicroRegionCell) -> _TerrainTextureProfile:
+    if cell.terrain_family == "forest":
+        return _TerrainTextureProfile("canopy", 0.78, (9.0, 22.0), (6.0, 18.0), (-45.0, 45.0), (0.18, 0.32))
+    if cell.terrain_family == "drylands":
+        return _TerrainTextureProfile("scrub", 0.56, (5.0, 13.0), (2.4, 7.0), (-24.0, 24.0), (0.16, 0.30))
+    if cell.terrain_family == "highlands":
+        return _TerrainTextureProfile("ridge", 0.46, (12.0, 28.0), (2.4, 5.5), (-32.0, 32.0), (0.14, 0.28))
+    if cell.terrain_family == "riverland" or getattr(cell, "is_floodplain", False):
+        return _TerrainTextureProfile("alluvial", 0.64, (7.0, 18.0), (3.5, 9.0), (-20.0, 20.0), (0.14, 0.27))
+    return _TerrainTextureProfile("meadow", 0.38, (7.0, 16.0), (4.0, 10.0), (-35.0, 35.0), (0.11, 0.22))
 
 
 def _micro_hillshade(
@@ -617,6 +650,30 @@ def _micro_hillshade(
         else:
             shade[cell.micro_id] = ("#233044", amount * 0.95)
     return shade
+
+
+def _micro_elevation_contours(
+    blend_edges: list[tuple[Point, Point, MicroRegionCell, MicroRegionCell]],
+) -> list[tuple[Point, Point, float, str, float, float]]:
+    contours: list[tuple[Point, Point, float, str, float, float]] = []
+    for a, b, first, second in blend_edges:
+        if first.is_coastal or second.is_coastal:
+            continue
+        lo = min(first.elevation, second.elevation)
+        hi = max(first.elevation, second.elevation)
+        crossed = [level for level in _ELEVATION_CONTOUR_LEVELS if lo < level <= hi]
+        if not crossed:
+            continue
+        level = max(crossed)
+        if level >= 0.78:
+            contours.append((a, b, level, "#f5efd1", 0.32, 1.05))
+        elif level >= 0.70:
+            contours.append((a, b, level, "#5d5140", 0.25, 0.92))
+        elif level >= 0.64:
+            contours.append((a, b, level, "#7b6b4c", 0.20, 0.74))
+        else:
+            contours.append((a, b, level, "#867653", 0.15, 0.58))
+    return contours
 
 
 def _feature_radius(feature: RegionFeature) -> float:
@@ -1431,11 +1488,41 @@ def _site_world_xy(local_geography_json: object, site_slot: object) -> tuple[flo
     return None
 
 
+def _site_anchor_feature_id(local_geography_json: object, site_slot: object) -> str | None:
+    if not local_geography_json:
+        return None
+    try:
+        data = json.loads(str(local_geography_json))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    sites = data.get("settlements")
+    if not isinstance(sites, list):
+        return None
+    try:
+        slot = int(site_slot or 1) - 1
+    except (TypeError, ValueError):
+        slot = 0
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        try:
+            if int(site.get("settlement_slot", 0)) != slot:
+                continue
+        except (TypeError, ValueError):
+            continue
+        anchor_id = str(site.get("anchor_feature_id") or "").strip()
+        return anchor_id or None
+    return None
+
+
 def _named_feature_overlays_from_local_geography(
     *,
     geometry: WorldMapGeometry,
     region_id: str,
     local_geography_json: object,
+    anchored_feature_points: dict[str, Point] | None = None,
 ) -> list[FeatureMapOverlay]:
     if not local_geography_json:
         return []
@@ -1462,19 +1549,23 @@ def _named_feature_overlays_from_local_geography(
         seen.add(fid)
         kind = str(feature.get("kind") or "feature").strip() or "feature"
         try:
-            if feature.get("source_world_x") is not None and feature.get("source_world_y") is not None:
+            anchored_xy = (anchored_feature_points or {}).get(fid)
+            if anchored_xy is not None:
+                wx, wy = anchored_xy
+            elif feature.get("source_world_x") is not None and feature.get("source_world_y") is not None:
                 world_xy = (float(feature["source_world_x"]), float(feature["source_world_y"]))
                 wx, wy = project_world_point_to_region_footprint(geometry, region_id, world_xy)
             else:
                 lx = max(0.04, min(0.96, float(feature.get("x", 0.5))))
                 ly = max(0.04, min(0.96, float(feature.get("y", 0.5))))
                 wx, wy = project_local_point_to_region_footprint(geometry, region_id, (lx, ly))
-            wx, wy = project_feature_point_to_region_footprint(
-                geometry,
-                region_id,
-                (wx, wy),
-                kind=kind,
-            )
+            if anchored_xy is None:
+                wx, wy = project_feature_point_to_region_footprint(
+                    geometry,
+                    region_id,
+                    (wx, wy),
+                    kind=kind,
+                )
         except (TypeError, ValueError):
             continue
         out.append(
@@ -1574,6 +1665,15 @@ def load_world_map_overlays(
                     lx = max(0.04, min(0.96, local[0]))
                     ly = max(0.04, min(0.96, local[1]))
                     world_x, world_y = project_local_point_to_region_footprint(geometry, rid, (lx, ly))
+                anchor_feature_id = _site_anchor_feature_id(
+                    row["local_geography_json"],
+                    row["site_slot"],
+                )
+                anchored_feature_points = (
+                    {anchor_feature_id: (world_x, world_y)}
+                    if anchor_feature_id
+                    else {}
+                )
                 settlements.append(
                     SettlementMapOverlay(
                         settlement_id=str(row["settlement_id"] or ""),
@@ -1589,8 +1689,12 @@ def load_world_map_overlays(
                     geometry=geometry,
                     region_id=rid,
                     local_geography_json=row["local_geography_json"],
+                    anchored_feature_points=anchored_feature_points,
                 ):
-                    features_by_id.setdefault(feature.feature_id, feature)
+                    if feature.feature_id in anchored_feature_points:
+                        features_by_id[feature.feature_id] = feature
+                    else:
+                        features_by_id.setdefault(feature.feature_id, feature)
         if {"simulation_polity_territory", "simulation_polities"}.issubset(relations):
             rows = conn.execute(
                 """
@@ -1683,7 +1787,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.road{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}.road-underlay{stroke:#fff2c8;mix-blend-mode:screen}.road-line{stroke:#6f5533}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend,.terrain-contour{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.terrain-contour{fill:none;mix-blend-mode:multiply;vector-effect:non-scaling-stroke}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.road{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}.road-underlay{stroke:#fff2c8;mix-blend-mode:screen}.road-line{stroke:#6f5533}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -1816,17 +1920,22 @@ def render_world_map_svg(
                 if cell.is_coastal:
                     continue
                 seed = _stable_seed("terrain-mottle", geometry.version, cell.micro_id)
-                if seed % 3 == 0:
+                profile = _terrain_texture_profile(cell)
+                gate = (seed % 1000) / 999.0
+                if gate > profile.density:
                     continue
                 rng = random.Random(seed)
                 cx, cy = _scale((cell.center_x, cell.center_y), width, height, pad)
-                rx = rng.uniform(8.0, 20.0)
-                ry = rng.uniform(5.0, 15.0)
-                angle = rng.uniform(-35.0, 35.0)
+                rx = rng.uniform(*profile.rx_range)
+                ry = rng.uniform(*profile.ry_range)
+                angle = rng.uniform(*profile.angle_range)
+                opacity = rng.uniform(*profile.opacity_range)
                 parts.append(
                     f'<ellipse class="terrain-mottle" cx="{cx:.1f}" cy="{cy:.1f}" '
                     f'rx="{rx:.1f}" ry="{ry:.1f}" transform="rotate({angle:.1f} {cx:.1f} {cy:.1f})" '
-                    f'fill="{_micro_mottle_fill(cell, overlays)}" opacity="{rng.uniform(0.20, 0.38):.2f}" />'
+                    f'data-texture-kind="{html.escape(profile.kind)}" '
+                    f'data-terrain-family="{html.escape(cell.terrain_family)}" '
+                    f'fill="{_micro_mottle_fill(cell, overlays)}" opacity="{opacity:.2f}" />'
                 )
             parts.append("</g>")
             parts.append(f'<g class="terrain-blend-layer" opacity="0.34"{terrain_mask}>')
@@ -1862,6 +1971,24 @@ def render_world_map_svg(
                     parts.append(
                         f'<path class="{cls}" d="{scaled_micro_paths[cell.micro_id]}" '
                         f'fill="{color}" opacity="{opacity:.3f}" />'
+                    )
+                parts.append("</g>")
+            contours = _micro_elevation_contours(blend_edges)
+            if contours:
+                parts.append(f'<g class="terrain-contour-layer" opacity="1.0"{terrain_mask}>')
+                for a, b, level, color, opacity, stroke_width in contours:
+                    pts = _oriented_noisy_edge_path(
+                        noisy_edge_paths,
+                        a,
+                        b,
+                        width=width,
+                        height=height,
+                        pad=pad,
+                    )
+                    parts.append(
+                        f'<path class="terrain-contour contour-{int(level * 100):02d}" '
+                        f'data-contour-level="{level:.2f}" d="{_line_path(pts)}" '
+                        f'stroke="{color}" stroke-width="{stroke_width:.2f}" opacity="{opacity:.3f}" />'
                     )
                 parts.append("</g>")
         boundary_paths = _dissolved_region_boundary_paths(

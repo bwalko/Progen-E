@@ -445,6 +445,82 @@ def _lookup_or_insert_settlement_key(
     return int(row["settlement_key"] if isinstance(row, sqlite3.Row) else row[0])
 
 
+class _EventPlaceKeyCache:
+    """Flush-local cache for normalized event place lookup keys."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.region_keys: dict[str, int] = {}
+        self.settlement_keys: dict[str, int] = {}
+        for row in conn.execute(
+            "SELECT region_id, region_key FROM simulation_region_lookup"
+        ):
+            raw_region_id = row["region_id"] if isinstance(row, sqlite3.Row) else row[0]
+            rid = str(raw_region_id).strip()
+            if rid:
+                self.region_keys[rid] = int(
+                    row["region_key"] if isinstance(row, sqlite3.Row) else row[1]
+                )
+        for row in conn.execute(
+            "SELECT settlement_id, settlement_key FROM simulation_settlement_lookup"
+        ):
+            raw_settlement_id = (
+                row["settlement_id"] if isinstance(row, sqlite3.Row) else row[0]
+            )
+            sid = str(raw_settlement_id).strip()
+            if sid:
+                self.settlement_keys[sid] = int(
+                    row["settlement_key"] if isinstance(row, sqlite3.Row) else row[1]
+                )
+
+    def region_key(self, region_id: object) -> int | None:
+        rid = str(region_id or "").strip()
+        if not rid:
+            return None
+        cached = self.region_keys.get(rid)
+        if cached is not None:
+            return cached
+        key = _lookup_or_insert_region_key(self.conn, rid)
+        if key is not None:
+            self.region_keys[rid] = key
+        return key
+
+    def settlement_key(
+        self, settlement_id: object, region_id: object | None = None
+    ) -> int | None:
+        sid = str(settlement_id or "").strip()
+        if not sid:
+            return None
+        cached = self.settlement_keys.get(sid)
+        if cached is not None:
+            return cached
+        rid = str(region_id or "").strip()
+        if not rid and ":" in sid:
+            rid = sid.split(":", 1)[0].strip()
+        rkey = self.region_key(rid)
+        if rkey is None:
+            return None
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO simulation_settlement_lookup (settlement_id, region_key)
+            VALUES (?, ?)
+            """,
+            (sid, rkey),
+        )
+        row = self.conn.execute(
+            """
+            SELECT settlement_key FROM simulation_settlement_lookup
+            WHERE settlement_id = ?
+            """,
+            (sid,),
+        ).fetchone()
+        if row is None:
+            return None
+        key = int(row["settlement_key"] if isinstance(row, sqlite3.Row) else row[0])
+        self.settlement_keys[sid] = key
+        return key
+
+
 def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -787,9 +863,19 @@ def _first_payload_text(payload: dict, keys: tuple[str, ...]) -> str | None:
 
 
 def _event_common_columns(payload: dict) -> tuple[int | None, int | None, str | None, str | None]:
+    return _event_common_columns_from_links(
+        payload,
+        _event_person_links_from_payload(payload),
+    )
+
+
+def _event_common_columns_from_links(
+    payload: dict,
+    links: list[tuple[int, str]],
+) -> tuple[int | None, int | None, str | None, str | None]:
     person_ids: list[int] = []
     seen: set[int] = set()
-    for pid, _role in _event_person_links_from_payload(payload):
+    for pid, _role in links:
         if pid in seen:
             continue
         seen.add(pid)
@@ -861,6 +947,7 @@ def _insert_simulation_event_move_rows(
     event_id: int,
     event_type: str,
     payload: dict,
+    place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     if str(event_type or "").strip() != "settlement_moved":
         return
@@ -869,18 +956,29 @@ def _insert_simulation_event_move_rows(
         return
     from_region_id = _event_optional_text(payload, "from_region_id")
     to_region_id = _event_optional_text(payload, "to_region_id")
-    from_settlement_key = _lookup_or_insert_settlement_key(
-        conn,
-        _event_optional_text(payload, "from_settlement_id"),
-        from_region_id,
-    )
-    to_settlement_key = _lookup_or_insert_settlement_key(
-        conn,
-        _event_optional_text(payload, "to_settlement_id"),
-        to_region_id,
-    )
-    from_region_key = _lookup_or_insert_region_key(conn, from_region_id)
-    to_region_key = _lookup_or_insert_region_key(conn, to_region_id)
+    from_settlement_id = _event_optional_text(payload, "from_settlement_id")
+    to_settlement_id = _event_optional_text(payload, "to_settlement_id")
+    if place_cache is not None:
+        from_settlement_key = place_cache.settlement_key(
+            from_settlement_id,
+            from_region_id,
+        )
+        to_settlement_key = place_cache.settlement_key(to_settlement_id, to_region_id)
+        from_region_key = place_cache.region_key(from_region_id)
+        to_region_key = place_cache.region_key(to_region_id)
+    else:
+        from_settlement_key = _lookup_or_insert_settlement_key(
+            conn,
+            from_settlement_id,
+            from_region_id,
+        )
+        to_settlement_key = _lookup_or_insert_settlement_key(
+            conn,
+            to_settlement_id,
+            to_region_id,
+        )
+        from_region_key = _lookup_or_insert_region_key(conn, from_region_id)
+        to_region_key = _lookup_or_insert_region_key(conn, to_region_id)
     move_reason = _event_optional_text(payload, "move_reason")
     requested_year = _coerce_event_int(payload.get("requested_year"))
     planned_apply_year = _coerce_event_int(payload.get("planned_apply_year"))
@@ -1036,6 +1134,7 @@ def _upsert_simulation_domain_state_from_event(
     settlement_key: int | None = None,
     region_key: int | None = None,
     created_at: str | None = None,
+    place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     if str(event_type or "").strip() != "knowledge_culture":
         return
@@ -1050,10 +1149,17 @@ def _upsert_simulation_domain_state_from_event(
         primary_settlement_key = settlement_key
         if primary_region_key is None:
             _primary, _secondary, settlement_id, region_id = _event_common_columns(payload)
-            primary_settlement_key = _lookup_or_insert_settlement_key(
-                conn, settlement_id, region_id
-            )
-            primary_region_key = _lookup_or_insert_region_key(conn, region_id)
+            if place_cache is not None:
+                primary_settlement_key = place_cache.settlement_key(
+                    settlement_id,
+                    region_id,
+                )
+                primary_region_key = place_cache.region_key(region_id)
+            else:
+                primary_settlement_key = _lookup_or_insert_settlement_key(
+                    conn, settlement_id, region_id
+                )
+                primary_region_key = _lookup_or_insert_region_key(conn, region_id)
         if primary_region_key is not None:
             rows.append(
                 (
@@ -1064,11 +1170,19 @@ def _upsert_simulation_domain_state_from_event(
                 )
             )
     for region_id, settlement_id, domain, delta in diffusion_states:
-        diffuse_region_key = _lookup_or_insert_region_key(conn, region_id)
+        diffuse_region_key = (
+            place_cache.region_key(region_id)
+            if place_cache is not None
+            else _lookup_or_insert_region_key(conn, region_id)
+        )
         if diffuse_region_key is None:
             continue
         diffuse_settlement_key = (
-            _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+            (
+                place_cache.settlement_key(settlement_id, region_id)
+                if place_cache is not None
+                else _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+            )
             if settlement_id
             else None
         )
@@ -1301,6 +1415,7 @@ def _insert_simulation_obligation_rows(
     settlement_key: int | None = None,
     region_key: int | None = None,
     created_at: str | None = None,
+    place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     obligations = _event_obligation_rows_from_payload(
         event_type,
@@ -1348,15 +1463,24 @@ def _insert_simulation_obligation_rows(
         ).strip()
         obligation_region_key = region_key
         if obligation_region_id:
-            obligation_region_key = _lookup_or_insert_region_key(
-                conn, obligation_region_id
+            obligation_region_key = (
+                place_cache.region_key(obligation_region_id)
+                if place_cache is not None
+                else _lookup_or_insert_region_key(conn, obligation_region_id)
             )
         obligation_settlement_key = settlement_key
         if obligation_settlement_id:
-            obligation_settlement_key = _lookup_or_insert_settlement_key(
-                conn,
-                obligation_settlement_id,
-                obligation_region_id,
+            obligation_settlement_key = (
+                place_cache.settlement_key(
+                    obligation_settlement_id,
+                    obligation_region_id,
+                )
+                if place_cache is not None
+                else _lookup_or_insert_settlement_key(
+                    conn,
+                    obligation_settlement_id,
+                    obligation_region_id,
+                )
             )
         details = {
             str(k): v
@@ -1607,6 +1731,7 @@ def _insert_simulation_reputation_mark_rows(
     settlement_key: int | None = None,
     region_key: int | None = None,
     created_at: str | None = None,
+    place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     marks = _event_reputation_mark_rows_from_payload(
         event_type,
@@ -1651,13 +1776,21 @@ def _insert_simulation_reputation_mark_rows(
         ).strip()
         mark_region_key = region_key
         if mark_region_id:
-            mark_region_key = _lookup_or_insert_region_key(conn, mark_region_id)
+            mark_region_key = (
+                place_cache.region_key(mark_region_id)
+                if place_cache is not None
+                else _lookup_or_insert_region_key(conn, mark_region_id)
+            )
         mark_settlement_key = settlement_key
         if mark_settlement_id:
-            mark_settlement_key = _lookup_or_insert_settlement_key(
-                conn,
-                mark_settlement_id,
-                mark_region_id,
+            mark_settlement_key = (
+                place_cache.settlement_key(mark_settlement_id, mark_region_id)
+                if place_cache is not None
+                else _lookup_or_insert_settlement_key(
+                    conn,
+                    mark_settlement_id,
+                    mark_region_id,
+                )
             )
         details = {
             str(k): v
@@ -1902,6 +2035,7 @@ def _insert_simulation_legal_fallout_rows(
     settlement_key: int | None = None,
     region_key: int | None = None,
     created_at: str | None = None,
+    place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     fallout_rows = _event_legal_fallout_rows_from_payload(
         event_type,
@@ -1952,15 +2086,21 @@ def _insert_simulation_legal_fallout_rows(
         ).strip()
         fallout_region_key = region_key
         if fallout_region_id:
-            fallout_region_key = _lookup_or_insert_region_key(
-                conn, fallout_region_id
+            fallout_region_key = (
+                place_cache.region_key(fallout_region_id)
+                if place_cache is not None
+                else _lookup_or_insert_region_key(conn, fallout_region_id)
             )
         fallout_settlement_key = settlement_key
         if fallout_settlement_id:
-            fallout_settlement_key = _lookup_or_insert_settlement_key(
-                conn,
-                fallout_settlement_id,
-                fallout_region_id,
+            fallout_settlement_key = (
+                place_cache.settlement_key(fallout_settlement_id, fallout_region_id)
+                if place_cache is not None
+                else _lookup_or_insert_settlement_key(
+                    conn,
+                    fallout_settlement_id,
+                    fallout_region_id,
+                )
             )
         details = {
             str(k): v
@@ -2169,6 +2309,7 @@ def _insert_simulation_faction_memory_rows(
     settlement_key: int | None = None,
     region_key: int | None = None,
     created_at: str | None = None,
+    place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     rows = _event_faction_memory_rows_from_payload(
         event_type, payload, sim_year=sim_year
@@ -2215,11 +2356,17 @@ def _insert_simulation_faction_memory_rows(
         ).strip()
         item_region_key = region_key
         if region_id:
-            item_region_key = _lookup_or_insert_region_key(conn, region_id)
+            item_region_key = (
+                place_cache.region_key(region_id)
+                if place_cache is not None
+                else _lookup_or_insert_region_key(conn, region_id)
+            )
         item_settlement_key = settlement_key
         if settlement_id:
-            item_settlement_key = _lookup_or_insert_settlement_key(
-                conn, settlement_id, region_id
+            item_settlement_key = (
+                place_cache.settlement_key(settlement_id, region_id)
+                if place_cache is not None
+                else _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
             )
         details = {
             str(k): v
@@ -2374,6 +2521,7 @@ def _upsert_simulation_institution_rows(
     settlement_key: int | None = None,
     region_key: int | None = None,
     created_at: str | None = None,
+    place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     if str(event_type or "").strip() != "knowledge_culture":
         return
@@ -2425,11 +2573,17 @@ def _upsert_simulation_institution_rows(
         ).strip()
         item_region_key = region_key
         if region_id:
-            item_region_key = _lookup_or_insert_region_key(conn, region_id)
+            item_region_key = (
+                place_cache.region_key(region_id)
+                if place_cache is not None
+                else _lookup_or_insert_region_key(conn, region_id)
+            )
         item_settlement_key = settlement_key
         if settlement_id:
-            item_settlement_key = _lookup_or_insert_settlement_key(
-                conn, settlement_id, region_id
+            item_settlement_key = (
+                place_cache.settlement_key(settlement_id, region_id)
+                if place_cache is not None
+                else _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
             )
         details = {
             str(k): v
@@ -2768,6 +2922,7 @@ def _upsert_simulation_innovation_rows_from_event(
     settlement_key: int | None = None,
     region_key: int | None = None,
     created_at: str | None = None,
+    place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     if str(event_type or "").strip() != "knowledge_culture":
         return
@@ -2778,9 +2933,17 @@ def _upsert_simulation_innovation_rows_from_event(
     item_settlement_key = settlement_key
     item_region_key = region_key
     if item_settlement_key is None and settlement_id:
-        item_settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+        item_settlement_key = (
+            place_cache.settlement_key(settlement_id, region_id)
+            if place_cache is not None
+            else _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
+        )
     if item_region_key is None and region_id:
-        item_region_key = _lookup_or_insert_region_key(conn, region_id)
+        item_region_key = (
+            place_cache.region_key(region_id)
+            if place_cache is not None
+            else _lookup_or_insert_region_key(conn, region_id)
+        )
     ts = created_at or _utc_now_iso()
     polity_id = data.get("polity_id")
     details = {
@@ -3618,6 +3781,32 @@ def _event_record_distortion_json(distortion: dict | None) -> str | None:
     return json.dumps(distortion, sort_keys=True, separators=(",", ":"))
 
 
+def _public_event_record_stage_defaults(
+    public_stage: str,
+) -> tuple[str, str, str]:
+    stage = str(public_stage or "").strip().lower()
+    stage_map = {
+        "unknown": ("public_unknown", "public_unknown_notice"),
+        "public_unknown": ("public_unknown", "public_unknown_notice"),
+        "rumor": ("rumored", "public_rumor"),
+        "rumored": ("rumored", "public_rumor"),
+        "misattributed": ("misattributed", "public_misattribution"),
+        "false_attribution": ("misattributed", "public_misattribution"),
+        "known": ("public_known", "public_chronicle"),
+        "public_known": ("public_known", "public_chronicle"),
+    }
+    if stage not in stage_map:
+        raise ValueError(f"unknown public event-record stage: {public_stage!r}")
+    visibility, default_record_type = stage_map[stage]
+    key_stage = {
+        "public_unknown": "unknown",
+        "rumored": "rumor",
+        "misattributed": "misattributed",
+        "public_known": "known",
+    }[visibility]
+    return visibility, default_record_type, key_stage
+
+
 def _validate_event_record_visibility_state(visibility_state: str) -> str:
     state = str(visibility_state or "").strip().lower()
     if state not in _EVENT_RECORD_VISIBILITY_STATES:
@@ -3947,26 +4136,9 @@ def upsert_public_event_record(
     **kwargs: object,
 ) -> int:
     """Create a public unknown, rumor, or known record for one factual event."""
-    stage = str(public_stage or "").strip().lower()
-    stage_map = {
-        "unknown": ("public_unknown", "public_unknown_notice"),
-        "public_unknown": ("public_unknown", "public_unknown_notice"),
-        "rumor": ("rumored", "public_rumor"),
-        "rumored": ("rumored", "public_rumor"),
-        "misattributed": ("misattributed", "public_misattribution"),
-        "false_attribution": ("misattributed", "public_misattribution"),
-        "known": ("public_known", "public_chronicle"),
-        "public_known": ("public_known", "public_chronicle"),
-    }
-    if stage not in stage_map:
-        raise ValueError(f"unknown public event-record stage: {public_stage!r}")
-    visibility, default_record_type = stage_map[stage]
-    key_stage = {
-        "public_unknown": "unknown",
-        "rumored": "rumor",
-        "misattributed": "misattributed",
-        "public_known": "known",
-    }[visibility]
+    visibility, default_record_type, key_stage = _public_event_record_stage_defaults(
+        public_stage
+    )
     return upsert_event_record(
         conn,
         int(event_id),
@@ -6133,27 +6305,65 @@ def append_simulation_event_rows(
     verbose_payloads: bool = False,
 ) -> list[int]:
     """Insert append-only simulation event rows and return inserted event IDs."""
+    if not rows:
+        return []
     ts = created_at or _utc_now_iso()
     cur = conn.cursor()
-    event_ids: list[int] = []
+    place_cache = _EventPlaceKeyCache(conn)
+    prepared_rows: list[
+        tuple[
+            int | None,
+            str,
+            dict,
+            list[tuple[int, str]],
+            int | None,
+            int | None,
+            int | None,
+            int | None,
+            str,
+        ]
+    ] = []
+    event_insert_rows: list[
+        tuple[
+            int | None,
+            str,
+            int | None,
+            int | None,
+            int | None,
+            int | None,
+            str,
+            str,
+            str,
+        ]
+    ] = []
     for sim_year, event_type, payload in rows:
-        primary, secondary, settlement_id, region_id = _event_common_columns(payload)
-        settlement_key = _lookup_or_insert_settlement_key(conn, settlement_id, region_id)
-        region_key = _lookup_or_insert_region_key(conn, region_id)
+        links = _event_person_links_from_payload(payload)
+        primary, secondary, settlement_id, region_id = _event_common_columns_from_links(
+            payload,
+            links,
+        )
+        settlement_key = place_cache.settlement_key(settlement_id, region_id)
+        region_key = place_cache.region_key(region_id)
         event_origin = _event_origin_from_payload(payload)
         stored_payload = (
             dict(payload)
             if verbose_payloads
             else _compact_event_payload(event_type, payload)
         )
-        cur.execute(
-            """
-            INSERT INTO simulation_events (
-                sim_year, event_type, primary_person_id, secondary_person_id,
-                settlement_key, region_key, event_origin, payload_json, created_at
+        prepared_rows.append(
+            (
+                sim_year,
+                event_type,
+                payload,
+                links,
+                primary,
+                secondary,
+                settlement_key,
+                region_key,
+                event_origin,
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+        )
+        event_insert_rows.append(
             (
                 sim_year,
                 event_type,
@@ -6164,23 +6374,141 @@ def append_simulation_event_rows(
                 event_origin,
                 json.dumps(stored_payload, separators=(",", ":")),
                 ts,
-            ),
-        )
-        event_id = int(cur.lastrowid)
-        event_ids.append(event_id)
-        for person_id, role in _event_person_links_from_payload(payload):
-            cur.execute(
-                """
-                INSERT OR IGNORE INTO simulation_event_people (event_id, person_id, role)
-                VALUES (?, ?, ?)
-                """,
-                (event_id, person_id, role),
             )
+        )
+
+    cur.executemany(
+        """
+        INSERT INTO simulation_events (
+            sim_year, event_type, primary_person_id, secondary_person_id,
+            settlement_key, region_key, event_origin, payload_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        event_insert_rows,
+    )
+    last_id_row = conn.execute("SELECT last_insert_rowid()").fetchone()
+    last_event_id = int(
+        last_id_row[0] if not isinstance(last_id_row, sqlite3.Row) else last_id_row[0]
+    )
+    first_event_id = last_event_id - len(event_insert_rows) + 1
+    event_ids = list(range(first_event_id, last_event_id + 1))
+
+    event_people_rows: list[tuple[int, int, str]] = []
+    default_record_rows: list[
+        tuple[
+            int,
+            str,
+            str,
+            int | None,
+            float,
+            int | None,
+            int | None,
+            int | None,
+            int | None,
+            str,
+            str,
+            str,
+        ]
+    ] = []
+    public_stage_rows: list[tuple[int, str, str, dict]] = []
+    for (
+        event_id,
+        (
+            sim_year,
+            event_type,
+            payload,
+            links,
+            primary,
+            secondary,
+            settlement_key,
+            region_key,
+            event_origin,
+        ),
+    ) in zip(event_ids, prepared_rows):
+        for person_id, role in links:
+            event_people_rows.append((int(event_id), int(person_id), role))
+        record_type, visibility_state, confidence = _event_record_kind_for_type(
+            event_type,
+            event_origin,
+        )
+        public_actor, public_victim = _event_record_public_people(
+            event_type,
+            primary,
+            secondary,
+        )
+        default_record_rows.append(
+            (
+                int(event_id),
+                record_type,
+                visibility_state,
+                sim_year,
+                float(confidence),
+                settlement_key,
+                region_key,
+                public_actor,
+                public_victim,
+                f"{record_type}.{visibility_state}.default",
+                ts,
+                ts,
+            )
+        )
+        if (
+            event_origin not in {"inferred", "backfilled"}
+            and str(event_type or "").strip() in _DEFAULT_PUBLIC_STAGE_EVENT_TYPES
+        ):
+            public_stage_rows.append((int(event_id), event_type, event_origin, payload))
+
+    if event_people_rows:
+        cur.executemany(
+            """
+            INSERT OR IGNORE INTO simulation_event_people (event_id, person_id, role)
+            VALUES (?, ?, ?)
+            """,
+            event_people_rows,
+        )
+    if default_record_rows:
+        cur.executemany(
+            """
+            INSERT OR IGNORE INTO simulation_event_records (
+                event_id, record_key, record_type, visibility_state,
+                known_since_year, confidence, preserving_settlement_key,
+                preserving_region_key, public_actor_person_id,
+                public_victim_person_id, prose_variant_key, created_at, updated_at
+            )
+            VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            default_record_rows,
+        )
+    for event_id, event_type, event_origin, payload in public_stage_rows:
+        _insert_default_public_stage_record_rows(
+            conn,
+            event_id=event_id,
+            event_type=event_type,
+            event_origin=event_origin,
+            payload=payload,
+        )
+
+    for (
+        event_id,
+        (
+            sim_year,
+            event_type,
+            payload,
+            _links,
+            primary,
+            secondary,
+            settlement_key,
+            region_key,
+            event_origin,
+        ),
+    ) in zip(event_ids, prepared_rows):
         _insert_simulation_event_move_rows(
             conn,
             event_id=event_id,
             event_type=event_type,
             payload=payload,
+            place_cache=place_cache,
         )
         _upsert_simulation_domain_state_from_event(
             conn,
@@ -6191,6 +6519,7 @@ def append_simulation_event_rows(
             settlement_key=settlement_key,
             region_key=region_key,
             created_at=ts,
+            place_cache=place_cache,
         )
         _insert_simulation_obligation_rows(
             conn,
@@ -6201,6 +6530,7 @@ def append_simulation_event_rows(
             settlement_key=settlement_key,
             region_key=region_key,
             created_at=ts,
+            place_cache=place_cache,
         )
         _insert_simulation_reputation_mark_rows(
             conn,
@@ -6211,6 +6541,7 @@ def append_simulation_event_rows(
             settlement_key=settlement_key,
             region_key=region_key,
             created_at=ts,
+            place_cache=place_cache,
         )
         _insert_simulation_legal_fallout_rows(
             conn,
@@ -6221,6 +6552,7 @@ def append_simulation_event_rows(
             settlement_key=settlement_key,
             region_key=region_key,
             created_at=ts,
+            place_cache=place_cache,
         )
         _insert_simulation_faction_memory_rows(
             conn,
@@ -6231,6 +6563,7 @@ def append_simulation_event_rows(
             settlement_key=settlement_key,
             region_key=region_key,
             created_at=ts,
+            place_cache=place_cache,
         )
         _upsert_simulation_institution_rows(
             conn,
@@ -6241,6 +6574,7 @@ def append_simulation_event_rows(
             settlement_key=settlement_key,
             region_key=region_key,
             created_at=ts,
+            place_cache=place_cache,
         )
         _upsert_simulation_innovation_rows_from_event(
             conn,
@@ -6251,19 +6585,7 @@ def append_simulation_event_rows(
             settlement_key=settlement_key,
             region_key=region_key,
             created_at=ts,
-        )
-        _insert_default_event_record_row(
-            conn,
-            event_id=event_id,
-            event_type=event_type,
-            sim_year=sim_year,
-            primary_person_id=primary,
-            secondary_person_id=secondary,
-            settlement_key=settlement_key,
-            region_key=region_key,
-            event_origin=event_origin,
-            created_at=ts,
-            payload=payload,
+            place_cache=place_cache,
         )
     if event_ids:
         _set_domain_states_processed_event_id(conn, max(event_ids))

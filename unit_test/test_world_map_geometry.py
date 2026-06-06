@@ -330,6 +330,8 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertTrue(all(c.water_polygon for c in geometry.river_channels))
         self.assertTrue(all(c.bank_polygon for c in geometry.river_channels))
         self.assertTrue(all(c.corridor_polygon for c in geometry.river_channels))
+        self.assertTrue(all(len(c.mouth_water_polygon) >= 8 for c in geometry.river_channels))
+        self.assertTrue(all(len(c.mouth_bank_polygon) >= 8 for c in geometry.river_channels))
         self.assertTrue(geometry.water_cells)
         self.assertTrue(any(w.kind == "ocean" for w in geometry.water_cells))
         self.assertTrue(any(w.kind == "lake" for w in geometry.water_cells))
@@ -424,8 +426,14 @@ class TestWorldMapGeometry(unittest.TestCase):
     def test_map_seed_debug_fixtures_capture_stable_comparison_metrics(self) -> None:
         campaign_a = build_world_map_geometry(world="default", db_path=self.cfg, map_seed="campaign-a")
         campaign_b = build_world_map_geometry(world="default", db_path=self.cfg, map_seed="campaign-b")
+        terrain_river_c = build_world_map_geometry(
+            world="default",
+            db_path=self.cfg,
+            map_seed="terrain-river-c",
+        )
         debug_a = build_world_map_debug_data(campaign_a)
         debug_b = build_world_map_debug_data(campaign_b)
+        debug_c = build_world_map_debug_data(terrain_river_c)
 
         self.assertEqual(debug_a["graph_backend"]["decision"], "keep_lightweight_micro_cell_graph")
         self.assertEqual(debug_a["counts"]["regions"], debug_b["counts"]["regions"])
@@ -433,16 +441,40 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertGreaterEqual(debug_a["counts"]["water_cells"], 30)
         self.assertGreaterEqual(debug_a["counts"]["rivers"], 4)
         self.assertLessEqual(debug_a["counts"]["rivers"], 20)
+        self.assertNotEqual(debug_a["counts"]["rivers"], debug_b["counts"]["rivers"])
         self.assertIn("lake", debug_a["water_counts"])
         self.assertIn("ocean", debug_a["water_counts"])
         self.assertNotEqual(debug_a["terrain_counts"], debug_b["terrain_counts"])
         self.assertNotEqual(debug_a["river_lengths"], debug_b["river_lengths"])
-        for debug in (debug_a, debug_b):
+        for debug in (debug_a, debug_b, debug_c):
             self.assertGreaterEqual(debug["moisture"]["avg"], 0.68)
             self.assertLessEqual(debug["moisture"]["avg"], 0.82)
             self.assertIn("drylands", debug["terrain_counts"])
+            self.assertGreaterEqual(debug["terrain_counts"].get("drylands", 0), 40)
             self.assertIn("plains", debug["terrain_counts"])
             self.assertIn("forest", debug["terrain_counts"])
+            self.assertGreater(debug["counts"]["channel_cells"], 0)
+            self.assertGreaterEqual(
+                debug["counts"]["floodplain_cells"],
+                debug["counts"]["channel_cells"],
+            )
+            self.assertLess(
+                debug["counts"]["floodplain_cells"],
+                debug["counts"]["micro_cells"] * 0.45,
+            )
+            self.assertEqual(
+                debug["river_mouth_shapes"]["mouths"],
+                debug["counts"]["river_channels"],
+            )
+            self.assertGreaterEqual(debug["river_mouth_shapes"]["min_water_points"], 8)
+            self.assertGreaterEqual(debug["river_mouth_shapes"]["min_bank_points"], 8)
+            self.assertGreater(debug["river_mouth_shapes"]["avg_water_area"], 0.0)
+            self.assertGreater(debug["elevation"]["bands"]["gte_0_64"], 0)
+            self.assertGreater(debug["elevation"]["bands"]["gte_0_78"], 0)
+            self.assertGreaterEqual(
+                debug["elevation"]["bands"]["gte_0_58"],
+                debug["elevation"]["bands"]["gte_0_64"],
+            )
             self.assertEqual(debug["qa"]["missing_coastal_feature_edges"], 0)
             self.assertLessEqual(debug["qa"]["max_coastal_feature_distance"], 0.010)
             self.assertEqual(debug["qa"]["missing_river_mouth_edges"], 0)
@@ -545,8 +577,20 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertIn('class="river-cut-mask-shape"', svg)
         self.assertIn('class="terrain-blend"', svg)
         self.assertIn('class="terrain-mottle"', svg)
+        self.assertIn('data-texture-kind="canopy"', svg)
+        self.assertIn('data-texture-kind="ridge"', svg)
+        self.assertIn('data-texture-kind="scrub"', svg)
+        self.assertIn('data-texture-kind="alluvial"', svg)
+        self.assertIn('data-texture-kind="meadow"', svg)
+        self.assertIn("data-terrain-family=", svg)
+        self.assertGreater(svg.count('class="terrain-mottle"'), 300)
+        self.assertLess(svg.count('class="terrain-mottle"'), len(geometry.micro_cells) * 0.55)
         self.assertIn('class="terrain-texture"', svg)
         self.assertIn('class="terrain-shade', svg)
+        self.assertIn('class="terrain-contour ', svg)
+        self.assertIn('class="terrain-contour-layer"', svg)
+        self.assertIn("data-contour-level=", svg)
+        self.assertLess(svg.count('class="terrain-contour '), len(geometry.micro_cells) * 0.5)
         self.assertIn('class="region-boundary"', svg)
         self.assertIn('class="region-boundary-layer dissolved-region-boundaries"', svg)
         self.assertIn('data-boundary-source="dissolved-region-cell"', svg)
