@@ -8,7 +8,13 @@ from pathlib import Path
 
 from library.world_map_geometry import MicroRegionCell, RegionCell, RegionEdge, WorldMapGeometry
 from library.world_map_svg import load_world_map_overlays, render_world_map_svg
-from library.world_map_roads import RoadMapEdge, _clean_road_points, build_settlement_road_overlays
+from library.world_map_roads import (
+    RoadMapEdge,
+    SeaRouteMapEdge,
+    _clean_road_points,
+    build_settlement_road_overlays,
+    build_settlement_sea_route_overlays,
+)
 
 
 def _region_cell_for(
@@ -16,6 +22,8 @@ def _region_cell_for(
     polygon: list[tuple[float, float]],
     *,
     continent_id: str = "c1",
+    terrain_family: str = "plains",
+    is_coastal: bool = False,
 ) -> RegionCell:
     center_x = sum(x for x, _ in polygon) / len(polygon)
     center_y = sum(y for _, y in polygon) / len(polygon)
@@ -28,8 +36,8 @@ def _region_cell_for(
         elevation=0.2,
         moisture=0.5,
         ruggedness=0.2,
-        terrain_family="plains",
-        is_coastal=False,
+        terrain_family=terrain_family,
+        is_coastal=is_coastal,
         feature_ids=[],
     )
 
@@ -87,6 +95,67 @@ def _three_region_route_geometry() -> WorldMapGeometry:
     )
 
 
+def _two_port_sea_geometry() -> WorldMapGeometry:
+    return WorldMapGeometry(
+        world="test",
+        version="unit",
+        width=1.0,
+        height=1.0,
+        cells=[
+            _region_cell_for(
+                "r1",
+                [(0.04, 0.28), (0.30, 0.28), (0.30, 0.72), (0.04, 0.72)],
+                continent_id="c1",
+                terrain_family="coast",
+                is_coastal=True,
+            ),
+            _region_cell_for(
+                "r2",
+                [(0.70, 0.28), (0.96, 0.28), (0.96, 0.72), (0.70, 0.72)],
+                continent_id="c2",
+                terrain_family="coast",
+                is_coastal=True,
+            ),
+        ],
+        micro_cells=[
+            _micro_cell(
+                "r1:coast",
+                0.04,
+                0.28,
+                0.30,
+                0.72,
+                region_id="r1",
+                continent_id="c1",
+                terrain_family="coast",
+                is_coastal=True,
+            ),
+            _micro_cell(
+                "r2:coast",
+                0.70,
+                0.28,
+                0.96,
+                0.72,
+                region_id="r2",
+                continent_id="c2",
+                terrain_family="coast",
+                is_coastal=True,
+            ),
+        ],
+        features=[],
+        edges=[
+            RegionEdge(
+                from_region_id="r1",
+                to_region_id="r2",
+                route_type="sea",
+                friction=16.0,
+                points=[(0.30, 0.52), (0.43, 0.38), (0.58, 0.36), (0.70, 0.50)],
+                edge_class="sea_route",
+            )
+        ],
+        rivers=[],
+    )
+
+
 def _micro_cell(
     micro_id: str,
     x0: float,
@@ -101,18 +170,20 @@ def _micro_cell(
     moisture: float = 0.55,
     terrain_family: str | None = None,
     region_id: str = "r1",
+    continent_id: str = "c1",
+    is_coastal: bool = False,
 ) -> MicroRegionCell:
     return MicroRegionCell(
         micro_id=micro_id,
         region_id=region_id,
-        continent_id="c1",
+        continent_id=continent_id,
         center_x=(x0 + x1) / 2.0,
         center_y=(y0 + y1) / 2.0,
         polygon=[(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
         elevation=elevation,
         moisture=moisture,
         terrain_family=terrain_family or ("riverland" if is_channel else "plains"),
-        is_coastal=False,
+        is_coastal=is_coastal,
         river_distance=0.0 if is_channel else 0.2,
         river_flow=river_flow,
         river_side=river_side,
@@ -407,7 +478,7 @@ def _make_save(
     return path
 
 
-def _edge(edges: list[RoadMapEdge], a: str, b: str) -> RoadMapEdge | None:
+def _edge(edges: list[RoadMapEdge] | list[SeaRouteMapEdge], a: str, b: str) -> RoadMapEdge | SeaRouteMapEdge | None:
     wanted = {a, b}
     for road in edges:
         if {road.from_settlement_id, road.to_settlement_id} == wanted:
@@ -560,6 +631,54 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertGreaterEqual(len(road.points), 5)
         self.assertLess(min(ys), 0.36)
         self.assertGreater(max(ys), 0.64)
+
+    def test_cross_continent_sea_route_uses_water_curve_not_land_road(self) -> None:
+        geometry = _two_port_sea_geometry()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.20, 0.50), "b": (0.80, 0.50)},
+                [(10, "a", "b", 4)],
+                region_by_settlement={"a": "r1", "b": "r2"},
+                world_points={"a": (0.20, 0.50), "b": (0.80, 0.50)},
+            )
+
+            roads = build_settlement_road_overlays(geometry=geometry, save_db_path=save)
+            sea_routes = build_settlement_sea_route_overlays(geometry=geometry, save_db_path=save)
+            overlays = load_world_map_overlays(geometry=geometry, save_db_path=save)
+            svg = render_world_map_svg(geometry, overlays=overlays)
+
+        self.assertIsNone(_edge(roads, "a", "b"))
+        sea_route = _edge(sea_routes, "a", "b")
+        self.assertIsNotNone(sea_route)
+        self.assertEqual(sea_route.actual_usage, 4)
+        self.assertEqual(sea_route.route_regions, ("r1", "r2"))
+        self.assertGreaterEqual(len(sea_route.points), 4)
+        self.assertTrue(any(0.32 < x < 0.68 for x, _y in sea_route.points))
+        direct = math.dist((0.20, 0.50), (0.80, 0.50))
+        length = sum(math.dist(a, b) for a, b in zip(sea_route.points, sea_route.points[1:]))
+        self.assertLess(length, direct * 1.55)
+        self.assertIn('class="sea-route sea-route-line"', svg)
+        self.assertIn('data-sea-route-actual="4.0000"', svg)
+        self.assertIn(" Q ", svg)
+
+    def test_configured_sea_neighbor_gets_implied_route_without_moves(self) -> None:
+        geometry = _two_port_sea_geometry()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.20, 0.50), "b": (0.80, 0.50)},
+                [],
+                region_by_settlement={"a": "r1", "b": "r2"},
+                world_points={"a": (0.20, 0.50), "b": (0.80, 0.50)},
+            )
+
+            sea_routes = build_settlement_sea_route_overlays(geometry=geometry, save_db_path=save)
+
+        sea_route = _edge(sea_routes, "a", "b")
+        self.assertIsNotNone(sea_route)
+        self.assertEqual(sea_route.actual_usage, 0)
+        self.assertGreater(sea_route.implied_usage, 0)
 
     def test_adjacent_region_road_prefers_micro_edge_path_over_route_chord(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

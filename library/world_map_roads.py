@@ -53,8 +53,28 @@ class RoadMapEdge:
 
 
 @dataclass(frozen=True)
+class SeaRouteMapEdge:
+    from_settlement_id: str
+    to_settlement_id: str
+    points: list[Point]
+    route_regions: tuple[str, ...]
+    usage: float
+    actual_usage: float
+    implied_usage: float
+    opacity: float
+
+
+@dataclass(frozen=True)
 class _RoadPath:
     points: list[Point]
+    cost: float
+    length: float
+
+
+@dataclass(frozen=True)
+class _SeaPath:
+    points: list[Point]
+    route_regions: tuple[str, ...]
     cost: float
     length: float
 
@@ -674,6 +694,170 @@ def _configured_region_route_points(
     return _dedupe_path_points(points) if len(points) >= 2 else None
 
 
+def _is_sea_edge(edge: object) -> bool:
+    route_type = str(getattr(edge, "route_type", "") or "").strip().lower()
+    edge_class = str(getattr(edge, "edge_class", "") or "").strip().lower()
+    return route_type == "sea" or edge_class == "sea_route"
+
+
+def _configured_sea_region_route(
+    geometry: WorldMapGeometry,
+    from_region_id: str,
+    to_region_id: str,
+) -> tuple[tuple[str, ...], list[Point], float] | None:
+    """Return a smooth configured sea-route polyline between two regions."""
+    start = str(from_region_id or "").strip()
+    end = str(to_region_id or "").strip()
+    if not start or not end or start == end:
+        return None
+
+    cells = geometry.cell_by_region_id()
+    edge_by_pair: dict[tuple[str, str], object] = {}
+    adjacency: dict[str, list[tuple[str, float]]] = {}
+    for edge in geometry.edges:
+        if not _is_sea_edge(edge):
+            continue
+        a = str(edge.from_region_id or "").strip()
+        b = str(edge.to_region_id or "").strip()
+        if not a or not b or a == b:
+            continue
+        points = list(edge.points or [])
+        if len(points) < 2:
+            ca = cells.get(a)
+            cb = cells.get(b)
+            if ca is None or cb is None:
+                continue
+            points = [(ca.center_x, ca.center_y), (cb.center_x, cb.center_y)]
+        distance = max(0.0001, _path_length(points))
+        friction = max(0.1, _coerce_float(edge.friction, 1.0))
+        weight = distance * friction
+        key = _pair_key(a, b)
+        edge_by_pair[key] = edge
+        adjacency.setdefault(a, []).append((b, weight))
+        adjacency.setdefault(b, []).append((a, weight))
+
+    if start not in adjacency or end not in adjacency:
+        return None
+
+    queue: list[tuple[float, str]] = [(0.0, start)]
+    distances = {start: 0.0}
+    previous: dict[str, str] = {}
+    while queue:
+        cost, region_id = heapq.heappop(queue)
+        if cost > distances.get(region_id, float("inf")):
+            continue
+        if region_id == end:
+            break
+        for other, step_cost in adjacency.get(region_id, []):
+            nd = cost + step_cost
+            if nd < distances.get(other, float("inf")):
+                distances[other] = nd
+                previous[other] = region_id
+                heapq.heappush(queue, (nd, other))
+    if end not in distances:
+        return None
+
+    region_path = [end]
+    while region_path[-1] != start:
+        prior = previous.get(region_path[-1])
+        if prior is None:
+            return None
+        region_path.append(prior)
+    region_path.reverse()
+
+    points: list[Point] = []
+    for a, b in zip(region_path, region_path[1:]):
+        edge = edge_by_pair.get(_pair_key(a, b))
+        if edge is None:
+            return None
+        segment = list(getattr(edge, "points", None) or [])
+        if len(segment) < 2:
+            ca = cells.get(a)
+            cb = cells.get(b)
+            if ca is None or cb is None:
+                return None
+            segment = [(ca.center_x, ca.center_y), (cb.center_x, cb.center_y)]
+        if str(getattr(edge, "from_region_id", "") or "").strip() != a:
+            segment.reverse()
+        if not points:
+            points.extend(segment)
+        else:
+            if math.hypot(points[-1][0] - segment[0][0], points[-1][1] - segment[0][1]) > 1e-7:
+                points.append(segment[0])
+            points.extend(segment[1:])
+    points = _dedupe_path_points(points)
+    if len(points) < 2:
+        return None
+    return tuple(region_path), points, max(0.0001, distances[end])
+
+
+def _sea_connector_points(
+    geometry: WorldMapGeometry,
+    start_point: Point,
+    end_point: Point,
+    *,
+    region_id: str,
+    ford_points: list[Point],
+) -> list[Point]:
+    if math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1]) <= 1e-7:
+        return [start_point]
+    connector = _route_between_points(
+        geometry,
+        start_point,
+        end_point,
+        start_region_id=region_id,
+        end_region_id=region_id,
+        ford_points=ford_points,
+    )
+    if connector is not None and len(connector.points) >= 2:
+        return connector.points
+    return [start_point, end_point]
+
+
+def _sea_route_between_nodes(
+    geometry: WorldMapGeometry,
+    a: RoadMapNode,
+    b: RoadMapNode,
+    ford_points: list[Point],
+) -> _SeaPath | None:
+    sea_route = _configured_sea_region_route(geometry, a.region_id, b.region_id)
+    if sea_route is None:
+        return None
+    route_regions, sea_points, sea_cost = sea_route
+    start_point = (a.x, a.y)
+    end_point = (b.x, b.y)
+    first_connector = _sea_connector_points(
+        geometry,
+        start_point,
+        sea_points[0],
+        region_id=a.region_id,
+        ford_points=ford_points,
+    )
+    last_connector = _sea_connector_points(
+        geometry,
+        sea_points[-1],
+        end_point,
+        region_id=b.region_id,
+        ford_points=ford_points,
+    )
+    points = _clean_road_points(
+        [
+            *first_connector,
+            *sea_points[1:-1],
+            *last_connector,
+        ]
+    )
+    if len(points) < 2:
+        return None
+    length = _path_length(points)
+    return _SeaPath(
+        points=points,
+        route_regions=route_regions,
+        cost=max(0.0001, sea_cost + length * 0.25),
+        length=length,
+    )
+
+
 def _nearby_implied_amount(a: RoadMapNode, b: RoadMapNode) -> float:
     population_signal = math.sqrt(max(1, a.population) * max(1, b.population))
     market_signal = 1.0 + min(1.5, max(0.0, a.market_pull + b.market_pull) * 8.0)
@@ -768,6 +952,69 @@ def _add_nearby_implied(
             candidates.append((distance, other))
         for _distance, other in sorted(candidates, key=lambda item: (item[0], -item[1].population, item[1].settlement_id))[:2]:
             _add_implied(demands, node.settlement_id, other.settlement_id, _nearby_implied_amount(node, other))
+
+
+def _sea_route_region_pairs(geometry: WorldMapGeometry) -> list[tuple[str, str, float]]:
+    out: list[tuple[str, str, float]] = []
+    seen: set[tuple[str, str]] = set()
+    for edge in geometry.edges:
+        if not _is_sea_edge(edge):
+            continue
+        a = str(edge.from_region_id or "").strip()
+        b = str(edge.to_region_id or "").strip()
+        if not a or not b or a == b:
+            continue
+        key = _pair_key(a, b)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((key[0], key[1], max(0.1, _coerce_float(edge.friction, 1.0))))
+    return sorted(out)
+
+
+def _node_maritime_rank(node: RoadMapNode, geometry: WorldMapGeometry) -> tuple[float, str]:
+    cell = geometry.cell_by_region_id().get(node.region_id)
+    coastal = 1.0 if cell is not None and (cell.is_coastal or cell.terrain_family == "coast") else 0.0
+    founding = str(node.founding_reason or "").strip().lower()
+    founding_bonus = 0.0
+    if any(token in founding for token in ("outpost", "port", "trade", "maritime", "commercial")):
+        founding_bonus = 0.45
+    network_bonus = 0.35 if node.trade_network_id else 0.0
+    market = max(0.0, node.market_pull) * 4.0 + max(0.0, node.prosperity_pool) * 0.08
+    population = math.sqrt(max(1, node.population)) * 0.08
+    return (coastal + founding_bonus + network_bonus + market + population, node.settlement_id)
+
+
+def _sea_implied_amount(a: RoadMapNode, b: RoadMapNode, friction: float) -> float:
+    population_signal = math.sqrt(max(1, a.population) * max(1, b.population))
+    market_signal = 1.0 + min(1.2, max(0.0, a.market_pull + b.market_pull) * 7.0)
+    route_signal = 0.45 + min(0.75, 12.0 / max(1.0, float(friction)))
+    distance = max(0.04, math.hypot(a.x - b.x, a.y - b.y))
+    return min(2.0, (0.42 + population_signal * 0.012) * market_signal * route_signal / (1.0 + distance * 1.8))
+
+
+def _add_sea_route_implied(
+    demands: dict[tuple[str, str], _RoadDemand],
+    nodes: dict[str, RoadMapNode],
+    geometry: WorldMapGeometry,
+) -> None:
+    by_region: dict[str, list[RoadMapNode]] = {}
+    for node in nodes.values():
+        by_region.setdefault(node.region_id, []).append(node)
+    for from_region_id, to_region_id, friction in _sea_route_region_pairs(geometry):
+        left = sorted(
+            by_region.get(from_region_id, []),
+            key=lambda n: (-_node_maritime_rank(n, geometry)[0], n.settlement_id),
+        )
+        right = sorted(
+            by_region.get(to_region_id, []),
+            key=lambda n: (-_node_maritime_rank(n, geometry)[0], n.settlement_id),
+        )
+        for a in left[:2]:
+            for b in right[:2]:
+                if a.settlement_id == b.settlement_id:
+                    continue
+                _add_implied(demands, a.settlement_id, b.settlement_id, _sea_implied_amount(a, b, friction))
 
 
 def _load_demands(
@@ -1715,3 +1962,71 @@ def build_settlement_road_overlays(
         if direct is not None:
             _add_usage_to_segments(segments, (direct,), demand)
     return _finalize_edges(segments)
+
+
+def build_settlement_sea_route_overlays(
+    *,
+    geometry: WorldMapGeometry,
+    save_db_path: Path | str | None,
+    max_nodes: int = 500,
+    max_routes: int = 260,
+) -> list[SeaRouteMapEdge]:
+    """Build usage-weighted settlement sea-lane overlays from configured sea routes."""
+    if save_db_path is None:
+        return []
+    if not any(_is_sea_edge(edge) for edge in geometry.edges):
+        return []
+    path = Path(save_db_path)
+    if not path.exists():
+        return []
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        nodes, _rows, ford_points = _load_nodes(conn, geometry, max_nodes=max_nodes)
+        if len(nodes) < 2:
+            return []
+        demands, _latest_year = _load_demands(conn, nodes, geometry)
+        _add_sea_route_implied(demands, nodes, geometry)
+    if not demands:
+        return []
+
+    routes: dict[tuple[str, str], _SeaPath] = {}
+    for key in demands:
+        if key[0] not in nodes or key[1] not in nodes:
+            continue
+        if nodes[key[0]].region_id == nodes[key[1]].region_id:
+            continue
+        route = _sea_route_between_nodes(geometry, nodes[key[0]], nodes[key[1]], ford_points)
+        if route is not None:
+            routes[key] = route
+    if not routes:
+        return []
+
+    ordered = sorted(
+        ((key, demands[key], route) for key, route in routes.items() if demands[key].usage > 0.0),
+        key=lambda item: (
+            0 if item[1].actual_usage > 0.0 else 1,
+            -item[1].usage,
+            item[0],
+        ),
+    )[: max(1, int(max_routes))]
+    max_usage = max((demand.usage for _key, demand, _route in ordered), default=0.0)
+    out: list[SeaRouteMapEdge] = []
+    for key, demand, route in ordered:
+        normalized = math.sqrt(max(0.0, demand.usage) / max_usage) if max_usage > 0.0 else 0.0
+        if demand.actual_usage > 0.0:
+            opacity = min(0.78, 0.28 + 0.50 * normalized)
+        else:
+            opacity = min(0.42, 0.14 + 0.28 * normalized)
+        out.append(
+            SeaRouteMapEdge(
+                from_settlement_id=key[0],
+                to_settlement_id=key[1],
+                points=route.points,
+                route_regions=route.route_regions,
+                usage=round(demand.usage, 4),
+                actual_usage=round(demand.actual_usage, 4),
+                implied_usage=round(demand.implied_usage, 4),
+                opacity=round(opacity, 3),
+            )
+        )
+    return sorted(out, key=lambda e: (-e.usage, e.from_settlement_id, e.to_settlement_id))

@@ -740,6 +740,11 @@ completion.
   - `python -m py_compile library\world_map_geometry.py library\world_map_svg.py`
   - `python -m unittest unit_test.test_world_map_geometry.TestWorldMapGeometry.test_local_anchor_settlement_and_feature_share_projection unit_test.test_world_map_geometry.TestWorldMapGeometry.test_map_seed_debug_fixtures_capture_stable_comparison_metrics`
   - `python -m unittest unit_test.test_world_map_geometry`
+- Extended the settlement route overlay model with sea lanes:
+  - `library.world_map_roads` now builds `SeaRouteMapEdge` overlays from the same saved settlements, latest-year moves, trade/outpost demand, and conservative implied demand used by roads, but only across configured sea-route region paths.
+  - sea-lane water spans follow direct smoothed curves from configured sea-route edges instead of routing through land micro-polygons; short endpoint connectors still attach settlements to their coast-side route endpoints.
+  - `library.world_map_svg` renders a separate `sea-route-layer` with `data-sea-route-*` attributes, while `utils.gradio_data_browser` labels the shared transport overlay toggle as `Routes`.
+  - verified with `python -m py_compile library\world_map_roads.py library\world_map_svg.py utils\gradio_data_browser.py unit_test\test_world_map_roads.py`, `python -m unittest unit_test.test_world_map_roads`, and `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_roads_and_checkbox_hides_them`.
 
 ## Scale Population Simulation Toward Millions
 

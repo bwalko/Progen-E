@@ -830,7 +830,7 @@ def _render_world_map_html_cached(
     else:
         overlay_text = "active settlements and polities" if include_overlays else "base geography only"
     if include_overlays and include_roads:
-        overlay_text = overlay_text.replace("settlements", "settlements, roads")
+        overlay_text = overlay_text.replace("settlements", "settlements, roads and sea lanes")
     zoom_sync = world_map_zoom_sync_script("s")
     controls = (
         '<div class="map-controls">'
@@ -8045,7 +8045,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                 map_world = gr.Dropdown(worlds, value=initial_world, label="World")
                 map_include_overlays = gr.Checkbox(value=True, label="Settlements and Polities")
                 map_include_inactive_settlements = gr.Checkbox(value=False, label="Inactive Settlements")
-                map_include_roads = gr.Checkbox(value=True, label="Roads")
+                map_include_roads = gr.Checkbox(value=True, label="Routes")
                 map_noisy_edges = gr.Checkbox(value=True, label="Noisy Edges")
                 map_labels = gr.Checkbox(value=True, label="Labels")
                 map_refresh = gr.Button("Render Map", variant="primary")
