@@ -2149,7 +2149,7 @@ def render_world_map_svg(
                 continue
             normalized = math.sqrt(float(road.usage) / max_usage) if max_usage > 0.0 else 0.0
             stroke_width = 1.05 + normalized * 1.75
-            path_d = _smooth_line_path(scaled)
+            path_d = _line_path(scaled)
             attrs = (
                 f'data-road-from-settlement-id="{html.escape(road.from_settlement_id)}" '
                 f'data-road-to-settlement-id="{html.escape(road.to_settlement_id)}" '

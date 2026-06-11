@@ -17,6 +17,7 @@ from library.world_map_geometry import (
     WorldMapGeometry,
     _dedupe_path_points,
     _micro_adjacency,
+    _nearest_point_on_segment,
     _point_in_polygon,
     _point_segment_distance,
     project_local_point_to_region_footprint,
@@ -91,6 +92,10 @@ _TERRAIN_MULTIPLIERS = {
     "drylands": 1.24,
     "highlands": 1.75,
 }
+_MICRO_GRAPH_CACHE: dict[
+    int,
+    tuple[int, dict[str, set[str]], dict[tuple[str, str], tuple[Point, Point]]],
+] = {}
 
 
 def _quote_identifier(name: str) -> str:
@@ -575,6 +580,100 @@ def _region_land_neighbors(geometry: WorldMapGeometry) -> dict[str, set[str]]:
     return out
 
 
+def _configured_region_route_points(
+    geometry: WorldMapGeometry,
+    from_region_id: str,
+    to_region_id: str,
+) -> list[Point] | None:
+    """Return the configured land-route polyline between two regions."""
+    start = str(from_region_id or "").strip()
+    end = str(to_region_id or "").strip()
+    if not start or not end or start == end:
+        return None
+
+    cells = geometry.cell_by_region_id()
+    if start in cells and end in cells and cells[start].continent_id != cells[end].continent_id:
+        return None
+
+    edge_by_pair: dict[tuple[str, str], object] = {}
+    adjacency: dict[str, list[tuple[str, float]]] = {}
+    for edge in geometry.edges:
+        route_type = str(edge.route_type or "").strip().lower()
+        if route_type == "sea" or str(edge.edge_class or "").strip().lower() == "sea_route":
+            continue
+        a = str(edge.from_region_id or "").strip()
+        b = str(edge.to_region_id or "").strip()
+        if not a or not b or a == b:
+            continue
+        if a in cells and b in cells and cells[a].continent_id != cells[b].continent_id:
+            continue
+        key = _pair_key(a, b)
+        points = list(edge.points or [])
+        if len(points) < 2:
+            ca = cells.get(a)
+            cb = cells.get(b)
+            if ca is None or cb is None:
+                continue
+            points = [(ca.center_x, ca.center_y), (cb.center_x, cb.center_y)]
+        distance = max(0.0001, _path_length(points))
+        friction = max(0.1, _coerce_float(edge.friction, 1.0))
+        weight = distance * friction
+        edge_by_pair[key] = edge
+        adjacency.setdefault(a, []).append((b, weight))
+        adjacency.setdefault(b, []).append((a, weight))
+
+    if start not in adjacency or end not in adjacency:
+        return None
+
+    queue: list[tuple[float, str]] = [(0.0, start)]
+    distances = {start: 0.0}
+    previous: dict[str, str] = {}
+    while queue:
+        cost, region_id = heapq.heappop(queue)
+        if cost > distances.get(region_id, float("inf")):
+            continue
+        if region_id == end:
+            break
+        for other, step_cost in adjacency.get(region_id, []):
+            nd = cost + step_cost
+            if nd < distances.get(other, float("inf")):
+                distances[other] = nd
+                previous[other] = region_id
+                heapq.heappush(queue, (nd, other))
+    if end not in distances:
+        return None
+
+    region_path = [end]
+    while region_path[-1] != start:
+        prior = previous.get(region_path[-1])
+        if prior is None:
+            return None
+        region_path.append(prior)
+    region_path.reverse()
+
+    points: list[Point] = []
+    for a, b in zip(region_path, region_path[1:]):
+        edge = edge_by_pair.get(_pair_key(a, b))
+        if edge is None:
+            return None
+        segment = list(getattr(edge, "points", None) or [])
+        if len(segment) < 2:
+            ca = cells.get(a)
+            cb = cells.get(b)
+            if ca is None or cb is None:
+                return None
+            segment = [(ca.center_x, ca.center_y), (cb.center_x, cb.center_y)]
+        if str(getattr(edge, "from_region_id", "") or "").strip() != a:
+            segment.reverse()
+        if not points:
+            points.extend(segment)
+        else:
+            if math.hypot(points[-1][0] - segment[0][0], points[-1][1] - segment[0][1]) > 1e-7:
+                points.append(segment[0])
+            points.extend(segment[1:])
+    return _dedupe_path_points(points) if len(points) >= 2 else None
+
+
 def _nearby_implied_amount(a: RoadMapNode, b: RoadMapNode) -> float:
     population_signal = math.sqrt(max(1, a.population) * max(1, b.population))
     market_signal = 1.0 + min(1.5, max(0.0, a.market_pull + b.market_pull) * 8.0)
@@ -688,9 +787,11 @@ def _cell_for_point(
     geometry: WorldMapGeometry,
     point: Point,
     *,
-    region_id: str,
+    region_id: str | None = None,
 ) -> MicroRegionCell | None:
-    candidates = [c for c in geometry.micro_cells if c.region_id == region_id] or list(geometry.micro_cells)
+    rid = str(region_id or "").strip()
+    candidates = [c for c in geometry.micro_cells if c.region_id == rid] if rid else []
+    candidates = candidates or list(geometry.micro_cells)
     for cell in candidates:
         if _point_in_polygon(point, cell.polygon):
             return cell
@@ -700,7 +801,7 @@ def _cell_for_point(
         candidates,
         key=lambda c: (
             (c.center_x - point[0]) ** 2 + (c.center_y - point[1]) ** 2,
-            0 if c.region_id == region_id else 1,
+            0 if rid and c.region_id == rid else 1,
             c.micro_id,
         ),
     )
@@ -776,39 +877,295 @@ def _road_step_weight(
     return max(0.0001, distance * terrain + _river_crossing_penalty(a, b, ford_points))
 
 
-def _route_between_nodes(
+def _micro_shared_edges(micro_cells: list[MicroRegionCell]) -> dict[tuple[str, str], tuple[Point, Point]]:
+    edge_owner: dict[tuple[Point, Point], tuple[str, Point, Point]] = {}
+    out: dict[tuple[str, str], tuple[Point, Point]] = {}
+    for cell in micro_cells:
+        pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
+        for i, a in enumerate(pts):
+            b = pts[(i + 1) % len(pts)]
+            edge_key = tuple(sorted((a, b)))  # type: ignore[assignment]
+            other = edge_owner.get(edge_key)
+            if other is None:
+                edge_owner[edge_key] = (cell.micro_id, a, b)
+                continue
+            other_id, other_a, other_b = other
+            if other_id == cell.micro_id:
+                continue
+            pair = tuple(sorted((cell.micro_id, other_id)))  # type: ignore[assignment]
+            out[pair] = (other_a, other_b)
+    return out
+
+
+def _road_micro_graph(
+    micro_cells: list[MicroRegionCell],
+) -> tuple[dict[str, set[str]], dict[tuple[str, str], tuple[Point, Point]]]:
+    key = id(micro_cells)
+    cached = _MICRO_GRAPH_CACHE.get(key)
+    if cached is not None and cached[0] == len(micro_cells):
+        return cached[1], cached[2]
+    adjacency, _shared_midpoints = _micro_adjacency(micro_cells)
+    shared_edges = _micro_shared_edges(micro_cells)
+    _MICRO_GRAPH_CACHE[key] = (len(micro_cells), adjacency, shared_edges)
+    return adjacency, shared_edges
+
+
+def _point_on_edge_midpoint(edge: tuple[Point, Point]) -> Point:
+    return ((edge[0][0] + edge[1][0]) / 2.0, (edge[0][1] + edge[1][1]) / 2.0)
+
+
+def _nearest_cell_edge(
+    cell: MicroRegionCell,
+    point: Point,
+) -> tuple[tuple[Point, Point], Point, float] | None:
+    pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
+    if len(pts) < 3:
+        return None
+    best: tuple[float, tuple[Point, Point], Point] | None = None
+    for idx, a in enumerate(pts):
+        b = pts[(idx + 1) % len(pts)]
+        nearest = _nearest_point_on_segment(point, a, b)
+        distance = math.hypot(point[0] - nearest[0], point[1] - nearest[1])
+        candidate = (distance, (a, b), nearest)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        return None
+    return best[1], best[2], best[0]
+
+
+def _edge_anchor_for_point(
+    cell: MicroRegionCell,
+    point: Point,
+    *,
+    tolerance: float = 0.0045,
+) -> tuple[tuple[Point, Point], Point] | None:
+    nearest = _nearest_cell_edge(cell, point)
+    if nearest is None:
+        return None
+    edge, projected, distance = nearest
+    if distance > tolerance:
+        return None
+    return edge, projected
+
+
+def _cell_edge_index(cell: MicroRegionCell, edge: tuple[Point, Point]) -> int | None:
+    wanted = tuple(sorted(edge))  # type: ignore[assignment]
+    pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
+    for idx, a in enumerate(pts):
+        b = pts[(idx + 1) % len(pts)]
+        if tuple(sorted((a, b))) == wanted:
+            return idx
+    return None
+
+
+def _cell_boundary_arc(
+    cell: MicroRegionCell,
+    entry_edge: tuple[Point, Point],
+    exit_edge: tuple[Point, Point],
+    entry: Point,
+    exit: Point,
+) -> list[Point]:
+    """Walk the shorter polygon boundary arc between two shared-edge points."""
+    pts = [(round(x, 5), round(y, 5)) for x, y in cell.polygon]
+    n = len(pts)
+    if n < 3:
+        return [entry, exit]
+    entry_idx = _cell_edge_index(cell, entry_edge)
+    exit_idx = _cell_edge_index(cell, exit_edge)
+    if entry_idx is None or exit_idx is None:
+        return [entry, exit]
+    if entry_idx == exit_idx:
+        return [entry, exit]
+
+    forward: list[Point] = [entry, pts[(entry_idx + 1) % n]]
+    idx = (entry_idx + 1) % n
+    while idx != exit_idx:
+        idx = (idx + 1) % n
+        forward.append(pts[idx])
+    forward.append(exit)
+
+    backward: list[Point] = [entry, pts[entry_idx]]
+    idx = entry_idx
+    target = (exit_idx + 1) % n
+    while idx != target:
+        idx = (idx - 1) % n
+        backward.append(pts[idx])
+    backward.append(exit)
+
+    return forward if _path_length(forward) <= _path_length(backward) else backward
+
+
+def _maybe_boundary_arc_between_points(
+    cell: MicroRegionCell,
+    start: Point,
+    end: Point,
+) -> list[Point] | None:
+    start_anchor = _edge_anchor_for_point(cell, start)
+    end_anchor = _edge_anchor_for_point(cell, end)
+    if start_anchor is None or end_anchor is None:
+        return None
+    start_edge, start_projected = start_anchor
+    end_edge, end_projected = end_anchor
+    if tuple(sorted(start_edge)) == tuple(sorted(end_edge)):
+        return None
+    arc = _cell_boundary_arc(cell, start_edge, end_edge, start_projected, end_projected)
+    if len(arc) < 2:
+        return None
+    direct = max(0.0001, math.hypot(end[0] - start[0], end[1] - start[1]))
+    if _path_length(arc) > direct * 2.8:
+        return None
+    out: list[Point] = []
+    if math.hypot(start[0] - start_projected[0], start[1] - start_projected[1]) > 1e-7:
+        out.append(start)
+    out.extend(arc)
+    if math.hypot(end[0] - end_projected[0], end[1] - end_projected[1]) > 1e-7:
+        out.append(end)
+    return out
+
+
+def _edge_trace_existing_points(
     geometry: WorldMapGeometry,
-    a: RoadMapNode,
-    b: RoadMapNode,
-    ford_points: list[Point],
-) -> _RoadPath | None:
-    start_point = (a.x, a.y)
-    end_point = (b.x, b.y)
+    points: list[Point],
+) -> list[Point]:
+    if len(points) < 2 or not geometry.micro_cells:
+        return points
+    out: list[Point] = [points[0]]
+    for start, end in zip(points, points[1:]):
+        midpoint = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+        cell = _cell_for_point(geometry, midpoint)
+        arc = _maybe_boundary_arc_between_points(cell, start, end) if cell is not None else None
+        segment = arc if arc is not None else [start, end]
+        out.extend(segment[1:])
+    return _dedupe_path_points(out)
+
+
+def _point_in_any_micro_cell(
+    geometry: WorldMapGeometry,
+    point: Point,
+) -> bool:
+    return any(_point_in_polygon(point, cell.polygon) for cell in geometry.micro_cells)
+
+
+def _segment_has_non_land_samples(
+    geometry: WorldMapGeometry,
+    start: Point,
+    end: Point,
+    *,
+    samples: int = 9,
+) -> bool:
     if not geometry.micro_cells:
-        distance = math.hypot(a.x - b.x, a.y - b.y)
+        return False
+    for idx in range(1, max(2, samples + 1)):
+        t = idx / (samples + 1)
+        point = (start[0] + (end[0] - start[0]) * t, start[1] + (end[1] - start[1]) * t)
+        if not _point_in_any_micro_cell(geometry, point):
+            return True
+    return False
+
+
+def _micro_path_edge_points(
+    micro_path: list[str],
+    by_id: dict[str, MicroRegionCell],
+    shared_edges: dict[tuple[str, str], tuple[Point, Point]],
+    start_point: Point,
+    end_point: Point,
+    ford_points: list[Point],
+) -> list[Point]:
+    if len(micro_path) <= 1:
+        return [start_point, end_point]
+
+    transitions: list[tuple[Point, tuple[Point, Point] | None]] = []
+    for first_id, second_id in zip(micro_path, micro_path[1:]):
+        first = by_id[first_id]
+        second = by_id[second_id]
+        pair = tuple(sorted((first_id, second_id)))  # type: ignore[assignment]
+        shared_edge = shared_edges.get(pair)
+        edge_point = (
+            _point_on_edge_midpoint(shared_edge)
+            if shared_edge is not None
+            else ((first.center_x + second.center_x) / 2.0, (first.center_y + second.center_y) / 2.0)
+        )
+        ford = None
+        if _river_crossing_penalty(first, second, ford_points) > 0.0:
+            ford = _nearest_ford_for_segment(
+                (first.center_x, first.center_y),
+                (second.center_x, second.center_y),
+                ford_points,
+                max_distance=_ford_snap_threshold(first, second),
+            )
+        transitions.append((ford if ford is not None else edge_point, None if ford is not None else shared_edge))
+
+    first_cell = by_id[micro_path[0]]
+    first_point, first_edge = transitions[0]
+    first_arc = (
+        _maybe_boundary_arc_between_points(first_cell, start_point, first_point)
+        if first_edge is not None
+        else None
+    )
+    points: list[Point] = first_arc if first_arc is not None else [start_point, first_point]
+    for idx in range(1, len(transitions)):
+        prior_point, prior_edge = transitions[idx - 1]
+        current_point, current_edge = transitions[idx]
+        cell = by_id[micro_path[idx]]
+        if prior_edge is not None and current_edge is not None:
+            arc = _cell_boundary_arc(cell, prior_edge, current_edge, prior_point, current_point)
+            points.extend(arc[1:])
+        else:
+            points.append(current_point)
+    last_cell = by_id[micro_path[-1]]
+    last_point, last_edge = transitions[-1]
+    last_arc = (
+        _maybe_boundary_arc_between_points(last_cell, last_point, end_point)
+        if last_edge is not None
+        else None
+    )
+    if last_arc is not None:
+        points.extend(last_arc[1:])
+    else:
+        points.append(end_point)
+    return points
+
+
+def _route_between_points(
+    geometry: WorldMapGeometry,
+    start_point: Point,
+    end_point: Point,
+    *,
+    start_region_id: str | None,
+    end_region_id: str | None,
+    ford_points: list[Point],
+    allow_ford_shortcut: bool = True,
+) -> _RoadPath | None:
+    if not geometry.micro_cells:
+        distance = math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1])
         points = _dedupe_path_points([start_point, end_point])
         return _RoadPath(points=points, cost=distance, length=_path_length(points))
-    start = _cell_for_point(geometry, start_point, region_id=a.region_id)
-    end = _cell_for_point(geometry, end_point, region_id=b.region_id)
+    start = _cell_for_point(geometry, start_point, region_id=start_region_id)
+    end = _cell_for_point(geometry, end_point, region_id=end_region_id)
     if start is None or end is None:
         return None
     if start.continent_id != end.continent_id:
         return None
-    ford_path = _direct_ford_path(start_point, end_point, ford_points)
+    ford_path = _direct_ford_path(start_point, end_point, ford_points) if allow_ford_shortcut else None
     if start.micro_id == end.micro_id:
-        points = _dedupe_path_points([start_point, end_point])
+        points = _maybe_boundary_arc_between_points(start, start_point, end_point) or [start_point, end_point]
+        points = _dedupe_path_points(points)
         return _RoadPath(
             points=points,
-            cost=max(0.0001, math.hypot(a.x - b.x, a.y - b.y)),
+            cost=max(0.0001, math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1])),
             length=_path_length(points),
         )
     by_id = {cell.micro_id: cell for cell in geometry.micro_cells}
-    adjacency, shared_midpoints = _micro_adjacency(geometry.micro_cells)
-    queue: list[tuple[float, str]] = [(0.0, start.micro_id)]
+    adjacency, shared_edges = _road_micro_graph(geometry.micro_cells)
+    def heuristic(cell: MicroRegionCell) -> float:
+        return math.hypot(cell.center_x - end.center_x, cell.center_y - end.center_y) * 0.58
+
+    queue: list[tuple[float, float, str]] = [(heuristic(start), 0.0, start.micro_id)]
     distances = {start.micro_id: 0.0}
     previous: dict[str, str] = {}
     while queue:
-        cost, micro_id = heapq.heappop(queue)
+        _priority, cost, micro_id = heapq.heappop(queue)
         if cost > distances.get(micro_id, float("inf")):
             continue
         if micro_id == end.micro_id:
@@ -822,7 +1179,7 @@ def _route_between_nodes(
             if nd < distances.get(neighbor_id, float("inf")):
                 distances[neighbor_id] = nd
                 previous[neighbor_id] = micro_id
-                heapq.heappush(queue, (nd, neighbor_id))
+                heapq.heappush(queue, (nd + heuristic(neighbor), nd, neighbor_id))
     if end.micro_id not in distances:
         return None
     micro_path = [end.micro_id]
@@ -832,25 +1189,14 @@ def _route_between_nodes(
             return None
         micro_path.append(prior)
     micro_path.reverse()
-    points: list[Point] = [start_point]
-    for first_id, second_id in zip(micro_path, micro_path[1:]):
-        first = by_id[first_id]
-        second = by_id[second_id]
-        pair = tuple(sorted((first_id, second_id)))  # type: ignore[assignment]
-        midpoint = shared_midpoints.get(
-            pair,
-            ((first.center_x + second.center_x) / 2.0, (first.center_y + second.center_y) / 2.0),
-        )
-        ford = None
-        if _river_crossing_penalty(first, second, ford_points) > 0.0:
-            ford = _nearest_ford_for_segment(
-                (first.center_x, first.center_y),
-                (second.center_x, second.center_y),
-                ford_points,
-                max_distance=_ford_snap_threshold(first, second),
-            )
-        points.append(ford if ford is not None else midpoint)
-    points.append(end_point)
+    points = _micro_path_edge_points(
+        micro_path,
+        by_id,
+        shared_edges,
+        start_point,
+        end_point,
+        ford_points,
+    )
     points = _clean_road_points(points, ford_points)
     route = _RoadPath(
         points=points,
@@ -860,8 +1206,156 @@ def _route_between_nodes(
     if ford_path is not None:
         direct_distance = max(0.0001, math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1]))
         if route.length / direct_distance >= 1.55 or ford_path.length <= route.length * 0.86:
-            return ford_path
+            natural_ford_path = None
+            if len(ford_path.points) >= 3:
+                natural_ford_path = _route_via_ford_point(
+                    geometry,
+                    start_point,
+                    ford_path.points[1],
+                    end_point,
+                    start_region_id=start_region_id,
+                    end_region_id=end_region_id,
+                    ford_points=ford_points,
+                )
+            return natural_ford_path or ford_path
     return route
+
+
+def _expand_route_points_through_land(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+    ford_points: list[Point],
+) -> list[Point] | None:
+    """Replace route chords that leave the land mesh with micro-cell edge routes."""
+    if len(points) < 2 or not geometry.micro_cells:
+        return points
+    out: list[Point] = [points[0]]
+    for start, end in zip(points, points[1:]):
+        direct = math.hypot(end[0] - start[0], end[1] - start[1])
+        segment = [start, end]
+        crosses_non_land = _segment_has_non_land_samples(geometry, start, end)
+        if crosses_non_land:
+            routed = _route_between_points(
+                geometry,
+                start,
+                end,
+                start_region_id=None,
+                end_region_id=None,
+                ford_points=ford_points,
+                allow_ford_shortcut=False,
+            )
+            if routed is None:
+                return None
+            elif routed.length <= max(0.0001, direct) * 4.5:
+                segment = routed.points
+            else:
+                return None
+        out.extend(segment[1:])
+    return _dedupe_path_points(out)
+
+
+def _route_via_ford_point(
+    geometry: WorldMapGeometry,
+    start_point: Point,
+    ford_point: Point,
+    end_point: Point,
+    *,
+    start_region_id: str | None,
+    end_region_id: str | None,
+    ford_points: list[Point],
+) -> _RoadPath | None:
+    first = _route_between_points(
+        geometry,
+        start_point,
+        ford_point,
+        start_region_id=start_region_id,
+        end_region_id=None,
+        ford_points=ford_points,
+        allow_ford_shortcut=False,
+    )
+    second = _route_between_points(
+        geometry,
+        ford_point,
+        end_point,
+        start_region_id=None,
+        end_region_id=end_region_id,
+        ford_points=ford_points,
+        allow_ford_shortcut=False,
+    )
+    if first is None or second is None:
+        return None
+    points = _clean_road_points([*first.points, *second.points[1:]], [ford_point])
+    if len(points) < 2:
+        return None
+    length = _path_length(points)
+    return _RoadPath(points=points, cost=max(0.0001, first.cost + second.cost), length=length)
+
+
+def _route_between_nodes(
+    geometry: WorldMapGeometry,
+    a: RoadMapNode,
+    b: RoadMapNode,
+    ford_points: list[Point],
+) -> _RoadPath | None:
+    start_point = (a.x, a.y)
+    end_point = (b.x, b.y)
+    if a.region_id != b.region_id:
+        land_neighbors = _region_land_neighbors(geometry)
+        if b.region_id in land_neighbors.get(a.region_id, set()):
+            direct_micro_route = _route_between_points(
+                geometry,
+                start_point,
+                end_point,
+                start_region_id=a.region_id,
+                end_region_id=b.region_id,
+                ford_points=ford_points,
+            )
+            direct_distance = max(0.0001, math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1]))
+            if direct_micro_route is not None and direct_micro_route.length / direct_distance <= 2.8:
+                return direct_micro_route
+        region_route = _configured_region_route_points(geometry, a.region_id, b.region_id)
+        if region_route is not None:
+            region_route = _edge_trace_existing_points(geometry, region_route)
+            expanded_region_route = _expand_route_points_through_land(geometry, region_route, ford_points)
+            if expanded_region_route is None:
+                region_route = []
+            else:
+                region_route = expanded_region_route
+        if region_route:
+            first_connector = _route_between_points(
+                geometry,
+                start_point,
+                region_route[0],
+                start_region_id=a.region_id,
+                end_region_id=a.region_id,
+                ford_points=ford_points,
+            )
+            last_connector = _route_between_points(
+                geometry,
+                region_route[-1],
+                end_point,
+                start_region_id=b.region_id,
+                end_region_id=b.region_id,
+                ford_points=ford_points,
+            )
+            if first_connector is not None and last_connector is not None:
+                points = [
+                    *first_connector.points,
+                    *region_route[1:-1],
+                    *last_connector.points[1:],
+                ]
+                points = _clean_road_points(points, ford_points)
+                if len(points) >= 2:
+                    length = _path_length(points)
+                    return _RoadPath(points=points, cost=max(0.0001, length), length=length)
+    return _route_between_points(
+        geometry,
+        start_point,
+        end_point,
+        start_region_id=a.region_id,
+        end_region_id=b.region_id,
+        ford_points=ford_points,
+    )
 
 
 def _path_length(points: list[Point]) -> float:
@@ -912,6 +1406,20 @@ def _clean_road_points(points: list[Point], preserve_points: list[Point] | None 
     out: list[Point] = []
     loop_tolerance = 0.004
     for point in _dedupe_path_points(points):
+        repeat_idx = next(
+            (
+                idx
+                for idx, prior in enumerate(out[:-1])
+                if math.hypot(point[0] - prior[0], point[1] - prior[1]) <= loop_tolerance
+            ),
+            None,
+        )
+        if repeat_idx is not None and not any(
+            _is_preserved_point(prior, preserve_points, tolerance=loop_tolerance)
+            for prior in out[repeat_idx + 1 :]
+        ):
+            out = out[: repeat_idx + 1]
+            continue
         if (
             len(out) >= 2
             and math.hypot(point[0] - out[-2][0], point[1] - out[-2][1]) <= loop_tolerance
@@ -1028,6 +1536,16 @@ def _ensure_segment(
     return key
 
 
+def _route_settlement_ratio(
+    route: _RoadPath,
+    nodes: dict[str, RoadMapNode],
+    a: str,
+    b: str,
+) -> float:
+    direct = max(0.0001, math.hypot(nodes[a].x - nodes[b].x, nodes[a].y - nodes[b].y))
+    return route.length / direct
+
+
 def _best_via_node(
     nodes: dict[str, RoadMapNode],
     routes: dict[tuple[str, str], _RoadPath],
@@ -1057,6 +1575,9 @@ def _best_via_node(
             + math.hypot(node.x - c.x, node.y - c.y)
         ) / direct_line_distance
         routed_ratio = (first.length + second.length) / max(direct_line_distance, direct_route.length, 0.0001)
+        absolute_routed_ratio = (first.length + second.length) / direct_line_distance
+        if absolute_routed_ratio > 3.2:
+            continue
         if routed_ratio > 1.85 and settlement_ratio > 1.08:
             continue
         geometry_ratio = routed_ratio if route_offset <= max_offset else settlement_ratio
@@ -1165,16 +1686,30 @@ def build_settlement_road_overlays(
         if via is not None:
             via_id, via_ratio = via
             if via_ratio <= 1.2 or (via_ratio <= 1.45 and not strong_actual):
-                first = _ensure_segment(segments, routes, geometry, nodes, ford_points, key[0], via_id)
-                second = _ensure_segment(segments, routes, geometry, nodes, ford_points, via_id, key[1])
-                if first is not None and second is not None:
-                    _add_usage_to_segments(segments, (first, second), demand)
-                    continue
+                first_key = _pair_key(key[0], via_id)
+                second_key = _pair_key(via_id, key[1])
+                first_route = routes.get(first_key)
+                second_route = routes.get(second_key)
+                via_legs_reasonable = not (
+                    not strong_actual
+                    and first_route is not None
+                    and second_route is not None
+                    and (
+                        _route_settlement_ratio(first_route, nodes, first_key[0], first_key[1]) > 3.2
+                        or _route_settlement_ratio(second_route, nodes, second_key[0], second_key[1]) > 3.2
+                    )
+                )
+                if via_legs_reasonable:
+                    first = _ensure_segment(segments, routes, geometry, nodes, ford_points, key[0], via_id)
+                    second = _ensure_segment(segments, routes, geometry, nodes, ford_points, via_id, key[1])
+                    if first is not None and second is not None:
+                        _add_usage_to_segments(segments, (first, second), demand)
+                        continue
 
         direct_route_ratio = direct_route.length / direct_settlement_distance
         if demand.actual_usage <= 0.0 and direct_route_ratio > 2.2:
             continue
-        if not strong_actual and direct_route_ratio > 3.2:
+        if not strong_actual and direct_route_ratio > 3.6:
             continue
         direct = _ensure_segment(segments, routes, geometry, nodes, ford_points, key[0], key[1])
         if direct is not None:
