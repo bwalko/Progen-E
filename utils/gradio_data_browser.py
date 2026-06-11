@@ -2506,7 +2506,9 @@ def _sort_rows_by_legacy_score(
 
 
 def _current_year(con: sqlite3.Connection, world: str) -> int | None:
-    columns = _table_columns(con, "world_state") if _has_table(con, "world_state") else []
+    if not _has_table(con, "world_state"):
+        return None
+    columns = _table_columns(con, "world_state")
     if "world" in columns:
         row = con.execute("select current_year from world_state where world = ?", (world,)).fetchone()
     else:
@@ -4876,6 +4878,96 @@ def _format_01_score(value: object) -> str:
         return "Unknown"
 
 
+def _format_archive_score(value: object) -> str:
+    if value in (None, ""):
+        return "Unknown"
+    try:
+        return f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return "Unknown"
+
+
+def _person_archive_score_row(
+    con: sqlite3.Connection, person_id: object
+) -> sqlite3.Row | None:
+    if not _has_table(con, "simulation_person_archive_scores"):
+        return None
+    try:
+        pid = int(person_id)
+    except (TypeError, ValueError):
+        return None
+    return con.execute(
+        """
+        select *
+        from simulation_person_archive_scores
+        where person_id = ?
+        """,
+        (pid,),
+    ).fetchone()
+
+
+def _archive_score_component_cards(score: sqlite3.Row) -> str:
+    component_labels = [
+        ("Events", "narrative_heat_events"),
+        ("Contradictions", "narrative_heat_contradictions"),
+        ("Consequences", "narrative_heat_consequences"),
+        ("Social", "narrative_heat_social"),
+        ("Rarity", "narrative_heat_rarity"),
+        ("Volatility", "narrative_heat_volatility"),
+        ("Legacy", "narrative_heat_legacy"),
+    ]
+    return "".join(
+        _render_detail_card(label, _format_archive_score(score[key]))
+        for label, key in component_labels
+        if key in score.keys()
+    )
+
+
+def _render_archive_score_section(person_id: object, score: sqlite3.Row | None) -> str:
+    if score is None:
+        return ""
+    violet = "Yes" if int(score["violet_marginalia"] or 0) else "No"
+    cards = [
+        _render_detail_card(
+            "Narrative Heat", _format_archive_score(score["narrative_heat_total"])
+        ),
+        _render_detail_card(
+            "ARI", _format_archive_score(score["archive_recognition_index"])
+        ),
+        _render_detail_card("Hidden Heat", _format_archive_score(score["hidden_heat"])),
+        _render_detail_card(
+            "Violet Marginalia",
+            f"{violet} ({_format_archive_score(score['violet_marginalia_score'])})",
+        ),
+        _render_detail_card("Recognition", score["recognition_bucket"]),
+        _render_detail_card("Narrative", score["narrative_bucket"]),
+    ]
+    components = _archive_score_component_cards(score)
+    pid = html.escape(str(person_id))
+    return f"""
+      <section aria-labelledby="person-{pid}-archive-scores">
+        <h3 id="person-{pid}-archive-scores" class="section-title">Archive Scores</h3>
+        <div class="detail-grid">{''.join(cards)}</div>
+        <div class="detail-grid">{components}</div>
+      </section>
+    """
+
+
+def _archive_score_share_lines(score: sqlite3.Row | None) -> list[str]:
+    if score is None:
+        return []
+    violet = "yes" if int(score["violet_marginalia"] or 0) else "no"
+    return [
+        "Archive Scores:",
+        f"- Narrative heat: {_format_archive_score(score['narrative_heat_total'])}",
+        f"- ARI: {_format_archive_score(score['archive_recognition_index'])}",
+        f"- Hidden heat: {_format_archive_score(score['hidden_heat'])}",
+        f"- Violet marginalia: {violet} ({_format_archive_score(score['violet_marginalia_score'])})",
+        f"- Recognition: {score['recognition_bucket']}",
+        "",
+    ]
+
+
 def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, person: dict[str, object]) -> str:
     current_year = _current_year(con, world)
     name = html.escape(_person_name(person))
@@ -4929,6 +5021,8 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     reputation_mark_rows = _person_reputation_mark_rows(con, world, row["person_id"])
     legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
     knowledge_effect_rows = _person_knowledge_effect_rows(events, row["person_id"])
+    archive_score = _person_archive_score_row(con, row["person_id"])
+    archive_score_section = _render_archive_score_section(row["person_id"], archive_score)
     consequence_summary_cards = _person_consequence_summary_cards(
         obligation_rows,
         reputation_mark_rows,
@@ -5072,6 +5166,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         <h3 id="person-{row['person_id']}-tags" class="section-title">Character Tags</h3>
         <div class="pill-list" aria-label="Character tags">{pill_html}</div>
       </section>
+      {archive_score_section}
       <section aria-labelledby="person-{row['person_id']}-legacy">
         <h3 id="person-{row['person_id']}-legacy" class="section-title">Legacy Indexes</h3>
         {legacy_scores_html}
@@ -5178,6 +5273,8 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     reputation_mark_rows = _person_reputation_mark_rows(con, world, row["person_id"])
     legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
     knowledge_effect_rows = _person_knowledge_effect_rows(events, row["person_id"])
+    archive_score = _person_archive_score_row(con, row["person_id"])
+    archive_score_lines = _archive_score_share_lines(archive_score)
     obligation_lines = _person_obligation_lines(
         con, world, obligation_rows, row["person_id"]
     )
@@ -5232,6 +5329,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             f"Work: {person.get('job') or person.get('employment_status') or 'none'}.",
             f"Character tags: {tags_text}",
             "",
+            *archive_score_lines,
             "Family:",
             f"- Father: {father}",
             f"- Mother: {mother}",

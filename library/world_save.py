@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 14
+SAVE_SCHEMA_VERSION = 15
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -76,6 +76,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_region_lookup",
     "simulation_settlement_lookup",
     "simulation_people",
+    "simulation_person_archive_scores",
     "simulation_people_light",
     "simulation_cohorts",
     "simulation_promotion_log",
@@ -318,7 +319,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
             f"save.sqlite schema version {version} is newer than supported "
             f"version {SAVE_SCHEMA_VERSION}"
         )
-    if version not in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, SAVE_SCHEMA_VERSION):
+    if version not in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, SAVE_SCHEMA_VERSION):
         raise RuntimeError(
             f"save.sqlite schema version {version} needs a migration before "
             f"this code can open it"
@@ -5011,6 +5012,9 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _ensure_simulation_institution_tables(conn)
     _ensure_simulation_innovation_tables(conn)
     _ensure_simulation_people_table(conn)
+    from library.person_archive_scores import ensure_person_archive_score_schema
+
+    ensure_person_archive_score_schema(conn)
     _ensure_hybrid_population_tables(conn)
     conn.executescript(_CREATE_SIMULATION_REGIONS)
     _ensure_simulation_settlements_table(conn)
@@ -5974,6 +5978,7 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
     with _open_save(save_db_path) as conn:
         ensure_checkpoint_schema(conn)
         conn.execute("DELETE FROM simulation_people")
+        conn.execute("DELETE FROM simulation_person_archive_scores")
         conn.execute("DELETE FROM simulation_people_light")
         conn.execute("DELETE FROM simulation_cohorts")
         conn.execute("DELETE FROM simulation_promotion_log")
@@ -7647,6 +7652,18 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
 
         _checkpoint_gov(ctx, cur)
         t0 = _profile_accumulate("checkpoint.snapshot_government", t0)
+
+        from library.person_archive_scores import refresh_person_archive_scores
+
+        archive_score_rows = refresh_person_archive_scores(
+            conn,
+            person_ids=(int(rec.person_id) for rec in ctx.people),
+            simulation_year=year,
+        )
+        simulation_timing.record_gauge(
+            year, "checkpoint", "person_archive_score_rows", archive_score_rows
+        )
+        t0 = _profile_accumulate("checkpoint.snapshot_person_archive_scores", t0)
 
         cur.execute(
             """

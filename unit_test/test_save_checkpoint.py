@@ -1661,6 +1661,13 @@ class TestSaveCheckpoint(unittest.TestCase):
                     n_settle = conn.execute(
                         "SELECT COUNT(*) FROM simulation_settlements",
                     ).fetchone()[0]
+                    archive_score_row = conn.execute(
+                        """
+                        SELECT narrative_heat_total, archive_recognition_index
+                        FROM simulation_person_archive_scores
+                        WHERE person_id = 1
+                        """
+                    ).fetchone()
                     birth_rid = (p.birthplace_region_id or "").strip()
                     self.assertTrue(birth_rid)
                     sample_rn = conn.execute(
@@ -1685,6 +1692,9 @@ class TestSaveCheckpoint(unittest.TestCase):
                 self.assertIsInstance(person_ext["g"], list)
                 self.assertEqual(int(n_regions), len(ctx.settlement_ids_by_region))
                 self.assertEqual(int(n_settle), len(ctx.settlements_by_id))
+                self.assertIsNotNone(archive_score_row)
+                self.assertGreaterEqual(float(archive_score_row[0]), 0.0)
+                self.assertGreaterEqual(float(archive_score_row[1]), 0.0)
                 self.assertIsNotNone(sample_rn)
                 self.assertEqual(str(sample_rn[0]).strip(), expected_label)
 

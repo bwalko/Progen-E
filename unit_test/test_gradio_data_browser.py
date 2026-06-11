@@ -13,6 +13,7 @@ if "gradio" not in sys.modules and importlib.util.find_spec("gradio") is None:
 
 import utils.gradio_data_browser as gdb
 from library.config_import import load_all_csvs_into_sqlite
+from library.person_archive_scores import ensure_person_archive_score_schema
 from library.world_save import (
     append_simulation_event_rows,
     ensure_checkpoint_schema,
@@ -1804,6 +1805,42 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Reputation Marks:\n- 1002: leadership low -> medium", share)
         self.assertIn("Legal Fallout:\n- 1003-1021: heir legitimacy challenge", share)
         self.assertIn("Knowledge Effects:\n- 1004: toolmaking", share)
+
+    def test_person_sheet_shows_cached_archive_scores(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        ensure_person_archive_score_schema(con)
+        con.execute(
+            """
+            insert into simulation_person_archive_scores (
+                person_id, narrative_heat_total, archive_recognition_index,
+                narrative_heat_events, narrative_heat_contradictions,
+                narrative_heat_consequences, narrative_heat_social,
+                narrative_heat_rarity, narrative_heat_volatility,
+                narrative_heat_legacy, hidden_heat, violet_marginalia_score,
+                violet_marginalia, recognition_bucket, narrative_bucket,
+                updated_at
+            )
+            values (
+                1, 73.25, 41.5, 22.0, 8.0, 12.0, 7.0, 9.0, 6.0,
+                9.25, 31.75, 0.48, 1, 'interesting but obscure', 'high',
+                '2026-01-01T00:00:00+00:00'
+            )
+            """
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertIn("Archive Scores", sheet)
+        self.assertIn("Narrative Heat", sheet)
+        self.assertIn("ARI", sheet)
+        self.assertIn("Violet Marginalia", sheet)
+        self.assertIn("interesting but obscure", sheet)
+        self.assertIn("Archive Scores:\n- Narrative heat: 73.2", share)
+        self.assertIn("- ARI: 41.5", share)
+        self.assertIn("- Violet marginalia: yes (0.5)", share)
 
     def test_partner_history_ignores_context_events_and_merges_repeated_pair(self) -> None:
         con = _memory_save()
