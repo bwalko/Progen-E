@@ -742,11 +742,12 @@ completion.
   - `python -m unittest unit_test.test_world_map_geometry`
 - Extended the settlement route overlay model with sea lanes:
   - `library.world_map_roads` now builds `SeaRouteMapEdge` overlays from the same saved settlements, latest-year moves, trade/outpost demand, and conservative implied demand used by roads, but only across configured sea-route region paths.
-  - sea-lane water spans follow direct smoothed curves from configured sea-route edges instead of routing through land micro-polygons; short endpoint connectors still attach settlements to their coast-side route endpoints.
-  - follow-up refinement: sea-lane water spans now sample against land micro-cells and use an invisible ocean navigation grid only when a direct segment would cross land, preserving clear authored curves while bending around islands/peninsulas.
+  - sea-lane water spans follow configured sea-route edges as cleared open-water polylines instead of routing through land micro-polygons or SVG smoothing that can cut corners over land; short endpoint connectors still attach settlements to their coast-side route endpoints.
+  - follow-up refinement: sea-lane water spans now sample against land micro-cells and use an invisible ocean navigation grid when a direct segment would cross land or when a reasonably short offshore/coast-following path is available, preserving clear routes while bending around islands/peninsulas.
   - overlong inland/river road overlays now yield to a configured sea lane when the ocean path is clearly shorter and more natural for the same settlement demand.
+  - road overlays now use a crimson `#b21f3a` centerline with a pale `#fffdf3` casing and stronger actual-route opacity so well-worn roads stay visible over terrain and black boundary linework.
   - `library.world_map_svg` renders a separate `sea-route-layer` with `data-sea-route-*` attributes, while `utils.gradio_data_browser` labels the shared transport overlay toggle as `Routes`.
-  - verified with `python -m py_compile library\world_map_roads.py library\world_map_svg.py utils\gradio_data_browser.py unit_test\test_world_map_roads.py`, `python -m py_compile library\world_map_roads.py unit_test\test_world_map_roads.py`, `python -m unittest unit_test.test_world_map_roads`, `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_roads_and_checkbox_hides_them`, and a capped default-world smoke where 6 generated sea-route overlays produced 0 land-crossing route segments.
+  - verified with `python -m py_compile library\world_map_roads.py library\world_map_svg.py unit_test\test_world_map_roads.py`, `python -m unittest unit_test.test_world_map_roads`, and a full default-world sea-overlay smoke where 5 generated sea-route overlays produced 0 land-crossing route segments with an average route-point coast distance of about 0.038.
 
 ## Scale Population Simulation Toward Millions
 

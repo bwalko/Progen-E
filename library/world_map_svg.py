@@ -1803,7 +1803,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend,.terrain-contour{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.terrain-contour{fill:none;mix-blend-mode:multiply;vector-effect:non-scaling-stroke}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.road,.sea-route{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}.road-underlay{stroke:#fff2c8;mix-blend-mode:screen}.road-line{stroke:#6f5533}.sea-route-underlay{stroke:#d6f8ff;mix-blend-mode:screen}.sea-route-line{stroke:#205f83;stroke-dasharray:7 5}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend,.terrain-contour{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.terrain-contour{fill:none;mix-blend-mode:multiply;vector-effect:non-scaling-stroke}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.road,.sea-route{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}.road-underlay{stroke:#fffdf3;mix-blend-mode:normal}.road-line{stroke:#b21f3a}.sea-route-underlay{stroke:#d6f8ff;mix-blend-mode:screen}.sea-route-line{stroke:#205f83;stroke-dasharray:7 5}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -2165,7 +2165,7 @@ def render_world_map_svg(
                 continue
             normalized = math.sqrt(float(route.usage) / max_usage) if max_usage > 0.0 else 0.0
             stroke_width = 0.85 + normalized * 1.45
-            path_d = _smooth_line_path(scaled)
+            path_d = _line_path(scaled)
             attrs = (
                 f'data-sea-route-from-settlement-id="{html.escape(route.from_settlement_id)}" '
                 f'data-sea-route-to-settlement-id="{html.escape(route.to_settlement_id)}" '
@@ -2193,8 +2193,10 @@ def render_world_map_svg(
             if len(scaled) < 2:
                 continue
             normalized = math.sqrt(float(road.usage) / max_usage) if max_usage > 0.0 else 0.0
-            stroke_width = 1.05 + normalized * 1.75
+            stroke_width = 1.20 + normalized * 2.05
             path_d = _line_path(scaled)
+            casing_opacity = 0.58 if road.actual_usage > 0.0 else 0.34
+            line_opacity = min(0.96, road.opacity + (0.18 if road.actual_usage > 0.0 else 0.08))
             attrs = (
                 f'data-road-from-settlement-id="{html.escape(road.from_settlement_id)}" '
                 f'data-road-to-settlement-id="{html.escape(road.to_settlement_id)}" '
@@ -2204,11 +2206,11 @@ def render_world_map_svg(
             )
             parts.append(
                 f'<path class="road road-underlay" {attrs} d="{path_d}" '
-                f'stroke-width="{stroke_width + 1.35:.2f}" opacity="{min(0.34, road.opacity * 0.55):.3f}" />'
+                f'stroke-width="{stroke_width + 1.65:.2f}" opacity="{casing_opacity:.3f}" />'
             )
             parts.append(
                 f'<path class="road road-line" {attrs} d="{path_d}" '
-                f'stroke-width="{stroke_width:.2f}" opacity="{road.opacity:.3f}" />'
+                f'stroke-width="{stroke_width:.2f}" opacity="{line_opacity:.3f}" />'
             )
         parts.append("</g>")
 

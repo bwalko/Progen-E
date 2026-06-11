@@ -748,7 +748,7 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertLess(min(ys), 0.36)
         self.assertGreater(max(ys), 0.64)
 
-    def test_cross_continent_sea_route_uses_water_curve_not_land_road(self) -> None:
+    def test_cross_continent_sea_route_uses_water_polyline_not_land_road(self) -> None:
         geometry = _two_port_sea_geometry()
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             save = _make_save(
@@ -776,7 +776,9 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertLess(length, direct * 1.55)
         self.assertIn('class="sea-route sea-route-line"', svg)
         self.assertIn('data-sea-route-actual="4.0000"', svg)
-        self.assertIn(" Q ", svg)
+        sea_layer = svg.split('<g class="sea-route-layer settlement-sea-routes">', 1)[1].split("</g>", 1)[0]
+        self.assertNotIn(" Q ", sea_layer)
+        self.assertNotIn(" T ", sea_layer)
 
     def test_configured_sea_neighbor_gets_implied_route_without_moves(self) -> None:
         geometry = _two_port_sea_geometry()
@@ -959,6 +961,8 @@ class TestWorldMapRoads(unittest.TestCase):
         road = _edge(roads, "a", "c")
         self.assertIsNotNone(road)
         self.assertIn((0.5, 0.5), road.points)
+        self.assertIn(".road-underlay{stroke:#fffdf3", svg)
+        self.assertIn(".road-line{stroke:#b21f3a}", svg)
         road_layer = svg.split('<g class="road-layer settlement-roads">', 1)[1].split("</g>", 1)[0]
         self.assertNotIn(" Q ", road_layer)
         self.assertNotIn(" T ", road_layer)

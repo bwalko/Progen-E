@@ -117,7 +117,7 @@ _MICRO_GRAPH_CACHE: dict[
     int,
     tuple[int, dict[str, set[str]], dict[tuple[str, str], tuple[Point, Point]]],
 ] = {}
-_WATER_GRID_SIZE = 56
+_WATER_GRID_SIZE = 48
 _WATER_GRAPH_CACHE: dict[
     int,
     tuple[int, int, list[Point], dict[tuple[int, int], int], dict[int, list[tuple[int, float]]]],
@@ -127,6 +127,7 @@ _SEA_REGION_ROUTE_CACHE: dict[
     tuple[int, int, str, str],
     tuple[tuple[str, ...], list[Point], float] | None,
 ] = {}
+_COAST_DISTANCE_CACHE: dict[int, tuple[int, dict[Point, float]]] = {}
 
 
 def _quote_identifier(name: str) -> str:
@@ -761,6 +762,57 @@ def _point_too_close_to_land(
     return False
 
 
+def _coast_distance(
+    geometry: WorldMapGeometry,
+    point: Point,
+    *,
+    max_distance: float = 0.24,
+) -> float:
+    key = id(geometry.micro_cells)
+    cached = _COAST_DISTANCE_CACHE.get(key)
+    if cached is None or cached[0] != len(geometry.micro_cells):
+        cached = (len(geometry.micro_cells), {})
+        _COAST_DISTANCE_CACHE[key] = cached
+    cache = cached[1]
+    p = (round(point[0], 5), round(point[1], 5))
+    if p in cache:
+        return cache[p]
+    if _land_cell_containing_point(geometry, p) is not None:
+        cache[p] = 0.0
+        return 0.0
+    best = max_distance
+    x, y = p
+    for x0, y0, x1, y1, cell in _land_cell_bounds(geometry):
+        if x < x0 - best or x > x1 + best or y < y0 - best or y > y1 + best:
+            continue
+        pts = cell.polygon
+        if len(pts) < 2:
+            continue
+        distance = min(_point_segment_distance(p, a, b) for a, b in zip(pts, pts[1:] + pts[:1]))
+        if distance < best:
+            best = distance
+    cache[p] = best
+    return best
+
+
+def _water_step_weight(
+    geometry: WorldMapGeometry,
+    a: Point,
+    b: Point,
+) -> float:
+    distance = math.hypot(a[0] - b[0], a[1] - b[1])
+    coast = min(_coast_distance(geometry, a), _coast_distance(geometry, b))
+    if coast < 0.010:
+        multiplier = 2.15
+    elif coast <= 0.075:
+        multiplier = 0.78 + abs(coast - 0.035) * 1.55
+    elif coast <= 0.145:
+        multiplier = 0.98 + (coast - 0.075) * 2.05
+    else:
+        multiplier = 1.14 + min(0.68, (coast - 0.145) * 3.0)
+    return max(0.0001, distance * multiplier)
+
+
 def _water_segment_crosses_land(
     geometry: WorldMapGeometry,
     start: Point,
@@ -875,7 +927,7 @@ def _water_nav_graph(
             other = nodes[other_idx]
             if _water_segment_crosses_land(geometry, point, other, samples=3):
                 continue
-            adjacency[idx].append((other_idx, math.hypot(point[0] - other[0], point[1] - other[1])))
+            adjacency[idx].append((other_idx, _water_step_weight(geometry, point, other)))
     _WATER_GRAPH_CACHE[key] = (len(geometry.micro_cells), _WATER_GRID_SIZE, nodes, by_grid, adjacency)
     return nodes, by_grid, adjacency
 
@@ -900,7 +952,7 @@ def _visible_water_links(
             break
         if _water_segment_crosses_land(geometry, point, nodes[idx], samples=10):
             continue
-        links.append((idx, max(0.0001, distance)))
+        links.append((idx, _water_step_weight(geometry, point, nodes[idx])))
         if len(links) >= limit:
             break
     return links
@@ -928,10 +980,13 @@ def _water_nav_path_around_land(
     geometry: WorldMapGeometry,
     start: Point,
     end: Point,
+    *,
+    prefer_coast: bool = False,
 ) -> list[Point] | None:
     if not geometry.micro_cells:
         return [start, end]
-    if not _water_segment_crosses_land(geometry, start, end, samples=16):
+    crosses_land = _water_segment_crosses_land(geometry, start, end, samples=16)
+    if not crosses_land and not prefer_coast:
         return [start, end]
     nodes, _by_grid, adjacency = _water_nav_graph(geometry)
     if not nodes:
@@ -984,7 +1039,13 @@ def _water_nav_path_around_land(
             return None
         path_ids.append(prior)
     path_ids.reverse()
-    return _simplify_water_points(geometry, [point_for(node_id) for node_id in path_ids])
+    path = [point_for(node_id) for node_id in path_ids]
+    if crosses_land:
+        return _simplify_water_points(geometry, path)
+    direct = max(0.0001, math.hypot(end[0] - start[0], end[1] - start[1]))
+    if _path_length(path) <= direct * 1.32:
+        return _dedupe_path_points(path)
+    return [start, end]
 
 
 def _water_route_points(
@@ -1004,7 +1065,7 @@ def _water_route_points(
         water_points.append(_coastal_water_point(geometry, point, toward))
     out: list[Point] = [water_points[0]]
     for start, end in zip(water_points, water_points[1:]):
-        segment = _water_nav_path_around_land(geometry, start, end) or [start, end]
+        segment = _water_nav_path_around_land(geometry, start, end, prefer_coast=True) or [start, end]
         out.extend(segment[1:])
     return _dedupe_path_points(out)
 
