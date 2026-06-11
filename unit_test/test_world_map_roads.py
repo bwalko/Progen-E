@@ -156,6 +156,105 @@ def _two_port_sea_geometry() -> WorldMapGeometry:
     )
 
 
+def _two_port_sea_geometry_with_island_blocker() -> WorldMapGeometry:
+    geometry = _two_port_sea_geometry()
+    island_cell = _region_cell_for(
+        "island",
+        [(0.44, 0.42), (0.56, 0.42), (0.56, 0.58), (0.44, 0.58)],
+        continent_id="c3",
+        terrain_family="coast",
+        is_coastal=True,
+    )
+    island_micro = _micro_cell(
+        "island:coast",
+        0.44,
+        0.42,
+        0.56,
+        0.58,
+        region_id="island",
+        continent_id="c3",
+        terrain_family="coast",
+        is_coastal=True,
+    )
+    return WorldMapGeometry(
+        world=geometry.world,
+        version=geometry.version,
+        width=geometry.width,
+        height=geometry.height,
+        cells=[*geometry.cells, island_cell],
+        micro_cells=[*geometry.micro_cells, island_micro],
+        features=[],
+        edges=[
+            RegionEdge(
+                from_region_id="r1",
+                to_region_id="r2",
+                route_type="sea",
+                friction=16.0,
+                points=[(0.30, 0.50), (0.50, 0.50), (0.70, 0.50)],
+                edge_class="sea_route",
+            )
+        ],
+        rivers=[],
+    )
+
+
+def _coastal_land_and_sea_choice_geometry() -> WorldMapGeometry:
+    return WorldMapGeometry(
+        world="test",
+        version="unit",
+        width=1.0,
+        height=1.0,
+        cells=[
+            _region_cell_for(
+                "r1",
+                [(0.04, 0.28), (0.28, 0.28), (0.28, 0.72), (0.04, 0.72)],
+                terrain_family="coast",
+                is_coastal=True,
+            ),
+            _region_cell_for(
+                "river",
+                [(0.42, 0.70), (0.58, 0.70), (0.58, 0.98), (0.42, 0.98)],
+                terrain_family="riverland",
+            ),
+            _region_cell_for(
+                "r2",
+                [(0.72, 0.28), (0.96, 0.28), (0.96, 0.72), (0.72, 0.72)],
+                terrain_family="coast",
+                is_coastal=True,
+            ),
+        ],
+        micro_cells=[],
+        features=[],
+        edges=[
+            RegionEdge(
+                from_region_id="r1",
+                to_region_id="river",
+                route_type="land",
+                friction=1.0,
+                points=[(0.24, 0.55), (0.18, 0.96), (0.50, 0.96)],
+                edge_class="land_route",
+            ),
+            RegionEdge(
+                from_region_id="river",
+                to_region_id="r2",
+                route_type="land",
+                friction=1.0,
+                points=[(0.50, 0.96), (0.82, 0.96), (0.76, 0.55)],
+                edge_class="land_route",
+            ),
+            RegionEdge(
+                from_region_id="r1",
+                to_region_id="r2",
+                route_type="sea",
+                friction=14.0,
+                points=[(0.24, 0.48), (0.50, 0.18), (0.76, 0.48)],
+                edge_class="sea_route",
+            ),
+        ],
+        rivers=[],
+    )
+
+
 def _micro_cell(
     micro_id: str,
     x0: float,
@@ -497,6 +596,23 @@ def _segment_samples_gap(points: list[tuple[float, float]]) -> bool:
     return False
 
 
+def _segment_samples_rect(
+    points: list[tuple[float, float]],
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> bool:
+    for start, end in zip(points, points[1:]):
+        for idx in range(1, 16):
+            t = idx / 16.0
+            x = start[0] + (end[0] - start[0]) * t
+            y = start[1] + (end[1] - start[1]) * t
+            if x0 < x < x1 and y0 < y < y1:
+                return True
+    return False
+
+
 class TestWorldMapRoads(unittest.TestCase):
     def test_world_map_settlement_markers_use_saved_world_anchor_like_roads(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -679,6 +795,47 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertIsNotNone(sea_route)
         self.assertEqual(sea_route.actual_usage, 0)
         self.assertGreater(sea_route.implied_usage, 0)
+
+    def test_sea_route_bends_around_land_blocker(self) -> None:
+        geometry = _two_port_sea_geometry_with_island_blocker()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.20, 0.50), "b": (0.80, 0.50)},
+                [(10, "a", "b", 4)],
+                region_by_settlement={"a": "r1", "b": "r2"},
+                world_points={"a": (0.20, 0.50), "b": (0.80, 0.50)},
+            )
+
+            sea_routes = build_settlement_sea_route_overlays(geometry=geometry, save_db_path=save)
+
+        sea_route = _edge(sea_routes, "a", "b")
+        self.assertIsNotNone(sea_route)
+        self.assertFalse(_segment_samples_rect(sea_route.points, 0.44, 0.42, 0.56, 0.58))
+        self.assertGreater(max(abs(y - 0.50) for _x, y in sea_route.points), 0.07)
+
+    def test_ocean_route_replaces_excessively_long_inland_river_road(self) -> None:
+        geometry = _coastal_land_and_sea_choice_geometry()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.20, 0.50), "b": (0.80, 0.50)},
+                [(10, "a", "b", 5)],
+                region_by_settlement={"a": "r1", "b": "r2"},
+                world_points={"a": (0.20, 0.50), "b": (0.80, 0.50)},
+            )
+
+            roads = build_settlement_road_overlays(geometry=geometry, save_db_path=save)
+            sea_routes = build_settlement_sea_route_overlays(geometry=geometry, save_db_path=save)
+
+        self.assertIsNone(_edge(roads, "a", "b"))
+        sea_route = _edge(sea_routes, "a", "b")
+        self.assertIsNotNone(sea_route)
+        self.assertEqual(sea_route.actual_usage, 5)
+        self.assertLess(
+            sum(math.dist(a, b) for a, b in zip(sea_route.points, sea_route.points[1:])),
+            0.9,
+        )
 
     def test_adjacent_region_road_prefers_micro_edge_path_over_route_chord(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

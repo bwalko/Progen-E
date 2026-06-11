@@ -743,8 +743,10 @@ completion.
 - Extended the settlement route overlay model with sea lanes:
   - `library.world_map_roads` now builds `SeaRouteMapEdge` overlays from the same saved settlements, latest-year moves, trade/outpost demand, and conservative implied demand used by roads, but only across configured sea-route region paths.
   - sea-lane water spans follow direct smoothed curves from configured sea-route edges instead of routing through land micro-polygons; short endpoint connectors still attach settlements to their coast-side route endpoints.
+  - follow-up refinement: sea-lane water spans now sample against land micro-cells and use an invisible ocean navigation grid only when a direct segment would cross land, preserving clear authored curves while bending around islands/peninsulas.
+  - overlong inland/river road overlays now yield to a configured sea lane when the ocean path is clearly shorter and more natural for the same settlement demand.
   - `library.world_map_svg` renders a separate `sea-route-layer` with `data-sea-route-*` attributes, while `utils.gradio_data_browser` labels the shared transport overlay toggle as `Routes`.
-  - verified with `python -m py_compile library\world_map_roads.py library\world_map_svg.py utils\gradio_data_browser.py unit_test\test_world_map_roads.py`, `python -m unittest unit_test.test_world_map_roads`, and `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_roads_and_checkbox_hides_them`.
+  - verified with `python -m py_compile library\world_map_roads.py library\world_map_svg.py utils\gradio_data_browser.py unit_test\test_world_map_roads.py`, `python -m py_compile library\world_map_roads.py unit_test\test_world_map_roads.py`, `python -m unittest unit_test.test_world_map_roads`, `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_roads_and_checkbox_hides_them`, and a capped default-world smoke where 6 generated sea-route overlays produced 0 land-crossing route segments.
 
 ## Scale Population Simulation Toward Millions
 

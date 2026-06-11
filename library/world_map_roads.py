@@ -20,6 +20,7 @@ from library.world_map_geometry import (
     _nearest_point_on_segment,
     _point_in_polygon,
     _point_segment_distance,
+    _clamp,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
 )
@@ -115,6 +116,16 @@ _TERRAIN_MULTIPLIERS = {
 _MICRO_GRAPH_CACHE: dict[
     int,
     tuple[int, dict[str, set[str]], dict[tuple[str, str], tuple[Point, Point]]],
+] = {}
+_WATER_GRID_SIZE = 56
+_WATER_GRAPH_CACHE: dict[
+    int,
+    tuple[int, int, list[Point], dict[tuple[int, int], int], dict[int, list[tuple[int, float]]]],
+] = {}
+_LAND_BOUNDS_CACHE: dict[int, tuple[int, list[tuple[float, float, float, float, MicroRegionCell]]]] = {}
+_SEA_REGION_ROUTE_CACHE: dict[
+    tuple[int, int, str, str],
+    tuple[tuple[str, ...], list[Point], float] | None,
 ] = {}
 
 
@@ -700,6 +711,304 @@ def _is_sea_edge(edge: object) -> bool:
     return route_type == "sea" or edge_class == "sea_route"
 
 
+def _land_cell_bounds(
+    geometry: WorldMapGeometry,
+) -> list[tuple[float, float, float, float, MicroRegionCell]]:
+    key = id(geometry.micro_cells)
+    cached = _LAND_BOUNDS_CACHE.get(key)
+    if cached is not None and cached[0] == len(geometry.micro_cells):
+        return cached[1]
+    bounds: list[tuple[float, float, float, float, MicroRegionCell]] = []
+    for cell in geometry.micro_cells:
+        xs = [x for x, _y in cell.polygon]
+        ys = [y for _x, y in cell.polygon]
+        if not xs or not ys:
+            continue
+        bounds.append((min(xs), min(ys), max(xs), max(ys), cell))
+    _LAND_BOUNDS_CACHE[key] = (len(geometry.micro_cells), bounds)
+    return bounds
+
+
+def _land_cell_containing_point(
+    geometry: WorldMapGeometry,
+    point: Point,
+) -> MicroRegionCell | None:
+    x, y = point
+    for x0, y0, x1, y1, cell in _land_cell_bounds(geometry):
+        if x < x0 or x > x1 or y < y0 or y > y1:
+            continue
+        if _point_in_polygon(point, cell.polygon):
+            return cell
+    return None
+
+
+def _point_too_close_to_land(
+    geometry: WorldMapGeometry,
+    point: Point,
+    *,
+    clearance: float,
+) -> bool:
+    x, y = point
+    for x0, y0, x1, y1, cell in _land_cell_bounds(geometry):
+        if x < x0 - clearance or x > x1 + clearance or y < y0 - clearance or y > y1 + clearance:
+            continue
+        if _point_in_polygon(point, cell.polygon):
+            return True
+        pts = cell.polygon
+        if clearance > 0.0 and len(pts) >= 2:
+            if min(_point_segment_distance(point, a, b) for a, b in zip(pts, pts[1:] + pts[:1])) <= clearance:
+                return True
+    return False
+
+
+def _water_segment_crosses_land(
+    geometry: WorldMapGeometry,
+    start: Point,
+    end: Point,
+    *,
+    samples: int = 12,
+) -> bool:
+    if not geometry.micro_cells:
+        return False
+    distance = math.hypot(end[0] - start[0], end[1] - start[1])
+    steps = max(samples, int(distance / 0.010))
+    for idx in range(0, steps + 1):
+        t = idx / max(1, steps)
+        point = (start[0] + (end[0] - start[0]) * t, start[1] + (end[1] - start[1]) * t)
+        if _point_too_close_to_land(geometry, point, clearance=0.0045):
+            return True
+    return False
+
+
+def _coastal_water_point(
+    geometry: WorldMapGeometry,
+    point: Point,
+    toward: Point | None = None,
+) -> Point:
+    p = (_coerce_float(point[0], 0.5), _coerce_float(point[1], 0.5))
+    cell = _land_cell_containing_point(geometry, p)
+    if cell is None and not _point_too_close_to_land(geometry, p, clearance=0.0055):
+        return (_clamp(p[0], 0.006, 0.994), _clamp(p[1], 0.006, 0.994))
+    directions: list[Point] = []
+    if toward is not None:
+        dx = toward[0] - p[0]
+        dy = toward[1] - p[1]
+        length = math.hypot(dx, dy)
+        if length > 1e-7:
+            directions.append((dx / length, dy / length))
+    if cell is not None:
+        dx = p[0] - cell.center_x
+        dy = p[1] - cell.center_y
+        length = math.hypot(dx, dy)
+        if length > 1e-7:
+            directions.append((dx / length, dy / length))
+        nearest = _nearest_cell_edge(cell, p)
+        if nearest is not None:
+            projected = nearest[1]
+            dx = projected[0] - p[0]
+            dy = projected[1] - p[1]
+            length = math.hypot(dx, dy)
+            if length > 1e-7:
+                directions.append((dx / length, dy / length))
+    for idx in range(32):
+        angle = math.tau * idx / 32.0
+        directions.append((math.cos(angle), math.sin(angle)))
+
+    unique_dirs: list[Point] = []
+    seen: set[tuple[int, int]] = set()
+    for dx, dy in directions:
+        key = (round(dx * 1000), round(dy * 1000))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_dirs.append((dx, dy))
+
+    best: tuple[float, Point] | None = None
+    for radius in (0.006, 0.010, 0.016, 0.026, 0.040, 0.060, 0.085, 0.115, 0.150, 0.195, 0.250):
+        for dx, dy in unique_dirs:
+            candidate = (
+                _clamp(p[0] + dx * radius, 0.006, 0.994),
+                _clamp(p[1] + dy * radius, 0.006, 0.994),
+            )
+            if _point_too_close_to_land(geometry, candidate, clearance=0.0055):
+                continue
+            distance = math.hypot(candidate[0] - p[0], candidate[1] - p[1])
+            item = (distance, candidate)
+            if best is None or item < best:
+                best = item
+        if best is not None:
+            return best[1]
+    return (_clamp(p[0], 0.006, 0.994), _clamp(p[1], 0.006, 0.994))
+
+
+def _water_nav_graph(
+    geometry: WorldMapGeometry,
+) -> tuple[list[Point], dict[tuple[int, int], int], dict[int, list[tuple[int, float]]]]:
+    key = id(geometry.micro_cells)
+    cached = _WATER_GRAPH_CACHE.get(key)
+    if cached is not None and cached[0] == len(geometry.micro_cells) and cached[1] == _WATER_GRID_SIZE:
+        return cached[2], cached[3], cached[4]
+    nodes: list[Point] = []
+    by_grid: dict[tuple[int, int], int] = {}
+    denom = max(1, _WATER_GRID_SIZE - 1)
+    for iy in range(_WATER_GRID_SIZE):
+        y = 0.012 + (0.976 * iy / denom)
+        for ix in range(_WATER_GRID_SIZE):
+            x = 0.012 + (0.976 * ix / denom)
+            point = (round(x, 6), round(y, 6))
+            if _land_cell_containing_point(geometry, point) is not None:
+                continue
+            by_grid[(ix, iy)] = len(nodes)
+            nodes.append(point)
+    adjacency: dict[int, list[tuple[int, float]]] = {idx: [] for idx in range(len(nodes))}
+    offsets = (
+        (-1, -1), (0, -1), (1, -1),
+        (-1, 0), (1, 0),
+        (-1, 1), (0, 1), (1, 1),
+    )
+    for (ix, iy), idx in by_grid.items():
+        point = nodes[idx]
+        for ox, oy in offsets:
+            other_idx = by_grid.get((ix + ox, iy + oy))
+            if other_idx is None:
+                continue
+            other = nodes[other_idx]
+            if _water_segment_crosses_land(geometry, point, other, samples=3):
+                continue
+            adjacency[idx].append((other_idx, math.hypot(point[0] - other[0], point[1] - other[1])))
+    _WATER_GRAPH_CACHE[key] = (len(geometry.micro_cells), _WATER_GRID_SIZE, nodes, by_grid, adjacency)
+    return nodes, by_grid, adjacency
+
+
+def _visible_water_links(
+    geometry: WorldMapGeometry,
+    point: Point,
+    nodes: list[Point],
+    *,
+    limit: int = 16,
+) -> list[tuple[int, float]]:
+    nearest = sorted(
+        (
+            (math.hypot(point[0] - node[0], point[1] - node[1]), idx)
+            for idx, node in enumerate(nodes)
+        ),
+        key=lambda item: (item[0], item[1]),
+    )
+    links: list[tuple[int, float]] = []
+    for distance, idx in nearest[: max(80, limit * 10)]:
+        if links and distance > 0.22:
+            break
+        if _water_segment_crosses_land(geometry, point, nodes[idx], samples=10):
+            continue
+        links.append((idx, max(0.0001, distance)))
+        if len(links) >= limit:
+            break
+    return links
+
+
+def _simplify_water_points(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+) -> list[Point]:
+    points = _dedupe_path_points(points)
+    if len(points) <= 2:
+        return points
+    out: list[Point] = [points[0]]
+    idx = 0
+    while idx < len(points) - 1:
+        next_idx = len(points) - 1
+        while next_idx > idx + 1 and _water_segment_crosses_land(geometry, points[idx], points[next_idx], samples=14):
+            next_idx -= 1
+        out.append(points[next_idx])
+        idx = next_idx
+    return _dedupe_path_points(out)
+
+
+def _water_nav_path_around_land(
+    geometry: WorldMapGeometry,
+    start: Point,
+    end: Point,
+) -> list[Point] | None:
+    if not geometry.micro_cells:
+        return [start, end]
+    if not _water_segment_crosses_land(geometry, start, end, samples=16):
+        return [start, end]
+    nodes, _by_grid, adjacency = _water_nav_graph(geometry)
+    if not nodes:
+        return None
+    start_links = _visible_water_links(geometry, start, nodes)
+    end_links = _visible_water_links(geometry, end, nodes)
+    if not start_links or not end_links:
+        return None
+    end_link_by_idx = {idx: distance for idx, distance in end_links}
+
+    def point_for(node_id: int) -> Point:
+        if node_id == -1:
+            return start
+        if node_id == -2:
+            return end
+        return nodes[node_id]
+
+    queue: list[tuple[float, float, int]] = [(math.hypot(end[0] - start[0], end[1] - start[1]), 0.0, -1)]
+    distances: dict[int, float] = {-1: 0.0}
+    previous: dict[int, int] = {}
+    while queue:
+        _priority, cost, node_id = heapq.heappop(queue)
+        if cost > distances.get(node_id, float("inf")):
+            continue
+        if node_id == -2:
+            break
+        if node_id == -1:
+            neighbors = start_links
+        else:
+            neighbors = list(adjacency.get(node_id, ()))
+            end_distance = end_link_by_idx.get(node_id)
+            if end_distance is not None:
+                neighbors.append((-2, end_distance))
+        for other_id, step_cost in neighbors:
+            nd = cost + step_cost
+            if nd < distances.get(other_id, float("inf")):
+                distances[other_id] = nd
+                previous[other_id] = node_id
+                other = point_for(other_id)
+                heapq.heappush(
+                    queue,
+                    (nd + math.hypot(end[0] - other[0], end[1] - other[1]), nd, other_id),
+                )
+    if -2 not in distances:
+        return None
+    path_ids = [-2]
+    while path_ids[-1] != -1:
+        prior = previous.get(path_ids[-1])
+        if prior is None:
+            return None
+        path_ids.append(prior)
+    path_ids.reverse()
+    return _simplify_water_points(geometry, [point_for(node_id) for node_id in path_ids])
+
+
+def _water_route_points(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+) -> list[Point]:
+    if len(points) < 2:
+        return points
+    water_points: list[Point] = []
+    for idx, point in enumerate(points):
+        if idx + 1 < len(points):
+            toward = points[idx + 1]
+        elif idx > 0:
+            toward = points[idx - 1]
+        else:
+            toward = None
+        water_points.append(_coastal_water_point(geometry, point, toward))
+    out: list[Point] = [water_points[0]]
+    for start, end in zip(water_points, water_points[1:]):
+        segment = _water_nav_path_around_land(geometry, start, end) or [start, end]
+        out.extend(segment[1:])
+    return _dedupe_path_points(out)
+
+
 def _configured_sea_region_route(
     geometry: WorldMapGeometry,
     from_region_id: str,
@@ -710,6 +1019,13 @@ def _configured_sea_region_route(
     end = str(to_region_id or "").strip()
     if not start or not end or start == end:
         return None
+    cache_key = (id(geometry), len(geometry.edges), start, end)
+    if cache_key in _SEA_REGION_ROUTE_CACHE:
+        cached = _SEA_REGION_ROUTE_CACHE[cache_key]
+        if cached is None:
+            return None
+        cached_regions, cached_points, cached_cost = cached
+        return cached_regions, list(cached_points), cached_cost
 
     cells = geometry.cell_by_region_id()
     edge_by_pair: dict[tuple[str, str], object] = {}
@@ -737,6 +1053,7 @@ def _configured_sea_region_route(
         adjacency.setdefault(b, []).append((a, weight))
 
     if start not in adjacency or end not in adjacency:
+        _SEA_REGION_ROUTE_CACHE[cache_key] = None
         return None
 
     queue: list[tuple[float, str]] = [(0.0, start)]
@@ -755,12 +1072,14 @@ def _configured_sea_region_route(
                 previous[other] = region_id
                 heapq.heappush(queue, (nd, other))
     if end not in distances:
+        _SEA_REGION_ROUTE_CACHE[cache_key] = None
         return None
 
     region_path = [end]
     while region_path[-1] != start:
         prior = previous.get(region_path[-1])
         if prior is None:
+            _SEA_REGION_ROUTE_CACHE[cache_key] = None
             return None
         region_path.append(prior)
     region_path.reverse()
@@ -769,12 +1088,14 @@ def _configured_sea_region_route(
     for a, b in zip(region_path, region_path[1:]):
         edge = edge_by_pair.get(_pair_key(a, b))
         if edge is None:
+            _SEA_REGION_ROUTE_CACHE[cache_key] = None
             return None
         segment = list(getattr(edge, "points", None) or [])
         if len(segment) < 2:
             ca = cells.get(a)
             cb = cells.get(b)
             if ca is None or cb is None:
+                _SEA_REGION_ROUTE_CACHE[cache_key] = None
                 return None
             segment = [(ca.center_x, ca.center_y), (cb.center_x, cb.center_y)]
         if str(getattr(edge, "from_region_id", "") or "").strip() != a:
@@ -787,8 +1108,15 @@ def _configured_sea_region_route(
             points.extend(segment[1:])
     points = _dedupe_path_points(points)
     if len(points) < 2:
+        _SEA_REGION_ROUTE_CACHE[cache_key] = None
         return None
-    return tuple(region_path), points, max(0.0001, distances[end])
+    points = _water_route_points(geometry, points)
+    if len(points) < 2:
+        _SEA_REGION_ROUTE_CACHE[cache_key] = None
+        return None
+    result = (tuple(region_path), points, max(0.0001, distances[end]))
+    _SEA_REGION_ROUTE_CACHE[cache_key] = result
+    return result
 
 
 def _sea_connector_points(
@@ -840,21 +1168,16 @@ def _sea_route_between_nodes(
         region_id=b.region_id,
         ford_points=ford_points,
     )
-    points = _clean_road_points(
-        [
-            *first_connector,
-            *sea_points[1:-1],
-            *last_connector,
-        ]
-    )
+    points = _dedupe_path_points(sea_points)
     if len(points) < 2:
         return None
-    length = _path_length(points)
+    water_length = _path_length(points)
+    access_length = _path_length(first_connector) + _path_length(last_connector)
     return _SeaPath(
         points=points,
         route_regions=route_regions,
-        cost=max(0.0001, sea_cost + length * 0.25),
-        length=length,
+        cost=max(0.0001, access_length + water_length * 0.72 + sea_cost * 0.015),
+        length=max(0.0001, access_length + water_length),
     )
 
 
@@ -1793,6 +2116,35 @@ def _route_settlement_ratio(
     return route.length / direct
 
 
+def _sea_route_should_replace_land_route(
+    geometry: WorldMapGeometry,
+    land_route: _RoadPath,
+    sea_route: _SeaPath | None,
+    nodes: dict[str, RoadMapNode],
+    a: str,
+    b: str,
+) -> bool:
+    if sea_route is None:
+        return False
+    direct = max(0.0001, math.hypot(nodes[a].x - nodes[b].x, nodes[a].y - nodes[b].y))
+    land_ratio = land_route.length / direct
+    sea_ratio = sea_route.length / direct
+    if sea_route.length <= land_route.length * 0.74:
+        return True
+    if land_ratio >= 2.05 and sea_ratio <= 1.65:
+        return True
+    cells = geometry.cell_by_region_id()
+    a_cell = cells.get(nodes[a].region_id)
+    b_cell = cells.get(nodes[b].region_id)
+    both_coastal = bool(
+        a_cell is not None
+        and b_cell is not None
+        and (a_cell.is_coastal or a_cell.terrain_family == "coast")
+        and (b_cell.is_coastal or b_cell.terrain_family == "coast")
+    )
+    return both_coastal and land_ratio >= 1.75 and sea_route.length <= land_route.length * 0.88
+
+
 def _best_via_node(
     nodes: dict[str, RoadMapNode],
     routes: dict[tuple[str, str], _RoadPath],
@@ -1912,6 +2264,14 @@ def build_settlement_road_overlays(
             0.0001,
             math.hypot(nodes[key[0]].x - nodes[key[1]].x, nodes[key[0]].y - nodes[key[1]].y),
         )
+        sea_route = None
+        if (
+            nodes[key[0]].region_id != nodes[key[1]].region_id
+            and direct_route.length / direct_settlement_distance >= 1.45
+        ):
+            sea_route = _sea_route_between_nodes(geometry, nodes[key[0]], nodes[key[1]], ford_points)
+        if _sea_route_should_replace_land_route(geometry, direct_route, sea_route, nodes, key[0], key[1]):
+            continue
         strong_actual = demand.actual_usage >= max(3.0, max_actual * 0.25)
         network = _network_route(segments, key[0], key[1])
         if network is not None:
