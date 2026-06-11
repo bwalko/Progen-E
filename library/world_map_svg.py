@@ -16,6 +16,7 @@ from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID, FontAwesomeI
 from library.world_map_roads import (
     RoadMapEdge,
     SeaRouteMapEdge,
+    _water_segment_crosses_land,
     build_settlement_road_overlays,
     build_settlement_sea_route_overlays,
 )
@@ -361,6 +362,57 @@ def _smooth_line_path(points: list[tuple[float, float]]) -> str:
     return " ".join(parts)
 
 
+def _svg_title(text: str) -> str:
+    return f"<title>{html.escape(text)}</title>"
+
+
+def _soften_polyline_corners(
+    points: list[tuple[float, float]],
+    *,
+    max_cut: float = 5.0,
+    min_turn_degrees: float = 12.0,
+) -> list[tuple[float, float]]:
+    """Replace hard grid corners with short chamfers while keeping a polyline."""
+    points = _dedupe_render_points(points, min_distance=0.35)
+    points = _drop_tiny_endpoint_render_hooks(points)
+    if len(points) < 3:
+        return points
+    out: list[tuple[float, float]] = [points[0]]
+    min_turn = math.radians(min_turn_degrees)
+    for idx, current in enumerate(points[1:-1], start=1):
+        prior = points[idx - 1]
+        nxt = points[idx + 1]
+        in_vec = (prior[0] - current[0], prior[1] - current[1])
+        out_vec = (nxt[0] - current[0], nxt[1] - current[1])
+        in_len = math.hypot(*in_vec)
+        out_len = math.hypot(*out_vec)
+        if in_len <= 1e-6 or out_len <= 1e-6:
+            continue
+        dot = (in_vec[0] * out_vec[0] + in_vec[1] * out_vec[1]) / (in_len * out_len)
+        angle = math.acos(_clamp(dot, -1.0, 1.0))
+        turn = math.pi - angle
+        cut = min(max_cut, in_len * 0.40, out_len * 0.40)
+        if turn < min_turn or angle < math.radians(24.0) or cut < 0.75:
+            if math.dist(out[-1], current) >= 0.35:
+                out.append(current)
+            continue
+        before = (
+            current[0] + in_vec[0] / in_len * cut,
+            current[1] + in_vec[1] / in_len * cut,
+        )
+        after = (
+            current[0] + out_vec[0] / out_len * cut,
+            current[1] + out_vec[1] / out_len * cut,
+        )
+        if math.dist(out[-1], before) >= 0.35:
+            out.append(before)
+        if math.dist(out[-1], after) >= 0.35:
+            out.append(after)
+    if math.dist(out[-1], points[-1]) >= 0.35:
+        out.append(points[-1])
+    return out
+
+
 def _tapered_river_polygon(
     points: list[tuple[float, float]],
     *,
@@ -399,6 +451,31 @@ def _dedupe_render_points(points: list[tuple[float, float]], *, min_distance: fl
         if out and math.dist(out[-1], point) < min_distance:
             continue
         out.append(point)
+    return out
+
+
+def _drop_tiny_endpoint_render_hooks(
+    points: list[tuple[float, float]],
+    *,
+    max_endpoint_segment: float = 1.8,
+    max_line_offset: float = 1.25,
+) -> list[tuple[float, float]]:
+    """Remove sub-pixel endpoint hooks without changing route topology upstream."""
+    out = list(points)
+    while len(out) >= 3:
+        if (
+            math.dist(out[0], out[1]) <= max_endpoint_segment
+            and _point_segment_distance(out[1], out[0], out[2]) <= max_line_offset
+        ):
+            del out[1]
+            continue
+        if (
+            math.dist(out[-2], out[-1]) <= max_endpoint_segment
+            and _point_segment_distance(out[-2], out[-3], out[-1]) <= max_line_offset
+        ):
+            del out[-2]
+            continue
+        break
     return out
 
 
@@ -1743,6 +1820,203 @@ def load_world_map_overlays(
     )
 
 
+def _route_length(points: list[Point]) -> float:
+    return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(points, points[1:]))
+
+
+def _float_summary(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"min": 0.0, "avg": 0.0, "max": 0.0}
+    return {
+        "min": round(min(values), 5),
+        "avg": round(sum(values) / len(values), 5),
+        "max": round(max(values), 5),
+    }
+
+
+def _polyline_shape_debug(points: list[Point]) -> dict[str, object]:
+    length = _route_length(points)
+    segments = [
+        math.hypot(b[0] - a[0], b[1] - a[1])
+        for a, b in zip(points, points[1:])
+    ]
+    turn_degrees: list[float] = []
+    for prior, current, nxt in zip(points, points[1:], points[2:]):
+        ax = current[0] - prior[0]
+        ay = current[1] - prior[1]
+        bx = nxt[0] - current[0]
+        by = nxt[1] - current[1]
+        al = math.hypot(ax, ay)
+        bl = math.hypot(bx, by)
+        if al <= 1e-9 or bl <= 1e-9:
+            continue
+        dot = (ax * bx + ay * by) / (al * bl)
+        turn_degrees.append(math.degrees(math.acos(_clamp(dot, -1.0, 1.0))))
+    direct = (
+        math.hypot(points[-1][0] - points[0][0], points[-1][1] - points[0][1])
+        if len(points) >= 2
+        else 0.0
+    )
+    max_segment = max(segments, default=0.0)
+    return {
+        "points": len(points),
+        "segments": len(segments),
+        "length": round(length, 5),
+        "directness_ratio": round(length / max(0.0001, direct), 5) if len(points) >= 2 else 0.0,
+        "max_segment_length": round(max_segment, 5),
+        "max_segment_fraction": round(max_segment / max(0.0001, length), 5),
+        "turn_count": len(turn_degrees),
+        "max_turn_degrees": round(max(turn_degrees, default=0.0), 2),
+        "turns_ge_45_degrees": sum(1 for turn in turn_degrees if turn >= 45.0),
+        "turns_ge_75_degrees": sum(1 for turn in turn_degrees if turn >= 75.0),
+        "right_angle_like_turns": sum(1 for turn in turn_degrees if 75.0 <= turn <= 105.0),
+    }
+
+
+def build_world_map_overlay_debug_data(
+    geometry: WorldMapGeometry,
+    overlays: WorldMapOverlays,
+) -> dict[str, object]:
+    """Return compact diagnostics for settlement and route SVG overlays."""
+    settlements_by_id = {s.settlement_id: s for s in overlays.settlements}
+    sea_endpoint_distances: list[float] = []
+    missing_endpoint_settlements = 0
+    sea_route_segments = 0
+    sea_land_crossing_segments = 0
+    sea_shape_rows: list[dict[str, object]] = []
+    sea_route_rows: list[dict[str, object]] = []
+    for route in overlays.sea_routes:
+        endpoint_distances: list[float | None] = []
+        for settlement_id, point in (
+            (route.from_settlement_id, route.points[0] if route.points else None),
+            (route.to_settlement_id, route.points[-1] if route.points else None),
+        ):
+            settlement = settlements_by_id.get(settlement_id)
+            if settlement is None or point is None:
+                missing_endpoint_settlements += 1
+                endpoint_distances.append(None)
+                continue
+            distance = math.hypot(point[0] - settlement.x, point[1] - settlement.y)
+            sea_endpoint_distances.append(distance)
+            endpoint_distances.append(round(distance, 5))
+        route_land_crossings = 0
+        for start, end in zip(route.points, route.points[1:]):
+            sea_route_segments += 1
+            if _water_segment_crosses_land(geometry, start, end, samples=16):
+                route_land_crossings += 1
+                sea_land_crossing_segments += 1
+        shape = _polyline_shape_debug(route.points)
+        sea_shape_rows.append(shape)
+        sea_route_rows.append(
+            {
+                "from_settlement_id": route.from_settlement_id,
+                "to_settlement_id": route.to_settlement_id,
+                "route_regions": list(route.route_regions),
+                "points": len(route.points),
+                "length": round(_route_length(route.points), 5),
+                "actual_usage": route.actual_usage,
+                "implied_usage": route.implied_usage,
+                "endpoint_distances": endpoint_distances,
+                "land_crossing_segments": route_land_crossings,
+                "shape": shape,
+            }
+        )
+
+    road_lengths = [_route_length(road.points) for road in overlays.roads]
+    sea_lengths = [_route_length(route.points) for route in overlays.sea_routes]
+    road_route_rows: list[dict[str, object]] = []
+    road_shape_rows: list[dict[str, object]] = []
+    rendered_road_shape_rows: list[dict[str, object]] = []
+    for road in overlays.roads:
+        shape = _polyline_shape_debug(road.points)
+        rendered_points = _soften_polyline_corners(
+            [_scale(point, 1200, 800, 36) for point in road.points],
+            max_cut=5.6,
+            min_turn_degrees=10.0,
+        )
+        rendered_shape = _polyline_shape_debug(rendered_points)
+        road_shape_rows.append(shape)
+        rendered_road_shape_rows.append(rendered_shape)
+        road_route_rows.append(
+            {
+                "from_settlement_id": road.from_settlement_id,
+                "to_settlement_id": road.to_settlement_id,
+                "points": len(road.points),
+                "length": round(_route_length(road.points), 5),
+                "actual_usage": road.actual_usage,
+                "implied_usage": road.implied_usage,
+                "shape": shape,
+                "rendered_shape": rendered_shape,
+            }
+        )
+    return {
+        "counts": {
+            "settlements": len(overlays.settlements),
+            "features": len(overlays.features),
+            "polity_regions": len(overlays.polities_by_region_id),
+            "roads": len(overlays.roads),
+            "sea_routes": len(overlays.sea_routes),
+        },
+        "roads": {
+            "actual_routes": sum(1 for road in overlays.roads if road.actual_usage > 0.0),
+            "implied_only_routes": sum(1 for road in overlays.roads if road.actual_usage <= 0.0),
+            "lengths": _float_summary(road_lengths),
+            "max_usage": round(max((road.usage for road in overlays.roads), default=0.0), 4),
+            "shape": {
+                "turns_ge_75_degrees": sum(int(row["turns_ge_75_degrees"]) for row in road_shape_rows),
+                "rendered_turns_ge_75_degrees": sum(
+                    int(row["turns_ge_75_degrees"]) for row in rendered_road_shape_rows
+                ),
+                "right_angle_like_turns": sum(int(row["right_angle_like_turns"]) for row in road_shape_rows),
+                "rendered_right_angle_like_turns": sum(
+                    int(row["right_angle_like_turns"]) for row in rendered_road_shape_rows
+                ),
+                "max_segment_fraction": round(
+                    max((float(row["max_segment_fraction"]) for row in road_shape_rows), default=0.0),
+                    5,
+                ),
+            },
+            "routes": road_route_rows,
+        },
+        "sea_routes": {
+            "actual_routes": sum(1 for route in overlays.sea_routes if route.actual_usage > 0.0),
+            "implied_only_routes": sum(1 for route in overlays.sea_routes if route.actual_usage <= 0.0),
+            "lengths": _float_summary(sea_lengths),
+            "max_usage": round(max((route.usage for route in overlays.sea_routes), default=0.0), 4),
+            "segments": sea_route_segments,
+            "land_crossing_segments": sea_land_crossing_segments,
+            "missing_endpoint_settlements": missing_endpoint_settlements,
+            "endpoint_distances": _float_summary(sea_endpoint_distances),
+            "shape": {
+                "turns_ge_75_degrees": sum(int(row["turns_ge_75_degrees"]) for row in sea_shape_rows),
+                "right_angle_like_turns": sum(int(row["right_angle_like_turns"]) for row in sea_shape_rows),
+                "max_segment_fraction": round(
+                    max((float(row["max_segment_fraction"]) for row in sea_shape_rows), default=0.0),
+                    5,
+                ),
+            },
+            "routes": sea_route_rows,
+        },
+        "qa": {
+            "sea_route_land_crossing_segments": sea_land_crossing_segments,
+            "max_sea_route_endpoint_distance": round(max(sea_endpoint_distances, default=0.0), 5),
+            "missing_sea_route_endpoint_settlements": missing_endpoint_settlements,
+            "road_rendered_sharp_turn_reduction": (
+                sum(int(row["turns_ge_75_degrees"]) for row in road_shape_rows)
+                - sum(int(row["turns_ge_75_degrees"]) for row in rendered_road_shape_rows)
+            ),
+            "max_road_segment_fraction": round(
+                max((float(row["max_segment_fraction"]) for row in road_shape_rows), default=0.0),
+                5,
+            ),
+            "max_sea_route_segment_fraction": round(
+                max((float(row["max_segment_fraction"]) for row in sea_shape_rows), default=0.0),
+                5,
+            ),
+        },
+    }
+
+
 def render_world_map_svg(
     geometry: WorldMapGeometry,
     *,
@@ -1803,7 +2077,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend,.terrain-contour{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.terrain-contour{fill:none;mix-blend-mode:multiply;vector-effect:non-scaling-stroke}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.road,.sea-route{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}.road-underlay{stroke:#fffdf3;mix-blend-mode:normal}.road-line{stroke:#b21f3a}.sea-route-underlay{stroke:#d6f8ff;mix-blend-mode:screen}.sea-route-line{stroke:#205f83;stroke-dasharray:7 5}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend,.terrain-contour{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.terrain-contour{fill:none;mix-blend-mode:multiply;vector-effect:non-scaling-stroke}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-water,.river-highlight,.river-mouth{pointer-events:visiblePainted;cursor:help}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.road,.sea-route{fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:stroke}.road{stroke-linecap:round}.sea-route{stroke-linecap:butt}.road-underlay,.sea-route-underlay{pointer-events:none}.road-line,.sea-route-line,.sea-route-harbor{cursor:help}.road-underlay{stroke:#fffdf3;mix-blend-mode:normal}.road-line{stroke:#b21f3a}.sea-route-underlay{stroke:#e6fbff;mix-blend-mode:screen}.sea-route-line{stroke:#174ea6;stroke-dasharray:8 6}.sea-route-harbor{fill:#174ea6;stroke:#e6fbff;stroke-width:1.2;vector-effect:non-scaling-stroke;pointer-events:visiblePainted}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -1852,32 +2126,32 @@ def render_world_map_svg(
             water_poly = [_scale(p, width, height, pad) for p in channel.water_polygon]
             if bank_poly:
                 parts.append(
-                    f'<path class="river-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                    f'<path class="river-bank {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
                     f'd="{_open_poly_path(bank_poly)}" fill="{bank_fill}" />'
                 )
             if water_poly:
                 parts.append(
-                    f'<path class="river-water {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-                    f'd="{_open_poly_path(water_poly)}" fill="#2f8dab" />'
+                    f'<path class="river-water {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
+                    f'd="{_open_poly_path(water_poly)}" fill="#2f8dab">{_svg_title("River")}</path>'
                 )
             if channel.highlight_points:
                 water_width = 0.72 + math.sqrt(max(0.0, river.flow)) * 2.35
                 highlight_width = max(0.24, water_width * 0.12)
                 highlight_points = [_scale(p, width, height, pad) for p in channel.highlight_points]
                 parts.append(
-                    f'<path class="river river-highlight {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-                    f'd="{_smooth_line_path(highlight_points)}" stroke-width="{highlight_width:.2f}" opacity="0.72" />'
+                    f'<path class="river river-highlight {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
+                    f'd="{_smooth_line_path(highlight_points)}" stroke-width="{highlight_width:.2f}" opacity="0.72">{_svg_title("River highlight")}</path>'
                 )
             if channel.mouth_bank_polygon and channel.mouth_water_polygon:
                 mouth_bank = [_scale(p, width, height, pad) for p in channel.mouth_bank_polygon]
                 mouth_water = [_scale(p, width, height, pad) for p in channel.mouth_water_polygon]
                 parts.append(
-                    f'<path class="river-mouth-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                    f'<path class="river-mouth-bank {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
                     f'd="{_open_poly_path(mouth_bank)}" fill="{_mix_color(corridor_color, "#2f8dab", 0.34)}" />'
                 )
                 parts.append(
-                    f'<path class="river-mouth {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-                    f'd="{_open_poly_path(mouth_water)}" fill="#3f95ad" />'
+                    f'<path class="river-mouth {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
+                    f'd="{_open_poly_path(mouth_water)}" fill="#3f95ad">{_svg_title("River mouth")}</path>'
                 )
         parts.append("</g>")
 
@@ -2080,6 +2354,7 @@ def render_world_map_svg(
             river.river_id,
             flow=river.flow,
         )
+        pts = _soften_polyline_corners(pts, max_cut=4.0, min_turn_degrees=10.0)
         if len(pts) < 2:
             continue
         water_width = 0.72 + math.sqrt(max(0.0, river.flow)) * 2.35
@@ -2095,7 +2370,7 @@ def render_world_map_svg(
                 end_width=water_width + 5.2,
             )
             parts.append(
-                f'<path class="river-corridor {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                f'<path class="river-corridor {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
                 f'd="{_open_poly_path(corridor_poly)}" fill="{corridor_color}" filter="url(#river-corridor-soften)" opacity="0.46" />'
             )
 
@@ -2122,12 +2397,12 @@ def render_world_map_svg(
             )
         )
         parts.append(
-            f'<path class="river-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+            f'<path class="river-bank {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
             f'd="{_open_poly_path(bank_poly)}" fill="{bank_fill}" />'
         )
         parts.append(
-            f'<path class="river-water {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-            f'd="{_open_poly_path(water_poly)}" fill="#2f8dab" />'
+            f'<path class="river-water {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
+            f'd="{_open_poly_path(water_poly)}" fill="#2f8dab">{_svg_title("River")}</path>'
         )
         if len(pts) >= 3:
             highlight_width = max(0.24, water_width * 0.12)
@@ -2137,8 +2412,8 @@ def render_world_map_svg(
                 else _offset_line_points(pts, amount=max(0.20, water_width * -0.12))
             )
             parts.append(
-                f'<path class="river river-highlight {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-                f'd="{_smooth_line_path(highlight_points)}" stroke-width="{highlight_width:.2f}" opacity="0.72" />'
+                f'<path class="river river-highlight {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
+                f'd="{_smooth_line_path(highlight_points)}" stroke-width="{highlight_width:.2f}" opacity="0.72">{_svg_title("River highlight")}</path>'
             )
         if len(pts) >= 2 and river.points[-1] != river.points[-2]:
             if channel is not None and channel.mouth_bank_polygon and channel.mouth_water_polygon:
@@ -2147,12 +2422,12 @@ def render_world_map_svg(
             else:
                 mouth_bank, mouth_water = _river_mouth_polygons(pts, width=water_width)
             parts.append(
-                f'<path class="river-mouth-bank {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
+                f'<path class="river-mouth-bank {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
                 f'd="{_open_poly_path(mouth_bank)}" fill="{_mix_color(_corridor_color, "#2f8dab", 0.34)}" />'
             )
             parts.append(
-                f'<path class="river-mouth {html.escape(river.river_class)}" data-river-id="{html.escape(river.river_id)}" '
-                f'd="{_open_poly_path(mouth_water)}" fill="#3f95ad" />'
+                f'<path class="river-mouth {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
+                f'd="{_open_poly_path(mouth_water)}" fill="#3f95ad">{_svg_title("River mouth")}</path>'
             )
 
     overlay_sea_routes = overlays.sea_routes if overlays is not None else []
@@ -2167,6 +2442,7 @@ def render_world_map_svg(
             stroke_width = 0.85 + normalized * 1.45
             path_d = _line_path(scaled)
             attrs = (
+                f'data-map-layer="sea-route" '
                 f'data-sea-route-from-settlement-id="{html.escape(route.from_settlement_id)}" '
                 f'data-sea-route-to-settlement-id="{html.escape(route.to_settlement_id)}" '
                 f'data-sea-route-regions="{html.escape(",".join(route.route_regions))}" '
@@ -2174,14 +2450,29 @@ def render_world_map_svg(
                 f'data-sea-route-actual="{route.actual_usage:.4f}" '
                 f'data-sea-route-implied="{route.implied_usage:.4f}"'
             )
+            route_title = _svg_title(
+                f"Sea route {route.from_settlement_id} to {route.to_settlement_id}"
+            )
             parts.append(
                 f'<path class="sea-route sea-route-underlay" {attrs} d="{path_d}" '
-                f'stroke-width="{stroke_width + 1.55:.2f}" opacity="{min(0.30, route.opacity * 0.46):.3f}" />'
+                f'stroke-width="{stroke_width + 1.55:.2f}" opacity="{min(0.30, route.opacity * 0.46):.3f}">{route_title}</path>'
             )
             parts.append(
                 f'<path class="sea-route sea-route-line" {attrs} d="{path_d}" '
-                f'stroke-width="{stroke_width:.2f}" opacity="{route.opacity:.3f}" />'
+                f'stroke-width="{stroke_width:.2f}" opacity="{route.opacity:.3f}">{route_title}</path>'
             )
+            harbor_radius = min(3.2, max(1.8, stroke_width + 0.85))
+            for point, settlement_id in (
+                (scaled[0], route.from_settlement_id),
+                (scaled[-1], route.to_settlement_id),
+            ):
+                parts.append(
+                    f'<circle class="sea-route-harbor" {attrs} '
+                    f'data-sea-route-harbor-settlement-id="{html.escape(settlement_id)}" '
+                    f'cx="{point[0]:.1f}" cy="{point[1]:.1f}" r="{harbor_radius:.2f}" '
+                    f'opacity="{min(0.96, route.opacity + 0.10):.3f}">'
+                    f'{_svg_title(f"Sea route harbor {settlement_id}")}</circle>'
+                )
         parts.append("</g>")
 
     overlay_roads = overlays.roads if overlays is not None else []
@@ -2192,25 +2483,30 @@ def render_world_map_svg(
             scaled = [_scale(p, width, height, pad) for p in road.points]
             if len(scaled) < 2:
                 continue
+            scaled = _soften_polyline_corners(scaled, max_cut=5.6, min_turn_degrees=10.0)
             normalized = math.sqrt(float(road.usage) / max_usage) if max_usage > 0.0 else 0.0
             stroke_width = 1.20 + normalized * 2.05
             path_d = _line_path(scaled)
             casing_opacity = 0.58 if road.actual_usage > 0.0 else 0.34
             line_opacity = min(0.96, road.opacity + (0.18 if road.actual_usage > 0.0 else 0.08))
             attrs = (
+                f'data-map-layer="road" '
                 f'data-road-from-settlement-id="{html.escape(road.from_settlement_id)}" '
                 f'data-road-to-settlement-id="{html.escape(road.to_settlement_id)}" '
                 f'data-road-usage="{road.usage:.4f}" '
                 f'data-road-actual="{road.actual_usage:.4f}" '
                 f'data-road-implied="{road.implied_usage:.4f}"'
             )
+            road_title = _svg_title(
+                f"Road route {road.from_settlement_id} to {road.to_settlement_id}"
+            )
             parts.append(
                 f'<path class="road road-underlay" {attrs} d="{path_d}" '
-                f'stroke-width="{stroke_width + 1.65:.2f}" opacity="{casing_opacity:.3f}" />'
+                f'stroke-width="{stroke_width + 1.65:.2f}" opacity="{casing_opacity:.3f}">{road_title}</path>'
             )
             parts.append(
                 f'<path class="road road-line" {attrs} d="{path_d}" '
-                f'stroke-width="{stroke_width:.2f}" opacity="{line_opacity:.3f}" />'
+                f'stroke-width="{stroke_width:.2f}" opacity="{line_opacity:.3f}">{road_title}</path>'
             )
         parts.append("</g>")
 

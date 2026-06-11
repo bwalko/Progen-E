@@ -863,15 +863,17 @@ def _world_map_click_onclick() -> str:
             "if(!target||!target.closest){return true;}"
             "const town=target.closest('[data-settlement-id]');"
             "const feature=town?null:target.closest('[data-feature-id]');"
-            "const region=town||feature||target.closest('[data-region-id],[data-region-label]');"
-            "if(!region){return true;}"
-            "const id=town?town.dataset.settlementId:(feature?feature.dataset.featureId:(region.dataset.regionId||region.dataset.regionLabel));"
+            "const route=(town||feature)?null:target.closest('[data-map-layer]');"
+            "const region=town||feature||route?null:target.closest('[data-region-id],[data-region-label]');"
+            "const routeValue=route?{view:'Map Routes',layer:route.dataset.mapLayer||'',river_id:route.dataset.riverId||'',class_name:route.getAttribute('class')||'',from_settlement_id:route.dataset.roadFromSettlementId||route.dataset.seaRouteFromSettlementId||'',to_settlement_id:route.dataset.roadToSettlementId||route.dataset.seaRouteToSettlementId||'',regions:route.dataset.seaRouteRegions||'',usage:route.dataset.roadUsage||route.dataset.seaRouteUsage||'',actual_usage:route.dataset.roadActual||route.dataset.seaRouteActual||'',implied_usage:route.dataset.roadImplied||route.dataset.seaRouteImplied||''}:null;"
+            "if(!region&&!route){return true;}"
+            "const id=town?town.dataset.settlementId:(feature?feature.dataset.featureId:(route?(routeValue.river_id||((routeValue.from_settlement_id||'?')+'->'+(routeValue.to_settlement_id||'?'))):(region.dataset.regionId||region.dataset.regionLabel)));"
             "if(!id){return true;}"
             "event.preventDefault();event.stopPropagation();"
             "const input=document.querySelector('#map-open-selection textarea,#map-open-selection input');"
             "const button=document.querySelector('#map-open-button button,#map-open-button');"
             "if(input&&button){"
-            "const value=JSON.stringify(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||'',named:feature.dataset.featureNamed||'0'}:{view:town?'Towns':'Regions',id:id});"
+            "const value=JSON.stringify(route?Object.assign({id:id},routeValue):(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||'',named:feature.dataset.featureNamed||'0'}:{view:town?'Towns':'Regions',id:id}));"
             "const descriptor=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value');"
             "if(descriptor&&descriptor.set){descriptor.set.call(input,value);}else{input.value=value;}"
             "input.dispatchEvent(new Event('input',{bubbles:true}));"
@@ -7472,6 +7474,46 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
         return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
     view = str(selection.get("view") or "Regions")
     item_id = str(selection.get("id") or "").strip()
+    if view == "Map Routes" and item_id:
+        layer = str(selection.get("layer") or "").strip()
+        layer_title = {
+            "road": "Road Route",
+            "sea-route": "Sea Route",
+            "river": "River",
+        }.get(layer, "Map Route")
+        from_settlement_id = str(selection.get("from_settlement_id") or "").strip()
+        to_settlement_id = str(selection.get("to_settlement_id") or "").strip()
+        river_id = str(selection.get("river_id") or "").strip()
+        regions = str(selection.get("regions") or "").strip()
+        usage = str(selection.get("usage") or "").strip()
+        actual_usage = str(selection.get("actual_usage") or "").strip()
+        implied_usage = str(selection.get("implied_usage") or "").strip()
+        route_label = (
+            f"{from_settlement_id} -> {to_settlement_id}"
+            if from_settlement_id or to_settlement_id
+            else river_id or item_id
+        )
+        cards = [
+            _detail_card("Layer", layer_title),
+            _detail_card("Route", route_label),
+        ]
+        if regions:
+            cards.append(_detail_card("Regions", regions))
+        if usage:
+            cards.append(_detail_card("Usage", usage))
+        if actual_usage:
+            cards.append(_detail_card("Actual", actual_usage))
+        if implied_usage:
+            cards.append(_detail_card("Implied", implied_usage))
+        if river_id:
+            cards.append(_detail_card("River ID", river_id))
+        return (
+            '<div class="place-sheet">'
+            f"<h2>{html.escape(layer_title)}</h2>"
+            f'<div class="place-subtitle">{html.escape(route_label)}</div>'
+            f'<div class="place-grid">{"".join(cards)}</div>'
+            "</div>"
+        )
     if view == "Features" and item_id:
         name = str(selection.get("name") or item_id).strip()
         kind = str(selection.get("kind") or "feature").strip()

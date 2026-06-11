@@ -2896,10 +2896,61 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 gdb._render_world_map_html_cached.cache_clear()
 
         self.assertIn('class="road road-line"', shown)
+        self.assertIn('data-map-layer="road"', shown)
         self.assertIn("data-road-usage=", shown)
         self.assertIn('data-road-actual="3.0000"', shown)
+        self.assertIn("Map Routes", shown)
         self.assertNotIn('class="road road-line"', hidden)
         self.assertNotIn("data-road-usage", hidden)
+
+    def test_world_map_route_selection_detail_identifies_route_layer(self) -> None:
+        road_html = render_world_map_selection_detail(
+            "test",
+            json.dumps(
+                {
+                    "view": "Map Routes",
+                    "id": "r1:a->r1:b",
+                    "layer": "road",
+                    "from_settlement_id": "r1:a",
+                    "to_settlement_id": "r1:b",
+                    "usage": "3.0000",
+                    "actual_usage": "3.0000",
+                    "implied_usage": "0.0000",
+                }
+            ),
+        )
+        sea_html = render_world_map_selection_detail(
+            "test",
+            json.dumps(
+                {
+                    "view": "Map Routes",
+                    "id": "r1:a->r2:b",
+                    "layer": "sea-route",
+                    "from_settlement_id": "r1:a",
+                    "to_settlement_id": "r2:b",
+                    "regions": "r1,r2",
+                }
+            ),
+        )
+        river_html = render_world_map_selection_detail(
+            "test",
+            json.dumps(
+                {
+                    "view": "Map Routes",
+                    "id": "river-1",
+                    "layer": "river",
+                    "river_id": "river-1",
+                }
+            ),
+        )
+
+        self.assertIn("Road Route", road_html)
+        self.assertIn("r1:a -&gt; r1:b", road_html)
+        self.assertIn("Usage", road_html)
+        self.assertIn("Sea Route", sea_html)
+        self.assertIn("r1,r2", sea_html)
+        self.assertIn("River", river_html)
+        self.assertIn("river-1", river_html)
 
     def test_world_map_selection_opens_existing_region_or_town_sheet(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

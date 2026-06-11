@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -7,7 +8,13 @@ from contextlib import closing
 from pathlib import Path
 
 from library.world_map_geometry import MicroRegionCell, RegionCell, RegionEdge, WorldMapGeometry
-from library.world_map_svg import load_world_map_overlays, render_world_map_svg
+from library.world_map_svg import (
+    WorldMapOverlays,
+    _soften_polyline_corners,
+    build_world_map_overlay_debug_data,
+    load_world_map_overlays,
+    render_world_map_svg,
+)
 from library.world_map_roads import (
     RoadMapEdge,
     SeaRouteMapEdge,
@@ -585,6 +592,42 @@ def _edge(edges: list[RoadMapEdge] | list[SeaRouteMapEdge], a: str, b: str) -> R
     return None
 
 
+def _svg_path_d(svg: str, class_name: str) -> str:
+    match = re.search(rf'<path class="{re.escape(class_name)}"[^>]* d="([^"]+)"', svg)
+    if match is None:
+        raise AssertionError(f"missing SVG path for class {class_name!r}")
+    return match.group(1)
+
+
+def _svg_path_world_points(path_d: str, *, width: int = 1200, height: int = 800, pad: int = 36) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for x_text, y_text in re.findall(r"[ML]\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)", path_d):
+        x = (float(x_text) - pad) / max(1e-9, width - pad * 2)
+        y = (float(y_text) - pad) / max(1e-9, height - pad * 2)
+        out.append((x, y))
+    return out
+
+
+def _svg_circle_world_points(
+    svg: str,
+    class_name: str,
+    *,
+    width: int = 1200,
+    height: int = 800,
+    pad: int = 36,
+) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for attrs in re.findall(rf'<circle class="{re.escape(class_name)}"([^>]*)>', svg):
+        x_match = re.search(r'cx="(-?\d+(?:\.\d+)?)"', attrs)
+        y_match = re.search(r'cy="(-?\d+(?:\.\d+)?)"', attrs)
+        if x_match is None or y_match is None:
+            continue
+        x = (float(x_match.group(1)) - pad) / max(1e-9, width - pad * 2)
+        y = (float(y_match.group(1)) - pad) / max(1e-9, height - pad * 2)
+        out.append((x, y))
+    return out
+
+
 def _segment_samples_gap(points: list[tuple[float, float]]) -> bool:
     for start, end in zip(points, points[1:]):
         for idx in range(1, 8):
@@ -775,10 +818,103 @@ class TestWorldMapRoads(unittest.TestCase):
         length = sum(math.dist(a, b) for a, b in zip(sea_route.points, sea_route.points[1:]))
         self.assertLess(length, direct * 1.55)
         self.assertIn('class="sea-route sea-route-line"', svg)
+        self.assertIn('class="sea-route-harbor"', svg)
+        self.assertIn('data-map-layer="sea-route"', svg)
+        self.assertIn("<title>Sea route a to b</title>", svg)
+        self.assertIn("<title>Sea route harbor a</title>", svg)
+        self.assertIn('data-sea-route-harbor-settlement-id="a"', svg)
         self.assertIn('data-sea-route-actual="4.0000"', svg)
         sea_layer = svg.split('<g class="sea-route-layer settlement-sea-routes">', 1)[1].split("</g>", 1)[0]
         self.assertNotIn(" Q ", sea_layer)
         self.assertNotIn(" T ", sea_layer)
+        self.assertIn(".road,.sea-route{fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:stroke}", svg)
+        self.assertIn(".road-underlay,.sea-route-underlay{pointer-events:none}", svg)
+        self.assertIn(".road-line,.sea-route-line,.sea-route-harbor{cursor:help}", svg)
+        self.assertIn(".sea-route{stroke-linecap:butt}", svg)
+        self.assertIn(".sea-route-line{stroke:#174ea6;stroke-dasharray:8 6}", svg)
+        self.assertIn(".sea-route-harbor{fill:#174ea6;stroke:#e6fbff", svg)
+
+    def test_sea_route_visible_points_start_near_settlement_harbors(self) -> None:
+        geometry = _two_port_sea_geometry()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.08, 0.32), "b": (0.92, 0.68)},
+                [(10, "a", "b", 4)],
+                region_by_settlement={"a": "r1", "b": "r2"},
+                world_points={"a": (0.08, 0.32), "b": (0.92, 0.68)},
+            )
+
+            sea_routes = build_settlement_sea_route_overlays(geometry=geometry, save_db_path=save)
+            overlays = load_world_map_overlays(geometry=geometry, save_db_path=save)
+            svg = render_world_map_svg(geometry, overlays=overlays)
+
+        sea_route = _edge(sea_routes, "a", "b")
+        self.assertIsNotNone(sea_route)
+        self.assertLess(math.dist(sea_route.points[0], (0.08, 0.32)), 0.18)
+        self.assertLess(math.dist(sea_route.points[-1], (0.92, 0.68)), 0.18)
+        self.assertGreater(math.dist(sea_route.points[0], (0.30, 0.52)), 0.08)
+        self.assertGreater(math.dist(sea_route.points[-1], (0.70, 0.50)), 0.08)
+        rendered_points = _svg_path_world_points(_svg_path_d(svg, "sea-route sea-route-line"))
+        self.assertLess(math.dist(rendered_points[0], (0.08, 0.32)), 0.18)
+        self.assertLess(math.dist(rendered_points[-1], (0.92, 0.68)), 0.18)
+        self.assertGreater(math.dist(rendered_points[0], (0.30, 0.52)), 0.08)
+        self.assertGreater(math.dist(rendered_points[-1], (0.70, 0.50)), 0.08)
+        harbor_points = _svg_circle_world_points(svg, "sea-route-harbor")
+        self.assertEqual(len(harbor_points), 2)
+        self.assertLess(math.dist(harbor_points[0], (0.08, 0.32)), 0.18)
+        self.assertLess(math.dist(harbor_points[-1], (0.92, 0.68)), 0.18)
+
+    def test_overlay_debug_reports_sea_route_endpoint_and_crossing_qa(self) -> None:
+        geometry = _two_port_sea_geometry()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.08, 0.32), "b": (0.92, 0.68)},
+                [(10, "a", "b", 4)],
+                region_by_settlement={"a": "r1", "b": "r2"},
+                world_points={"a": (0.08, 0.32), "b": (0.92, 0.68)},
+            )
+
+            overlays = load_world_map_overlays(geometry=geometry, save_db_path=save)
+
+        debug = build_world_map_overlay_debug_data(geometry, overlays)
+
+        self.assertEqual(debug["counts"]["sea_routes"], 1)
+        self.assertEqual(debug["sea_routes"]["land_crossing_segments"], 0)
+        self.assertEqual(debug["qa"]["sea_route_land_crossing_segments"], 0)
+        self.assertLess(debug["qa"]["max_sea_route_endpoint_distance"], 0.18)
+        self.assertGreater(debug["qa"]["max_sea_route_segment_fraction"], 0.0)
+        self.assertIn("shape", debug["sea_routes"]["routes"][0])
+        self.assertGreater(debug["sea_routes"]["shape"]["max_segment_fraction"], 0.0)
+        self.assertEqual(debug["sea_routes"]["routes"][0]["endpoint_distances"], [0.06, 0.06])
+        self.assertEqual(debug["sea_routes"]["routes"][0]["land_crossing_segments"], 0)
+
+    def test_overlay_debug_reports_road_shape_after_render_chamfer(self) -> None:
+        overlays = WorldMapOverlays(
+            settlements=[],
+            polities_by_region_id={},
+            roads=[
+                RoadMapEdge(
+                    from_settlement_id="a",
+                    to_settlement_id="b",
+                    points=[(0.10, 0.10), (0.40, 0.10), (0.40, 0.40), (0.70, 0.40)],
+                    usage=4.0,
+                    actual_usage=4.0,
+                    implied_usage=0.0,
+                    opacity=0.72,
+                )
+            ],
+        )
+
+        debug = build_world_map_overlay_debug_data(_geometry(), overlays)
+
+        route = debug["roads"]["routes"][0]
+        self.assertEqual(route["shape"]["right_angle_like_turns"], 2)
+        self.assertEqual(route["rendered_shape"]["right_angle_like_turns"], 0)
+        self.assertEqual(debug["roads"]["shape"]["right_angle_like_turns"], 2)
+        self.assertEqual(debug["roads"]["shape"]["rendered_right_angle_like_turns"], 0)
+        self.assertGreaterEqual(debug["qa"]["road_rendered_sharp_turn_reduction"], 2)
 
     def test_configured_sea_neighbor_gets_implied_route_without_moves(self) -> None:
         geometry = _two_port_sea_geometry()
@@ -893,6 +1029,16 @@ class TestWorldMapRoads(unittest.TestCase):
 
         self.assertEqual(cleaned, [(0.1, 0.1), (0.18, 0.12)])
 
+    def test_road_point_cleanup_prunes_tiny_preserved_spur(self) -> None:
+        start = (0.160647, 0.41096)
+        spur = (0.156489, 0.411953)
+        end = (0.168, 0.418)
+        points = [start, spur, start, end]
+
+        cleaned = _clean_road_points(points, preserve_points=[spur])
+
+        self.assertEqual(cleaned, [start, end])
+
     def test_road_point_cleanup_prunes_returned_polygon_loop(self) -> None:
         points = [
             (0.10, 0.10),
@@ -906,6 +1052,58 @@ class TestWorldMapRoads(unittest.TestCase):
         cleaned = _clean_road_points(points)
 
         self.assertEqual(cleaned, [(0.10, 0.10), (0.20, 0.10), (0.30, 0.12)])
+
+    def test_road_render_corner_softening_keeps_polyline_but_reduces_grid_corners(self) -> None:
+        points = [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (40.0, 20.0)]
+
+        softened = _soften_polyline_corners(points, max_cut=5.0)
+
+        self.assertNotIn((20.0, 0.0), softened)
+        self.assertNotIn((20.0, 20.0), softened)
+        self.assertIn((15.0, 0.0), softened)
+        self.assertIn((20.0, 5.0), softened)
+        self.assertEqual(softened[0], points[0])
+        self.assertEqual(softened[-1], points[-1])
+
+    def test_road_render_corner_softening_prunes_tiny_endpoint_hook(self) -> None:
+        points = [
+            (195.359328, 317.132488),
+            (194.260656, 317.03712),
+            (207.881991, 328.920619),
+            (220.0, 340.0),
+        ]
+
+        softened = _soften_polyline_corners(points, max_cut=5.6, min_turn_degrees=10.0)
+
+        self.assertEqual(softened[0], points[0])
+        self.assertNotIn(points[1], softened)
+        self.assertEqual(softened[-1], points[-1])
+
+    def test_rendered_road_path_chamfers_raw_grid_corner(self) -> None:
+        overlays = WorldMapOverlays(
+            settlements=[],
+            polities_by_region_id={},
+            roads=[
+                RoadMapEdge(
+                    from_settlement_id="a",
+                    to_settlement_id="b",
+                    points=[(0.10, 0.10), (0.40, 0.10), (0.40, 0.40), (0.70, 0.40)],
+                    usage=4.0,
+                    actual_usage=4.0,
+                    implied_usage=0.0,
+                    opacity=0.72,
+                )
+            ]
+        )
+
+        svg = render_world_map_svg(_geometry(), overlays=overlays)
+
+        road_d = _svg_path_d(svg, "road road-line")
+        self.assertNotIn("L 487.2 108.8", road_d)
+        self.assertNotIn("L 487.2 327.2", road_d)
+        self.assertIn("L 481.6 108.8", road_d)
+        self.assertIn("L 487.2 114.4", road_d)
+        self.assertIn("<title>Road route a to b</title>", svg)
 
     def test_direct_road_when_indirect_circuity_is_high(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -963,6 +1161,8 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertIn((0.5, 0.5), road.points)
         self.assertIn(".road-underlay{stroke:#fffdf3", svg)
         self.assertIn(".road-line{stroke:#b21f3a}", svg)
+        self.assertIn('data-map-layer="road"', svg)
+        self.assertIn("<title>Road route a to c</title>", svg)
         road_layer = svg.split('<g class="road-layer settlement-roads">', 1)[1].split("</g>", 1)[0]
         self.assertNotIn(" Q ", road_layer)
         self.assertNotIn(" T ", road_layer)

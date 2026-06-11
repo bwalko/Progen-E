@@ -1215,21 +1215,23 @@ def _sea_route_between_nodes(
     route_regions, sea_points, sea_cost = sea_route
     start_point = (a.x, a.y)
     end_point = (b.x, b.y)
+    start_water = _coastal_water_point(geometry, start_point, sea_points[0])
+    end_water = _coastal_water_point(geometry, end_point, sea_points[-1])
     first_connector = _sea_connector_points(
         geometry,
         start_point,
-        sea_points[0],
+        start_water,
         region_id=a.region_id,
         ford_points=ford_points,
     )
     last_connector = _sea_connector_points(
         geometry,
-        sea_points[-1],
+        end_water,
         end_point,
         region_id=b.region_id,
         ford_points=ford_points,
     )
-    points = _dedupe_path_points(sea_points)
+    points = _water_route_points(geometry, [start_water, *sea_points, end_water])
     if len(points) < 2:
         return None
     water_length = _path_length(points)
@@ -2036,6 +2038,7 @@ def _clean_road_points(points: list[Point], preserve_points: list[Point] | None 
     preserve_points = preserve_points or []
     out: list[Point] = []
     loop_tolerance = 0.004
+    preserved_spur_tolerance = 0.006
     for point in _dedupe_path_points(points):
         repeat_idx = next(
             (
@@ -2054,7 +2057,10 @@ def _clean_road_points(points: list[Point], preserve_points: list[Point] | None 
         if (
             len(out) >= 2
             and math.hypot(point[0] - out[-2][0], point[1] - out[-2][1]) <= loop_tolerance
-            and not _is_preserved_point(out[-1], preserve_points, tolerance=loop_tolerance)
+            and (
+                not _is_preserved_point(out[-1], preserve_points, tolerance=loop_tolerance)
+                or math.hypot(out[-1][0] - out[-2][0], out[-1][1] - out[-2][1]) <= preserved_spur_tolerance
+            )
         ):
             out.pop()
             if math.hypot(point[0] - out[-1][0], point[1] - out[-1][1]) > 1e-7:

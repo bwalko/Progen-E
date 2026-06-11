@@ -19,6 +19,7 @@ if str(_ROOT) not in sys.path:
 
 from library.world_map_geometry import build_world_map_debug_data, build_world_map_geometry  # noqa: E402
 from library.world_map_svg import (  # noqa: E402
+    build_world_map_overlay_debug_data,
     load_world_map_overlays,
     render_world_map_svg,
 )
@@ -100,8 +101,11 @@ def main() -> None:
     if args.debug_output is not None:
         debug_output = args.debug_output.resolve()
         debug_output.parent.mkdir(parents=True, exist_ok=True)
+        debug_data = build_world_map_debug_data(geometry)
+        if overlays is not None:
+            debug_data["route_overlays"] = build_world_map_overlay_debug_data(geometry, overlays)
         debug_output.write_text(
-            json.dumps(build_world_map_debug_data(geometry), indent=2, sort_keys=True),
+            json.dumps(debug_data, indent=2, sort_keys=True),
             encoding="utf-8",
             newline="\n",
         )
