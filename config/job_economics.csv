@@ -5,25 +5,15 @@ job_key,era,row_kind,pool_draw,wage_yield,value_add,tax_rate
 *,medieval,base,0.2300,0.2900,0.2700,0.0680
 *,modern,base,0.2100,0.3100,0.2900,0.0780
 *,*,base,0.2100,0.3100,0.2900,0.0780
+accountant,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 alchemist-priest,bronze_age,deviation,0.8096,3.7950,3.8280,1.3570
-anxious steward,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
 architect,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
 astronomer-priest,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
-authoritarian leader,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
-bad midwife assistant,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-bizarre architect,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
 blunt scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-boastful officer,bronze_age,deviation,0.7800,4.1000,4.0000,1.3800
 brick carrier,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 caravan master,bronze_age,deviation,0.7800,4.1000,4.0000,1.3800
-careless porter,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-careless servant,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-careless treasurer,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-casual porter,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 chariot daredevil,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 clan diplomat,bronze_age,deviation,0.7800,4.1000,4.0000,1.3800
-corrupt priest,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-corrupt scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 court astrologer,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 cult founder,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 dock hand,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
@@ -32,9 +22,6 @@ dock porter,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 ecstatic priest,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 engineer,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
 estate steward,bronze_age,deviation,0.7800,4.1000,4.0000,1.3800
-failed scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-false priest,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-fanatical priest,bronze_age,deviation,0.8624,2.5530,2.5740,1.2420
 fertility cult figure,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 festival helper,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 field hand,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
@@ -42,18 +29,15 @@ field laborer,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 gambler,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
 grain porter,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 granary helper,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
-harsh judge,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-heretic inventor,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
 hermit priest,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-inquisitorial priest,bronze_age,deviation,0.8624,2.5530,2.5740,1.2420
 inventor,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
 judge,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 judge advocate,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 kiln assistant,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 lament priestess/priest,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 law scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
+leader,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 light potter,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-low-output field hand,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 market stall helper,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 marriage broker,bronze_age,deviation,0.7800,4.1000,4.0000,1.3800
 mason,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
@@ -62,24 +46,19 @@ menial laborer,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 midwife,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 midwife assistant,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 mud-brick laborer,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
-obsessive accountant,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
-obsessive scribe,bronze_age,deviation,0.8624,2.5530,2.5740,1.2420
 officer,bronze_age,deviation,0.7800,4.1000,4.0000,1.3800
 oracle,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 oracle attendant,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
-overbearing midwife,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-overinvolved midwife,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 palace intriguer,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 physician,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
 porter,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 potter,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-priest,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-radical inventor,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
+priest,bronze_age,deviation,0.8624,2.5530,2.5740,1.2420
 reform priest,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 rigid teacher,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 ritual scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 royal workshop specialist,bronze_age,deviation,0.6336,7.1760,6.6000,1.7825
-scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
+scribe,bronze_age,deviation,0.8624,2.5530,2.5740,1.2420
 scribe assistant,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 shock infantry,bronze_age,deviation,0.7216,4.9680,4.4880,1.4030
 shock troop,bronze_age,deviation,0.7216,4.9680,4.4880,1.4030
@@ -88,15 +67,9 @@ slave-driver-equivalent oppressor,bronze_age,deviation,0.8800,1.3800,1.3200,1.15
 slave-market-equivalent oppressor,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 slaver-equivalent oppressor,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 standard potter,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
-sycophant scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 tax helper,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 teacher,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 temple astronomer,bronze_age,deviation,0.6336,7.1760,6.6000,1.7825
-unreliable apprentice,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable guard,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable herald,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable scribe,bronze_age,deviation,1.0800,0.3800,0.4000,0.8200
-unstable architect,bronze_age,deviation,0.9200,2.7500,2.9000,1.1800
 wandering scribe,bronze_age,deviation,0.9800,1.8500,1.9500,1.0800
 warlord,bronze_age,deviation,0.8800,1.3800,1.3200,1.1500
 water carrier,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
@@ -104,13 +77,10 @@ workshop helper,bronze_age,deviation,1.1000,0.5500,0.5800,0.9200
 alchemist,iron_age,deviation,0.8096,3.7950,3.8280,1.3570
 arena choreographer,iron_age,deviation,0.6336,7.1760,6.6000,1.7825
 assistant artisan,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
-bad household manager,iron_age,deviation,1.0800,0.3800,0.4000,0.8200
 baggage carrier,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 baggage handler,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 blacksmith striker,iron_age,deviation,0.8200,3.6000,3.4000,1.2200
 blunt philosopher,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
-careless soldier,iron_age,deviation,1.0800,0.3800,0.4000,0.8200
-casual laborer,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 celebrity athlete-equivalent,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 civil engineer,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 clan representative,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
@@ -118,13 +88,10 @@ clerk assistant,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 courtesan-adjacent entertainer,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 cult leader,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 demagogue,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
+duel referee,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 duelist,iron_age,deviation,0.7216,4.9680,4.4880,1.4030
-eccentric philosopher,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
-engineer,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
+engineer,iron_age,deviation,0.8096,3.7950,3.8280,1.3570
 experimental physician,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
-failed officer,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
-failed scribe,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
-famous duel referee,iron_age,deviation,0.6336,7.1760,6.6000,1.7825
 firefighter-equivalent,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 galley rower,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 gambler,iron_age,deviation,1.0800,0.3800,0.4000,0.8200
@@ -132,10 +99,7 @@ gladiator,iron_age,deviation,0.7216,4.9680,4.4880,1.4030
 gladiator trainer,iron_age,deviation,0.7216,4.9680,4.4880,1.4030
 gladiator-persona,iron_age,deviation,0.7216,4.9680,4.4880,1.4030
 governor-equivalent leader,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
-harsh officer,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
-harsh physician,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 herbalist assistant,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
-heretic philosopher,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 household head,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
 inquisitor,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 inquisitor aide,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
@@ -143,29 +107,23 @@ inventor,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 judge,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 judge aide,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 jurist,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
+laborer,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 legionary,iron_age,deviation,0.8200,3.6000,3.4000,1.2200
-low-rank porter,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 loyalist officer,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
-mad inventor,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 magistrate,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
 market helper,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 military officer,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
 military strategist,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
 mill assistant,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
-negligent physician assistant,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 nurse-equivalent,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
-obsessive engineer,iron_age,deviation,0.8096,3.7950,3.8280,1.3570
 officer,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
 ombudsman-equivalent,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 orthodox priest,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
-overinvolved physician,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
-overprotective physician,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
-paranoid officer,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
-paranoid strategist,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 philosopher,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 philosopher hermit,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 physician,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 physician advocate,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
+physician assistant,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 physician in crisis,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 physician retainer,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 pirate,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
@@ -173,24 +131,19 @@ porter,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 quarry laborer,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 remote healer,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 revenge officer,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
-risky engineer,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 road crew laborer,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 scientist-equivalent natural philosopher,iron_age,deviation,0.8096,3.7950,3.8280,1.3570
+scribe,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 scribe assistant,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 secret police-equivalent,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 shock entertainer,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 siege craft specialist,iron_age,deviation,0.7216,4.9680,4.4880,1.4030
-smothering teacher,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 stoic philosopher,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 strategist,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 surgeon assistant,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
 teacher,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 tradition teacher,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 traveling philosopher,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
-unreliable farmhand,iron_age,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable messenger,iron_age,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable spy,iron_age,deviation,1.0800,0.3800,0.4000,0.8200
-vain philosopher,iron_age,deviation,0.9200,2.7500,2.9000,1.1800
 village smith helper,iron_age,deviation,0.9800,1.8500,1.9500,1.0800
 warlord,iron_age,deviation,0.8800,1.3800,1.3200,1.1500
 workshop assistant,iron_age,deviation,1.1000,0.5500,0.5800,0.9200
@@ -198,40 +151,27 @@ zealot officer,iron_age,deviation,0.7800,4.1000,4.0000,1.3800
 abbess/abbot-equivalent leader,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 abbot/abbess-equivalent leader,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 abbott/abbess-equivalent leader,medieval,deviation,0.8800,1.3800,1.3200,1.1500
-abusive guild master,medieval,deviation,0.7800,4.1000,4.0000,1.3800
 alchemist,medieval,deviation,0.8096,3.7950,3.8280,1.3570
-anxious nurse-equivalent,medieval,deviation,0.9504,0.5244,0.5280,0.9430
 apprentice troublemaker,medieval,deviation,1.0800,0.3800,0.4000,0.8200
 architect,medieval,deviation,0.9200,2.7500,2.9000,1.1800
 assistant apothecary,medieval,deviation,1.1000,0.5500,0.5800,0.9200
-authoritarian mayor,medieval,deviation,0.7800,4.1000,4.0000,1.3800
-bad nurse-equivalent,medieval,deviation,0.9504,0.5244,0.5280,0.9430
-bad steward,medieval,deviation,1.0800,0.3800,0.4000,0.8200
-bankrupt minor leader,medieval,deviation,1.0800,0.3800,0.4000,0.8200
 brewery assistant,medieval,deviation,0.9800,1.8500,1.9500,1.0800
-casual field hand,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 cathedral clock specialist,medieval,deviation,0.6336,7.1760,6.6000,1.7825
 celibate physician,medieval,deviation,0.9200,2.7500,2.9000,1.1800
 clerk assistant,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 constable,medieval,deviation,0.7800,4.1000,4.0000,1.3800
-controlling abbess/abbot-equivalent leader,medieval,deviation,0.8800,1.3800,1.3200,1.1500
+copyist,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 copyist assistant,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 crusader-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 duelist,medieval,deviation,0.7216,4.9680,4.4880,1.4030
-eccentric inventor,medieval,deviation,0.9200,2.7500,2.9000,1.1800
 estate steward,medieval,deviation,0.7800,4.1000,4.0000,1.3800
 executioner assistant,medieval,deviation,1.1000,0.5500,0.5800,0.9200
-false prophet,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 fashion model-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 field hand,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 field laborer,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 firefighter-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 gambler,medieval,deviation,1.0800,0.3800,0.4000,0.8200
-guild master,medieval,deviation,0.7800,4.1000,4.0000,1.3800
-guild peak master,medieval,deviation,0.6336,7.1760,6.6000,1.7825
-harsh guild master,medieval,deviation,0.7800,4.1000,4.0000,1.3800
-harsh magistrate,medieval,deviation,0.7800,4.1000,4.0000,1.3800
-harsh teacher,medieval,deviation,0.9800,1.8500,1.9500,1.0800
+guild master,medieval,deviation,0.6864,5.6580,5.2800,1.5870
 infirmary assistant,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 inquisitor,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 inquisitor aide,medieval,deviation,0.8800,1.3800,1.3200,1.1500
@@ -242,8 +182,8 @@ jester,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 judge,medieval,deviation,0.9800,1.8500,1.9500,1.0800
 kitchen helper,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 knight-equivalent soldier,medieval,deviation,0.7216,4.9680,4.4880,1.4030
-lavish lord-equivalent leader,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 longbowman,medieval,deviation,0.7216,4.9680,4.4880,1.4030
+lord-equivalent leader,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 magistrate,medieval,deviation,0.7800,4.1000,4.0000,1.3800
 martyr nurse-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 masked inquisitor,medieval,deviation,0.8800,1.3800,1.3200,1.1500
@@ -258,19 +198,17 @@ mill worker,medieval,deviation,0.9800,1.8500,1.9500,1.0800
 monster-hunter persona,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 muck worker,medieval,deviation,1.0800,0.3800,0.4000,0.8200
 nurse-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
-obsessive copyist,medieval,deviation,0.8800,1.3800,1.3200,1.1500
-obsessive scholar,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 odd-job laborer,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 officer,medieval,deviation,0.7800,4.1000,4.0000,1.3800
-overinvolved teacher,medieval,deviation,0.9800,1.8500,1.9500,1.0800
 parish laborer,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 physician,medieval,deviation,0.9200,2.7500,2.9000,1.1800
 plague physician,medieval,deviation,0.9200,2.7500,2.9000,1.1800
 plague prophet,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 porter,medieval,deviation,1.1000,0.5500,0.5800,0.9200
-reckless crusader-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
+prophet,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 reeve assistant,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 robber baron-equivalent,medieval,deviation,0.8800,1.3800,1.3200,1.1500
+scholar,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 scribe,medieval,deviation,0.9800,1.8500,1.9500,1.0800
 scullion,medieval,deviation,1.0800,0.3800,0.4000,0.8200
 siege engineer,medieval,deviation,0.9200,2.7500,2.9000,1.1800
@@ -278,23 +216,15 @@ teacher,medieval,deviation,0.9800,1.8500,1.9500,1.0800
 tournament fighter,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 town crier assistant,medieval,deviation,1.1000,0.5500,0.5800,0.9200
 tradition teacher,medieval,deviation,0.9800,1.8500,1.9500,1.0800
-unreliable apprentice,medieval,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable clerk,medieval,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable courier,medieval,deviation,1.0800,0.3800,0.4000,0.8200
 vendetta knight-equivalent,medieval,deviation,0.7216,4.9680,4.4880,1.4030
 village elder,medieval,deviation,0.7800,4.1000,4.0000,1.3800
 warlord-equivalent leader,medieval,deviation,0.8800,1.3800,1.3200,1.1500
-witch-hunter archetype,medieval,deviation,0.8800,1.3800,1.3200,1.1500
 administrative assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
 analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
-anxious manager,modern,deviation,1.0800,0.3800,0.4000,0.8200
-anxious teacher,modern,deviation,1.0800,0.3800,0.4000,0.8200
 archive assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
-authoritarian leader,modern,deviation,0.8800,1.3800,1.3200,1.1500
+assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
+auditor,modern,deviation,0.8800,1.3800,1.3200,1.1500
 back-office analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
-bad cfo,modern,deviation,1.0800,0.3800,0.4000,0.8200
-bad manager,modern,deviation,1.0800,0.3800,0.4000,0.8200
-basic analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
 brand mascot,modern,deviation,0.8800,1.3800,1.3200,1.1500
 career hopper,modern,deviation,0.8800,1.3800,1.3200,1.1500
 cartel boss,modern,deviation,0.8800,1.3800,1.3200,1.1500
@@ -307,58 +237,53 @@ conspiracy analyst,modern,deviation,0.8096,3.7950,3.8280,1.3570
 conspiracy influencer,modern,deviation,0.8800,1.3800,1.3200,1.1500
 conspiracy investigator,modern,deviation,0.8800,1.3800,1.3200,1.1500
 corporate raider,modern,deviation,0.8800,1.3800,1.3200,1.1500
-corrupt police officer,modern,deviation,0.7800,4.1000,4.0000,1.3800
 couch-surfer archetype,modern,deviation,0.8800,1.3800,1.3200,1.1500
+crisis negotiator,modern,deviation,0.8800,1.3800,1.3200,1.1500
 cult leader,modern,deviation,0.8800,1.3800,1.3200,1.1500
 cybersecurity analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
-dark-pattern marketer,modern,deviation,0.8800,1.3800,1.3200,1.1500
 data analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
 demagogue,modern,deviation,0.8800,1.3800,1.3200,1.1500
-disruptive founder,modern,deviation,0.8800,1.3800,1.3200,1.1500
-elite crisis negotiator,modern,deviation,0.6336,7.1760,6.6000,1.7825
 engineer,modern,deviation,0.9200,2.7500,2.9000,1.1800
 executive assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
 expedition guide,modern,deviation,0.8800,1.3800,1.3200,1.1500
 fandom organizer,modern,deviation,0.8800,1.3800,1.3200,1.1500
-fraud analyst gone bad,modern,deviation,0.9200,2.7500,2.9000,1.1800
+founder,modern,deviation,0.8800,1.3800,1.3200,1.1500
+fraud analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
 gambler,modern,deviation,1.0800,0.3800,0.4000,0.8200
 generalist assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
 groundskeeping assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
-helicopter parent archetype,modern,deviation,0.8800,1.3800,1.3200,1.1500
 influencer assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
 janitorial aide,modern,deviation,1.1000,0.5500,0.5800,0.9200
 judge,modern,deviation,0.9800,1.8500,1.9500,1.0800
-junior analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
 lab assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
+leader,modern,deviation,0.8800,1.3800,1.3200,1.1500
 library assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
-mad-scientist archetype,modern,deviation,0.8096,3.7950,3.8280,1.3570
+marketer,modern,deviation,0.8800,1.3800,1.3200,1.1500
 meme creator,modern,deviation,0.8800,1.3800,1.3200,1.1500
+military leader,modern,deviation,0.8800,1.3800,1.3200,1.1500
 monk/nun-equivalent,modern,deviation,0.8800,1.3800,1.3200,1.1500
+negotiator,modern,deviation,0.8800,1.3800,1.3200,1.1500
 nightlife promoter,modern,deviation,0.8800,1.3800,1.3200,1.1500
-obsessive auditor,modern,deviation,0.8800,1.3800,1.3200,1.1500
-obsessive founder,modern,deviation,0.8800,1.3800,1.3200,1.1500
 outsider scientist,modern,deviation,0.9200,2.7500,2.9000,1.1800
+parent,modern,deviation,0.8800,1.3800,1.3200,1.1500
 physician,modern,deviation,0.9200,2.7500,2.9000,1.1800
 physician advocate,modern,deviation,0.9200,2.7500,2.9000,1.1800
 podcaster,modern,deviation,0.8800,1.3800,1.3200,1.1500
 police officer,modern,deviation,0.7800,4.1000,4.0000,1.3800
 policy analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
-predatory founder,modern,deviation,0.8800,1.3800,1.3200,1.1500
-predatory negotiator,modern,deviation,0.8800,1.3800,1.3200,1.1500
-prize-winning specialist,modern,deviation,0.6336,7.1760,6.6000,1.7825
 process engineer,modern,deviation,0.9200,2.7500,2.9000,1.1800
 professor,modern,deviation,0.9200,2.7500,2.9000,1.1800
 propaganda strategist,modern,deviation,0.9200,2.7500,2.9000,1.1800
 quant trader,modern,deviation,0.8800,1.3800,1.3200,1.1500
-reckless founder,modern,deviation,0.8800,1.3800,1.3200,1.1500
 research scientist,modern,deviation,0.9200,2.7500,2.9000,1.1800
 risk officer,modern,deviation,0.7800,4.1000,4.0000,1.3800
-scientist,modern,deviation,0.9200,2.7500,2.9000,1.1800
+scientist,modern,deviation,0.8096,3.7950,3.8280,1.3570
 security analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
 shock comedian,modern,deviation,0.8800,1.3800,1.3200,1.1500
 shock influencer,modern,deviation,0.8800,1.3800,1.3200,1.1500
 shock jock,modern,deviation,0.8800,1.3800,1.3200,1.1500
 software engineer,modern,deviation,0.9200,2.7500,2.9000,1.1800
+specialist,modern,deviation,0.8800,1.3800,1.3200,1.1500
 startup hopper,modern,deviation,0.8800,1.3800,1.3200,1.1500
 stockroom helper,modern,deviation,1.1000,0.5500,0.5800,0.9200
 storm chaser,modern,deviation,0.8800,1.3800,1.3200,1.1500
@@ -368,17 +293,10 @@ teacher,modern,deviation,0.9800,1.8500,1.9500,1.0800
 threat intelligence analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
 travel creator,modern,deviation,0.8800,1.3800,1.3200,1.1500
 trend analyst,modern,deviation,0.9200,2.7500,2.9000,1.1800
-underemployed assistant,modern,deviation,1.1000,0.5500,0.5800,0.9200
-unreliable gig worker,modern,deviation,1.0800,0.3800,0.4000,0.8200
-unstable founder,modern,deviation,0.8800,1.3800,1.3200,1.1500
 venture-scale architect,modern,deviation,0.6336,7.1760,6.6000,1.7825
-volatile founder,modern,deviation,0.8800,1.3800,1.3200,1.1500
 warehouse picker,modern,deviation,1.1000,0.5500,0.5800,0.9200
-warlord archetype,modern,deviation,0.8800,1.3800,1.3200,1.1500
 whistleblower,modern,deviation,0.8800,1.3800,1.3200,1.1500
 ambush spotter,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
-anxious healer,prehistoric,deviation,1.0800,0.3800,0.4000,0.8200
-bad child watcher,prehistoric,deviation,1.0800,0.3800,0.4000,0.8200
 band champion,prehistoric,deviation,0.6336,7.1760,6.6000,1.7825
 band defender,prehistoric,deviation,0.8200,3.6000,3.4000,1.2200
 berry picker,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
@@ -390,18 +308,12 @@ camp helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 camp judge,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 camp laborer,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 camp sweeper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
-careless animal keeper,prehistoric,deviation,1.0800,0.3800,0.4000,0.8200
-careless fire keeper,prehistoric,deviation,1.0800,0.3800,0.4000,0.8200
 child helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 craft helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 crisis leader,prehistoric,deviation,0.7800,4.1000,4.0000,1.3800
-dependent helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 direct healer,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
-eccentric healer,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 elder assistant,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 execution helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
-false healer,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
-false prophet,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
 feud judge,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 fire specialist,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 firewood carrier,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
@@ -412,21 +324,17 @@ half-trained healer,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 healer,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 hermit gatherer,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
+household helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
+inventor,prehistoric,deviation,0.9200,2.7500,2.9000,1.1800
 isolated toolmaker,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 judge of disputes,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
-lazy scout,prehistoric,deviation,1.0800,0.3800,0.4000,0.8200
 light gatherer,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 masked ritual helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
-neglectful stores helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 oath zealot,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
-obsessive planner,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
-obsessive toolmaker,prehistoric,deviation,0.8624,2.5530,2.5740,1.2420
-obsessive tracker,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
 passive gatherer,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
+planner,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
+prophet,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
 quiet healer,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
-rare-tool specialist,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
-risky inventor,prehistoric,deviation,0.9200,2.7500,2.9000,1.1800
-risky strategist,prehistoric,deviation,0.9200,2.7500,2.9000,1.1800
 ritual assistant,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 rival gatherer,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 rival helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
@@ -437,17 +345,15 @@ sabotage helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 seasonal planner,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 shy helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 silent laborer,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
-simple gatherer,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 sloppy tool helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 solitary gatherer,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
+stores helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
 strategist,prehistoric,deviation,0.9200,2.7500,2.9000,1.1800
 teacher,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 tool carrier,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
-toolmaker,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
+tool specialist,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
+toolmaker,prehistoric,deviation,0.8624,2.5530,2.5740,1.2420
+tracker,prehistoric,deviation,0.8800,1.3800,1.3200,1.1500
 tradition helper,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200
-unreliable gatherer,prehistoric,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable messenger,prehistoric,deviation,1.0800,0.3800,0.4000,0.8200
-unreliable trader,prehistoric,deviation,1.0800,0.3800,0.4000,0.8200
 vision quest guide,prehistoric,deviation,0.6336,7.1760,6.6000,1.7825
-visionary toolmaker,prehistoric,deviation,0.9800,1.8500,1.9500,1.0800
 wood hauler,prehistoric,deviation,1.1000,0.5500,0.5800,0.9200

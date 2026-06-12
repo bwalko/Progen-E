@@ -62,6 +62,22 @@ LEGACY_SCORE_KEY_TO_LABEL = {
     "martyr_reformer": "Martyr",
 }
 LEGACY_SCORE_LABEL_TO_KEY = {v: k for k, v in LEGACY_SCORE_KEY_TO_LABEL.items()}
+LEGACY_SCORE_MIN_DISPLAY = 0.70
+ARCHIVE_SCORE_DEFINITIONS = {
+    "Narrative Heat": "0-100: how much visible story material this person has accumulated from events, relationships, rarity, and consequences.",
+    "ARI": "Archive Recognition Index, 0-100: how likely this person is to be identifiable in later records instead of surviving only as background context.",
+    "Hidden Heat": "0-100: story significance that exists in private, sealed, rumored, or currently obscure records.",
+    "Violet Marginalia": "Whether the person crosses the threshold for later annotators to flag them as unusually archive-worthy.",
+    "Recognition": "Bucketed explanation of the Archive Recognition Index.",
+    "Narrative": "Bucketed explanation of the total Narrative Heat score.",
+    "Events": "Narrative Heat from direct event participation.",
+    "Contradictions": "Narrative Heat from tension, reversals, and conflicting public/private traces.",
+    "Consequences": "Narrative Heat from obligations, reputation marks, legal fallout, or domain effects.",
+    "Social": "Narrative Heat from relationship, household, office, and social-network entanglement.",
+    "Rarity": "Narrative Heat from unusual traits, roles, circumstances, or low-frequency combinations.",
+    "Volatility": "Narrative Heat from instability, risk, or fast-changing life context.",
+    "Legacy": "Narrative Heat contributed by high legacy-index potential.",
+}
 LOGGER = logging.getLogger("gradio_data_browser")
 REGION_BROWSER_HEADERS = [
     "Name",
@@ -539,6 +555,11 @@ body.dark .person-sheet,
     color: var(--person-sheet-muted) !important;
     font-size: 12px;
     text-transform: uppercase;
+}
+.detail-label[title] {
+    cursor: help;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
 }
 .detail-value {
     color: var(--person-sheet-text) !important;
@@ -1450,7 +1471,26 @@ def _history_region_label(
     rid = str(region_id or "").strip()
     if not rid:
         return ""
-    if _has_relation(con, "simulation_regions_readable"):
+    region_table = _place_read_relation(con, "simulation_regions")
+    if _has_relation(con, region_table):
+        columns = _table_columns(con, region_table)
+        if "region_id" in columns and "region_display_name" in columns:
+            where_sql = "region_id = ?"
+            params: tuple[object, ...] = (rid,)
+            if "world" in columns:
+                where_sql = "world = ? and region_id = ?"
+                params = (world, rid)
+            row = con.execute(
+                f"""
+                SELECT region_display_name
+                FROM {_quote_identifier(region_table)}
+                WHERE {where_sql}
+                """,
+                params,
+            ).fetchone()
+            if row and str(row["region_display_name"] or "").strip():
+                return str(row["region_display_name"]).strip()
+    if _has_relation(con, "simulation_regions_readable") and region_table != "simulation_regions_readable":
         row = con.execute(
             """
             SELECT region_display_name
@@ -2945,12 +2985,13 @@ def _settlement_alive_and_jobs(con: sqlite3.Connection, world: str, settlement_i
 
 def _settlement_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> dict[str, object]:
     settlement_id = str(row["settlement_id"])
+    region_id = str(row["region_id"] or "")
     alive, jobs = _settlement_alive_and_jobs(con, world, settlement_id)
     return {
         "Name": row["display_name"] or settlement_id,
         "Level": row["level"] or "",
         "Alive": alive,
-        "Region": row["region_id"] or "",
+        "Region": _history_region_label(con, world, region_id),
         "Status": row["status"] or "",
         "Food": _fmt_number(row["food_pressure"]),
         "Stability": _fmt_number(row["stability"]),
@@ -3084,6 +3125,7 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
         if not row:
             return f'<div class="place-sheet muted">No settlement named {html.escape(sid)} in {html.escape(saved_world)}.</div>'
         alive, jobs = _settlement_alive_and_jobs(con, saved_world, sid)
+        region_name = _history_region_label(con, saved_world, row["region_id"])
         residents: list[str] = []
         if _has_table(con, "simulation_people"):
             residence_sql = _person_residence_sql(con)
@@ -3103,13 +3145,13 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
             trait_slots = _trait_slots_for_world(saved_world)
             for person_row in rows:
                 person = _person_from_row(person_row, trait_slots)
-                residents.append(f"{_person_name(person)} - {person.get('job') or 'unassigned'}")
+                residents.append(_notable_person_label(person))
         cards = "".join(
             [
                 _detail_card("Alive", alive),
                 _detail_card("Level", row["level"] or ""),
                 _detail_card("Status", row["status"] or ""),
-                _detail_card("Region", row["region_id"] or ""),
+                _detail_card("Region", region_name),
                 _detail_card("Population Cap", row["population_cap"] or ""),
                 _detail_card("Households", row["household_cap"] or ""),
                 _detail_card("Food Pressure", _fmt_number(row["food_pressure"])),
@@ -3124,7 +3166,7 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
         return (
             '<div class="place-sheet">'
             f'<h2>{html.escape(str(row["display_name"] or sid))}</h2>'
-            f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(str(row["region_id"] or ""))}</div>'
+            f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(region_name)}</div>'
             f'<div class="place-muted">{html.escape(name_line)}</div>'
             f'<div class="place-grid">{cards}</div>'
             '<div class="place-columns">'
@@ -4819,14 +4861,16 @@ def _trait_display_values(
     return current, base, shown
 
 
-def _render_detail_card(label: str, value: object) -> str:
+def _render_detail_card(label: str, value: object, tooltip: str | None = None) -> str:
     shown = html.escape(str(value if value not in (None, "") else "Unknown"))
-    return f'<div class="detail-card"><div class="detail-label">{html.escape(label)}</div><div class="detail-value">{shown}</div></div>'
+    title = f' title="{html.escape(str(tooltip), quote=True)}"' if tooltip else ""
+    return f'<div class="detail-card"><div class="detail-label"{title}>{html.escape(label)}</div><div class="detail-value">{shown}</div></div>'
 
 
-def _render_detail_card_html(label: str, value: str) -> str:
+def _render_detail_card_html(label: str, value: str, tooltip: str | None = None) -> str:
     shown = value if value not in (None, "") else "Unknown"
-    return f'<div class="detail-card"><div class="detail-label">{html.escape(label)}</div><div class="detail-value">{shown}</div></div>'
+    title = f' title="{html.escape(str(tooltip), quote=True)}"' if tooltip else ""
+    return f'<div class="detail-card"><div class="detail-label"{title}>{html.escape(label)}</div><div class="detail-value">{shown}</div></div>'
 
 
 def _legacy_indices_module():
@@ -4848,12 +4892,14 @@ def _render_legacy_scores(traits: object) -> str:
     if not isinstance(traits, dict) or not traits:
         return '<div class="muted">No legacy index data recorded.</div>'
     try:
-        rows = _legacy_indices_module().top_legacy_index_scores(traits, limit=6)
+        rows = _legacy_indices_module().top_legacy_index_scores(traits, limit=10)
     except Exception as exc:
         return f'<div class="muted">Could not calculate legacy indexes: {html.escape(str(exc))}</div>'
     cards: list[str] = []
     for row in rows:
         score = max(0.0, min(1.0, float(row.score)))
+        if score < LEGACY_SCORE_MIN_DISPLAY:
+            continue
         cards.append(
             '<div class="legacy-score">'
             '<div class="legacy-score-head">'
@@ -4866,6 +4912,8 @@ def _render_legacy_scores(traits: object) -> str:
             '</div>'
             '</div>'
         )
+    if not cards:
+        return f'<div class="muted">No legacy indexes at or above {LEGACY_SCORE_MIN_DISPLAY:.2f}.</div>'
     return f'<div class="legacy-grid">{"".join(cards)}</div>'
 
 
@@ -4917,7 +4965,11 @@ def _archive_score_component_cards(score: sqlite3.Row) -> str:
         ("Legacy", "narrative_heat_legacy"),
     ]
     return "".join(
-        _render_detail_card(label, _format_archive_score(score[key]))
+        _render_detail_card(
+            label,
+            _format_archive_score(score[key]),
+            ARCHIVE_SCORE_DEFINITIONS.get(label),
+        )
         for label, key in component_labels
         if key in score.keys()
     )
@@ -4929,18 +4981,27 @@ def _render_archive_score_section(person_id: object, score: sqlite3.Row | None) 
     violet = "Yes" if int(score["violet_marginalia"] or 0) else "No"
     cards = [
         _render_detail_card(
-            "Narrative Heat", _format_archive_score(score["narrative_heat_total"])
+            "Narrative Heat",
+            _format_archive_score(score["narrative_heat_total"]),
+            ARCHIVE_SCORE_DEFINITIONS["Narrative Heat"],
         ),
         _render_detail_card(
-            "ARI", _format_archive_score(score["archive_recognition_index"])
+            "ARI",
+            _format_archive_score(score["archive_recognition_index"]),
+            ARCHIVE_SCORE_DEFINITIONS["ARI"],
         ),
-        _render_detail_card("Hidden Heat", _format_archive_score(score["hidden_heat"])),
+        _render_detail_card(
+            "Hidden Heat",
+            _format_archive_score(score["hidden_heat"]),
+            ARCHIVE_SCORE_DEFINITIONS["Hidden Heat"],
+        ),
         _render_detail_card(
             "Violet Marginalia",
             f"{violet} ({_format_archive_score(score['violet_marginalia_score'])})",
+            ARCHIVE_SCORE_DEFINITIONS["Violet Marginalia"],
         ),
-        _render_detail_card("Recognition", score["recognition_bucket"]),
-        _render_detail_card("Narrative", score["narrative_bucket"]),
+        _render_detail_card("Recognition", score["recognition_bucket"], ARCHIVE_SCORE_DEFINITIONS["Recognition"]),
+        _render_detail_card("Narrative", score["narrative_bucket"], ARCHIVE_SCORE_DEFINITIONS["Narrative"]),
     ]
     components = _archive_score_component_cards(score)
     pid = html.escape(str(person_id))
@@ -5123,7 +5184,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         _render_detail_card("Appearance", f"{person.get('skin_tone', '?')} skin, {person.get('hair', '?')} hair, {person.get('eyes', '?')} eyes"),
         _render_detail_card("Build", f"{float(person.get('maturity_height_cm') or 0):.0f} cm, {float(person.get('maturity_weight_kg') or 0):.0f} kg"),
         _render_detail_card("Attractiveness", _format_01_score(person.get("attractiveness_01"))),
-        _render_detail_card("Work", person.get("job") or person.get("employment_status") or "None"),
+        _render_detail_card("Work", _display_job_label(person.get("job")) or person.get("employment_status") or "None"),
     ]
     pill_html = "".join(f'<span class="pill">{html.escape(str(item))}</span>' for item in [*phrases, *composites])
     if not pill_html:
@@ -5326,7 +5387,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
                 f"{float(person.get('maturity_height_cm') or 0):.0f} cm, "
                 f"{float(person.get('maturity_weight_kg') or 0):.0f} kg."
             ),
-            f"Work: {person.get('job') or person.get('employment_status') or 'none'}.",
+            f"Work: {_display_job_label(person.get('job')) or person.get('employment_status') or 'none'}.",
             f"Character tags: {tags_text}",
             "",
             *archive_score_lines,
@@ -5523,11 +5584,86 @@ def _count_one(con: sqlite3.Connection, sql: str, params: Iterable[object] = ())
     return int(row[0] or 0) if row else 0
 
 
+NON_DISPLAY_JOB_LABELS = {"", "unassigned", "dependent", "dependent minor", "dependent_minor"}
+
+JOB_DISPLAY_EXACT_RENAMES = {
+    "bad cfo": "financial officer",
+    "dark-pattern marketer": "marketer",
+    "dependent helper": "household helper",
+    "elite crisis negotiator": "crisis negotiator",
+    "famous duel referee": "duel referee",
+    "fraud analyst gone bad": "fraud analyst",
+    "guild peak master": "guild master",
+    "helicopter parent archetype": "parent",
+    "heretic": "dissenter",
+    "mad-scientist archetype": "scientist",
+    "poorhouse abuser": "poorhouse worker",
+    "prize-winning specialist": "specialist",
+    "rare-tool specialist": "tool specialist",
+    "warlord archetype": "military leader",
+    "witch-hunter archetype": "inquisitor",
+}
+
+JOB_DISPLAY_QUALITY_PREFIXES = (
+    "authoritarian",
+    "bad",
+    "basic",
+    "corrupt",
+    "cruel",
+    "debt-ridden",
+    "elite",
+    "famous",
+    "harsh",
+    "junior",
+    "negligent",
+    "predatory",
+    "prize-winning",
+    "rare-tool",
+    "reckless",
+    "ruthless",
+    "simple",
+    "suspicious",
+    "unstable",
+    "unreliable",
+    "volatile",
+)
+
+
+def _clean_display_job_label(job: object) -> str:
+    label = str(job or "").strip()
+    lower = label.lower()
+    if lower in JOB_DISPLAY_EXACT_RENAMES:
+        return JOB_DISPLAY_EXACT_RENAMES[lower]
+    for prefix in JOB_DISPLAY_QUALITY_PREFIXES:
+        prefix_with_space = f"{prefix} "
+        if lower.startswith(prefix_with_space):
+            return label[len(prefix_with_space) :].strip()
+    return label
+
+
+def _is_display_job(job: object) -> bool:
+    label = str(job or "").strip()
+    return label.lower() not in NON_DISPLAY_JOB_LABELS
+
+
+def _display_job_label(job: object) -> str:
+    label = str(job or "").strip()
+    return _clean_display_job_label(label) if _is_display_job(label) else ""
+
+
+def _notable_person_label(person: dict[str, object]) -> str:
+    job = _display_job_label(person.get("job"))
+    name = _person_name(person)
+    return f"{name} — {job}" if job else name
+
+
 def _merge_job_counts(*job_lists: Iterable[tuple[str, int]], limit: int = 5) -> list[tuple[str, int]]:
     counts: dict[str, int] = {}
     for jobs in job_lists:
         for job, count in jobs:
-            label = str(job or "Unassigned")
+            label = _display_job_label(job)
+            if not label:
+                continue
             counts[label] = counts.get(label, 0) + int(count or 0)
     return sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
 
@@ -5606,11 +5742,15 @@ def _top_jobs_for_where(
           and {where_extra}
         group by job_name
         order by n desc, job_name collate nocase
-        limit ?
         """,
-        (*params, *tuple(extra_params), int(limit)),
+        (*params, *tuple(extra_params)),
     ).fetchall()
-    return [(str(r["job_name"]), int(r["n"] or 0)) for r in rows]
+    counts: dict[str, int] = {}
+    for row in rows:
+        label = _display_job_label(row["job_name"])
+        if label:
+            counts[label] = counts.get(label, 0) + int(row["n"] or 0)
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
 
 
 def _passive_people_place_stats(
@@ -5640,15 +5780,21 @@ def _passive_people_place_stats(
         tuple(ids),
     ).fetchall()
     alive_counts: dict[str, int] = {place_id: 0 for place_id in ids}
-    top_jobs: dict[str, list[tuple[str, int]]] = {place_id: [] for place_id in ids}
+    job_counts: dict[str, dict[str, int]] = {place_id: {} for place_id in ids}
     for row in rows:
         place_id = str(row["place_id"] or "")
         count = int(row["n"] or 0)
         if not place_id:
             continue
         alive_counts[place_id] = alive_counts.get(place_id, 0) + count
-        if len(top_jobs.setdefault(place_id, [])) < limit:
-            top_jobs[place_id].append((str(row["job_name"]), count))
+        label = _display_job_label(row["job_name"])
+        if label:
+            place_jobs = job_counts.setdefault(place_id, {})
+            place_jobs[label] = place_jobs.get(label, 0) + count
+    top_jobs = {
+        place_id: sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
+        for place_id, counts in job_counts.items()
+    }
     return alive_counts, top_jobs
 
 
@@ -5682,15 +5828,21 @@ def _cohort_place_stats(
         (cohort_year, *ids),
     ).fetchall()
     alive_counts: dict[str, int] = {place_id: 0 for place_id in ids}
-    top_jobs: dict[str, list[tuple[str, int]]] = {place_id: [] for place_id in ids}
+    job_counts: dict[str, dict[str, int]] = {place_id: {} for place_id in ids}
     for row in rows:
         place_id = str(row["place_id"] or "")
         count = int(row["n"] or 0)
         if not place_id:
             continue
         alive_counts[place_id] = alive_counts.get(place_id, 0) + count
-        if len(top_jobs.setdefault(place_id, [])) < limit:
-            top_jobs[place_id].append((str(row["job_name"]), count))
+        label = _display_job_label(row["job_name"])
+        if label:
+            place_jobs = job_counts.setdefault(place_id, {})
+            place_jobs[label] = place_jobs.get(label, 0) + count
+    top_jobs = {
+        place_id: sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
+        for place_id, counts in job_counts.items()
+    }
     return alive_counts, top_jobs
 
 
@@ -5707,6 +5859,7 @@ def _alive_counts_and_top_jobs_by_place(
         return {}, {}
     alive_counts: dict[str, int] = {place_id: 0 for place_id in ids}
     top_jobs: dict[str, list[tuple[str, int]]] = {place_id: [] for place_id in ids}
+    detail_job_counts: dict[str, dict[str, int]] = {place_id: {} for place_id in ids}
     if _has_table(con, "simulation_people"):
         placeholders = ", ".join("?" for _ in ids)
         people_where, people_params = _alive_where(con, world)
@@ -5731,8 +5884,12 @@ def _alive_counts_and_top_jobs_by_place(
             if not place_id:
                 continue
             alive_counts[place_id] = alive_counts.get(place_id, 0) + count
-            if len(top_jobs.setdefault(place_id, [])) < limit:
-                top_jobs[place_id].append((str(row["job_name"]), count))
+            label = _display_job_label(row["job_name"])
+            if label:
+                place_jobs = detail_job_counts.setdefault(place_id, {})
+                place_jobs[label] = place_jobs.get(label, 0) + count
+    for place_id, counts in detail_job_counts.items():
+        top_jobs[place_id] = sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
     place_kind = "region" if "region" in place_sql else "settlement"
     passive_counts, passive_jobs = _passive_people_place_stats(con, place_kind, ids, limit=limit)
     cohort_counts, cohort_jobs = _cohort_place_stats(con, place_kind, ids, limit=limit)
@@ -5900,14 +6057,28 @@ def _snapshot_settlement_name(snapshot: dict[str, object], settlement_id: object
     return str(row.get("display_name") or settlement_id)
 
 
+def _snapshot_region_display_name(snapshot: dict[str, object], region_id: object) -> str:
+    rid = str(region_id or "").strip()
+    if not rid:
+        return ""
+    row = _snapshot_map(snapshot, "regions", "region_id").get(rid)
+    if row:
+        label = str(row.get("region_display_name") or "").strip()
+        if label:
+            return label
+    return _display_title(rid)
+
+
 def _snapshot_person_job(person: dict[str, object]) -> str:
-    return str(person.get("job") or "Unassigned")
+    return _display_job_label(person.get("job"))
 
 
 def _top_jobs_from_people(people: Iterable[dict[str, object]], limit: int) -> list[tuple[str, int]]:
     counts: dict[str, int] = {}
     for person in people:
         job = _snapshot_person_job(person)
+        if not job:
+            continue
         counts[job] = counts.get(job, 0) + 1
     return sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
 
@@ -5954,6 +6125,8 @@ def _snapshot_population_stats(
     job_counts: dict[str, int] = {}
     for person in detailed:
         job = _snapshot_person_job(person)
+        if not job:
+            continue
         job_counts[job] = job_counts.get(job, 0) + 1
     alive = len(detailed)
     for row in _snapshot_rows(snapshot, "passive_people"):
@@ -5967,8 +6140,9 @@ def _snapshot_population_stats(
         if str(row_place or "") != place_id:
             continue
         alive += 1
-        job = str(row.get("job_family") or "Unassigned")
-        job_counts[job] = job_counts.get(job, 0) + 1
+        job = _display_job_label(row.get("job_family"))
+        if job:
+            job_counts[job] = job_counts.get(job, 0) + 1
     cohort_year = _snapshot_latest_cohort_year(snapshot)
     if cohort_year is not None:
         for row in _snapshot_rows(snapshot, "cohorts"):
@@ -5979,8 +6153,9 @@ def _snapshot_population_stats(
                 continue
             count = _safe_int(row.get("population_count"), 0)
             alive += count
-            job = str(row.get("job_family") or "Unassigned")
-            job_counts[job] = job_counts.get(job, 0) + count
+            job = _display_job_label(row.get("job_family"))
+            if job:
+                job_counts[job] = job_counts.get(job, 0) + count
     jobs = sorted(job_counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
     return alive, jobs
 
@@ -6057,7 +6232,7 @@ def _snapshot_notable_people(people: Iterable[dict[str, object]], limit: int = 8
         people,
         key=lambda person: (-float(person.get("career_fitness_score") or 0.0), int(person.get("person_id") or 0)),
     )
-    return [f"{_person_name(person)} — {person.get('job') or 'unassigned'}" for person in ranked[:limit]]
+    return [_notable_person_label(person) for person in ranked[:limit]]
 
 
 def _top_people_for_where(
@@ -6121,7 +6296,7 @@ def _config_region_display_name(world: str, region_id: str) -> str:
 
 
 def _render_empty_region_sheet(con: sqlite3.Connection, world: str, region_id: str) -> str:
-    name = _config_region_display_name(world, region_id) or region_id
+    name = _history_region_label(con, world, region_id)
     cards = "".join(
         [
             _detail_card("Alive", 0),
@@ -6137,8 +6312,8 @@ def _render_empty_region_sheet(con: sqlite3.Connection, world: str, region_id: s
     return (
         '<div class="place-sheet">'
         f'<h2>{html.escape(name)}</h2>'
-        f'<div class="place-subtitle">Region {html.escape(region_id)}</div>'
-        f'<div class="place-muted">No settlements are recorded for region {html.escape(region_id)} in the current save yet.</div>'
+        '<div class="place-subtitle">Region</div>'
+        f'<div class="place-muted">No settlements are recorded for {html.escape(name)} in the current save yet.</div>'
         f'<div class="place-grid">{cards}</div>'
         f'{_region_map_html(con, world, region_id)}'
         '<div class="place-columns">'
@@ -6821,7 +6996,7 @@ def _places_browser_data(
                         "Name": row["display_name"] or sid,
                         "Level": row["level"] or "",
                         "Alive": alive,
-                        "Region": rid,
+                        "Region": _history_region_label(con, saved_world, rid),
                         "Status": row["status"] or "",
                         "Food": _fmt_number(row["food_pressure"]),
                         "Stability": _fmt_number(row["stability"]),
@@ -6952,6 +7127,7 @@ def _render_region_sheet_from_snapshot(snapshot: dict[str, object], region_id: s
     people = _snapshot_people_by_region(snapshot, region_id)
     settlements = _snapshot_region_settlements(snapshot, region_id)
     alive, job_counts = _snapshot_population_stats(snapshot, "region", region_id, limit=8)
+    region_name = _snapshot_region_display_name(snapshot, region_id)
     jobs = [f"{job}: {n}" for job, n in job_counts]
     residents = _snapshot_notable_people(people, 8)
     settlement_items = []
@@ -6978,8 +7154,8 @@ def _render_region_sheet_from_snapshot(snapshot: dict[str, object], region_id: s
     )
     return (
         '<div class="place-sheet">'
-        f'<h2>{html.escape(str(row.get("region_display_name") or region_id))}</h2>'
-        f'<div class="place-subtitle">Region {html.escape(region_id)}</div>'
+        f'<h2>{html.escape(region_name)}</h2>'
+        '<div class="place-subtitle">Region</div>'
         f'<div class="place-grid">{cards}</div>'
         f'{_snapshot_region_map_html(snapshot, region_id)}'
         '<div class="place-columns">'
@@ -7004,6 +7180,7 @@ def _render_town_sheet_from_snapshot(snapshot: dict[str, object], settlement_id:
         )
     sid = str(row.get("settlement_id") or settlement_id)
     rid = str(row.get("region_id") or "")
+    region_name = _snapshot_region_display_name(snapshot, rid)
     people = _snapshot_people_by_settlement(snapshot, sid)
     alive, job_counts = _snapshot_population_stats(snapshot, "settlement", sid, limit=8)
     jobs = [f"{job}: {n}" for job, n in job_counts]
@@ -7013,7 +7190,7 @@ def _render_town_sheet_from_snapshot(snapshot: dict[str, object], settlement_id:
             _detail_card("Alive", alive),
             _detail_card("Level", row.get("level") or ""),
             _detail_card("Status", row.get("status") or ""),
-            _detail_card("Region", rid),
+            _detail_card("Region", region_name),
             _detail_card("Food Pressure", _fmt_number(row.get("food_pressure"))),
             _detail_card("Stability", _fmt_number(row.get("stability"))),
             _detail_card("Market Pull", _fmt_number(row.get("market_pull"))),
@@ -7027,7 +7204,7 @@ def _render_town_sheet_from_snapshot(snapshot: dict[str, object], settlement_id:
     return (
         '<div class="place-sheet">'
         f'<h2>{html.escape(str(row.get("display_name") or sid))}</h2>'
-        f'<div class="place-subtitle">{html.escape(str(row.get("level") or "settlement"))} in {html.escape(rid)}</div>'
+        f'<div class="place-subtitle">{html.escape(str(row.get("level") or "settlement"))} in {html.escape(region_name)}</div>'
         f'<div class="place-muted">{html.escape(name_line)}</div>'
         f'<div class="place-grid">{cards}</div>'
         f'{_snapshot_region_map_html(snapshot, rid, focus_settlement_id=sid)}'
@@ -7074,6 +7251,8 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
         target = str(terr.get("target_id") or "")
         if terr.get("target_kind") == "settlement":
             target = _snapshot_settlement_name(snapshot, target)
+        elif terr.get("target_kind") == "region":
+            target = _snapshot_region_display_name(snapshot, target)
         territory_items.append(f"{terr.get('target_kind')}: {target} since {terr.get('since_sim_year')}")
     seat_items = []
     for seat in seats[:16]:
@@ -7159,7 +7338,7 @@ def _places_rows_from_snapshot(
                     "Name": row.get("display_name") or sid,
                     "Level": row.get("level") or "",
                     "Alive": alive,
-                    "Region": rid,
+                    "Region": _snapshot_region_display_name(snapshot, rid),
                     "Status": row.get("status") or "",
                     "Food": _fmt_number(row.get("food_pressure")),
                     "Stability": _fmt_number(row.get("stability")),
@@ -7325,10 +7504,11 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
     alive = alive_counts.get(region_id, 0)
     settlements = _region_settlements(con, region_id)
     jobs = [f"{job}: {n}" for job, n in top_jobs.get(region_id, [])]
+    region_name = _history_region_label(con, world, region_id)
     people = []
     for p in _top_people_for_where(con, world, f"{birth_region_sql} = ?", (region_id,), limit=8):
         person = _person_from_row(p, _trait_slots_for_world(world))
-        people.append(f"{_person_name(person)} — {person.get('job') or 'unassigned'}")
+        people.append(_notable_person_label(person))
     settlement_ids = [str(s["settlement_id"]) for s in settlements[:12]]
     settlement_alive_counts, _ = _alive_counts_and_top_jobs_by_place(
         con,
@@ -7358,8 +7538,8 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
     )
     return (
         '<div class="place-sheet">'
-        f'<h2>{html.escape(str(row["region_display_name"] or region_id))}</h2>'
-        f'<div class="place-subtitle">Region {html.escape(region_id)}</div>'
+        f'<h2>{html.escape(region_name)}</h2>'
+        '<div class="place-subtitle">Region</div>'
         f'<div class="place-grid">{cards}</div>'
         f'{_region_map_html(con, world, region_id)}'
         '<div class="place-columns">'
@@ -7397,6 +7577,7 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
         )
     sid = str(row["settlement_id"])
     rid = str(row["region_id"])
+    region_name = _history_region_label(con, world, rid)
     residence_sql = _person_residence_sql(con)
     alive_counts, top_jobs = _alive_counts_and_top_jobs_by_place(
         con,
@@ -7410,13 +7591,13 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
     residents = []
     for p in _top_people_for_where(con, world, f"{residence_sql} = ?", (sid,), limit=8):
         person = _person_from_row(p, _trait_slots_for_world(world))
-        residents.append(f"{_person_name(person)} — {person.get('job') or 'unassigned'}")
+        residents.append(_notable_person_label(person))
     cards = "".join(
         [
             _detail_card("Alive", alive),
             _detail_card("Level", row["level"] or ""),
             _detail_card("Status", row["status"] or ""),
-            _detail_card("Region", rid),
+            _detail_card("Region", region_name),
             _detail_card("Food Pressure", _fmt_number(row["food_pressure"])),
             _detail_card("Stability", _fmt_number(row["stability"])),
             _detail_card("Market Pull", _fmt_number(row["market_pull"])),
@@ -7430,7 +7611,7 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
     return (
         '<div class="place-sheet">'
         f'<h2>{html.escape(str(row["display_name"] or sid))}</h2>'
-        f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(rid)}</div>'
+        f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(region_name)}</div>'
         f'<div class="place-muted">{html.escape(name_line)}</div>'
         f'<div class="place-grid">{cards}</div>'
         f'{_region_map_html(con, world, rid, focus_settlement_id=sid)}'
@@ -7493,6 +7674,8 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
         target = str(terr["target_id"])
         if terr["target_kind"] == "settlement":
             target = _settlement_name(con, world, target)
+        elif terr["target_kind"] == "region":
+            target = _history_region_label(con, world, target)
         territory_items.append(f"{terr['target_kind']}: {target} since {terr['since_sim_year']}")
     seat_items = []
     for seat in seats[:16]:
@@ -7563,6 +7746,28 @@ def render_places_html_selection(world: str, view: str, key: object) -> str:
         raise
 
 
+def _map_selection_region_label(world: str, region_id: object) -> str:
+    rid = str(region_id or "").strip()
+    if not rid:
+        return ""
+    return _config_region_display_name(world, rid) or _display_title(rid)
+
+
+def _map_selection_settlement_label(world: str, settlement_id: object) -> str:
+    sid = str(settlement_id or "").strip()
+    if not sid:
+        return ""
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return sid
+    try:
+        with _connect_readonly(path) as con:
+            saved_world = _resolve_saved_world(con, world)
+            return _settlement_name(con, saved_world, sid) or sid
+    except (FileNotFoundError, sqlite3.Error):
+        return sid
+
+
 def render_world_map_selection_detail(world: str, selection_json: str) -> str:
     if not selection_json:
         return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
@@ -7583,20 +7788,28 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
         to_settlement_id = str(selection.get("to_settlement_id") or "").strip()
         river_id = str(selection.get("river_id") or "").strip()
         regions = str(selection.get("regions") or "").strip()
+        region_labels = [
+            _map_selection_region_label(world, rid)
+            for rid in regions.split(",")
+            if str(rid or "").strip()
+        ]
+        regions_label = ", ".join(label for label in region_labels if label)
         usage = str(selection.get("usage") or "").strip()
         actual_usage = str(selection.get("actual_usage") or "").strip()
         implied_usage = str(selection.get("implied_usage") or "").strip()
+        from_label = _map_selection_settlement_label(world, from_settlement_id)
+        to_label = _map_selection_settlement_label(world, to_settlement_id)
         route_label = (
-            f"{from_settlement_id} -> {to_settlement_id}"
-            if from_settlement_id or to_settlement_id
+            f"{from_label} -> {to_label}"
+            if from_label or to_label
             else river_id or item_id
         )
         cards = [
             _detail_card("Layer", layer_title),
             _detail_card("Route", route_label),
         ]
-        if regions:
-            cards.append(_detail_card("Regions", regions))
+        if regions_label:
+            cards.append(_detail_card("Regions", regions_label))
         if usage:
             cards.append(_detail_card("Usage", usage))
         if actual_usage:
@@ -7616,28 +7829,28 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
         name = str(selection.get("name") or item_id).strip()
         kind = str(selection.get("kind") or "feature").strip()
         region_id = str(selection.get("region_id") or "").strip()
+        region_name = _map_selection_region_label(world, region_id)
         etymology = str(selection.get("etymology") or "").strip()
         is_named = str(selection.get("named") or "").strip().lower() in {"1", "true", "yes"}
-        kind_title = (kind or "feature").replace("_", " ").title()
+        kind_title = _display_title(kind or "feature")
         title = name if is_named and name else kind_title
         subtitle = (
-            f'Named {html.escape(kind or "feature")}'
+            f'Named {html.escape(kind_title)}'
             if is_named
-            else f'Regional {html.escape(kind or "feature")} landmark'
+            else f'Regional {html.escape(kind_title)} landmark'
         )
         cards = "".join(
             [
                 _detail_card("Name", name if is_named and name else "Unnamed"),
-                _detail_card("Kind", kind or "feature"),
-                _detail_card("Region", region_id or "Unknown"),
-                _detail_card("Feature ID", item_id),
+                _detail_card("Kind", kind_title),
+                _detail_card("Region", region_name or "Unknown"),
             ]
         )
         return (
             '<div class="place-sheet">'
             f'<h2>{html.escape(title)}</h2>'
             f'<div class="place-subtitle">{subtitle}'
-            f'{(" in " + html.escape(region_id)) if region_id else ""}</div>'
+            f'{(" in " + html.escape(region_name)) if region_name else ""}</div>'
             f'<div class="place-grid">{cards}</div>'
             f'{f"<p class=\"place-muted\">{html.escape(etymology)}</p>" if etymology else ""}'
             '</div>'

@@ -1838,9 +1838,60 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("ARI", sheet)
         self.assertIn("Violet Marginalia", sheet)
         self.assertIn("interesting but obscure", sheet)
+        self.assertIn('title="0-100: how much visible story material', sheet)
+        self.assertIn('title="Archive Recognition Index, 0-100', sheet)
         self.assertIn("Archive Scores:\n- Narrative heat: 73.2", share)
         self.assertIn("- ARI: 41.5", share)
         self.assertIn("- Violet marginalia: yes (0.5)", share)
+
+    def test_legacy_scores_hide_rows_below_display_threshold(self) -> None:
+        class _LegacyFixture:
+            @staticmethod
+            def top_legacy_index_scores(_traits, limit: int = 10):
+                return (
+                    types.SimpleNamespace(
+                        label="Ordinary Creative",
+                        score=0.69,
+                        description="Below the display floor.",
+                    ),
+                    types.SimpleNamespace(
+                        label="Standout Chronicler",
+                        score=0.70,
+                        description="Exactly on the display floor.",
+                    ),
+                )
+
+        original = gdb._LEGACY_INDICES_MODULE
+        gdb._LEGACY_INDICES_MODULE = _LegacyFixture
+        try:
+            html = gdb._render_legacy_scores({"creativity": 0.9})
+        finally:
+            gdb._LEGACY_INDICES_MODULE = original
+
+        self.assertIn("Standout Chronicler", html)
+        self.assertIn("0.70", html)
+        self.assertNotIn("Ordinary Creative", html)
+
+    def test_legacy_scores_explain_when_all_rows_are_below_threshold(self) -> None:
+        class _LegacyFixture:
+            @staticmethod
+            def top_legacy_index_scores(_traits, limit: int = 10):
+                return (
+                    types.SimpleNamespace(
+                        label="Ordinary Creative",
+                        score=0.69,
+                        description="Below the display floor.",
+                    ),
+                )
+
+        original = gdb._LEGACY_INDICES_MODULE
+        gdb._LEGACY_INDICES_MODULE = _LegacyFixture
+        try:
+            html = gdb._render_legacy_scores({"creativity": 0.4})
+        finally:
+            gdb._LEGACY_INDICES_MODULE = original
+
+        self.assertIn("No legacy indexes at or above 0.70", html)
 
     def test_partner_history_ignores_context_events_and_merges_repeated_pair(self) -> None:
         con = _memory_save()
@@ -2985,7 +3036,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("r1:a -&gt; r1:b", road_html)
         self.assertIn("Usage", road_html)
         self.assertIn("Sea Route", sea_html)
-        self.assertIn("r1,r2", sea_html)
+        self.assertIn("R1, R2", sea_html)
         self.assertIn("River", river_html)
         self.assertIn("river-1", river_html)
 
@@ -3036,10 +3087,12 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("River Country", region_html)
         self.assertIn("Fordham", town_html)
         self.assertIn("Bluewater", feature_html)
-        self.assertIn("Named river", feature_html)
+        self.assertIn("Named River", feature_html)
         self.assertIn("blue · river", feature_html)
+        self.assertIn("R1", feature_html)
+        self.assertNotIn("r1:f0", feature_html)
         self.assertIn("Ford", generic_feature_html)
-        self.assertIn("Regional ford landmark", generic_feature_html)
+        self.assertIn("Regional Ford landmark", generic_feature_html)
         self.assertIn("Unnamed", generic_feature_html)
 
     def test_world_map_overlays_read_named_features_from_local_geography(self) -> None:
@@ -3140,7 +3193,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             finally:
                 gdb._db_path = original_db_path
 
-        self.assertIn("No settlements are recorded for region boreas_clear_river", html)
+        self.assertIn("No settlements are recorded for Boreas Clear River", html)
         self.assertNotIn("No region named", html)
 
     def test_place_row_selection_uses_loaded_key_state(self) -> None:
@@ -3170,10 +3223,38 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         html = _render_town_sheet(con, "test", "r1:s1")
 
         self.assertIn("Fordham", html)
+        self.assertIn("River Country", html)
         self.assertIn("Ford · home", html)
         self.assertIn("Bluewater", html)
         self.assertIn("miller: 1", html)
         self.assertIn("Ada Forge", html)
+
+    def test_place_sheets_do_not_show_dependent_or_unassigned_as_jobs(self) -> None:
+        con = _memory_place_save()
+        con.execute("update simulation_people set job = 'dependent' where person_id = 1")
+        con.execute("update simulation_people set job = 'unassigned' where person_id = 2")
+
+        html = _render_region_sheet(con, "test", "r1")
+
+        self.assertIn("Ada Forge", html)
+        self.assertIn("Bea Forge", html)
+        self.assertNotIn("dependent", html.lower())
+        self.assertNotIn("unassigned", html.lower())
+        self.assertNotIn("Ada Forge —", html)
+
+    def test_place_sheets_normalize_saved_quality_adjective_jobs(self) -> None:
+        con = _memory_place_save()
+        con.execute("update simulation_people set job = 'authoritarian mayor' where person_id = 1")
+        con.execute("update simulation_people set job = 'bad cfo' where person_id = 2")
+
+        html = _render_region_sheet(con, "test", "r1")
+
+        self.assertIn("Ada Forge — mayor", html)
+        self.assertIn("Bea Forge — financial officer", html)
+        self.assertIn("mayor: 1", html)
+        self.assertIn("financial officer: 1", html)
+        self.assertNotIn("authoritarian", html.lower())
+        self.assertNotIn("bad cfo", html.lower())
 
     def test_town_sheet_supports_legacy_json_person_rows(self) -> None:
         con = _memory_legacy_place_save()

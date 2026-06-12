@@ -645,6 +645,97 @@ class TestSimulationCareers(unittest.TestCase):
         self.assertLess(by_key[("justice", "optimal")][1], 0.2)
         self.assertGreater(by_key[("intellect", "deficient")][1], 0.7)
 
+    def test_genome_job_titles_do_not_use_quality_adjective_labels(self) -> None:
+        job_columns = (
+            "prehistoric_jobs",
+            "prehistoric_premium_jobs",
+            "bronze_age_jobs",
+            "bronze_age_premium_jobs",
+            "iron_age_jobs",
+            "iron_age_premium_jobs",
+            "medieval_jobs",
+            "medieval_premium_jobs",
+            "modern_jobs",
+            "modern_premium_jobs",
+        )
+        banned_exact = {"dependent", "unassigned"}
+        banned_prefixes = (
+            "abusive",
+            "anxious",
+            "authoritarian",
+            "bad",
+            "bankrupt",
+            "basic",
+            "bizarre",
+            "boastful",
+            "careless",
+            "casual",
+            "controlling",
+            "corrupt",
+            "debt-ridden",
+            "dependent",
+            "disruptive",
+            "eccentric",
+            "elite",
+            "failed",
+            "false",
+            "famous",
+            "fanatical",
+            "harsh",
+            "heretic",
+            "heretical",
+            "inquisitorial",
+            "junior",
+            "lavish",
+            "lazy",
+            "low-output",
+            "low-rank",
+            "mad",
+            "negligent",
+            "neglectful",
+            "obsessive",
+            "overbearing",
+            "overinvolved",
+            "overprotective",
+            "paranoid",
+            "predatory",
+            "prize-winning",
+            "radical",
+            "rare-tool",
+            "reckless",
+            "risky",
+            "simple",
+            "smothering",
+            "suspicious",
+            "sycophant",
+            "underemployed",
+            "unreliable",
+            "unstable",
+            "vain",
+            "visionary",
+            "volatile",
+        )
+        with (_ROOT / "config" / "genome_jobs.csv").open(newline="", encoding="utf-8-sig") as f:
+            rows = list(csv.DictReader(f))
+
+        offenders: list[str] = []
+        for row in rows:
+            for column in job_columns:
+                for raw in str(row.get(column) or "").split(";"):
+                    job, _restriction = _parse_job_token(raw.strip())
+                    lower = job.lower()
+                    if not lower:
+                        continue
+                    if lower in banned_exact or any(
+                        lower == prefix
+                        or lower.startswith(f"{prefix} ")
+                        or lower.startswith(f"{prefix}-")
+                        for prefix in banned_prefixes
+                    ):
+                        offenders.append(f"{row['trait']} {row['deviation_band']} {column}: {job}")
+
+        self.assertEqual(offenders, [])
+
     def test_refresh_current_people_life_stages_updates_from_age(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)

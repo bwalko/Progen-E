@@ -1697,6 +1697,50 @@ def _segment_has_non_land_samples(
     return False
 
 
+def _naturalized_direct_road_points(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+    *,
+    start_cell: MicroRegionCell,
+    end_cell: MicroRegionCell,
+) -> list[Point]:
+    if len(points) != 2 or not geometry.micro_cells:
+        return points
+    start, end = points
+    distance = math.hypot(end[0] - start[0], end[1] - start[1])
+    if distance < 0.035:
+        return points
+    dx = (end[0] - start[0]) / distance
+    dy = (end[1] - start[1]) / distance
+    px, py = -dy, dx
+    midpoint = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    cell_midpoint = (
+        (float(start_cell.center_x) + float(end_cell.center_x)) / 2.0,
+        (float(start_cell.center_y) + float(end_cell.center_y)) / 2.0,
+    )
+    bias = (cell_midpoint[0] - midpoint[0]) * px + (cell_midpoint[1] - midpoint[1]) * py
+    first_sign = 1.0 if bias >= 0.0 else -1.0
+    for amount in (
+        min(0.030, max(0.008, distance * 0.18)),
+        min(0.022, max(0.006, distance * 0.12)),
+        min(0.016, max(0.004, distance * 0.08)),
+    ):
+        for sign in (first_sign, -first_sign):
+            candidate = (
+                _clamp(midpoint[0] + px * sign * amount, 0.006, 0.994),
+                _clamp(midpoint[1] + py * sign * amount, 0.006, 0.994),
+            )
+            cell = _land_cell_containing_point(geometry, candidate)
+            if cell is None or cell.continent_id != start_cell.continent_id:
+                continue
+            if _segment_has_non_land_samples(geometry, start, candidate, samples=5):
+                continue
+            if _segment_has_non_land_samples(geometry, candidate, end, samples=5):
+                continue
+            return _dedupe_path_points([start, candidate, end])
+    return points
+
+
 def _micro_path_edge_points(
     micro_path: list[str],
     by_id: dict[str, MicroRegionCell],
@@ -1784,6 +1828,12 @@ def _route_between_points(
     if start.micro_id == end.micro_id:
         points = _maybe_boundary_arc_between_points(start, start_point, end_point) or [start_point, end_point]
         points = _dedupe_path_points(points)
+        points = _naturalized_direct_road_points(
+            geometry,
+            points,
+            start_cell=start,
+            end_cell=end,
+        )
         return _RoadPath(
             points=points,
             cost=max(0.0001, math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1])),
@@ -1831,6 +1881,12 @@ def _route_between_points(
         ford_points,
     )
     points = _clean_road_points(points, ford_points)
+    points = _naturalized_direct_road_points(
+        geometry,
+        points,
+        start_cell=start,
+        end_cell=end,
+    )
     route = _RoadPath(
         points=points,
         cost=max(0.0001, distances[end.micro_id]),
@@ -1850,7 +1906,20 @@ def _route_between_points(
                     end_region_id=end_region_id,
                     ford_points=ford_points,
                 )
-            return natural_ford_path or ford_path
+                return natural_ford_path or ford_path
+            natural_ford_points = _naturalized_direct_road_points(
+                geometry,
+                list(ford_path.points),
+                start_cell=start,
+                end_cell=end,
+            )
+            if natural_ford_points != ford_path.points:
+                return _RoadPath(
+                    points=natural_ford_points,
+                    cost=ford_path.cost,
+                    length=_path_length(natural_ford_points),
+                )
+            return ford_path
     return route
 
 
@@ -1978,6 +2047,15 @@ def _route_between_nodes(
                     *last_connector.points[1:],
                 ]
                 points = _clean_road_points(points, ford_points)
+                start_cell = _land_cell_containing_point(geometry, start_point)
+                end_cell = _land_cell_containing_point(geometry, end_point)
+                if start_cell is not None and end_cell is not None:
+                    points = _naturalized_direct_road_points(
+                        geometry,
+                        points,
+                        start_cell=start_cell,
+                        end_cell=end_cell,
+                    )
                 if len(points) >= 2:
                     length = _path_length(points)
                     return _RoadPath(points=points, cost=max(0.0001, length), length=length)

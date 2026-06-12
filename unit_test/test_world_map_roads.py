@@ -1022,6 +1022,28 @@ class TestWorldMapRoads(unittest.TestCase):
             math.dist((0.10, 0.50), (0.90, 0.50)) * 1.2,
         )
 
+    def test_adjacent_micro_road_keeps_visible_bend_after_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.18, 0.50), "b": (0.78, 0.50)},
+                [(10, "a", "b", 4)],
+            )
+            geometry = _geometry(
+                micro_cells=[
+                    _micro_cell("left", 0.0, 0.0, 0.5, 1.0),
+                    _micro_cell("right", 0.5, 0.0, 1.0, 1.0),
+                ]
+            )
+
+            roads = build_settlement_road_overlays(geometry=geometry, save_db_path=save)
+
+        road = _edge(roads, "a", "b")
+        self.assertIsNotNone(road)
+        self.assertGreaterEqual(len(road.points), 3)
+        self.assertGreater(max(abs(y - 0.50) for _x, y in road.points), 0.01)
+        self.assertNotEqual(road.points, [(0.18, 0.50), (0.78, 0.50)])
+
     def test_road_point_cleanup_prunes_tiny_hairpin_before_svg_smoothing(self) -> None:
         points = [(0.1, 0.1), (0.125, 0.102), (0.1008, 0.1006), (0.18, 0.12)]
 
