@@ -1332,6 +1332,16 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     "default",
                     types.SimpleNamespace(index=0),
                 )
+                all_metric_table, _, _, _, _ = gdb.load_almanack_browser(
+                    "default",
+                    "All",
+                    "All Metrics",
+                    "All",
+                    "Both",
+                    "",
+                    "",
+                    50,
+                )
                 passive_table, passive_status, passive_keys, _, _ = gdb.load_almanack_browser(
                     "default",
                     "Family",
@@ -1357,13 +1367,16 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         passive_rows = self._history_table_rows(passive_table)
         evidence_rows = self._history_table_rows(person_evidence)
         passive_evidence_rows = self._history_table_rows(passive_evidence)
-        self.assertEqual(empty_table["headers"], gdb.ALMANACK_HEADERS)
+        self.assertEqual(empty_table["headers"], gdb.ALMANACK_SELECTED_HEADERS)
         self.assertIn("cache is empty", empty_status)
         self.assertIn("Refreshed", murder_status)
         self.assertIn("rank mode=Raw Value", murder_status)
+        self.assertEqual(murder_table["headers"][:4], ["Rank", "Value", "Count", "Name"])
+        self.assertNotIn("Metric", murder_table["headers"])
         self.assertEqual(murder_rows[0]["Name"], "Ari Vale")
-        self.assertEqual(murder_rows[0]["Metric"], "Murders Committed")
-        self.assertIn("World Rank", murder_rows[0])
+        self.assertIn("Context", murder_rows[0])
+        self.assertIn("world #", murder_rows[0]["Context"])
+        self.assertIn("Metric", all_metric_table["headers"])
         self.assertIn("Ari Vale", person_html)
         self.assertIn("Record ID: 1", person_share)
         self.assertEqual(evidence_rows[0]["Source"], "simulation_events")
@@ -1631,11 +1644,11 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertIn("Ada became smith", text)
         self.assertNotIn("Ada Forge became smith", text)
-        self.assertIn("<strong>Ada</strong> became smith", html)
+        self.assertIn('<strong title="Ada Forge (b. 0)">Ada</strong> became smith', html)
         self.assertNotIn(">Ada</a> became smith", html)
         self.assertNotIn(">Ada Forge</a> became smith", html)
 
-    def test_person_sheet_event_keeps_other_people_full_names(self) -> None:
+    def test_person_sheet_event_uses_compact_link_names_with_full_hover(self) -> None:
         con = _memory_save()
         event = _event_row(
             con,
@@ -1647,8 +1660,72 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         html = _event_sentence_html(con, "test", event, 1)
 
         self.assertIn("Ada formed a household partnership with Bea Forge", text)
-        self.assertIn("<strong>Ada</strong> formed a household partnership with", html)
-        self.assertIn(">Bea Forge</a>", html)
+        self.assertIn("<strong", html)
+        self.assertIn(">Bea</a>", html)
+        self.assertIn('title="Bea Forge (b. 8)"', html)
+
+    def test_property_crime_event_cards_use_payload_details(self) -> None:
+        con = _memory_save()
+        event = _event_row(
+            con,
+            "property_crime",
+            {
+                "perpetrator_person_id": 1,
+                "target_person_id": 2,
+                "incident_kind": "storehouse_robbery",
+                "motive": "scarcity",
+                "loss_value": 0.18,
+                "settlement_id": "aeria_north:settlement:1",
+                "region_id": "aeria_north",
+            },
+        )
+
+        text = _event_sentence(con, "test", event, 1)
+        html = _event_sentence_html(con, "test", event, 1)
+
+        self.assertIn("Ada committed storehouse robbery against Bea Forge", text)
+        self.assertIn("loss 0.180", text)
+        self.assertIn("motive scarcity", text)
+        self.assertIn("<strong", html)
+        self.assertIn(">Bea</a>", html)
+        self.assertIn("storehouse robbery", html)
+        self.assertIn("loss 0.180", html)
+        self.assertNotIn("property crime: Ada", html.lower())
+
+    def test_knowledge_event_cards_prefer_specific_focus_and_flavor_sparse_records(self) -> None:
+        con = _memory_save()
+        specific_event = _event_row(
+            con,
+            "knowledge_culture",
+            {
+                "creator_person_id": 1,
+                "patron_person_id": 2,
+                "incident_kind": "innovation",
+                "knowledge_domain": "transport",
+                "innovation_analogue_name": "wheel",
+                "novelty_value": 0.42,
+                "consequences": {"knowledge_state": {"state_delta": 0.11}},
+            },
+        )
+        sparse_event = _event_row(
+            con,
+            "knowledge_culture",
+            {
+                "creator_person_id": 1,
+                "incident_kind": "innovation",
+                "knowledge_domain": "art",
+            },
+        )
+
+        specific_html = _event_sentence_html(con, "test", specific_event, 1)
+        sparse_html = _event_sentence_html(con, "test", sparse_event, 1)
+
+        self.assertIn("wheel, innovation in transport", specific_html)
+        self.assertIn(">Bea</a>", specific_html)
+        self.assertIn("<summary>Details</summary>", specific_html)
+        self.assertIn("state delta: 0.110", specific_html)
+        self.assertIn("a new art practice", sparse_html)
+        self.assertIn("not a specific invention", sparse_html)
 
     def test_person_sheet_has_separate_history_sections(self) -> None:
         con = _memory_save()
@@ -1702,18 +1779,70 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         paramour_section = sheet[sheet.index("Paramour History"):sheet.index(">Events</h3>")]
         self.assertLess(job_section.index("100-105"), job_section.index("105-110"))
         self.assertLess(job_section.index("105-110"), job_section.index("110-120"))
+        self.assertIn("history-timeline", job_section)
+        self.assertIn("history-segment", job_section)
+        self.assertIn("history-gap", job_section)
+        self.assertIn("flex-grow: 5", job_section)
+        self.assertIn("flex-grow: 10", job_section)
         self.assertIn("smith", job_section)
-        self.assertIn("Unemployed", job_section)
+        self.assertNotIn(">Unemployed<", job_section)
         self.assertIn("scribe", job_section)
         self.assertIn("101-115", partner_section)
-        self.assertIn(">Bea Forge", partner_section)
+        self.assertIn(">Bea</a>", partner_section)
+        self.assertIn('title="Bea Forge (b. 8)"', partner_section)
         self.assertIn("person-link", partner_section)
         self.assertIn("103-112", paramour_section)
-        self.assertIn(">Cato Vale", paramour_section)
+        self.assertIn(">Cato</a>", paramour_section)
+        self.assertIn('title="Cato Vale (b. 5)"', paramour_section)
         self.assertIn("person-link", paramour_section)
         self.assertIn("Job History:\n- 100-105: smith", share)
         self.assertIn("Partner History:\n- 101-115: Bea Forge", share)
         self.assertIn("Paramour History:\n- 103-112: Cato Vale", share)
+
+    def test_person_sheet_children_summary_counts_all_children(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        children = [
+            (3, 1, 1, {"first_name": "Cal", "last_name": "Forge", "birthyear": 10}),
+            (4, 1, 0, {"first_name": "Dee", "last_name": "Forge", "birthyear": 11, "deathyear": 14}),
+            (5, 1, 0, {"first_name": "Eli", "last_name": "Forge", "birthyear": 12, "deathyear": 15}),
+            (6, 1, 0, {"first_name": "Fen", "last_name": "Forge", "birthyear": 13, "deathyear": 53}),
+            (7, 1, 0, {"first_name": "Gil", "last_name": "Forge", "birthyear": 14}),
+        ]
+        children.extend(
+            (
+                person_id,
+                1,
+                1,
+                {
+                    "first_name": f"Kid{person_id}",
+                    "last_name": "Forge",
+                    "birthyear": 20 + person_id,
+                },
+            )
+            for person_id in range(8, 16)
+        )
+        con.executemany(
+            """
+            insert into simulation_people (
+                person_id, world, is_founder, father_id, mother_id, is_alive, person_json
+            )
+            values (?, 'test', 0, ?, NULL, ?, ?)
+            """,
+            [
+                (person_id, father_id, is_alive, json.dumps(person_json))
+                for person_id, father_id, is_alive, person_json in children
+            ],
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertIn("14 recorded children, 2 died before 16, 10 alive.", sheet)
+        self.assertIn("+ 2 more recorded children not shown", sheet)
+        self.assertIn("- 14 recorded children, 2 died before 16, 10 alive.", share)
+        self.assertIn("- + 2 more recorded children not shown.", share)
 
     def test_person_sheet_prominently_lists_consequence_ledgers(self) -> None:
         con = _memory_save()
@@ -1943,9 +2072,12 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Obligation: relief debt", sheet)
         self.assertIn("Reputation: leadership", sheet)
         self.assertIn("Legal Fallout: heir legitimacy challenge", sheet)
-        self.assertIn("Knowledge Effect: toolmaking", sheet)
-        self.assertIn(">Bea Forge", sheet)
-        self.assertIn(">Cato Vale", sheet)
+        self.assertIn("Knowledge Effect: a new toolmaking practice", sheet)
+        self.assertIn("the record names the field but not a specific invention", sheet)
+        self.assertIn("<summary>Details</summary>", sheet)
+        self.assertIn(">Bea</a>", sheet)
+        self.assertIn(">Cato</a>", sheet)
+        self.assertIn('title="Cato Vale (b. 5)"', sheet)
         self.assertIn("Consequences:\n- Obligations: 1", share)
         self.assertIn("Reputation marks: 1", share)
         self.assertIn("Legal fallout: 1", share)
@@ -1953,7 +2085,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Active Obligations:\n- 1001-1013: relief debt", share)
         self.assertIn("Reputation Marks:\n- 1002: leadership low -> medium", share)
         self.assertIn("Legal Fallout:\n- 1003-1021: heir legitimacy challenge", share)
-        self.assertIn("Knowledge Effects:\n- 1004: toolmaking", share)
+        self.assertIn("Knowledge Effects:\n- 1004: a new toolmaking practice; field-level record", share)
 
     def test_person_sheet_shows_cached_archive_scores(self) -> None:
         con = _memory_save()
@@ -2184,10 +2316,12 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Bea was killed by Ada Forge", victim_text)
         self.assertIn("feud murder", killer_text)
         self.assertNotIn("murder: Ada", killer_text)
-        self.assertIn("<strong>Ada</strong> killed", killer_html)
-        self.assertIn("<strong>Bea</strong> was killed by", victim_html)
-        self.assertIn(">Bea Forge</a>", killer_html)
-        self.assertIn(">Ada Forge</a>", victim_html)
+        self.assertIn('<strong title="Ada Forge (b. 0)">Ada</strong> killed', killer_html)
+        self.assertIn('<strong title="Bea Forge (b. 8)">Bea</strong> was killed by', victim_html)
+        self.assertIn(">Bea</a>", killer_html)
+        self.assertIn('title="Bea Forge (b. 8)"', killer_html)
+        self.assertIn(">Ada</a>", victim_html)
+        self.assertIn('title="Ada Forge (b. 0)"', victim_html)
 
     def test_career_fitness_update_uses_event_payload(self) -> None:
         con = _memory_save()

@@ -19,7 +19,7 @@ import time
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator, Iterable
+from typing import Callable, Iterator, Iterable
 
 import gradio as gr
 
@@ -209,20 +209,30 @@ from library.world_map_svg import (  # noqa: E402
 
 ALMANACK_HEADERS = [
     "Rank",
-    "Person ID",
-    "Name",
-    "Life",
-    "Age",
-    "Home",
-    "Metric",
     "Value",
     "Count",
-    "World Rank",
-    "Era Rank",
-    "Region Rank",
-    "Percentile",
-    "Z",
+    "Name",
+    "Person ID",
+    "Life",
+    "Age",
     "Years",
+    "Home",
+    "Metric",
+    "Context",
+    "Evidence",
+    "Source",
+]
+ALMANACK_SELECTED_HEADERS = [
+    "Rank",
+    "Value",
+    "Count",
+    "Name",
+    "Person ID",
+    "Life",
+    "Age",
+    "Years",
+    "Home",
+    "Context",
     "Evidence",
     "Source",
 ]
@@ -346,6 +356,46 @@ body.dark .sim-progress-card,
 #person-table th:nth-child(10),
 #person-table td:nth-child(10) {
     max-width: 230px !important;
+}
+#almanack-table,
+#almanack-table table,
+#almanack-table .table-wrap,
+#almanack-table .dataframe {
+    font-size: 12px !important;
+}
+#almanack-table th,
+#almanack-table td,
+#almanack-table [role="columnheader"],
+#almanack-table [role="gridcell"] {
+    font-size: 12px !important;
+    line-height: 1.2 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+#almanack-table th:nth-child(1),
+#almanack-table td:nth-child(1) {
+    width: 44px !important;
+    min-width: 44px !important;
+}
+#almanack-table th:nth-child(2),
+#almanack-table td:nth-child(2),
+#almanack-table th:nth-child(3),
+#almanack-table td:nth-child(3) {
+    width: 72px !important;
+    min-width: 64px !important;
+}
+#almanack-table th:nth-child(4),
+#almanack-table td:nth-child(4) {
+    min-width: 150px !important;
+}
+#almanack-table th:nth-child(10),
+#almanack-table td:nth-child(10),
+#almanack-table th:nth-child(11),
+#almanack-table td:nth-child(11),
+#almanack-table th:nth-child(12),
+#almanack-table td:nth-child(12) {
+    max-width: 260px !important;
 }
 .person-sheet {
     --person-sheet-bg-start: #fbf8ef;
@@ -746,6 +796,75 @@ body.dark .person-sheet,
     background: var(--person-sheet-relation-bg);
     color: var(--person-sheet-text) !important;
     padding: 7px 9px;
+}
+.relation-compact {
+    min-width: 0;
+}
+.history-summary {
+    color: var(--person-sheet-muted) !important;
+    margin: 0 0 8px;
+}
+.history-timeline {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    width: 100%;
+    min-height: 54px;
+}
+.history-list {
+    width: 100%;
+}
+.history-segment {
+    min-width: 44px;
+    max-width: 100%;
+    border-left: 3px solid var(--person-sheet-accent);
+    background: var(--person-sheet-relation-bg);
+    color: var(--person-sheet-text) !important;
+    padding: 7px 8px;
+    overflow: hidden;
+    transition: min-width .15s ease, box-shadow .15s ease;
+}
+.history-segment strong,
+.event-card-title {
+    display: block;
+    color: var(--person-sheet-title) !important;
+    font-size: 14px;
+    line-height: 1.15;
+    margin-bottom: 3px;
+}
+.history-segment span,
+.event-card-body {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.history-segment:hover,
+.history-segment:focus {
+    min-width: 160px;
+    overflow: visible;
+    box-shadow: 0 4px 12px rgba(60, 45, 20, .14);
+    z-index: 1;
+}
+.history-gap {
+    min-width: 12px;
+    border-left: 0;
+    background: repeating-linear-gradient(
+        90deg,
+        transparent 0,
+        transparent 5px,
+        rgba(111, 96, 70, .16) 5px,
+        rgba(111, 96, 70, .16) 7px
+    );
+}
+.event-card-details {
+    margin-top: 5px;
+    color: var(--person-sheet-muted) !important;
+    font-size: 12px;
+}
+.event-card-details summary {
+    cursor: pointer;
+    font-weight: 650;
 }
 .muted {
     color: var(--person-sheet-muted) !important;
@@ -2833,8 +2952,12 @@ def load_people_browser(
     return _dataframe(values, headers), status, person_ids
 
 
-def _almanack_empty_frame() -> gr.Dataframe:
-    return gr.Dataframe(value=[], headers=ALMANACK_HEADERS)
+def _almanack_headers_for_metric(selection: object) -> list[str]:
+    return ALMANACK_SELECTED_HEADERS if _almanack_metric_key(selection) else ALMANACK_HEADERS
+
+
+def _almanack_empty_frame(metric: object = None) -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=_almanack_headers_for_metric(metric))
 
 
 def _almanack_empty_evidence_frame() -> gr.Dataframe:
@@ -2864,6 +2987,30 @@ def _almanack_year_span(row: dict[str, object]) -> str:
     return f"{first}-{last}"
 
 
+def _shorten_table_text(value: object, limit: int = 96) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _almanack_context_text(row: dict[str, object]) -> str:
+    bits: list[str] = []
+    if row.get("world_rank") not in (None, ""):
+        bits.append(f"world #{row.get('world_rank')}")
+    if row.get("era_rank") not in (None, ""):
+        era = row.get("era_bucket")
+        era_tail = f" ({era}s)" if era not in (None, "") else ""
+        bits.append(f"era #{row.get('era_rank')}{era_tail}")
+    if row.get("region_rank") not in (None, ""):
+        bits.append(f"region #{row.get('region_rank')}")
+    if row.get("percentile") not in (None, ""):
+        bits.append(f"pct {_fmt_number(row.get('percentile'), 1)}")
+    if row.get("z_score") not in (None, ""):
+        bits.append(f"z {_fmt_number(row.get('z_score'), 2)}")
+    return "; ".join(bits)
+
+
 def _almanack_state_key(row: dict[str, object]) -> str:
     return json.dumps(
         {
@@ -2878,21 +3025,17 @@ def _almanack_state_key(row: dict[str, object]) -> str:
 def _almanack_table_row(row: dict[str, object]) -> dict[str, object]:
     return {
         "Rank": row.get("rank", ""),
-        "Person ID": row.get("person_id", ""),
-        "Name": row.get("name", ""),
-        "Life": row.get("life", ""),
-        "Age": row.get("age", ""),
-        "Home": row.get("home", ""),
-        "Metric": row.get("metric_label", ""),
         "Value": _fmt_number(row.get("metric_value"), 3),
         "Count": row.get("metric_count", ""),
-        "World Rank": row.get("world_rank", ""),
-        "Era Rank": row.get("era_rank", ""),
-        "Region Rank": row.get("region_rank", ""),
-        "Percentile": _fmt_number(row.get("percentile"), 2),
-        "Z": _fmt_number(row.get("z_score"), 2),
+        "Name": row.get("name", ""),
+        "Person ID": row.get("person_id", ""),
+        "Life": row.get("life", ""),
+        "Age": row.get("age", ""),
         "Years": _almanack_year_span(row),
-        "Evidence": row.get("evidence_summary", ""),
+        "Home": row.get("home", ""),
+        "Metric": row.get("metric_label", ""),
+        "Context": _almanack_context_text(row),
+        "Evidence": _shorten_table_text(row.get("evidence_summary", "")),
         "Source": "Passive explicit" if row.get("source_kind") == "passive" else "Detailed",
     }
 
@@ -2948,7 +3091,7 @@ def load_almanack_browser(
 ) -> tuple[gr.Dataframe, str, list[str], str, str]:
     if not world:
         return (
-            _almanack_empty_frame(),
+            _almanack_empty_frame(metric),
             "Choose a world.",
             [],
             '<div class="person-sheet muted">Load The Almanack, then click a row.</div>',
@@ -2958,7 +3101,7 @@ def load_almanack_browser(
     path = _db_path(world, "Save DB")
     if not path.exists():
         return (
-            _almanack_empty_frame(),
+            _almanack_empty_frame(metric),
             f"{path} is missing. Run a simulation first.",
             [],
             '<div class="person-sheet muted">No save DB found.</div>',
@@ -2969,7 +3112,7 @@ def load_almanack_browser(
         cache = person_almanack_cache_status(con)
         if not cache.get("exists") or int(cache.get("row_count") or 0) == 0:
             return (
-                _almanack_empty_frame(),
+                _almanack_empty_frame(metric),
                 f"{path.name}: Almanack cache is empty. Click Refresh Almanack to build it.",
                 [],
                 '<div class="person-sheet muted">Refresh The Almanack, then load rankings.</div>',
@@ -2987,11 +3130,12 @@ def load_almanack_browser(
             rank_mode=str(rank_mode or "Raw Value"),
         )
     values = [_almanack_table_row(row) for row in rows]
+    headers = _almanack_headers_for_metric(metric)
     keys = [_almanack_state_key(row) for row in rows]
     saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
     status = _almanack_status_text(path, cache, len(values), str(rank_mode or "Raw Value")) + saved_world_note
     return (
-        _dataframe(values, ALMANACK_HEADERS),
+        _dataframe(values, headers),
         status,
         keys,
         '<div class="person-sheet muted">Click a detailed row to open its person sheet. Passive rows show a compact record.</div>',
@@ -3012,7 +3156,7 @@ def refresh_almanack_browser(
 ) -> tuple[gr.Dataframe, str, list[str], str, str]:
     if not world:
         return (
-            _almanack_empty_frame(),
+            _almanack_empty_frame(metric),
             "Choose a world.",
             [],
             '<div class="person-sheet muted">Choose a world.</div>',
@@ -3021,7 +3165,7 @@ def refresh_almanack_browser(
     path = _db_path(world, "Save DB")
     if not path.exists():
         return (
-            _almanack_empty_frame(),
+            _almanack_empty_frame(metric),
             f"{path} is missing. Run a simulation first.",
             [],
             '<div class="person-sheet muted">No save DB found.</div>',
@@ -3545,6 +3689,28 @@ def _person_link_html(con: sqlite3.Connection, world: str, person_id: object) ->
     )
 
 
+def _person_years_label(person: dict[str, object]) -> str:
+    years = f"b. {person.get('birthyear', '?')}"
+    if person.get("deathyear") is not None:
+        years += f"-{person.get('deathyear')}"
+    return years
+
+
+def _person_link_html_compact(con: sqlite3.Connection, world: str, person_id: object) -> str:
+    row, person = _lookup_person(con, world, person_id)
+    if not row:
+        return "Unknown"
+    full_name = _person_name(person)
+    shown = _person_first_name(person)
+    title = f"{full_name} ({_person_years_label(person)})"
+    return (
+        f'<a href="#" class="person-link" '
+        f'title="{html.escape(title, quote=True)}" '
+        f'aria-label="Open person record for {html.escape(full_name, quote=True)}" '
+        f'onclick="{_person_link_onclick(int(row["person_id"]))}">{html.escape(shown)}</a>'
+    )
+
+
 def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -> list[sqlite3.Row]:
     events_has_world = "world" in _table_columns(con, "simulation_events")
     event_people_exists = _has_table(con, "simulation_event_people")
@@ -3621,6 +3787,94 @@ def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -
     ).fetchall()
 
 
+def _person_children_rows(
+    con: sqlite3.Connection, world: str, person_id: object
+) -> list[sqlite3.Row]:
+    people_has_world = "world" in _table_columns(con, "simulation_people")
+    return con.execute(
+        f"""
+        select *
+        from simulation_people
+        where {'world = ? and ' if people_has_world else ''}(father_id = ? or mother_id = ?)
+        order by person_id
+        """,
+        (
+            *([world] if people_has_world else []),
+            person_id,
+            person_id,
+        ),
+    ).fetchall()
+
+
+def _row_alive(row: sqlite3.Row) -> bool:
+    if "is_alive" not in row.keys():
+        return False
+    try:
+        return bool(int(row["is_alive"]))
+    except (TypeError, ValueError):
+        return False
+
+
+def _child_died_young(child: sqlite3.Row, trait_slots: tuple[str, ...]) -> bool:
+    person = _person_from_row(child, trait_slots)
+    if _row_alive(child):
+        return False
+    try:
+        birthyear = int(person.get("birthyear"))
+        deathyear = int(person.get("deathyear"))
+    except (TypeError, ValueError):
+        return False
+    return deathyear - birthyear < 16
+
+
+def _children_summary_text(
+    children: list[sqlite3.Row], trait_slots: tuple[str, ...]
+) -> str:
+    total = len(children)
+    if total == 0:
+        return "No recorded children."
+    alive = sum(1 for child in children if _row_alive(child))
+    lost_young = sum(1 for child in children if _child_died_young(child, trait_slots))
+    child_word = "child" if total == 1 else "children"
+    return (
+        f"{total} recorded {child_word}, "
+        f"{lost_young} died before 16, "
+        f"{alive} alive."
+    )
+
+
+def _person_child_items_html(
+    con: sqlite3.Connection,
+    world: str,
+    children: list[sqlite3.Row],
+    trait_slots: tuple[str, ...],
+    *,
+    visible_limit: int = 12,
+) -> list[str]:
+    if not children:
+        return ['<div class="relation muted">No recorded children</div>']
+    items: list[str] = []
+    for child in children[:visible_limit]:
+        person = _person_from_row(child, trait_slots)
+        title = f"{_person_name(person)} ({_person_years_label(person)})"
+        status = "alive" if _row_alive(child) else "dead"
+        if _child_died_young(child, trait_slots):
+            status = "died before 16"
+        items.append(
+            '<div class="relation relation-compact" '
+            f'title="{html.escape(title, quote=True)}">'
+            f'{_person_link_html_compact(con, world, child["person_id"])}'
+            f'<br><span class="muted">{html.escape(status)}</span>'
+            '</div>'
+        )
+    hidden = len(children) - visible_limit
+    if hidden > 0:
+        items.append(
+            f'<div class="relation muted">+ {hidden} more recorded children not shown</div>'
+        )
+    return items
+
+
 def _short_person(con: sqlite3.Connection, world: str, person_id: object) -> str:
     if person_id in (None, ""):
         return "unknown person"
@@ -3669,15 +3923,16 @@ def _short_person_html_for_event(
     row, person = _lookup_person(con, world, person_id)
     if not row:
         return "unknown person"
-    label = _person_first_name(person) if _same_person_id(person_id, focus_person_id) else _person_name(person)
+    label = _person_first_name(person)
+    full_name = _person_name(person)
+    title = f"{full_name} ({_person_years_label(person)})"
     if _same_person_id(person_id, focus_person_id):
-        return f"<strong>{html.escape(label)}</strong>"
-    name = html.escape(label)
-    full_name = html.escape(_person_name(person))
+        return f'<strong title="{html.escape(title, quote=True)}">{html.escape(label)}</strong>'
     return (
         f'<a href="#" class="person-link" '
-        f'aria-label="Open person record for {full_name}" '
-        f'onclick="{_person_link_onclick(int(row["person_id"]))}">{name}</a>'
+        f'title="{html.escape(title, quote=True)}" '
+        f'aria-label="Open person record for {html.escape(full_name, quote=True)}" '
+        f'onclick="{_person_link_onclick(int(row["person_id"]))}">{html.escape(label)}</a>'
     )
 
 
@@ -4001,6 +4256,196 @@ def _event_murder_sentence_html(
     return f"{killer} killed {victim}{tail}."
 
 
+def _event_label_text(value: object, default: str = "unknown") -> str:
+    text = str(value or "").strip()
+    return text.replace("_", " ") if text else default
+
+
+def _event_place_text(con: sqlite3.Connection, world: str, payload: dict[str, object]) -> str:
+    settlement_id = payload.get("settlement_id")
+    settlement_table = _place_read_relation(con, "simulation_settlements")
+    if settlement_id and _has_relation(con, settlement_table):
+        settlement = _settlement_name(con, world, settlement_id)
+        if settlement:
+            return settlement
+    if settlement_id:
+        return str(settlement_id)
+    region = str(payload.get("region_id") or "").strip()
+    return _event_label_text(region, "an unrecorded place")
+
+
+def _event_person_list(
+    con: sqlite3.Connection,
+    world: str,
+    ids: object,
+    focus_person_id: object,
+    *,
+    html_mode: bool,
+) -> str:
+    if not isinstance(ids, list) or not ids:
+        return ""
+    shown = (
+        _short_person_html_for_event(con, world, pid, focus_person_id)
+        if html_mode
+        else _short_person_for_event(con, world, pid, focus_person_id)
+        for pid in ids[:6]
+    )
+    text = ", ".join(shown)
+    if len(ids) > 6:
+        text += f", and {len(ids) - 6} more"
+    return text
+
+
+def _event_details_html(*items: tuple[str, object]) -> str:
+    bits = [
+        f"{label}: {value}"
+        for label, value in items
+        if value not in (None, "")
+    ]
+    if not bits:
+        return ""
+    return (
+        '<details class="event-card-details">'
+        '<summary>Details</summary>'
+        f'<span>{html.escape("; ".join(bits))}</span>'
+        '</details>'
+    )
+
+
+def _knowledge_focus_text(payload: dict[str, object]) -> tuple[str, bool]:
+    specific = next(
+        (
+            str(payload.get(key) or "").strip()
+            for key in (
+                "innovation_analogue_name",
+                "source_innovation_title",
+                "innovation_title",
+                "innovation_name",
+                "discovery",
+                "specific_effect",
+            )
+            if str(payload.get(key) or "").strip()
+        ),
+        "",
+    )
+    domain = _event_label_text(payload.get("knowledge_domain"), "knowledge")
+    kind = _event_label_text(payload.get("incident_kind"), "knowledge work")
+    if specific:
+        return f"{specific}, {kind} in {domain}", True
+    if domain != "knowledge":
+        return f"a new {domain} practice", False
+    return kind, False
+
+
+def _property_crime_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> str:
+    perpetrator_id = payload.get("perpetrator_person_id") or payload.get("person_id")
+    target_id = payload.get("target_person_id") or payload.get("victim_person_id")
+    perpetrator = _short_person_for_event(con, world, perpetrator_id, focus_person_id)
+    target = _short_person_for_event(con, world, target_id, focus_person_id)
+    kind = _event_label_text(payload.get("incident_kind"), "property crime")
+    place = _event_place_text(con, world, payload)
+    bits = [f"{perpetrator} committed {kind} against {target} at {place}"]
+    if payload.get("loss_value") not in (None, ""):
+        bits.append(f"loss {_fmt_number(payload.get('loss_value'), 3)}")
+    motive = _event_label_text(payload.get("motive"), "")
+    if motive:
+        bits.append(f"motive {motive}")
+    witnesses = _event_person_list(
+        con, world, payload.get("witness_person_ids") or payload.get("witnesses"), focus_person_id, html_mode=False
+    )
+    if witnesses:
+        bits.append(f"witnesses {witnesses}")
+    return "; ".join(bits) + "."
+
+
+def _property_crime_sentence_html(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> str:
+    perpetrator_id = payload.get("perpetrator_person_id") or payload.get("person_id")
+    target_id = payload.get("target_person_id") or payload.get("victim_person_id")
+    perpetrator = _short_person_html_for_event(con, world, perpetrator_id, focus_person_id)
+    target = _short_person_html_for_event(con, world, target_id, focus_person_id)
+    kind = html.escape(_event_label_text(payload.get("incident_kind"), "property crime"))
+    place = html.escape(_event_place_text(con, world, payload))
+    bits = [f"{perpetrator} committed {kind} against {target} at {place}"]
+    if payload.get("loss_value") not in (None, ""):
+        bits.append(f"loss {_fmt_number(payload.get('loss_value'), 3)}")
+    motive = _event_label_text(payload.get("motive"), "")
+    if motive:
+        bits.append(f"motive {html.escape(motive)}")
+    witnesses = _event_person_list(
+        con, world, payload.get("witness_person_ids") or payload.get("witnesses"), focus_person_id, html_mode=False
+    )
+    details = _event_details_html(
+        ("witnesses", witnesses),
+        ("region", _event_label_text(payload.get("region_id"), "")),
+        ("settlement", payload.get("settlement_id")),
+    )
+    return "; ".join(bits) + "." + details
+
+
+def _knowledge_culture_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> str:
+    creator = _short_person_for_event(con, world, payload.get("creator_person_id") or payload.get("person_id"), focus_person_id)
+    patron_id = payload.get("patron_person_id")
+    patron = _short_person_for_event(con, world, patron_id, focus_person_id) if patron_id not in (None, "") else ""
+    focus, has_specific = _knowledge_focus_text(payload)
+    place = _event_place_text(con, world, payload)
+    if has_specific:
+        sentence = f"{creator} produced {focus} at {place}"
+    else:
+        sentence = f"{creator} left a documented mark on {focus} at {place}"
+    if patron:
+        sentence += f"; patron {patron}"
+    if not has_specific:
+        sentence += "; the record names the field but not a specific invention"
+    return sentence + "."
+
+
+def _knowledge_culture_sentence_html(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> str:
+    creator = _short_person_html_for_event(con, world, payload.get("creator_person_id") or payload.get("person_id"), focus_person_id)
+    patron_id = payload.get("patron_person_id")
+    patron = _short_person_html_for_event(con, world, patron_id, focus_person_id) if patron_id not in (None, "") else ""
+    focus, has_specific = _knowledge_focus_text(payload)
+    place = html.escape(_event_place_text(con, world, payload))
+    if has_specific:
+        sentence = f"{creator} produced {html.escape(focus)} at {place}"
+    else:
+        sentence = f"{creator} left a documented mark on {html.escape(focus)} at {place}"
+    if patron:
+        sentence += f"; patron {patron}"
+    if not has_specific:
+        sentence += "; the record names the field but not a specific invention"
+    consequences = payload.get("consequences")
+    knowledge_state = consequences.get("knowledge_state") if isinstance(consequences, dict) else {}
+    if not isinstance(knowledge_state, dict):
+        knowledge_state = {}
+    details = _event_details_html(
+        ("kind", _event_label_text(payload.get("incident_kind"), "")),
+        ("state delta", _fmt_number(knowledge_state.get("state_delta"), 3)),
+        ("novelty", _fmt_number(payload.get("novelty_value"), 3)),
+        ("domain", _event_label_text(payload.get("knowledge_domain"), "")),
+    )
+    return sentence + "." + details
+
+
 def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, focus_person_id: object) -> str:
     payload = _load_json_object(event["payload_json"])
     event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
@@ -4077,6 +4522,12 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
 
     if event_type == "murder":
         return _event_murder_sentence(con, world, payload, focus_person_id)
+
+    if event_type == "property_crime":
+        return _property_crime_sentence(con, world, payload, focus_person_id)
+
+    if event_type == "knowledge_culture":
+        return _knowledge_culture_sentence(con, world, payload, focus_person_id)
 
     if event_type in {"settlement_moved", "job_seeker_migration"}:
         if event_type == "settlement_moved":
@@ -4252,6 +4703,12 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
 
     if event_type == "murder":
         return _event_murder_sentence_html(con, world, payload, focus_person_id)
+
+    if event_type == "property_crime":
+        return _property_crime_sentence_html(con, world, payload, focus_person_id)
+
+    if event_type == "knowledge_culture":
+        return _knowledge_culture_sentence_html(con, world, payload, focus_person_id)
 
     if event_type in {"settlement_moved", "job_seeker_migration"}:
         if event_type == "settlement_moved":
@@ -4552,16 +5009,75 @@ def _history_entries_for_person(
     return jobs, partners, paramours
 
 
-def _job_history_items_html(entries: list[dict[str, object]]) -> list[str]:
+def _history_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _history_duration(entry: dict[str, object]) -> int:
+    start = _history_int(entry.get("start_year"))
+    end = _history_int(entry.get("end_year"))
+    if start is None or end is None:
+        return 1
+    return max(1, end - start)
+
+
+def _history_duration_text(entry: dict[str, object]) -> str:
+    duration = _history_duration(entry)
+    return f"{duration} year{'s' if duration != 1 else ''}"
+
+
+def _history_timeline_html(
+    entries: list[dict[str, object]],
+    *,
+    empty_text: str,
+    segment_html: Callable[[dict[str, object]], str],
+    is_gap: Callable[[dict[str, object]], bool] | None = None,
+) -> list[str]:
     if not entries:
-        return ['<div class="relation muted">No recorded job history</div>']
-    return [
-        '<div class="relation">'
-        f'<strong>{html.escape(_history_year_range(entry.get("start_year"), entry.get("end_year")))}</strong><br>'
-        f'{html.escape(str(entry.get("label") or "Unknown"))}'
-        '</div>'
-        for entry in entries
-    ]
+        return [f'<div class="relation muted">{html.escape(empty_text)}</div>']
+    is_gap = is_gap or (lambda _entry: False)
+    items: list[str] = []
+    for entry in entries:
+        duration = _history_duration(entry)
+        year_range = _history_year_range(entry.get("start_year"), entry.get("end_year"))
+        title_parts = [year_range, _history_duration_text(entry)]
+        if entry.get("label"):
+            title_parts.append(str(entry.get("label")))
+        title = " | ".join(title_parts)
+        if is_gap(entry):
+            items.append(
+                '<div class="history-segment history-gap" '
+                f'style="flex-grow: {duration}" '
+                f'title="{html.escape(title, quote=True)}" '
+                f'aria-label="{html.escape(title, quote=True)}"></div>'
+            )
+            continue
+        items.append(
+            '<div class="history-segment" tabindex="0" '
+            f'style="flex-grow: {duration}" '
+            f'title="{html.escape(title, quote=True)}">'
+            f'{segment_html(entry)}'
+            '</div>'
+        )
+    return ['<div class="history-timeline">' + "".join(items) + "</div>"]
+
+
+def _job_history_items_html(entries: list[dict[str, object]]) -> list[str]:
+    def segment(entry: dict[str, object]) -> str:
+        return (
+            f'<strong>{html.escape(_history_year_range(entry.get("start_year"), entry.get("end_year")))}</strong>'
+            f'<span>{html.escape(str(entry.get("label") or "Unknown"))}</span>'
+        )
+
+    return _history_timeline_html(
+        entries,
+        empty_text="No recorded job history",
+        segment_html=segment,
+        is_gap=lambda entry: str(entry.get("label") or "") == "Unemployed",
+    )
 
 
 def _relationship_history_items_html(
@@ -4570,15 +5086,17 @@ def _relationship_history_items_html(
     entries: list[dict[str, object]],
     empty_text: str,
 ) -> list[str]:
-    if not entries:
-        return [f'<div class="relation muted">{html.escape(empty_text)}</div>']
-    return [
-        '<div class="relation">'
-        f'<strong>{html.escape(_history_year_range(entry.get("start_year"), entry.get("end_year")))}</strong><br>'
-        f'{_person_link_html(con, world, entry.get("person_id"))}'
-        '</div>'
-        for entry in entries
-    ]
+    def segment(entry: dict[str, object]) -> str:
+        return (
+            f'<strong>{html.escape(_history_year_range(entry.get("start_year"), entry.get("end_year")))}</strong>'
+            f'<span>{_person_link_html_compact(con, world, entry.get("person_id"))}</span>'
+        )
+
+    return _history_timeline_html(
+        entries,
+        empty_text=empty_text,
+        segment_html=segment,
+    )
 
 
 def _job_history_lines(entries: list[dict[str, object]]) -> list[str]:
@@ -4704,12 +5222,15 @@ def _person_knowledge_effect_rows(
         knowledge_state = consequences.get("knowledge_state")
         if not isinstance(knowledge_state, dict):
             knowledge_state = {}
+        focus, has_specific_focus = _knowledge_focus_text(payload)
         rows.append(
             {
                 "event_id": _event_id(event),
                 "year": _row_value(event, "sim_year"),
                 "role": ", ".join(roles),
                 "incident_kind": payload.get("incident_kind"),
+                "focus": focus,
+                "has_specific_focus": has_specific_focus,
                 "domain": knowledge_state.get("domain")
                 or payload.get("knowledge_domain"),
                 "state_delta": knowledge_state.get("state_delta"),
@@ -4893,6 +5414,8 @@ def _person_knowledge_effect_items_html(
     for row in rows:
         domain = str(row.get("domain") or "unknown domain").replace("_", " ")
         kind = str(row.get("incident_kind") or "knowledge culture").replace("_", " ")
+        focus = str(row.get("focus") or "").strip() or domain
+        has_specific_focus = bool(row.get("has_specific_focus"))
         creator = _short_person_html_for_event(
             con, world, row.get("creator_person_id"), focus_person_id
         )
@@ -4902,19 +5425,37 @@ def _person_knowledge_effect_items_html(
             if patron_id not in (None, "")
             else ""
         )
+        visible_line = (
+            f"{creator} produced {html.escape(focus)}{patron}"
+            if has_specific_focus
+            else (
+                f"{creator} left a documented mark on {html.escape(focus)}{patron}; "
+                "the record names the field but not a specific invention"
+            )
+        )
         detail = _detail_bits(
             ("role", row.get("role")),
+            ("kind", kind),
             ("state delta", _fmt_number(row.get("state_delta"), digits=3)),
             ("novelty", _fmt_number(row.get("novelty_value"), digits=3)),
+            ("domain", domain),
         )
         if detail:
             detail += _place_tail(row)
+        detail_html = (
+            '<details class="event-card-details">'
+            '<summary>Details</summary>'
+            f'<span>{html.escape(detail)}</span>'
+            '</details>'
+            if detail
+            else ""
+        )
         items.append(
             '<div class="relation consequence-row consequence-knowledge">'
             f'<strong>{html.escape(_year_span_text(row.get("year")))} · '
-            f'Knowledge Effect: {html.escape(domain)}</strong><br>'
-            f'{creator} shaped {html.escape(domain)} through {html.escape(kind)}{patron}'
-            f'<br><span class="muted">{html.escape(detail)}</span>'
+            f'Knowledge Effect: {html.escape(focus)}</strong><br>'
+            f'{visible_line}'
+            f'{detail_html}'
             '</div>'
         )
     return items
@@ -5006,9 +5547,11 @@ def _person_knowledge_effect_lines(
             if patron_id not in (None, "")
             else ""
         )
+        focus = str(row.get("focus") or row.get("domain") or "unknown domain").replace("_", " ")
+        sparse_note = "" if row.get("has_specific_focus") else "; field-level record"
         lines.append(
             f"- {_year_span_text(row.get('year'))}: "
-            f"{str(row.get('domain') or 'unknown domain').replace('_', ' ')}; "
+            f"{focus}{sparse_note}; "
             f"role {row.get('role') or 'related'}; creator {creator}{patron}; "
             f"state delta {_fmt_number(row.get('state_delta'), digits=3)}, "
             f"novelty {_fmt_number(row.get('novelty_value'), digits=3)}."
@@ -5469,27 +6012,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     mother_html = _person_link_html(con, world, row["mother_id"]) if row["mother_id"] else "Unknown"
     partner_html = _person_link_html(con, world, person.get("partner_person_id")) if person.get("partner_person_id") else "None"
     paramour_html = _person_link_html(con, world, person.get("paramour_person_id")) if person.get("paramour_person_id") else "None"
-    people_has_world = "world" in _table_columns(con, "simulation_people")
-    children = con.execute(
-        f"""
-        select *
-        from simulation_people
-        where {'world = ? and ' if people_has_world else ''}(father_id = ? or mother_id = ?)
-        order by person_id
-        limit 12
-        """,
-        (
-            *([world] if people_has_world else []),
-            row["person_id"],
-            row["person_id"],
-        ),
-    ).fetchall()
-    child_items = [
-        f'<div class="relation">{_person_link_html(con, world, child["person_id"])}</div>'
-        for child in children
-    ]
-    if not child_items:
-        child_items = ['<div class="relation muted">No recorded children</div>']
+    trait_slots = _trait_slots_for_world(world)
+    children = _person_children_rows(con, world, row["person_id"])
+    child_summary = _children_summary_text(children, trait_slots)
+    child_items = _person_child_items_html(con, world, children, trait_slots)
 
     events = _person_event_rows(con, world, row["person_id"])
     job_history, partner_history, paramour_history = _history_entries_for_person(
@@ -5542,9 +6068,11 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     for event in events:
         sentence = _event_sentence_html(con, world, event, row["person_id"])
         event_items.append(
-            f'<div class="relation"><strong>{html.escape(str(event["sim_year"]))}</strong> '
-            f'{html.escape(str(event["event_type"]).replace("_", " "))}<br>'
-            f'<span class="muted">{sentence}</span></div>'
+            '<div class="relation event-card">'
+            f'<strong class="event-card-title">{html.escape(str(event["sim_year"]))} · '
+            f'{html.escape(str(event["event_type"]).replace("_", " ").title())}</strong><br>'
+            f'<span class="event-card-body">{sentence}</span>'
+            '</div>'
         )
     if not event_items:
         event_items = ['<div class="relation muted">No matching events found</div>']
@@ -5671,19 +6199,20 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
       </section>
       <section aria-labelledby="person-{row['person_id']}-children">
         <h3 id="person-{row['person_id']}-children" class="section-title">Children</h3>
+        <p class="history-summary">{html.escape(child_summary)}</p>
         <div class="relation-list">{''.join(child_items)}</div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-job-history">
         <h3 id="person-{row['person_id']}-job-history" class="section-title">Job History</h3>
-        <div class="relation-list">{''.join(job_items)}</div>
+        <div class="history-list">{''.join(job_items)}</div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-partner-history">
         <h3 id="person-{row['person_id']}-partner-history" class="section-title">Partner History</h3>
-        <div class="relation-list">{''.join(partner_items)}</div>
+        <div class="history-list">{''.join(partner_items)}</div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-paramour-history">
         <h3 id="person-{row['person_id']}-paramour-history" class="section-title">Paramour History</h3>
-        <div class="relation-list">{''.join(paramour_items)}</div>
+        <div class="history-list">{''.join(paramour_items)}</div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-events">
         <h3 id="person-{row['person_id']}-events" class="section-title">Events</h3>
@@ -5726,25 +6255,15 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     if not deviation_trait_lines:
         deviation_trait_lines.append("- No genome data recorded.")
 
-    people_has_world = "world" in _table_columns(con, "simulation_people")
-    children = con.execute(
-        f"""
-        select *
-        from simulation_people
-        where {'world = ? and ' if people_has_world else ''}(father_id = ? or mother_id = ?)
-        order by person_id
-        limit 12
-        """,
-        (
-            *([world] if people_has_world else []),
-            row["person_id"],
-            row["person_id"],
-        ),
-    ).fetchall()
+    trait_slots = _trait_slots_for_world(world)
+    children = _person_children_rows(con, world, row["person_id"])
+    child_summary = _children_summary_text(children, trait_slots)
     child_lines = [
-        f"- {_person_name(_person_from_row(child, _trait_slots_for_world(world)))}"
-        for child in children
+        f"- {_person_name(_person_from_row(child, trait_slots))}"
+        for child in children[:12]
     ] or ["- No recorded children."]
+    if len(children) > 12:
+        child_lines.append(f"- + {len(children) - 12} more recorded children not shown.")
 
     events = _person_event_rows(con, world, row["person_id"])
     job_history, partner_history, paramour_history = _history_entries_for_person(
@@ -5822,6 +6341,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             f"- Paramour: {paramour}",
             "",
             "Children:",
+            f"- {child_summary}",
             *child_lines,
             "",
             "Consequences:",
@@ -9037,6 +9557,8 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         almanack_refresh = gr.Button("Refresh Almanack")
                     almanack_status = gr.Textbox(label="Status", interactive=False)
                     almanack_table = gr.Dataframe(
+                        value=[],
+                        headers=ALMANACK_SELECTED_HEADERS,
                         label="The Almanack",
                         interactive=False,
                         wrap=True,

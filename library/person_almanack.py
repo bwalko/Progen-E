@@ -16,7 +16,7 @@ ALMANACK_TABLE = "simulation_person_almanack_metrics"
 ALMANACK_META_TABLE = "simulation_person_almanack_cache"
 ALMANACK_DEFINITION_TABLE = "simulation_person_almanack_metric_definitions"
 ALMANACK_EVIDENCE_TABLE = "simulation_person_almanack_evidence"
-ALMANACK_SCHEMA_VERSION = 2
+ALMANACK_SCHEMA_VERSION = 3
 EVIDENCE_LIMIT_PER_METRIC = 50
 
 _COMMON_NOTE = "Scores describe saved simulation records, not moral worth."
@@ -634,6 +634,7 @@ def ensure_person_almanack_schema(conn: sqlite3.Connection) -> None:
             cache_key TEXT PRIMARY KEY,
             row_count INTEGER NOT NULL DEFAULT 0,
             source_event_max_id INTEGER NOT NULL DEFAULT 0,
+            cache_schema_version INTEGER NOT NULL DEFAULT {ALMANACK_SCHEMA_VERSION},
             updated_year INTEGER,
             updated_at TEXT NOT NULL
         );
@@ -689,6 +690,11 @@ def ensure_person_almanack_schema(conn: sqlite3.Connection) -> None:
             "region_key": "INTEGER",
             "context_json": "TEXT NOT NULL DEFAULT '{}'",
         },
+    )
+    _ensure_columns(
+        conn,
+        ALMANACK_META_TABLE,
+        {"cache_schema_version": f"INTEGER NOT NULL DEFAULT {ALMANACK_SCHEMA_VERSION}"},
     )
     _upsert_metric_definitions(conn)
     columns = set(_table_columns(conn, ALMANACK_TABLE))
@@ -769,12 +775,13 @@ def refresh_person_almanack(
             cache_key,
             row_count,
             source_event_max_id,
+            cache_schema_version,
             updated_year,
             updated_at
         )
-        VALUES ('default', ?, ?, ?, ?)
+        VALUES ('default', ?, ?, ?, ?, ?)
         """,
-        (len(rows), max_event_id, simulation_year, now),
+        (len(rows), max_event_id, ALMANACK_SCHEMA_VERSION, simulation_year, now),
     )
     return len(rows)
 
@@ -1060,9 +1067,15 @@ def person_almanack_cache_status(conn: sqlite3.Connection) -> dict[str, object]:
     ).fetchone()
     meta = None
     if _table_exists(conn, ALMANACK_META_TABLE):
+        meta_columns = set(_table_columns(conn, ALMANACK_META_TABLE))
+        version_expr = (
+            "cache_schema_version"
+            if "cache_schema_version" in meta_columns
+            else "NULL AS cache_schema_version"
+        )
         meta = conn.execute(
             f"""
-            SELECT row_count, source_event_max_id, updated_at, updated_year
+            SELECT row_count, source_event_max_id, {version_expr}, updated_at, updated_year
             FROM {_quote_identifier(ALMANACK_META_TABLE)}
             WHERE cache_key = 'default'
             """
@@ -1074,12 +1087,18 @@ def person_almanack_cache_status(conn: sqlite3.Connection) -> dict[str, object]:
         if row
         else 0
     )
+    cache_schema_version = (
+        _coerce_int(meta["cache_schema_version"]) if meta is not None else None
+    )
     return {
         "exists": True,
         "row_count": int(row["row_count"] or 0) if row else 0,
         "source_event_max_id": source_event_max_id,
         "current_event_max_id": max_event_id,
-        "stale": max_event_id > source_event_max_id,
+        "cache_schema_version": cache_schema_version,
+        "expected_cache_schema_version": ALMANACK_SCHEMA_VERSION,
+        "stale": max_event_id > source_event_max_id
+        or cache_schema_version != ALMANACK_SCHEMA_VERSION,
         "updated_at": (
             str(meta["updated_at"] or "")
             if meta is not None
@@ -1354,6 +1373,8 @@ def _add_detailed_child_metrics(
     for child_id, child in people.items():
         birthyear = _coerce_int(child.get("birthyear"))
         deathyear = _coerce_int(child.get("deathyear"))
+        child_name = str(child.get("name") or "").strip() or f"child {child_id}"
+        is_alive = bool(_coerce_int(child.get("is_alive")))
         for parent_key in ("father_id", "mother_id"):
             parent_id = _coerce_int(child.get(parent_key))
             if parent_id is None:
@@ -1366,14 +1387,20 @@ def _add_detailed_child_metrics(
                     "source_id": child_id,
                     "source_year": birthyear,
                     "role": parent_key.replace("_id", ""),
-                    "summary": f"child {child_id}",
+                    "summary": f"{child_name} recorded as child",
                     "payload_path": parent_key,
                     "region_key": child.get("birthplace_region_key") or child.get("current_region_key"),
                     "settlement_key": child.get("birthplace_settlement_key") or child.get("current_settlement_key"),
                     "related_people": [child_id],
                 },
             )
-            if birthyear is not None and deathyear is not None and deathyear - birthyear < 16:
+            if (
+                not is_alive
+                and birthyear is not None
+                and deathyear is not None
+                and deathyear - birthyear < 16
+            ):
+                age_at_death = deathyear - birthyear
                 _acc(
                     accumulators,
                     "detailed",
@@ -1387,11 +1414,12 @@ def _add_detailed_child_metrics(
                         "source_id": child_id,
                         "source_year": deathyear,
                         "role": "parent",
-                        "summary": f"child {child_id} died age {deathyear - birthyear}",
+                        "summary": f"{child_name} died in {deathyear} at age {age_at_death}",
                         "payload_path": "deathyear",
                         "region_key": child.get("current_region_key") or child.get("birthplace_region_key"),
                         "settlement_key": child.get("current_settlement_key") or child.get("birthplace_settlement_key"),
                         "related_people": [child_id],
+                        "caveat": {"age_at_death": age_at_death, "young_threshold": 16},
                     },
                 )
 
@@ -2565,9 +2593,13 @@ def _people_context(conn: sqlite3.Connection) -> dict[int, dict[str, object]]:
             "partner_person_id",
             "paramour_person_id",
             "is_alive",
+            "first_name",
+            "last_name",
+            "name",
             "birthyear",
             "deathyear",
             "job",
+            "person_json",
             "current_settlement_key",
             "birthplace_settlement_key",
         )
@@ -2582,6 +2614,13 @@ def _people_context(conn: sqlite3.Connection) -> dict[int, dict[str, object]]:
     out: dict[int, dict[str, object]] = {}
     for row in rows:
         data = {col: row[col] for col in wanted}
+        person_json = _json_dict(data.get("person_json"))
+        first_name = str(data.get("first_name") or person_json.get("first_name") or "").strip()
+        last_name = str(data.get("last_name") or person_json.get("last_name") or "").strip()
+        data["name"] = (
+            str(data.get("name") or "").strip()
+            or " ".join(part for part in (first_name, last_name) if part)
+        )
         current_settlement_key = _coerce_int(data.get("current_settlement_key"))
         birthplace_settlement_key = _coerce_int(data.get("birthplace_settlement_key"))
         data["current_region_key"] = settlement_regions.get(current_settlement_key)

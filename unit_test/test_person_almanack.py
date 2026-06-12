@@ -6,6 +6,7 @@ import unittest
 from contextlib import closing
 
 from library.person_almanack import (
+    ALMANACK_SCHEMA_VERSION,
     metric_definition_choices,
     person_almanack_cache_status,
     query_person_almanack,
@@ -136,7 +137,11 @@ class TestPersonAlmanack(unittest.TestCase):
             )
             self.assertEqual(
                 metrics[("detailed", 1, "children_recorded")]["metric_count"],
-                2,
+                5,
+            )
+            self.assertEqual(
+                metrics[("detailed", 1, "children_lost_young")]["metric_count"],
+                1,
             )
             self.assertEqual(
                 metrics[("passive", 100, "children_recorded")]["metric_count"],
@@ -214,6 +219,16 @@ class TestPersonAlmanack(unittest.TestCase):
             self.assertEqual(evidence[0]["source_table"], "simulation_events")
             self.assertIn("killer", {str(row["role"]) for row in evidence})
 
+            young_loss_evidence = query_person_almanack_evidence(
+                conn,
+                "detailed",
+                1,
+                "children_lost_young",
+            )
+            self.assertEqual(len(young_loss_evidence), 1)
+            self.assertIn("Eli Vale died in 1010 at age 3", young_loss_evidence[0]["summary"])
+            self.assertEqual(young_loss_evidence[0]["payload_path"], "deathyear")
+
             duel = query_person_almanack_duel(conn, 1, 2)
             self.assertEqual(duel["person_a"]["name"], "Ari Vale")
             self.assertEqual(duel["person_b"]["name"], "Bela Reed")
@@ -221,6 +236,17 @@ class TestPersonAlmanack(unittest.TestCase):
 
             status = person_almanack_cache_status(conn)
             self.assertFalse(status["stale"])
+            self.assertEqual(status["cache_schema_version"], ALMANACK_SCHEMA_VERSION)
+            conn.execute(
+                """
+                UPDATE simulation_person_almanack_cache
+                SET cache_schema_version = ?
+                WHERE cache_key = 'default'
+                """,
+                (ALMANACK_SCHEMA_VERSION - 1,),
+            )
+            self.assertTrue(person_almanack_cache_status(conn)["stale"])
+            self.assertEqual(refresh_person_almanack(conn, simulation_year=1020), count)
             append_simulation_event_rows(
                 conn,
                 "default",
@@ -261,6 +287,9 @@ class TestPersonAlmanack(unittest.TestCase):
             (3, None, None, 0, "Caro", "Ash", 982, 1015, "scribe"),
             (4, 1, 3, 1, "Dara", "Vale", 1005, None, "child"),
             (5, 1, 3, 0, "Eli", "Vale", 1007, 1010, "child"),
+            (6, 1, 3, 1, "Fia", "Vale", 1008, None, "child"),
+            (7, 1, 3, 0, "Gio", "Vale", 1009, 1049, "child"),
+            (8, 1, 3, 0, "Hal", "Vale", 1010, None, "child"),
         ]
         conn.executemany(
             """
