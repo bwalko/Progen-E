@@ -6,6 +6,7 @@ import unittest
 from contextlib import closing
 
 from library.person_archive_scores import (
+    load_person_archive_explanation,
     load_person_archive_score,
     refresh_person_archive_scores,
     top_person_archive_scores,
@@ -111,10 +112,102 @@ class TestPersonArchiveScores(unittest.TestCase):
             self.assertIn("remembered", str(score["recognition_bucket"]))
 
             components = json.loads(str(score["component_json"]))
-            self.assertEqual(components["score_version"], 1)
+            self.assertEqual(components["schema"], "person_archive_score_components.v2")
+            self.assertEqual(components["score_version"], 2)
+            self.assertEqual(components["formula_version"], 2)
+            self.assertTrue(
+                {
+                    "totals",
+                    "components",
+                    "bucket_labels",
+                    "top_event_types",
+                    "top_roles",
+                    "evidence_counts",
+                    "data_caveats",
+                    "top_reason_summaries",
+                    "source_ids",
+                    "summary",
+                }.issubset(components.keys())
+            )
             self.assertGreaterEqual(components["event_count"], 5)
+            self.assertIn("narrative_heat_events", components["components"])
+            self.assertIn("ari_official_status", components["components"])
+            self.assertIn("archive_quadrant", components["bucket_labels"])
+            self.assertTrue(components["summary"])
+            self.assertTrue(components["top_reason_summaries"])
             self.assertTrue(components["flags"]["criminal_role"])
             self.assertTrue(components["flags"]["official_role"])
+
+            reason_rows = conn.execute(
+                """
+                SELECT component_key, axis, contribution, source_kind, label
+                FROM simulation_person_archive_score_reasons
+                WHERE person_id = 1
+                """
+            ).fetchall()
+            self.assertTrue(
+                any(
+                    row["component_key"] == "narrative_heat_events"
+                    and row["source_kind"] == "event"
+                    and float(row["contribution"]) > 0.0
+                    for row in reason_rows
+                )
+            )
+            self.assertTrue(
+                any(
+                    row["component_key"] == "narrative_heat_contradictions"
+                    and float(row["contribution"]) > 0.0
+                    for row in reason_rows
+                )
+            )
+            self.assertTrue(
+                any(
+                    str(row["axis"]) == "ari"
+                    and float(row["contribution"]) > 0.0
+                    for row in reason_rows
+                )
+            )
+            self.assertTrue(
+                any(
+                    row["component_key"] == "violet_marginalia_score"
+                    and float(row["contribution"]) > 0.0
+                    for row in reason_rows
+                )
+            )
+            quiet_reasons = conn.execute(
+                """
+                SELECT component_key, axis, contribution
+                FROM simulation_person_archive_score_reasons
+                WHERE person_id = 4
+                """
+            ).fetchall()
+            self.assertTrue(
+                any(
+                    row["component_key"] == "ari_suppression_obscurity_penalty"
+                    and row["axis"] == "obscurity"
+                    and float(row["contribution"]) < 0.0
+                    for row in quiet_reasons
+                )
+            )
+            hidden_reason = conn.execute(
+                """
+                SELECT label, explanation
+                FROM simulation_person_archive_score_reasons
+                WHERE component_key = 'hidden_heat'
+                  AND contribution > 0.0
+                LIMIT 1
+                """
+            ).fetchone()
+            self.assertIsNotNone(hidden_reason)
+
+            explanation = load_person_archive_explanation(conn, 1)
+            self.assertIsNotNone(explanation)
+            assert explanation is not None
+            self.assertEqual(explanation["score_version"], 2)
+            self.assertIn("remembered", str(explanation["summary"]).lower())
+            self.assertIn("scores", explanation)
+            self.assertIn("top_reasons", explanation)
+            self.assertTrue(explanation["top_reasons"])
 
             top = top_person_archive_scores(
                 conn, order_by="narrative_heat_total", limit=1

@@ -15,9 +15,12 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 
-SCORE_FORMULA_VERSION = 1
+SCORE_FORMULA_VERSION = 2
 
 SCORE_TABLE = "simulation_person_archive_scores"
+REASON_TABLE = "simulation_person_archive_score_reasons"
+MAX_REASONS_PER_COMPONENT = 6
+MAX_EXPLANATION_REASONS = 12
 
 _NARRATIVE_COLUMNS: tuple[str, ...] = (
     "narrative_heat_events",
@@ -59,6 +62,119 @@ _SCORE_COLUMNS: tuple[str, ...] = (
     "component_json",
     "updated_at",
 )
+
+_REASON_COLUMNS: tuple[str, ...] = (
+    "person_id",
+    "component_key",
+    "axis",
+    "contribution",
+    "source_kind",
+    "source_id",
+    "source_year",
+    "role",
+    "label",
+    "explanation",
+    "sort_rank",
+    "score_version",
+)
+
+_COMPONENT_META: dict[str, tuple[str, str, str]] = {
+    "narrative_heat_events": (
+        "Events",
+        "narrative",
+        "Direct event participation, weighted by role and historical importance.",
+    ),
+    "narrative_heat_contradictions": (
+        "Contradictions",
+        "narrative",
+        "Tension, reversals, and conflicting public/private traces.",
+    ),
+    "narrative_heat_consequences": (
+        "Consequences",
+        "narrative",
+        "Obligations, reputation marks, legal fallout, and other durable effects.",
+    ),
+    "narrative_heat_social": (
+        "Social",
+        "narrative",
+        "Relationship, household, office, and social-network entanglement.",
+    ),
+    "narrative_heat_rarity": (
+        "Rarity",
+        "narrative",
+        "Unusual traits, roles, circumstances, or low-frequency combinations.",
+    ),
+    "narrative_heat_volatility": (
+        "Volatility",
+        "narrative",
+        "Instability, risk, and fast-changing life context.",
+    ),
+    "narrative_heat_legacy": (
+        "Legacy",
+        "narrative",
+        "Signals that the life may echo through descendants, institutions, or ideas.",
+    ),
+    "ari_official_status": (
+        "Official Status",
+        "ari",
+        "Formal offices, status language, and administrative roles.",
+    ),
+    "ari_wealth": (
+        "Wealth",
+        "ari",
+        "Prosperity, household resources, and premium economic roles.",
+    ),
+    "ari_family_prestige": (
+        "Family Prestige",
+        "ari",
+        "Dynastic ties and parentage that make a person easier to identify.",
+    ),
+    "ari_public_role": (
+        "Public Role",
+        "ari",
+        "Public event participation and record visibility.",
+    ),
+    "ari_legal_records": (
+        "Legal Records",
+        "ari",
+        "Legal fallout and reputation ledgers that preserve names.",
+    ),
+    "ari_knowledge_art": (
+        "Knowledge Or Art",
+        "ari",
+        "Creative, scholarly, patronage, and innovation traces.",
+    ),
+    "ari_founder_institution": (
+        "Founder Or Institution",
+        "ari",
+        "Founder, institution, patronage, and dynasty traces.",
+    ),
+    "ari_descendant_memory": (
+        "Descendant Memory",
+        "ari",
+        "Children and living descendants who can carry family memory.",
+    ),
+    "ari_chronicler_interest": (
+        "Chronicler Interest",
+        "ari",
+        "Public records, total records, and story-shaped lives that attract later notice.",
+    ),
+    "ari_suppression_obscurity_penalty": (
+        "Suppression Or Obscurity",
+        "obscurity",
+        "Sparse public records, low status, stigma, or missing institutional traces.",
+    ),
+    "hidden_heat": (
+        "Hidden Heat",
+        "derived",
+        "Narrative Heat that exceeds current archive recognition.",
+    ),
+    "violet_marginalia_score": (
+        "Violet Marginalia",
+        "derived",
+        "Unusually human archive texture that may deserve later annotation.",
+    ),
+}
 
 _MAJOR_EVENT_TYPES: frozenset[str] = frozenset(
     {
@@ -216,6 +332,76 @@ class ArchiveFacts:
     roles: Counter[str] = field(default_factory=Counter)
 
 
+@dataclass
+class ScoreReason:
+    person_id: int
+    component_key: str
+    axis: str
+    contribution: float
+    source_kind: str = ""
+    source_id: int | None = None
+    source_year: int | None = None
+    role: str = ""
+    label: str = ""
+    explanation: str = ""
+    sort_rank: int = 0
+    score_version: int = SCORE_FORMULA_VERSION
+
+    def as_insert_tuple(self) -> tuple[object, ...]:
+        return (
+            int(self.person_id),
+            self.component_key,
+            self.axis,
+            round(float(self.contribution), 4),
+            self.source_kind,
+            self.source_id,
+            self.source_year,
+            self.role,
+            self.label,
+            self.explanation,
+            int(self.sort_rank),
+            int(self.score_version),
+        )
+
+
+class ScoreAccumulator:
+    """Collect explainable score reasons beside the numeric formula."""
+
+    def __init__(self, person_id: int):
+        self.person_id = int(person_id)
+        self.reasons: list[ScoreReason] = []
+
+    def add(
+        self,
+        component_key: str,
+        contribution: float,
+        *,
+        label: str,
+        explanation: str,
+        axis: str | None = None,
+        source_kind: str = "formula",
+        source_id: int | None = None,
+        source_year: int | None = None,
+        role: str = "",
+    ) -> None:
+        if abs(float(contribution)) < 0.0001:
+            return
+        self.reasons.append(
+            ScoreReason(
+                person_id=self.person_id,
+                component_key=component_key,
+                axis=axis or _component_axis(component_key),
+                contribution=float(contribution),
+                source_kind=source_kind,
+                source_id=source_id,
+                source_year=source_year,
+                role=role,
+                label=_clean_text(label),
+                explanation=_clean_text(explanation),
+            )
+        )
+
+
 def ensure_person_archive_score_schema(conn: sqlite3.Connection) -> None:
     """Create the cached person archive score table and retrieval indexes."""
 
@@ -223,7 +409,7 @@ def ensure_person_archive_score_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS simulation_person_archive_scores (
             person_id INTEGER PRIMARY KEY,
-            score_version INTEGER NOT NULL DEFAULT 1,
+            score_version INTEGER NOT NULL DEFAULT 2,
             updated_year INTEGER,
             source_event_max_id INTEGER NOT NULL DEFAULT 0,
             narrative_heat_total REAL NOT NULL DEFAULT 0.0,
@@ -265,6 +451,33 @@ def ensure_person_archive_score_schema(conn: sqlite3.Connection) -> None:
             violet_marginalia_score DESC,
             person_id
         );
+        CREATE TABLE IF NOT EXISTS simulation_person_archive_score_reasons (
+            person_id INTEGER NOT NULL,
+            component_key TEXT NOT NULL,
+            axis TEXT NOT NULL,
+            contribution REAL NOT NULL DEFAULT 0.0,
+            source_kind TEXT NOT NULL DEFAULT '',
+            source_id INTEGER,
+            source_year INTEGER,
+            role TEXT NOT NULL DEFAULT '',
+            label TEXT NOT NULL DEFAULT '',
+            explanation TEXT NOT NULL DEFAULT '',
+            sort_rank INTEGER NOT NULL DEFAULT 0,
+            score_version INTEGER NOT NULL DEFAULT 2,
+            PRIMARY KEY (person_id, component_key, sort_rank)
+        );
+        CREATE INDEX IF NOT EXISTS idx_person_archive_score_reasons_person
+        ON simulation_person_archive_score_reasons (
+            person_id,
+            axis,
+            sort_rank
+        );
+        CREATE INDEX IF NOT EXISTS idx_person_archive_score_reasons_component
+        ON simulation_person_archive_score_reasons (
+            component_key,
+            contribution DESC,
+            person_id
+        );
         """
     )
 
@@ -274,6 +487,13 @@ def ensure_person_archive_score_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError(
             "simulation_person_archive_scores is missing expected columns: "
             + ", ".join(missing)
+        )
+    reason_columns = set(_table_columns(conn, REASON_TABLE))
+    reason_missing = [col for col in _REASON_COLUMNS if col not in reason_columns]
+    if reason_missing:
+        raise RuntimeError(
+            "simulation_person_archive_score_reasons is missing expected columns: "
+            + ", ".join(reason_missing)
         )
 
 
@@ -307,21 +527,29 @@ def refresh_person_archive_scores(
             WHERE person_id NOT IN (SELECT person_id FROM simulation_people)
             """
         )
+        conn.execute(
+            """
+            DELETE FROM simulation_person_archive_score_reasons
+            WHERE person_id NOT IN (SELECT person_id FROM simulation_people)
+            """
+        )
 
     if not people_rows:
         return 0
 
     person_id_set = frozenset(int(r["person_id"]) for r in people_rows)
+    _delete_reason_rows_for_ids(conn, set(person_id_set))
     facts = _build_archive_facts(conn, person_id_set)
     events_by_person = _load_events_by_person(conn, person_id_set)
     max_event_id = _max_event_id(conn)
     now = updated_at or datetime.now(timezone.utc).isoformat()
 
     rows = []
+    reason_rows: list[tuple[object, ...]] = []
     for row in people_rows:
         person_id = int(row["person_id"])
         person = _person_from_checkpoint_row(row)
-        score = _score_person(
+        score, reasons = _score_person(
             person_id=person_id,
             row=row,
             person=person,
@@ -332,6 +560,7 @@ def refresh_person_archive_scores(
             updated_at=now,
         )
         rows.append(tuple(score[col] for col in _SCORE_COLUMNS))
+        reason_rows.extend(reason.as_insert_tuple() for reason in reasons)
 
     placeholders = ", ".join("?" for _ in _SCORE_COLUMNS)
     columns_sql = ", ".join(_quote_identifier(col) for col in _SCORE_COLUMNS)
@@ -342,6 +571,16 @@ def refresh_person_archive_scores(
         """,
         rows,
     )
+    if reason_rows:
+        reason_placeholders = ", ".join("?" for _ in _REASON_COLUMNS)
+        reason_columns_sql = ", ".join(_quote_identifier(col) for col in _REASON_COLUMNS)
+        conn.executemany(
+            f"""
+            INSERT OR REPLACE INTO simulation_person_archive_score_reasons ({reason_columns_sql})
+            VALUES ({reason_placeholders})
+            """,
+            reason_rows,
+        )
     return len(rows)
 
 
@@ -410,6 +649,54 @@ def top_person_archive_scores(
     )
 
 
+def load_person_archive_explanation(
+    conn: sqlite3.Connection, person_id: int, max_reasons: int = MAX_EXPLANATION_REASONS
+) -> dict[str, object] | None:
+    """Load one cached score with structured reasons for tools and LLM context."""
+
+    score = load_person_archive_score(conn, person_id)
+    if score is None:
+        return None
+    component_payload = _json_dict(score.get("component_json"))
+    reasons = _load_reason_dicts(conn, int(person_id), max_reasons=max_reasons)
+    if not reasons:
+        fallback = component_payload.get("top_reason_summaries") or component_payload.get("top_reasons") or []
+        if isinstance(fallback, list):
+            reasons = [dict(item) for item in fallback if isinstance(item, dict)][
+                : max(0, int(max_reasons))
+            ]
+    return {
+        "person_id": int(person_id),
+        "score_version": int(score.get("score_version") or SCORE_FORMULA_VERSION),
+        "summary": _clean_text(
+            component_payload.get("summary")
+            or _fallback_score_summary(
+                score.get("recognition_bucket"),
+                score.get("narrative_heat_total"),
+                score.get("archive_recognition_index"),
+            )
+        ),
+        "scores": {
+            "narrative_heat_total": _coerce_float(score.get("narrative_heat_total")) or 0.0,
+            "archive_recognition_index": _coerce_float(score.get("archive_recognition_index")) or 0.0,
+            "hidden_heat": _coerce_float(score.get("hidden_heat")) or 0.0,
+            "violet_marginalia_score": _coerce_float(score.get("violet_marginalia_score")) or 0.0,
+            "violet_marginalia": bool(int(score.get("violet_marginalia") or 0)),
+        },
+        "buckets": {
+            "archive_quadrant": _clean_text(score.get("recognition_bucket")),
+            "narrative": _clean_text(score.get("narrative_bucket")),
+        },
+        "components": component_payload.get("components") or _components_from_score_row(score),
+        "top_event_types": component_payload.get("top_event_types") or [],
+        "top_roles": component_payload.get("top_roles") or [],
+        "evidence_counts": component_payload.get("evidence_counts") or {},
+        "data_caveats": component_payload.get("data_caveats") or [],
+        "top_reasons": reasons,
+        "source_ids": component_payload.get("source_ids") or {},
+    }
+
+
 def _score_person(
     *,
     person_id: int,
@@ -420,7 +707,7 @@ def _score_person(
     simulation_year: int | None,
     source_event_max_id: int,
     updated_at: str,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], list[ScoreReason]]:
     birthyear = _coerce_int(person.get("birthyear"))
     deathyear = _coerce_int(person.get("deathyear"))
     end_year = deathyear if deathyear is not None else simulation_year
@@ -441,6 +728,7 @@ def _score_person(
     )
     tags = _person_tags(person)
     genome = _person_genome(person)
+    acc = ScoreAccumulator(person_id)
 
     event_heat = 0.0
     rarity_heat = 0.0
@@ -473,9 +761,31 @@ def _score_person(
         historical_importance = _coerce_float(payload.get("historical_importance")) or 0.0
         if historical_importance >= 0.7:
             high_importance_events += 1
-        event_heat += _event_heat_for_role(event_type, role)
+        role_heat = _event_heat_for_role(event_type, role)
+        event_heat += role_heat
+        acc.add(
+            "narrative_heat_events",
+            role_heat,
+            label=_event_reason_label(event_type, role),
+            explanation=f"{event_type.replace('_', ' ')} involvement as {role or 'related'} raised Narrative Heat.",
+            source_kind="event",
+            source_id=event.event_id,
+            source_year=event.sim_year,
+            role=role,
+        )
         if historical_importance > 0.0:
-            event_heat += min(8.0, historical_importance * 10.0)
+            importance_heat = min(8.0, historical_importance * 10.0)
+            event_heat += importance_heat
+            acc.add(
+                "narrative_heat_events",
+                importance_heat,
+                label="High historical importance",
+                explanation=f"The event carried historical_importance {historical_importance:.2f}.",
+                source_kind="event",
+                source_id=event.event_id,
+                source_year=event.sim_year,
+                role=role,
+            )
         if event_type in _PUBLIC_EVENT_TYPES:
             public_role_events += 1
         if event_type == "murder":
@@ -488,6 +798,16 @@ def _score_person(
             criminal_role = True
         elif event_type == "affair_scandal" and role in {"accused", "paramour"}:
             rarity_heat += 3.0
+            acc.add(
+                "narrative_heat_rarity",
+                3.0,
+                label="Affair scandal trace",
+                explanation="A scandal role is treated as a rare archive-visible life texture.",
+                source_kind="event",
+                source_id=event.event_id,
+                source_year=event.sim_year,
+                role=role,
+            )
         elif event_type == "knowledge_culture" and role in {"creator", "patron"}:
             knowledge_events += 1
             knowledge_role = True
@@ -525,24 +845,95 @@ def _score_person(
                         linked_people.add(linked)
 
     facts.linked_person_count = max(facts.linked_person_count, len(linked_people))
-    event_heat += min(15.0, facts.child_count * 1.2)
+    child_event_heat = min(15.0, facts.child_count * 1.2)
+    event_heat += child_event_heat
+    acc.add(
+        "narrative_heat_events",
+        child_event_heat,
+        label="Family events",
+        explanation=f"{facts.child_count} recorded child link(s) add ordinary but biography-shaping life material.",
+        source_kind="fact",
+    )
     if facts.child_count >= 8:
         event_heat += 5.0
+        acc.add(
+            "narrative_heat_events",
+            5.0,
+            label="Large family",
+            explanation="Eight or more recorded children make the life unusually visible through family history.",
+            source_kind="fact",
+        )
     if age is not None and age >= 90:
         event_heat += 10.0
         rarity_heat += 10.0
+        acc.add(
+            "narrative_heat_events",
+            10.0,
+            label="Extreme old age",
+            explanation=f"Age {age} gives the life an unusually long observed span.",
+            source_kind="person",
+        )
+        acc.add(
+            "narrative_heat_rarity",
+            10.0,
+            label="Extreme old age",
+            explanation=f"Age {age} is rare enough to matter as archive texture.",
+            source_kind="person",
+        )
     elif age is not None and age >= 75:
         rarity_heat += 5.0
+        acc.add(
+            "narrative_heat_rarity",
+            5.0,
+            label="Long life",
+            explanation=f"Age {age} adds a modest rarity signal.",
+            source_kind="person",
+        )
     if unusual_death:
         event_heat += 15.0
         rarity_heat += 10.0
+        acc.add(
+            "narrative_heat_events",
+            15.0,
+            label="Unusual death",
+            explanation="The event record marks this person as a murder victim.",
+            source_kind="event",
+        )
+        acc.add(
+            "narrative_heat_rarity",
+            10.0,
+            label="Unusual death",
+            explanation="Violent or unusual death is treated as a rare archive trace.",
+            source_kind="event",
+        )
     if job_tier == "premium":
         event_heat += 6.0
         rarity_heat += 8.0
+        acc.add(
+            "narrative_heat_events",
+            6.0,
+            label="Premium role",
+            explanation="A premium job tier makes ordinary events more likely to have visible story shape.",
+            source_kind="person",
+        )
+        acc.add(
+            "narrative_heat_rarity",
+            8.0,
+            label="Premium role",
+            explanation="Premium roles are rarer and more archive-visible than common work.",
+            source_kind="person",
+        )
     if _status_is_high(status):
         event_heat += 5.0
+        acc.add(
+            "narrative_heat_events",
+            5.0,
+            label="High status",
+            explanation="High-status language increases the chance that life events are noticed.",
+            source_kind="person",
+        )
 
-    contradiction_heat = _contradiction_heat(
+    contradiction_specs = _contradiction_reason_specs(
         tags=tags,
         job=job,
         criminal_role=criminal_role,
@@ -550,6 +941,15 @@ def _score_person(
         knowledge_role=knowledge_role,
         caused_victims=caused_victims,
     )
+    contradiction_heat = min(30.0, sum(value for value, _, _ in contradiction_specs))
+    for value, label, explanation in contradiction_specs:
+        acc.add(
+            "narrative_heat_contradictions",
+            value,
+            label=label,
+            explanation=explanation,
+            source_kind="person",
+        )
 
     consequence_heat = (
         min(18.0, facts.obligation_count * 4.0)
@@ -562,6 +962,55 @@ def _score_person(
         + min(12.0, event_type_counts["affair_scandal"] * 4.0)
     )
     consequence_heat = min(40.0, consequence_heat)
+    for value, label, explanation in (
+        (
+            min(18.0, facts.obligation_count * 4.0),
+            "Obligation ledgers",
+            f"{facts.obligation_count} obligation ledger row(s) keep consequences attached to the person.",
+        ),
+        (
+            min(24.0, facts.reputation_count * 8.0),
+            "Reputation marks",
+            f"{facts.reputation_count} reputation mark(s) preserve social consequences.",
+        ),
+        (
+            min(24.0, facts.legal_fallout_count * 8.0),
+            "Legal fallout",
+            f"{facts.legal_fallout_count} legal fallout row(s) preserve conflict or adjudication traces.",
+        ),
+        (
+            min(18.0, facts.faction_memory_count * 6.0),
+            "Faction memory",
+            f"{facts.faction_memory_count} faction-memory row(s) preserve group-level consequences.",
+        ),
+        (
+            min(36.0, caused_victims * 12.0),
+            "Victims caused",
+            f"{caused_victims} caused victim(s) make the event consequences durable.",
+        ),
+        (
+            min(20.0, knowledge_events * 10.0),
+            "Knowledge consequences",
+            f"{knowledge_events} knowledge/culture event(s) add durable consequence heat.",
+        ),
+        (
+            min(12.0, event_type_counts["household_childcare_shortfall"] * 6.0),
+            "Household care crisis",
+            "Childcare shortfall events create remembered household consequences.",
+        ),
+        (
+            min(12.0, event_type_counts["affair_scandal"] * 4.0),
+            "Affair scandal fallout",
+            "Affair scandal events can leave durable household or legal consequences.",
+        ),
+    ):
+        acc.add(
+            "narrative_heat_consequences",
+            value,
+            label=label,
+            explanation=explanation,
+            source_kind="fact",
+        )
 
     social_heat = (
         min(12.0, facts.child_count * 1.0)
@@ -572,17 +1021,91 @@ def _score_person(
         + (6.0 if facts.office_holding_count and facts.child_count else 0.0)
     )
     social_heat = min(35.0, social_heat)
+    for value, label, explanation in (
+        (
+            min(12.0, facts.child_count * 1.0),
+            "Children and descendants",
+            f"{facts.child_count} child link(s) widen the visible family network.",
+        ),
+        (
+            min(10.0, (len(partner_ids) + facts.current_partner_count) * 2.0),
+            "Partners",
+            "Recorded partner links make the person easier to place socially.",
+        ),
+        (
+            min(12.0, (len(paramour_ids) + facts.current_paramour_count) * 3.0),
+            "Paramours",
+            "Recorded paramour links add social entanglement and archive texture.",
+        ),
+        (
+            min(12.0, facts.linked_person_count * 0.5),
+            "Linked people",
+            f"{facts.linked_person_count} distinct linked person(s) appear in payload traces.",
+        ),
+        (
+            min(8.0, facts.cross_region_move_count * 3.0),
+            "Cross-region movement",
+            f"{facts.cross_region_move_count} cross-region move(s) widen the social geography.",
+        ),
+        (
+            6.0 if facts.office_holding_count and facts.child_count else 0.0,
+            "Office and family overlap",
+            "Office holding plus children ties public and family networks together.",
+        ),
+    ):
+        acc.add(
+            "narrative_heat_social",
+            value,
+            label=label,
+            explanation=explanation,
+            source_kind="fact",
+        )
 
     rare_trait_extremes = sum(1 for value in genome.values() if abs(float(value)) >= 90.0)
     if rare_trait_extremes:
         rarity_heat += min(15.0, rare_trait_extremes * 3.0)
+        acc.add(
+            "narrative_heat_rarity",
+            min(15.0, rare_trait_extremes * 3.0),
+            label="Extreme genome traits",
+            explanation=f"{rare_trait_extremes} genome trait(s) sit at extreme signed magnitudes.",
+            source_kind="person",
+        )
     rarity_heat += min(24.0, late_major_events * 12.0)
+    acc.add(
+        "narrative_heat_rarity",
+        min(24.0, late_major_events * 12.0),
+        label="Late major events",
+        explanation=f"{late_major_events} major event(s) occurred after age 65.",
+        source_kind="event",
+    )
     if high_importance_events:
         rarity_heat += min(12.0, high_importance_events * 4.0)
+        acc.add(
+            "narrative_heat_rarity",
+            min(12.0, high_importance_events * 4.0),
+            label="High-importance events",
+            explanation=f"{high_importance_events} event(s) crossed the high historical importance threshold.",
+            source_kind="event",
+        )
     if facts.cross_region_move_count:
         rarity_heat += min(8.0, facts.cross_region_move_count * 2.0)
+        acc.add(
+            "narrative_heat_rarity",
+            min(8.0, facts.cross_region_move_count * 2.0),
+            label="Cross-region movement",
+            explanation=f"{facts.cross_region_move_count} cross-region move(s) are uncommon enough to add rarity.",
+            source_kind="fact",
+        )
     if facts.innovation_discoverer_count:
         rarity_heat += min(15.0, facts.innovation_discoverer_count * 8.0)
+        acc.add(
+            "narrative_heat_rarity",
+            min(15.0, facts.innovation_discoverer_count * 8.0),
+            label="Innovation discovery",
+            explanation=f"{facts.innovation_discoverer_count} innovation discovery row(s) mark rare cultural agency.",
+            source_kind="fact",
+        )
 
     job_change_count = max(
         0,
@@ -591,13 +1114,55 @@ def _score_person(
     partner_change_count = len(partner_ids) + len(paramour_ids)
     reputation_direction_changes = 1 if facts.reputation_positive_count and facts.reputation_negative_count else 0
     volatility_heat += min(12.0, job_change_count * 2.0)
+    acc.add(
+        "narrative_heat_volatility",
+        min(12.0, job_change_count * 2.0),
+        label="Job changes",
+        explanation=f"{job_change_count} distinct job change(s) make the life less static.",
+        source_kind="event",
+    )
     volatility_heat += min(16.0, partner_change_count * 2.0)
+    acc.add(
+        "narrative_heat_volatility",
+        min(16.0, partner_change_count * 2.0),
+        label="Relationship changes",
+        explanation=f"{partner_change_count} partner or paramour change(s) add life volatility.",
+        source_kind="event",
+    )
     volatility_heat += min(15.0, reputation_direction_changes * 5.0)
+    acc.add(
+        "narrative_heat_volatility",
+        min(15.0, reputation_direction_changes * 5.0),
+        label="Mixed reputation",
+        explanation="Both positive and negative reputation marks exist.",
+        source_kind="fact",
+    )
     volatility_heat += min(12.0, facts.move_count * 2.0)
+    acc.add(
+        "narrative_heat_volatility",
+        min(12.0, facts.move_count * 2.0),
+        label="Movement",
+        explanation=f"{facts.move_count} recorded move(s) change the person's context.",
+        source_kind="fact",
+    )
     if criminal_role and official_role:
         volatility_heat += 10.0
+        acc.add(
+            "narrative_heat_volatility",
+            10.0,
+            label="Criminal-official tension",
+            explanation="Criminal and official traces coexist in one life.",
+            source_kind="person",
+        )
     if employment_status == "unemployed" and last_job and job:
         volatility_heat += 3.0
+        acc.add(
+            "narrative_heat_volatility",
+            3.0,
+            label="Employment reversal",
+            explanation="Unemployment with a known last job and current job suggests a visible reversal.",
+            source_kind="person",
+        )
 
     legacy_heat = (
         min(16.0, facts.living_child_count * 1.0)
@@ -607,6 +1172,45 @@ def _score_person(
         + min(20.0, facts.dynasty_founder_count * 10.0)
         + min(12.0, facts.obligation_active_count * 3.0)
     )
+    for value, label, explanation in (
+        (
+            min(16.0, facts.living_child_count * 1.0),
+            "Living descendants",
+            f"{facts.living_child_count} living child link(s) can carry memory forward.",
+        ),
+        (
+            10.0 if facts.child_count >= 4 else 0.0,
+            "Large descendant base",
+            "Four or more children increase family-memory persistence.",
+        ),
+        (
+            min(25.0, (knowledge_events + facts.innovation_discoverer_count) * 10.0),
+            "Knowledge legacy",
+            "Knowledge/culture and innovation traces can persist beyond the person.",
+        ),
+        (
+            min(20.0, facts.institution_founder_count * 8.0),
+            "Institution founder",
+            f"{facts.institution_founder_count} institution founder row(s) add legacy heat.",
+        ),
+        (
+            min(20.0, facts.dynasty_founder_count * 10.0),
+            "Dynasty founder",
+            f"{facts.dynasty_founder_count} dynasty founder row(s) add legacy heat.",
+        ),
+        (
+            min(12.0, facts.obligation_active_count * 3.0),
+            "Active obligations",
+            f"{facts.obligation_active_count} active obligation(s) can outlive the triggering year.",
+        ),
+    ):
+        acc.add(
+            "narrative_heat_legacy",
+            value,
+            label=label,
+            explanation=explanation,
+            source_kind="fact",
+        )
 
     narrative_components = {
         "narrative_heat_events": event_heat,
@@ -635,6 +1239,21 @@ def _score_person(
         narrative_total=narrative_total,
         criminal_role=criminal_role,
     )
+    _add_ari_reasons(
+        acc,
+        ari_components=ari_components,
+        facts=facts,
+        job=job,
+        status=status,
+        job_tier=job_tier,
+        job_prosperity=job_prosperity,
+        household_prosperity=household_prosperity,
+        public_role_events=public_role_events,
+        knowledge_events=knowledge_events,
+        is_founder=is_founder,
+        has_parent=bool(_coerce_int(row.get("father_id")) or _coerce_int(row.get("mother_id"))),
+        criminal_role=criminal_role,
+    )
     ari_total = _clamp(
         sum(value for key, value in ari_components.items() if key != "ari_suppression_obscurity_penalty")
         - ari_components["ari_suppression_obscurity_penalty"],
@@ -655,23 +1274,87 @@ def _score_person(
         0.0,
         1.0,
     )
-    component_json = {
-        "score_version": SCORE_FORMULA_VERSION,
-        "event_count": int(facts.event_count),
-        "child_count": int(facts.child_count),
-        "living_child_count": int(facts.living_child_count),
-        "office_holding_count": int(facts.office_holding_count),
-        "public_record_count": int(facts.public_record_count),
-        "top_event_types": event_type_counts.most_common(8),
-        "top_roles": role_counts.most_common(8),
-        "flags": {
+    acc.add(
+        "hidden_heat",
+        hidden_heat,
+        label="Narrative exceeds recognition",
+        explanation=f"Narrative Heat {narrative_total:.1f} exceeds ARI {ari_total:.1f}.",
+        axis="derived",
+        source_kind="formula",
+    )
+    acc.add(
+        "violet_marginalia_score",
+        narrative_total * 0.004,
+        label="Narrative texture",
+        explanation="Total Narrative Heat contributes to the Violet Marginalia probability.",
+        axis="derived",
+        source_kind="formula",
+    )
+    acc.add(
+        "violet_marginalia_score",
+        contradiction_heat * 0.006,
+        label="Contradictory texture",
+        explanation="Contradiction Heat contributes to the Violet Marginalia probability.",
+        axis="derived",
+        source_kind="formula",
+    )
+    acc.add(
+        "violet_marginalia_score",
+        hidden_heat * 0.005,
+        label="Hidden heat texture",
+        explanation="Hidden Heat contributes to the Violet Marginalia probability.",
+        axis="derived",
+        source_kind="formula",
+    )
+    acc.add(
+        "violet_marginalia_score",
+        strange_life_bonus,
+        label="Strange life bonus",
+        explanation="Contradiction or late major events add a Violet Marginalia bonus.",
+        axis="derived",
+        source_kind="formula",
+    )
+    acc.add(
+        "violet_marginalia_score",
+        forgotten_bonus,
+        label="Forgotten life bonus",
+        explanation="High hidden heat with modest ARI adds a Violet Marginalia bonus.",
+        axis="derived",
+        source_kind="formula",
+    )
+    acc.add(
+        "violet_marginalia_score",
+        -already_famous_penalty,
+        label="Already famous penalty",
+        explanation="Very high ARI reduces the need for a special marginalia flag.",
+        axis="derived",
+        source_kind="formula",
+    )
+    recognition_bucket = _recognition_bucket(narrative_total, ari_total)
+    narrative_bucket = _narrative_bucket(narrative_total)
+    ranked_reasons = _rank_reasons(acc.reasons)
+    component_json = _component_json_payload(
+        facts=facts,
+        narrative_components=narrative_components,
+        ari_components=ari_components,
+        narrative_total=narrative_total,
+        ari_total=ari_total,
+        hidden_heat=hidden_heat,
+        violet_score=violet_score,
+        recognition_bucket=recognition_bucket,
+        narrative_bucket=narrative_bucket,
+        event_type_counts=event_type_counts,
+        role_counts=role_counts,
+        source_event_max_id=source_event_max_id,
+        reasons=ranked_reasons,
+        flags={
             "criminal_role": bool(criminal_role),
             "official_role": bool(official_role),
             "knowledge_role": bool(knowledge_role),
             "late_major_events": int(late_major_events),
             "unusual_death": bool(unusual_death),
         },
-    }
+    )
 
     score: dict[str, object] = {
         "person_id": int(person_id),
@@ -683,8 +1366,8 @@ def _score_person(
         "hidden_heat": round(hidden_heat, 4),
         "violet_marginalia_score": round(violet_score, 4),
         "violet_marginalia": 1 if violet_score >= 0.42 else 0,
-        "recognition_bucket": _recognition_bucket(narrative_total, ari_total),
-        "narrative_bucket": _narrative_bucket(narrative_total),
+        "recognition_bucket": recognition_bucket,
+        "narrative_bucket": narrative_bucket,
         "component_json": json.dumps(component_json, separators=(",", ":")),
         "updated_at": updated_at,
     }
@@ -692,7 +1375,7 @@ def _score_person(
         score[key] = round(_clamp(narrative_components[key], 0.0, 100.0), 4)
     for key in _ARI_COLUMNS:
         score[key] = round(_clamp(ari_components[key], 0.0, 100.0), 4)
-    return score
+    return score, ranked_reasons
 
 
 def _ari_components(
@@ -777,6 +1460,381 @@ def _ari_components(
         "ari_chronicler_interest": chronicler_interest,
         "ari_suppression_obscurity_penalty": suppression,
     }
+
+
+def _add_ari_reasons(
+    acc: ScoreAccumulator,
+    *,
+    ari_components: dict[str, float],
+    facts: ArchiveFacts,
+    job: str,
+    status: str,
+    job_tier: str,
+    job_prosperity: float | None,
+    household_prosperity: float | None,
+    public_role_events: int,
+    knowledge_events: int,
+    is_founder: bool,
+    has_parent: bool,
+    criminal_role: bool,
+) -> None:
+    acc.add(
+        "ari_official_status",
+        min(30.0, facts.office_holding_count * 8.0 + facts.current_office_count * 6.0),
+        label="Office holding",
+        explanation=f"{facts.office_holding_count} office holding row(s) and {facts.current_office_count} current office row(s) preserve formal status.",
+        source_kind="fact",
+    )
+    acc.add(
+        "ari_official_status",
+        8.0 if _job_has_any(job, _OFFICIAL_JOB_TERMS) else 0.0,
+        label="Official job language",
+        explanation=f"The job label {job or 'unknown'} matches official/archive-administrative terms.",
+        source_kind="person",
+    )
+    acc.add(
+        "ari_official_status",
+        4.0 if _status_is_high(status) else 0.0,
+        label="High status language",
+        explanation="High-status language makes the archive more likely to preserve the name.",
+        source_kind="person",
+    )
+
+    job_wealth = (
+        max(0.0, min(1.0, job_prosperity)) * 12.0
+        if job_prosperity is not None
+        else 0.0
+    )
+    household_wealth = (
+        max(0.0, min(2.0, household_prosperity)) * 5.0
+        if household_prosperity is not None
+        else 0.0
+    )
+    for value, label, explanation in (
+        (
+            job_wealth,
+            "Job prosperity",
+            "Job prosperity contributes to archive recognition through wealth and status traces.",
+        ),
+        (
+            household_wealth,
+            "Household prosperity",
+            "Household prosperity contributes to archive recognition through property and family traces.",
+        ),
+        (
+            8.0 if job_tier == "premium" else 0.0,
+            "Premium job tier",
+            "Premium jobs are more likely to be named in records.",
+        ),
+        (
+            5.0 if _status_is_high(status) else 0.0,
+            "High status wealth trace",
+            "High status contributes to the wealth/status recognition channel.",
+        ),
+    ):
+        acc.add(
+            "ari_wealth",
+            value,
+            label=label,
+            explanation=explanation,
+            source_kind="person",
+        )
+
+    acc.add(
+        "ari_family_prestige",
+        min(
+            18.0,
+            facts.dynasty_founder_count * 12.0 + (6.0 if has_parent else 0.0),
+        ),
+        label="Family prestige",
+        explanation="Dynasty-founder rows or recorded parentage make the person easier to place in family memory.",
+        source_kind="fact",
+    )
+    acc.add(
+        "ari_public_role",
+        min(
+            18.0,
+            public_role_events * 3.0
+            + facts.public_record_count * 1.5
+            + (6.0 if _job_has_any(job, _OFFICIAL_JOB_TERMS) else 0.0),
+        ),
+        label="Public record visibility",
+        explanation=f"{public_role_events} public role event(s) and {facts.public_record_count} public record(s) preserve the person.",
+        source_kind="fact",
+    )
+    acc.add(
+        "ari_legal_records",
+        min(16.0, facts.legal_fallout_count * 6.0 + facts.reputation_count * 2.0),
+        label="Legal and reputation records",
+        explanation=f"{facts.legal_fallout_count} legal fallout row(s) and {facts.reputation_count} reputation mark(s) preserve archive identity.",
+        source_kind="fact",
+    )
+    acc.add(
+        "ari_knowledge_art",
+        min(
+            24.0,
+            knowledge_events * 8.0
+            + facts.innovation_discoverer_count * 10.0
+            + facts.innovation_patron_count * 4.0
+            + (6.0 if _job_has_any(job, _KNOWLEDGE_JOB_TERMS) else 0.0),
+        ),
+        label="Knowledge or art trace",
+        explanation="Knowledge/culture events, innovation rows, patronage, or knowledge-work job terms preserve a cultural trace.",
+        source_kind="fact",
+    )
+    acc.add(
+        "ari_founder_institution",
+        min(
+            24.0,
+            (8.0 if is_founder else 0.0)
+            + facts.institution_founder_count * 8.0
+            + facts.institution_patron_count * 4.0
+            + facts.dynasty_founder_count * 10.0,
+        ),
+        label="Founder or institution trace",
+        explanation="Founder, institution, patronage, and dynasty rows are formal recognition channels.",
+        source_kind="fact",
+    )
+    acc.add(
+        "ari_descendant_memory",
+        min(16.0, facts.living_child_count * 0.8 + facts.child_count * 0.4),
+        label="Descendant memory",
+        explanation=f"{facts.child_count} child link(s), including {facts.living_child_count} living, can preserve family memory.",
+        source_kind="fact",
+    )
+    acc.add(
+        "ari_chronicler_interest",
+        ari_components["ari_chronicler_interest"],
+        label="Chronicler interest",
+        explanation="Public records, total records, and Narrative Heat make later chronicler attention more likely.",
+        source_kind="formula",
+    )
+
+    if facts.public_record_count == 0 and facts.office_holding_count == 0:
+        acc.add(
+            "ari_suppression_obscurity_penalty",
+            -8.0,
+            label="No public or office records",
+            explanation="No public record rows or office holdings were found, lowering recognition.",
+            axis="obscurity",
+            source_kind="fact",
+        )
+    if job_tier != "premium" and not _status_is_high(status):
+        acc.add(
+            "ari_suppression_obscurity_penalty",
+            -3.0,
+            label="Low-status preservation bias",
+            explanation="Common job tier and non-high status make preservation less likely.",
+            axis="obscurity",
+            source_kind="person",
+        )
+    if criminal_role and facts.legal_fallout_count == 0 and facts.public_record_count <= 1:
+        acc.add(
+            "ari_suppression_obscurity_penalty",
+            -5.0,
+            label="Stigmatized but thinly recorded",
+            explanation="Criminal-role evidence without legal/public records may suppress recognition.",
+            axis="obscurity",
+            source_kind="person",
+        )
+
+
+def _component_json_payload(
+    *,
+    facts: ArchiveFacts,
+    narrative_components: dict[str, float],
+    ari_components: dict[str, float],
+    narrative_total: float,
+    ari_total: float,
+    hidden_heat: float,
+    violet_score: float,
+    recognition_bucket: str,
+    narrative_bucket: str,
+    event_type_counts: Counter[str],
+    role_counts: Counter[str],
+    source_event_max_id: int,
+    reasons: list[ScoreReason],
+    flags: dict[str, object],
+) -> dict[str, object]:
+    totals = {
+        "narrative_heat_total": round(narrative_total, 4),
+        "archive_recognition_index": round(ari_total, 4),
+        "hidden_heat": round(hidden_heat, 4),
+        "violet_marginalia_score": round(violet_score, 4),
+        "violet_marginalia": bool(violet_score >= 0.42),
+    }
+    components = _components_from_values(
+        {
+            **narrative_components,
+            **ari_components,
+            "hidden_heat": hidden_heat,
+            "violet_marginalia_score": violet_score,
+        }
+    )
+    top_reason_summaries = _reason_summaries(reasons, limit=MAX_EXPLANATION_REASONS)
+    data_caveats = _data_caveats(facts)
+    source_event_ids = sorted(
+        {
+            int(reason.source_id)
+            for reason in reasons
+            if reason.source_kind == "event" and reason.source_id is not None
+        }
+    )[:MAX_EXPLANATION_REASONS]
+    return {
+        "schema": "person_archive_score_components.v2",
+        "score_version": SCORE_FORMULA_VERSION,
+        "formula_version": SCORE_FORMULA_VERSION,
+        "summary": _score_summary(
+            narrative_total=narrative_total,
+            ari_total=ari_total,
+            recognition_bucket=recognition_bucket,
+            reasons=reasons,
+        ),
+        "totals": totals,
+        "components": components,
+        "bucket_labels": {
+            "archive_quadrant": recognition_bucket,
+            "narrative": narrative_bucket,
+        },
+        "top_event_types": event_type_counts.most_common(8),
+        "top_roles": role_counts.most_common(8),
+        "evidence_counts": {
+            "events": int(facts.event_count),
+            "public_records": int(facts.public_record_count),
+            "total_records": int(facts.total_record_count),
+            "children": int(facts.child_count),
+            "living_children": int(facts.living_child_count),
+            "office_holdings": int(facts.office_holding_count),
+            "obligations": int(facts.obligation_count),
+            "reputation_marks": int(facts.reputation_count),
+            "legal_fallout": int(facts.legal_fallout_count),
+            "institutions": int(facts.institution_founder_count + facts.institution_patron_count),
+            "innovations": int(facts.innovation_discoverer_count + facts.innovation_patron_count),
+        },
+        "data_caveats": data_caveats,
+        "top_reason_summaries": top_reason_summaries,
+        "top_reasons": top_reason_summaries,
+        "source_ids": {
+            "events": source_event_ids,
+            "source_event_max_id": int(source_event_max_id),
+        },
+        "flags": flags,
+        # Legacy v1 convenience keys retained for older tools/tests.
+        "event_count": int(facts.event_count),
+        "child_count": int(facts.child_count),
+        "living_child_count": int(facts.living_child_count),
+        "office_holding_count": int(facts.office_holding_count),
+        "public_record_count": int(facts.public_record_count),
+    }
+
+
+def _components_from_values(values: dict[str, float]) -> dict[str, dict[str, object]]:
+    components: dict[str, dict[str, object]] = {}
+    for key, value in values.items():
+        label, axis, definition = _COMPONENT_META.get(
+            key, (_display_label_from_key(key), "derived", "")
+        )
+        if key == "violet_marginalia_score":
+            score_value = _clamp(float(value), 0.0, 1.0)
+        else:
+            score_value = _clamp(float(value), 0.0, 100.0)
+        contribution = score_value
+        if axis == "obscurity":
+            contribution = -abs(contribution)
+        components[key] = {
+            "label": label,
+            "axis": axis,
+            "score": round(score_value, 4),
+            "contribution": round(contribution, 4),
+            "definition": definition,
+        }
+    return components
+
+
+def _components_from_score_row(score: dict[str, object]) -> dict[str, dict[str, object]]:
+    values: dict[str, float] = {}
+    for key in (*_NARRATIVE_COLUMNS, *_ARI_COLUMNS, "hidden_heat", "violet_marginalia_score"):
+        if key in score:
+            values[key] = _coerce_float(score.get(key)) or 0.0
+    return _components_from_values(values)
+
+
+def _data_caveats(facts: ArchiveFacts) -> list[str]:
+    caveats: list[str] = []
+    if facts.event_count == 0:
+        caveats.append("No linked event rows were found; explanation leans on checkpoint facts.")
+    if facts.public_record_count == 0:
+        caveats.append("No public archive records currently attach to this person.")
+    if facts.total_record_count <= 1:
+        caveats.append("Sparse linked records; top reasons may be incomplete.")
+    return caveats
+
+
+def _score_summary(
+    *,
+    narrative_total: float,
+    ari_total: float,
+    recognition_bucket: str,
+    reasons: list[ScoreReason],
+) -> str:
+    narrative_reason = _first_reason_label(reasons, "narrative")
+    ari_reason = _first_reason_label(reasons, "ari")
+    obscure_reason = _first_reason_label(reasons, "obscurity")
+    quadrant = _sentence_case(recognition_bucket or _recognition_bucket(narrative_total, ari_total))
+    if narrative_total >= 45.0 and ari_total >= 45.0:
+        tail = f"{narrative_reason} gives the life story shape, while {ari_reason} makes it legible to the archive."
+    elif narrative_total >= 45.0:
+        tail = f"{narrative_reason} gives the life story shape, but {obscure_reason} limits formal recognition."
+    elif ari_total >= 45.0:
+        tail = f"{ari_reason} makes the person visible even though the recorded life is comparatively quiet."
+    else:
+        tail = f"{narrative_reason} is the strongest surviving trace, with little formal archive recognition."
+    return f"{quadrant}: {tail}"
+
+
+def _fallback_score_summary(bucket: object, narrative_heat: object, ari: object) -> str:
+    quadrant = _sentence_case(_clean_text(bucket) or "ordinary or poorly preserved")
+    narrative = _coerce_float(narrative_heat) or 0.0
+    recognition = _coerce_float(ari) or 0.0
+    return f"{quadrant}: Narrative Heat {narrative:.1f}, ARI {recognition:.1f}."
+
+
+def _first_reason_label(reasons: list[ScoreReason], axis: str) -> str:
+    for reason in reasons:
+        if reason.axis == axis:
+            return _clean_text(reason.label).lower() or "available traces"
+    return "available traces"
+
+
+def _reason_summaries(
+    reasons: list[ScoreReason], *, limit: int
+) -> list[dict[str, object]]:
+    summaries: list[dict[str, object]] = []
+    for reason in sorted(
+        reasons,
+        key=lambda r: (
+            -abs(float(r.contribution)),
+            r.sort_rank,
+            r.component_key,
+            r.label,
+        ),
+    )[: max(0, int(limit))]:
+        summaries.append(
+            {
+                "component_key": reason.component_key,
+                "axis": reason.axis,
+                "contribution": round(float(reason.contribution), 4),
+                "source_kind": reason.source_kind,
+                "source_id": reason.source_id,
+                "source_year": reason.source_year,
+                "role": reason.role,
+                "label": reason.label,
+                "explanation": reason.explanation,
+                "sort_rank": int(reason.sort_rank),
+                "score_version": int(reason.score_version),
+            }
+        )
+    return summaries
 
 
 def _build_archive_facts(
@@ -1063,6 +2121,69 @@ def _person_genome(person: dict[str, object]) -> dict[str, float]:
     return {}
 
 
+def _contradiction_reason_specs(
+    *,
+    tags: set[str],
+    job: str,
+    criminal_role: bool,
+    official_role: bool,
+    knowledge_role: bool,
+    caused_victims: int,
+) -> list[tuple[float, str, str]]:
+    text = " | ".join(sorted(tags | {job.lower()}))
+
+    def has(*needles: str) -> bool:
+        return all(needle in text for needle in needles)
+
+    specs: list[tuple[float, str, str]] = []
+    checks = (
+        (("nurtur", "neglig"), 8.0, "Nurturing/negligent tension"),
+        (("passive", "temper"), 8.0, "Passive/temper tension"),
+        (("humble", "inciter"), 6.0, "Humble/inciter tension"),
+        (("modest", "amorous"), 6.0, "Modest/amorous tension"),
+        (("witty", "oblivious"), 6.0, "Witty/oblivious tension"),
+        (("lawless", "diplomat"), 8.0, "Lawless diplomat"),
+        (("miser", "patron"), 6.0, "Miser patron"),
+        (("artist", "murder"), 8.0, "Artist and murder trace"),
+        (("raider", "official"), 8.0, "Raider official"),
+    )
+    for needles, value, label in checks:
+        if has(*needles):
+            shown = " and ".join(needles)
+            specs.append(
+                (
+                    value,
+                    label,
+                    f"Character/job text contains both {shown}, creating a contradiction signal.",
+                )
+            )
+    if criminal_role and official_role:
+        specs.append(
+            (
+                8.0,
+                "Criminal-official contradiction",
+                "Criminal and official evidence coexist in the same life.",
+            )
+        )
+    if knowledge_role and caused_victims:
+        specs.append(
+            (
+                8.0,
+                "Creator-victim contradiction",
+                "Knowledge/culture traces coexist with caused victims.",
+            )
+        )
+    if "amorous" in text and "pious" in text:
+        specs.append(
+            (
+                5.0,
+                "Amorous/pious tension",
+                "Character text contains both amorous and pious signals.",
+            )
+        )
+    return specs
+
+
 def _contradiction_heat(
     *,
     tags: set[str],
@@ -1072,33 +2193,39 @@ def _contradiction_heat(
     knowledge_role: bool,
     caused_victims: int,
 ) -> float:
-    text = " | ".join(sorted(tags | {job.lower()}))
-
-    def has(*needles: str) -> bool:
-        return all(needle in text for needle in needles)
-
-    heat = 0.0
-    checks = (
-        (("nurtur", "neglig"), 8.0),
-        (("passive", "temper"), 8.0),
-        (("humble", "inciter"), 6.0),
-        (("modest", "amorous"), 6.0),
-        (("witty", "oblivious"), 6.0),
-        (("lawless", "diplomat"), 8.0),
-        (("miser", "patron"), 6.0),
-        (("artist", "murder"), 8.0),
-        (("raider", "official"), 8.0),
+    heat = sum(
+        value
+        for value, _, _ in _contradiction_reason_specs(
+            tags=tags,
+            job=job,
+            criminal_role=criminal_role,
+            official_role=official_role,
+            knowledge_role=knowledge_role,
+            caused_victims=caused_victims,
+        )
     )
-    for needles, value in checks:
-        if has(*needles):
-            heat += value
-    if criminal_role and official_role:
-        heat += 8.0
-    if knowledge_role and caused_victims:
-        heat += 8.0
-    if "amorous" in text and "pious" in text:
-        heat += 5.0
     return min(30.0, heat)
+
+
+def _event_reason_label(event_type: str, role: str) -> str:
+    event = _clean_text(event_type).replace("_", " ") or "event"
+    shown_role = _clean_text(role).replace("_", " ") or "related"
+    return f"{_sentence_case(event)} as {shown_role}"
+
+
+def _component_axis(component_key: str) -> str:
+    return _COMPONENT_META.get(component_key, ("", "derived", ""))[1]
+
+
+def _display_label_from_key(value: str) -> str:
+    return " ".join(part for part in str(value).replace("_", " ").split()).title()
+
+
+def _sentence_case(value: object) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    return text[:1].upper() + text[1:]
 
 
 def _event_heat_for_role(event_type: str, role: str) -> float:
@@ -1267,6 +2394,87 @@ def _delete_scores_for_ids(conn: sqlite3.Connection, person_ids: set[int]) -> No
             """,
             chunk,
         )
+        conn.execute(
+            f"""
+            DELETE FROM simulation_person_archive_score_reasons
+            WHERE person_id IN ({placeholders})
+            """,
+            chunk,
+        )
+
+
+def _delete_reason_rows_for_ids(conn: sqlite3.Connection, person_ids: set[int]) -> None:
+    if not person_ids:
+        return
+    for chunk in _chunks(tuple(sorted(person_ids))):
+        placeholders = ", ".join("?" for _ in chunk)
+        conn.execute(
+            f"""
+            DELETE FROM simulation_person_archive_score_reasons
+            WHERE person_id IN ({placeholders})
+            """,
+            chunk,
+        )
+
+
+def _rank_reasons(reasons: list[ScoreReason]) -> list[ScoreReason]:
+    ranked: list[ScoreReason] = []
+    groups: dict[str, list[ScoreReason]] = defaultdict(list)
+    for reason in reasons:
+        groups[reason.component_key].append(reason)
+    for component_key in sorted(groups):
+        component_reasons = sorted(
+            groups[component_key],
+            key=lambda r: (
+                -abs(float(r.contribution)),
+                r.source_year if r.source_year is not None else 10**9,
+                r.source_id if r.source_id is not None else 10**9,
+                r.label,
+            ),
+        )[:MAX_REASONS_PER_COMPONENT]
+        for index, reason in enumerate(component_reasons, start=1):
+            reason.sort_rank = index
+            reason.score_version = SCORE_FORMULA_VERSION
+            ranked.append(reason)
+    return sorted(
+        ranked,
+        key=lambda r: (
+            -abs(float(r.contribution)),
+            r.component_key,
+            r.sort_rank,
+            r.label,
+        ),
+    )
+
+
+def _load_reason_dicts(
+    conn: sqlite3.Connection, person_id: int, *, max_reasons: int
+) -> list[dict[str, object]]:
+    if not _table_exists(conn, REASON_TABLE):
+        return []
+    return _fetch_dicts(
+        conn,
+        """
+        SELECT
+            person_id,
+            component_key,
+            axis,
+            contribution,
+            source_kind,
+            source_id,
+            source_year,
+            role,
+            label,
+            explanation,
+            sort_rank,
+            score_version
+        FROM simulation_person_archive_score_reasons
+        WHERE person_id = ?
+        ORDER BY ABS(contribution) DESC, component_key ASC, sort_rank ASC
+        LIMIT ?
+        """,
+        (int(person_id), max(1, min(200, int(max_reasons)))),
+    )
 
 
 def _fetch_dicts(

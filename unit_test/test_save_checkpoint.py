@@ -120,6 +120,27 @@ class TestSaveCheckpoint(unittest.TestCase):
                         "2026-01-01T00:00:00+00:00",
                     ),
                 )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        sim_year, event_type, payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        1001,
+                        "property_crime",
+                        json.dumps(
+                            {
+                                "perpetrator_person_id": 1,
+                                "target_person_id": 1,
+                                "loss_value": 0.5,
+                            },
+                            separators=(",", ":"),
+                        ),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
                 self.assertEqual(save_schema_version(conn), SAVE_SCHEMA_VERSION)
                 self.assertEqual(
                     conn.execute("PRAGMA user_version").fetchone()[0],
@@ -142,7 +163,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 )
                 self.assertEqual(
                     conn.execute("SELECT COUNT(*) FROM simulation_events").fetchone()[0],
-                    1,
+                    2,
                 )
                 self.assertEqual(
                     conn.execute(
@@ -166,6 +187,32 @@ class TestSaveCheckpoint(unittest.TestCase):
                 ).fetchone()
                 self.assertEqual(row[0], "Test")
                 self.assertEqual(json.loads(row[1])["first_name"], "Test")
+                almanack = conn.execute(
+                    """
+                    SELECT metric_value, metric_count
+                    FROM simulation_person_almanack_metrics
+                    WHERE person_id = 1
+                      AND metric_key = 'property_crimes_committed'
+                    """
+                ).fetchone()
+                self.assertIsNotNone(almanack)
+                self.assertEqual(int(almanack[1]), 1)
+                self.assertGreater(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM simulation_person_almanack_metric_definitions"
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertGreater(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) FROM simulation_person_almanack_evidence
+                        WHERE person_id = 1
+                          AND metric_key = 'property_crimes_committed'
+                        """
+                    ).fetchone()[0],
+                    0,
+                )
 
     def test_v3_events_backfill_to_normalized_event_people(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -1668,6 +1715,13 @@ class TestSaveCheckpoint(unittest.TestCase):
                         WHERE person_id = 1
                         """
                     ).fetchone()
+                    archive_reason_count = conn.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM simulation_person_archive_score_reasons
+                        WHERE person_id = 1
+                        """
+                    ).fetchone()[0]
                     birth_rid = (p.birthplace_region_id or "").strip()
                     self.assertTrue(birth_rid)
                     sample_rn = conn.execute(
@@ -1695,6 +1749,7 @@ class TestSaveCheckpoint(unittest.TestCase):
                 self.assertIsNotNone(archive_score_row)
                 self.assertGreaterEqual(float(archive_score_row[0]), 0.0)
                 self.assertGreaterEqual(float(archive_score_row[1]), 0.0)
+                self.assertGreater(int(archive_reason_count), 0)
                 self.assertIsNotNone(sample_rn)
                 self.assertEqual(str(sample_rn[0]).strip(), expected_label)
 

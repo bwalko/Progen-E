@@ -490,6 +490,43 @@ Examples:
 
 * * *
 
+Implemented Shape
+-----------------
+
+The current implementation lives in `library/person_archive_scores.py` as a derived read model. It does not change the core idea above:
+
+* **Narrative Heat** is story potential.
+* **ARI** is archive recognition.
+* **Hidden Heat** is story potential that exceeds archive recognition.
+* **Violet Marginalia** is a rare attention marker for unusually human traces.
+
+ARI is recognition, not moral worth, inherent importance, goodness, fame, or power. A high ARI means the archive is more likely to identify and preserve a person. A low ARI does not mean the person mattered less.
+
+Cached tables:
+
+* `simulation_person_archive_scores` keeps the numeric columns used for indexed top-N retrieval: totals, component scores, bucket labels, `component_json`, and `score_version`.
+* `simulation_person_archive_score_reasons` stores bounded explanation rows refreshed with the score rows. Fields are `person_id`, `component_key`, `axis`, `contribution`, `source_kind`, `source_id`, `source_year`, `role`, `label`, `explanation`, `sort_rank`, and `score_version`.
+* Reason rows are derived cache rows. Existing saves can open without manual migration; the table is created by `ensure_person_archive_score_schema(...)` and populated on the next score refresh.
+* Positive `contribution` values explain story or recognition drivers. Negative `contribution` values explain obscurity, suppression, stigma, sparse public records, or preservation bias.
+
+Component keys:
+
+* Narrative Heat: `narrative_heat_events`, `narrative_heat_contradictions`, `narrative_heat_consequences`, `narrative_heat_social`, `narrative_heat_rarity`, `narrative_heat_volatility`, `narrative_heat_legacy`.
+* ARI: `ari_official_status`, `ari_wealth`, `ari_family_prestige`, `ari_public_role`, `ari_legal_records`, `ari_knowledge_art`, `ari_founder_institution`, `ari_descendant_memory`, `ari_chronicler_interest`, `ari_suppression_obscurity_penalty`.
+* Derived: `hidden_heat`, `violet_marginalia_score`.
+
+`component_json` version 2 is intended to be stable for Python tools and LLM context. Top-level keys include `schema`, `score_version`, `formula_version`, `summary`, `totals`, `components`, `bucket_labels`, `top_event_types`, `top_roles`, `evidence_counts`, `data_caveats`, `top_reason_summaries`, `top_reasons`, `source_ids`, and `flags`. The old convenience keys such as `event_count`, `child_count`, `office_holding_count`, and `public_record_count` remain for compatibility.
+
+Read APIs:
+
+* `load_person_archive_score(conn, person_id)` returns the cached numeric row and remains compatible with v1 callers.
+* `load_person_archive_explanation(conn, person_id, max_reasons=12)` returns a dict with scores, buckets, component metadata, caveats, top reasons, and source ids.
+* `top_person_archive_scores(...)` still reads cached numeric columns and does not recompute formulas.
+
+Browser/detail views must read cached rows only. Score refresh happens from checkpoint or maintenance paths, not while rendering person sheets.
+
+* * *
+
 Guiding Principle
 -----------------
 

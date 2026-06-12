@@ -68,6 +68,7 @@ ARCHIVE_SCORE_DEFINITIONS = {
     "ARI": "Archive Recognition Index, 0-100: how likely this person is to be identifiable in later records instead of surviving only as background context.",
     "Hidden Heat": "0-100: story significance that exists in private, sealed, rumored, or currently obscure records.",
     "Violet Marginalia": "Whether the person crosses the threshold for later annotators to flag them as unusually archive-worthy.",
+    "Archive Quadrant": "Bucketed cross of Narrative Heat and Archive Recognition Index.",
     "Recognition": "Bucketed explanation of the Archive Recognition Index.",
     "Narrative": "Bucketed explanation of the total Narrative Heat score.",
     "Events": "Narrative Heat from direct event participation.",
@@ -190,11 +191,62 @@ from library.event_prose import (  # noqa: E402
     load_public_unknown_prose,
 )
 from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID  # noqa: E402
+from library.person_almanack import (  # noqa: E402
+    metric_definition_choices,
+    metric_categories,
+    metric_choices,
+    person_almanack_cache_status,
+    query_person_almanack,
+    query_person_almanack_duel,
+    query_person_almanack_evidence,
+    refresh_person_almanack_for_file,
+)
 from library.world_map_svg import (  # noqa: E402
     load_world_map_overlays,
     render_world_map_svg,
     world_map_zoom_sync_script,
 )
+
+ALMANACK_HEADERS = [
+    "Rank",
+    "Person ID",
+    "Name",
+    "Life",
+    "Age",
+    "Home",
+    "Metric",
+    "Value",
+    "Count",
+    "World Rank",
+    "Era Rank",
+    "Region Rank",
+    "Percentile",
+    "Z",
+    "Years",
+    "Evidence",
+    "Source",
+]
+ALMANACK_EVIDENCE_HEADERS = [
+    "Rank",
+    "Year",
+    "Source",
+    "Source ID",
+    "Role",
+    "Contribution",
+    "Summary",
+    "Payload Path",
+    "Related People",
+]
+ALMANACK_METRIC_CHOICES = ["All Metrics", *[label for label, _key in metric_definition_choices()]]
+ALMANACK_METRIC_LABEL_TO_KEY = {label: key for label, key in metric_choices()}
+ALMANACK_CATEGORY_CHOICES = metric_categories()
+ALMANACK_SOURCE_CHOICES = ["Both", "Detailed", "Passive explicit"]
+ALMANACK_RANK_MODE_CHOICES = [
+    "Raw Value",
+    "World Percentile",
+    "Era Abnormality",
+    "Regional Rank",
+]
 
 
 def configure_app_logging() -> Path:
@@ -2781,6 +2833,218 @@ def load_people_browser(
     return _dataframe(values, headers), status, person_ids
 
 
+def _almanack_empty_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=ALMANACK_HEADERS)
+
+
+def _almanack_empty_evidence_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=ALMANACK_EVIDENCE_HEADERS)
+
+
+def _almanack_metric_key(selection: object) -> str | None:
+    text = str(selection or "").strip()
+    if not text or text == "All Metrics":
+        return None
+    if text in ALMANACK_METRIC_LABEL_TO_KEY:
+        return ALMANACK_METRIC_LABEL_TO_KEY[text]
+    if text in set(ALMANACK_METRIC_LABEL_TO_KEY.values()):
+        return text
+    return ALMANACK_METRIC_LABEL_TO_KEY.get(ALMANACK_METRIC_CHOICES[1])
+
+
+def _almanack_year_span(row: dict[str, object]) -> str:
+    first = row.get("first_year")
+    last = row.get("last_year")
+    if first in (None, "") and last in (None, ""):
+        return ""
+    if first == last or last in (None, ""):
+        return str(first)
+    if first in (None, ""):
+        return str(last)
+    return f"{first}-{last}"
+
+
+def _almanack_state_key(row: dict[str, object]) -> str:
+    return json.dumps(
+        {
+            "source_kind": str(row.get("source_kind") or "detailed"),
+            "person_id": int(row.get("person_id") or 0),
+            "metric_key": str(row.get("metric_key") or ""),
+        },
+        separators=(",", ":"),
+    )
+
+
+def _almanack_table_row(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "Rank": row.get("rank", ""),
+        "Person ID": row.get("person_id", ""),
+        "Name": row.get("name", ""),
+        "Life": row.get("life", ""),
+        "Age": row.get("age", ""),
+        "Home": row.get("home", ""),
+        "Metric": row.get("metric_label", ""),
+        "Value": _fmt_number(row.get("metric_value"), 3),
+        "Count": row.get("metric_count", ""),
+        "World Rank": row.get("world_rank", ""),
+        "Era Rank": row.get("era_rank", ""),
+        "Region Rank": row.get("region_rank", ""),
+        "Percentile": _fmt_number(row.get("percentile"), 2),
+        "Z": _fmt_number(row.get("z_score"), 2),
+        "Years": _almanack_year_span(row),
+        "Evidence": row.get("evidence_summary", ""),
+        "Source": "Passive explicit" if row.get("source_kind") == "passive" else "Detailed",
+    }
+
+
+def _almanack_evidence_table(rows: list[dict[str, object]]) -> gr.Dataframe:
+    values = []
+    for row in rows:
+        values.append(
+            {
+                "Rank": row.get("evidence_rank", ""),
+                "Year": row.get("source_year", ""),
+                "Source": row.get("source_table", ""),
+                "Source ID": row.get("source_id", ""),
+                "Role": row.get("role", ""),
+                "Contribution": _fmt_number(row.get("contribution_value"), 3),
+                "Summary": row.get("summary", ""),
+                "Payload Path": row.get("payload_path", ""),
+                "Related People": ", ".join(str(pid) for pid in row.get("related_people", [])[:8]),
+            }
+        )
+    return _dataframe(values, ALMANACK_EVIDENCE_HEADERS)
+
+
+def _almanack_status_text(
+    path: Path, cache: dict[str, object], row_count: int, rank_mode: str
+) -> str:
+    bits = [f"{path.name}: showing {row_count} Almanack ranking rows"]
+    bits.append(f"rank mode={rank_mode or 'Raw Value'}")
+    cache_rows = int(cache.get("row_count") or 0)
+    bits.append(f"cache rows={cache_rows}")
+    current_event = int(cache.get("current_event_max_id") or 0)
+    source_event = int(cache.get("source_event_max_id") or 0)
+    if current_event or source_event:
+        bits.append(f"events={source_event}/{current_event}")
+    updated_year = cache.get("updated_year")
+    if updated_year not in (None, ""):
+        bits.append(f"updated year={updated_year}")
+    if cache.get("stale"):
+        bits.append("cache may be stale; click Refresh Almanack")
+    return " | ".join(bits) + ". Click a detailed row to open its person sheet."
+
+
+def load_almanack_browser(
+    world: str,
+    category: str,
+    metric: object,
+    life_filter: str,
+    source_filter: str,
+    search: str,
+    min_value: object,
+    limit: object,
+    rank_mode: str = "Raw Value",
+) -> tuple[gr.Dataframe, str, list[str], str, str]:
+    if not world:
+        return (
+            _almanack_empty_frame(),
+            "Choose a world.",
+            [],
+            '<div class="person-sheet muted">Load The Almanack, then click a row.</div>',
+            "Load The Almanack, then click a row.",
+        )
+    row_limit = _safe_int(limit, 50, 1, 500)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return (
+            _almanack_empty_frame(),
+            f"{path} is missing. Run a simulation first.",
+            [],
+            '<div class="person-sheet muted">No save DB found.</div>',
+            "No save DB found.",
+        )
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        cache = person_almanack_cache_status(con)
+        if not cache.get("exists") or int(cache.get("row_count") or 0) == 0:
+            return (
+                _almanack_empty_frame(),
+                f"{path.name}: Almanack cache is empty. Click Refresh Almanack to build it.",
+                [],
+                '<div class="person-sheet muted">Refresh The Almanack, then load rankings.</div>',
+                "Refresh The Almanack, then load rankings.",
+            )
+        rows = query_person_almanack(
+            con,
+            metric_key=_almanack_metric_key(metric),
+            category=str(category or "All"),
+            life_filter=str(life_filter or "All"),
+            source_filter=str(source_filter or "Both"),
+            search=str(search or ""),
+            min_value=min_value,
+            limit=row_limit,
+            rank_mode=str(rank_mode or "Raw Value"),
+        )
+    values = [_almanack_table_row(row) for row in rows]
+    keys = [_almanack_state_key(row) for row in rows]
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = _almanack_status_text(path, cache, len(values), str(rank_mode or "Raw Value")) + saved_world_note
+    return (
+        _dataframe(values, ALMANACK_HEADERS),
+        status,
+        keys,
+        '<div class="person-sheet muted">Click a detailed row to open its person sheet. Passive rows show a compact record.</div>',
+        "Click a detailed row to generate share text.",
+    )
+
+
+def refresh_almanack_browser(
+    world: str,
+    category: str,
+    metric: object,
+    life_filter: str,
+    source_filter: str,
+    search: str,
+    min_value: object,
+    limit: object,
+    rank_mode: str = "Raw Value",
+) -> tuple[gr.Dataframe, str, list[str], str, str]:
+    if not world:
+        return (
+            _almanack_empty_frame(),
+            "Choose a world.",
+            [],
+            '<div class="person-sheet muted">Choose a world.</div>',
+            "Choose a world.",
+        )
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return (
+            _almanack_empty_frame(),
+            f"{path} is missing. Run a simulation first.",
+            [],
+            '<div class="person-sheet muted">No save DB found.</div>',
+            "No save DB found.",
+        )
+    from library.world_save import ensure_checkpoint_schema_for_file
+
+    ensure_checkpoint_schema_for_file(path)
+    count = refresh_person_almanack_for_file(path)
+    table, status, keys, sheet, share = load_almanack_browser(
+        world,
+        category,
+        metric,
+        life_filter,
+        source_filter,
+        search,
+        min_value,
+        limit,
+        rank_mode,
+    )
+    return table, f"Refreshed {count} Almanack metric rows. {status}", keys, sheet, share
+
+
 def _empty_settlements_frame() -> gr.Dataframe:
     return gr.Dataframe(value=[], headers=SETTLEMENT_BROWSER_HEADERS)
 
@@ -4954,6 +5218,138 @@ def _person_archive_score_row(
     ).fetchone()
 
 
+def _person_archive_reason_rows(
+    con: sqlite3.Connection, person_id: object, limit: int = 12
+) -> list[dict[str, object]]:
+    if not _has_table(con, "simulation_person_archive_score_reasons"):
+        return []
+    try:
+        pid = int(person_id)
+    except (TypeError, ValueError):
+        return []
+    rows = con.execute(
+        """
+        select
+            person_id,
+            component_key,
+            axis,
+            contribution,
+            source_kind,
+            source_id,
+            source_year,
+            role,
+            label,
+            explanation,
+            sort_rank,
+            score_version
+        from simulation_person_archive_score_reasons
+        where person_id = ?
+        order by abs(contribution) desc, component_key asc, sort_rank asc
+        limit ?
+        """,
+        (pid, max(1, min(100, int(limit)))),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _archive_score_payload(score: sqlite3.Row | None) -> dict[str, object]:
+    if score is None or "component_json" not in score.keys():
+        return {}
+    try:
+        payload = json.loads(str(score["component_json"] or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _archive_score_summary(score: sqlite3.Row, payload: dict[str, object]) -> str:
+    summary = str(payload.get("summary") or "").strip()
+    if summary:
+        return summary
+    bucket = str(score["recognition_bucket"] or "ordinary or poorly preserved").strip()
+    if bucket:
+        bucket = bucket[:1].upper() + bucket[1:]
+    return (
+        f"{bucket}: Narrative Heat {_format_archive_score(score['narrative_heat_total'])}, "
+        f"ARI {_format_archive_score(score['archive_recognition_index'])}."
+    )
+
+
+def _archive_reason_from_payload(payload: dict[str, object], limit: int = 12) -> list[dict[str, object]]:
+    raw = payload.get("top_reason_summaries") or payload.get("top_reasons") or []
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, dict)][:limit]
+
+
+def _archive_reason_contribution(value: object) -> str:
+    try:
+        return f"{float(value):+.1f}"
+    except (TypeError, ValueError):
+        return "+0.0"
+
+
+def _archive_reason_line(reason: dict[str, object], *, include_explanation: bool = True) -> str:
+    label = str(reason.get("label") or reason.get("component_key") or "Archive reason").strip()
+    contribution = _archive_reason_contribution(reason.get("contribution"))
+    bits = [f"{label} ({contribution})"]
+    source_bits: list[str] = []
+    if reason.get("source_year") not in (None, ""):
+        source_bits.append(str(reason.get("source_year")))
+    if reason.get("source_kind"):
+        source = str(reason.get("source_kind"))
+        if reason.get("source_id") not in (None, ""):
+            source += f" #{reason.get('source_id')}"
+        source_bits.append(source)
+    if reason.get("role"):
+        source_bits.append(str(reason.get("role")).replace("_", " "))
+    if source_bits:
+        bits.append("[" + ", ".join(source_bits) + "]")
+    explanation = str(reason.get("explanation") or "").strip()
+    if include_explanation and explanation:
+        bits.append(explanation)
+    return " - ".join(bits)
+
+
+def _archive_reason_items_html(reasons: list[dict[str, object]]) -> str:
+    if not reasons:
+        return '<div class="relation muted">No cached reasons in this group yet.</div>'
+    items = []
+    for reason in reasons[:5]:
+        line = _archive_reason_line(reason)
+        items.append(f'<div class="relation">{html.escape(line)}</div>')
+    return "".join(items)
+
+
+def _archive_reason_groups_html(reasons: list[dict[str, object]]) -> str:
+    narrative = [
+        r for r in reasons
+        if str(r.get("axis") or "") == "narrative" and float(r.get("contribution") or 0.0) > 0.0
+    ]
+    ari = [
+        r for r in reasons
+        if str(r.get("axis") or "") == "ari" and float(r.get("contribution") or 0.0) > 0.0
+    ]
+    obscurity = [
+        r for r in reasons
+        if str(r.get("axis") or "") == "obscurity" or float(r.get("contribution") or 0.0) < 0.0
+    ]
+    groups = [
+        ("Narrative Heat Drivers", narrative),
+        ("ARI Drivers", ari),
+        ("Obscurity / Suppression Drivers", obscurity),
+    ]
+    html_parts = []
+    for title, rows in groups:
+        html_parts.append(
+            '<div>'
+            f'<h4 class="subsection-title">{html.escape(title)}</h4>'
+            f'<div class="relation-list">{_archive_reason_items_html(rows)}</div>'
+            '</div>'
+        )
+    return '<div class="consequence-groups archive-reason-groups">' + "".join(html_parts) + "</div>"
+
+
 def _archive_score_component_cards(score: sqlite3.Row) -> str:
     component_labels = [
         ("Events", "narrative_heat_events"),
@@ -4975,9 +5371,16 @@ def _archive_score_component_cards(score: sqlite3.Row) -> str:
     )
 
 
-def _render_archive_score_section(person_id: object, score: sqlite3.Row | None) -> str:
+def _render_archive_score_section(
+    person_id: object,
+    score: sqlite3.Row | None,
+    reasons: list[dict[str, object]] | None = None,
+) -> str:
     if score is None:
         return ""
+    payload = _archive_score_payload(score)
+    reason_rows = list(reasons or _archive_reason_from_payload(payload))
+    summary = _archive_score_summary(score, payload)
     violet = "Yes" if int(score["violet_marginalia"] or 0) else "No"
     cards = [
         _render_detail_card(
@@ -5000,33 +5403,50 @@ def _render_archive_score_section(person_id: object, score: sqlite3.Row | None) 
             f"{violet} ({_format_archive_score(score['violet_marginalia_score'])})",
             ARCHIVE_SCORE_DEFINITIONS["Violet Marginalia"],
         ),
-        _render_detail_card("Recognition", score["recognition_bucket"], ARCHIVE_SCORE_DEFINITIONS["Recognition"]),
+        _render_detail_card("Archive Quadrant", score["recognition_bucket"], ARCHIVE_SCORE_DEFINITIONS["Archive Quadrant"]),
         _render_detail_card("Narrative", score["narrative_bucket"], ARCHIVE_SCORE_DEFINITIONS["Narrative"]),
     ]
     components = _archive_score_component_cards(score)
+    reason_groups = _archive_reason_groups_html(reason_rows)
     pid = html.escape(str(person_id))
     return f"""
       <section aria-labelledby="person-{pid}-archive-scores">
         <h3 id="person-{pid}-archive-scores" class="section-title">Archive Scores</h3>
+        <p><strong>Why this person was noticed:</strong> {html.escape(summary)}</p>
         <div class="detail-grid">{''.join(cards)}</div>
+        {reason_groups}
         <div class="detail-grid">{components}</div>
       </section>
     """
 
 
-def _archive_score_share_lines(score: sqlite3.Row | None) -> list[str]:
+def _archive_score_share_lines(
+    score: sqlite3.Row | None, reasons: list[dict[str, object]] | None = None
+) -> list[str]:
     if score is None:
         return []
+    payload = _archive_score_payload(score)
+    reason_rows = list(reasons or _archive_reason_from_payload(payload))
+    summary = _archive_score_summary(score, payload)
+    caveats = payload.get("data_caveats") if isinstance(payload.get("data_caveats"), list) else []
     violet = "yes" if int(score["violet_marginalia"] or 0) else "no"
-    return [
+    lines = [
         "Archive Scores:",
         f"- Narrative heat: {_format_archive_score(score['narrative_heat_total'])}",
         f"- ARI: {_format_archive_score(score['archive_recognition_index'])}",
         f"- Hidden heat: {_format_archive_score(score['hidden_heat'])}",
         f"- Violet marginalia: {violet} ({_format_archive_score(score['violet_marginalia_score'])})",
-        f"- Recognition: {score['recognition_bucket']}",
-        "",
+        f"- Archive quadrant: {score['recognition_bucket']}",
+        f"- Why noticed: {summary}",
     ]
+    top_reasons = reason_rows[:3]
+    if top_reasons:
+        lines.append("- Top reasons:")
+        lines.extend(f"  - {_archive_reason_line(reason)}" for reason in top_reasons)
+    if caveats:
+        lines.append(f"- Caveat: {str(caveats[0])}")
+    lines.append("")
+    return lines
 
 
 def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, person: dict[str, object]) -> str:
@@ -5083,7 +5503,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
     knowledge_effect_rows = _person_knowledge_effect_rows(events, row["person_id"])
     archive_score = _person_archive_score_row(con, row["person_id"])
-    archive_score_section = _render_archive_score_section(row["person_id"], archive_score)
+    archive_reason_rows = _person_archive_reason_rows(con, row["person_id"])
+    archive_score_section = _render_archive_score_section(
+        row["person_id"], archive_score, archive_reason_rows
+    )
     consequence_summary_cards = _person_consequence_summary_cards(
         obligation_rows,
         reputation_mark_rows,
@@ -5335,7 +5758,8 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
     knowledge_effect_rows = _person_knowledge_effect_rows(events, row["person_id"])
     archive_score = _person_archive_score_row(con, row["person_id"])
-    archive_score_lines = _archive_score_share_lines(archive_score)
+    archive_reason_rows = _person_archive_reason_rows(con, row["person_id"])
+    archive_score_lines = _archive_score_share_lines(archive_score, archive_reason_rows)
     obligation_lines = _person_obligation_lines(
         con, world, obligation_rows, row["person_id"]
     )
@@ -5494,6 +5918,268 @@ def select_person_from_table(person_ids: list[int], world: str, evt: gr.SelectDa
             "Click a person row to generate share text.",
         )
     return render_person_outputs(world, person_id)
+
+
+def _decode_almanack_key(value: object) -> dict[str, object] | None:
+    try:
+        data = json.loads(str(value or ""))
+        source_kind = str(data.get("source_kind") or "detailed").strip()
+        person_id = int(data.get("person_id") or 0)
+        metric_key = str(data.get("metric_key") or "").strip()
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if person_id <= 0:
+        return None
+    return {"source_kind": source_kind, "person_id": person_id, "metric_key": metric_key}
+
+
+def _passive_almanack_row(con: sqlite3.Connection, person_id: int) -> sqlite3.Row | None:
+    relation = (
+        "simulation_people_light_readable"
+        if _has_relation(con, "simulation_people_light_readable")
+        else "simulation_people_light"
+    )
+    if not _has_table(con, "simulation_people_light"):
+        return None
+    return con.execute(
+        f"""
+        SELECT *
+        FROM {_quote_identifier(relation)}
+        WHERE person_id = ?
+        """,
+        (int(person_id),),
+    ).fetchone()
+
+
+def _passive_almanack_home(row: sqlite3.Row) -> str:
+    for key in ("current_settlement_id", "birthplace_settlement_id"):
+        if key in row.keys() and row[key]:
+            return str(row[key])
+    return ""
+
+
+def render_passive_almanack_outputs(world: str, person_id: object) -> tuple[str, str]:
+    try:
+        pid = int(person_id)
+    except (TypeError, ValueError):
+        return (
+            '<div class="person-sheet muted">Click an Almanack row to inspect it.</div>',
+            "Click an Almanack row to generate share text.",
+        )
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return (
+            f'<div class="person-sheet muted">{html.escape(str(path))} is missing.</div>',
+            f"{path} is missing.",
+        )
+    with _connect_readonly(path) as con:
+        row = _passive_almanack_row(con, pid)
+        if row is None:
+            return (
+                f'<div class="person-sheet muted">No passive person #{pid} in {html.escape(world)}.</div>',
+                f"No passive person #{pid} in {world}.",
+            )
+        name = str(row["name"] or "").strip() if "name" in row.keys() else f"Passive #{pid}"
+        life = "Alive" if int(row["is_alive"] or 0) else "Dead"
+        birthyear = row["birthyear"] if "birthyear" in row.keys() else ""
+        deathyear = row["deathyear"] if "deathyear" in row.keys() else ""
+        years = f"{birthyear or '?'}"
+        years += f" - {deathyear}" if deathyear not in (None, "") else ""
+        home = _passive_almanack_home(row)
+        job_family = row["job_family"] if "job_family" in row.keys() else ""
+        child_count = row["child_count"] if "child_count" in row.keys() else 0
+        partner = row["partner_name"] if "partner_name" in row.keys() else ""
+        child_years = ""
+        if "child_birthyears_json" in row.keys() and row["child_birthyears_json"]:
+            try:
+                child_years = ", ".join(str(y) for y in json.loads(str(row["child_birthyears_json"]))[:8])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                child_years = ""
+    cards = "".join(
+        [
+            _detail_card("Source", "Passive explicit"),
+            _detail_card("Life", life),
+            _detail_card("Years", years),
+            _detail_card("Home", home or "Unknown"),
+            _detail_card("Job Family", job_family or "Unknown"),
+            _detail_card("Children", child_count),
+            _detail_card("Partner", partner or "None"),
+        ]
+    )
+    child_note = (
+        f'<p class="place-muted">Recorded child birth years: {html.escape(child_years)}</p>'
+        if child_years
+        else ""
+    )
+    html_out = (
+        '<article class="person-sheet">'
+        f'<h2>{html.escape(name)}</h2>'
+        f'<div class="person-subtitle">Passive person #{pid}</div>'
+        f'<div class="place-grid">{cards}</div>'
+        f"{child_note}"
+        "</article>"
+    )
+    share = "\n".join(
+        [
+            name,
+            f"Passive person ID: {pid}",
+            f"Status: {life}; years {years}.",
+            f"Home: {home or 'unknown'}.",
+            f"Job family: {job_family or 'unknown'}.",
+            f"Recorded children: {child_count}.",
+        ]
+    )
+    return html_out, share
+
+
+def _almanack_evidence_for_key(world: str, decoded: dict[str, object]) -> gr.Dataframe:
+    metric_key = str(decoded.get("metric_key") or "").strip()
+    if not metric_key:
+        return _almanack_empty_evidence_frame()
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _almanack_empty_evidence_frame()
+    with _connect_readonly(path) as con:
+        rows = query_person_almanack_evidence(
+            con,
+            str(decoded.get("source_kind") or "detailed"),
+            int(decoded.get("person_id") or 0),
+            metric_key,
+            limit=50,
+        )
+    return _almanack_evidence_table(rows)
+
+
+def render_almanack_outputs(world: str, key: object) -> tuple[str, str, gr.Dataframe]:
+    decoded = _decode_almanack_key(key)
+    if decoded is None:
+        return (
+            '<div class="person-sheet muted">Click an Almanack row to inspect it.</div>',
+            "Click an Almanack row to generate share text.",
+            _almanack_empty_evidence_frame(),
+        )
+    source_kind = str(decoded.get("source_kind") or "detailed")
+    person_id = int(decoded.get("person_id") or 0)
+    if source_kind == "passive":
+        sheet, share = render_passive_almanack_outputs(world, person_id)
+    else:
+        sheet, share = render_person_outputs(world, person_id)
+    return sheet, share, _almanack_evidence_for_key(world, decoded)
+
+
+def select_almanack_from_table(
+    almanack_keys: list[str], world: str, evt: gr.SelectData
+) -> tuple[str, str, gr.Dataframe]:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        key = almanack_keys[int(row_index)]
+    except Exception:
+        return (
+            '<div class="person-sheet muted">Click an Almanack row to inspect it.</div>',
+            "Click an Almanack row to generate share text.",
+            _almanack_empty_evidence_frame(),
+        )
+    return render_almanack_outputs(world, key)
+
+
+def _almanack_duel_person_id(value: object) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"\d+", text)
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except ValueError:
+        return None
+
+
+def _almanack_duel_html(result: dict[str, object]) -> str:
+    person_a = result.get("person_a") if isinstance(result.get("person_a"), dict) else {}
+    person_b = result.get("person_b") if isinstance(result.get("person_b"), dict) else {}
+    name_a = html.escape(str(person_a.get("name") or "Person A"))
+    name_b = html.escape(str(person_b.get("name") or "Person B"))
+    sections = []
+    for category in result.get("categories", []):
+        if not isinstance(category, dict):
+            continue
+        lines = category.get("lines") if isinstance(category.get("lines"), list) else []
+        if not lines:
+            continue
+        leader = html.escape(str(category.get("leader") or "Tie"))
+        items = []
+        for line in lines[:6]:
+            if not isinstance(line, dict):
+                continue
+            items.append(
+                '<div class="relation">'
+                f'<strong>{html.escape(str(line.get("metric") or ""))}</strong><br>'
+                f'A {html.escape(str(line.get("a") or 0))} / '
+                f'B {html.escape(str(line.get("b") or 0))}. '
+                f'{html.escape(str(line.get("why") or ""))}'
+                '</div>'
+            )
+        sections.append(
+            '<section>'
+            f'<h3 class="section-title">{html.escape(str(category.get("category") or ""))}</h3>'
+            f'<p class="place-muted">Leader: {leader}</p>'
+            f'<div class="relation-list">{"".join(items)}</div>'
+            '</section>'
+        )
+    if not sections:
+        sections.append('<p class="place-muted">No cached Almanack overlap for this pair yet.</p>')
+    return (
+        '<article class="person-sheet">'
+        f'<h2>Almanack Duel</h2>'
+        f'<div class="person-subtitle">{name_a} vs {name_b}</div>'
+        + "".join(sections)
+        + "</article>"
+    )
+
+
+def _almanack_duel_text(result: dict[str, object]) -> str:
+    person_a = result.get("person_a") if isinstance(result.get("person_a"), dict) else {}
+    person_b = result.get("person_b") if isinstance(result.get("person_b"), dict) else {}
+    lines = [
+        "Almanack Duel",
+        f"A: {person_a.get('name') or 'Person A'}",
+        f"B: {person_b.get('name') or 'Person B'}",
+        "",
+    ]
+    for category in result.get("categories", []):
+        if not isinstance(category, dict):
+            continue
+        metric_lines = category.get("lines") if isinstance(category.get("lines"), list) else []
+        if not metric_lines:
+            continue
+        lines.append(f"{category.get('category')}: leader {category.get('leader')}")
+        for line in metric_lines[:5]:
+            if isinstance(line, dict):
+                lines.append(f"- {line.get('why')}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def load_almanack_duel(world: str, person_a: object, person_b: object) -> tuple[str, str]:
+    a_id = _almanack_duel_person_id(person_a)
+    b_id = _almanack_duel_person_id(person_b)
+    if not world:
+        return '<div class="person-sheet muted">Choose a world.</div>', "Choose a world."
+    if a_id is None or b_id is None:
+        return (
+            '<div class="person-sheet muted">Enter two person ids to compare.</div>',
+            "Enter two person ids to compare.",
+        )
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return (
+            f'<div class="person-sheet muted">{html.escape(str(path))} is missing.</div>',
+            f"{path} is missing.",
+        )
+    with _connect_readonly(path) as con:
+        result = query_person_almanack_duel(con, a_id, b_id)
+    return _almanack_duel_html(result), _almanack_duel_text(result)
 
 
 def _fmt_number(value: object, digits: int = 2) -> str:
@@ -8316,6 +9002,84 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         buttons=["copy"],
                     )
 
+        with gr.Tab("The Almanack"):
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=6):
+                    with gr.Row():
+                        almanack_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        almanack_category = gr.Dropdown(
+                            ALMANACK_CATEGORY_CHOICES,
+                            value="All",
+                            label="Category",
+                        )
+                        almanack_metric = gr.Dropdown(
+                            ALMANACK_METRIC_CHOICES,
+                            value="Murders Committed",
+                            label="Metric",
+                        )
+                    with gr.Row():
+                        almanack_life = gr.Radio(["All", "Alive", "Dead"], value="All", label="People")
+                        almanack_source = gr.Radio(ALMANACK_SOURCE_CHOICES, value="Both", label="Source")
+                        almanack_rank_mode = gr.Radio(
+                            ALMANACK_RANK_MODE_CHOICES,
+                            value="Raw Value",
+                            label="Rank",
+                        )
+                    with gr.Row():
+                        almanack_limit = gr.Number(value=50, label="Limit", precision=0)
+                        almanack_min_value = gr.Textbox(value="", label="Minimum", placeholder="Any")
+                    almanack_search = gr.Textbox(
+                        label="Search The Almanack",
+                        placeholder="Name, id, home, metric, evidence...",
+                    )
+                    with gr.Row():
+                        almanack_load = gr.Button("Load Rankings", variant="primary")
+                        almanack_refresh = gr.Button("Refresh Almanack")
+                    almanack_status = gr.Textbox(label="Status", interactive=False)
+                    almanack_table = gr.Dataframe(
+                        label="The Almanack",
+                        interactive=False,
+                        wrap=True,
+                        elem_id="almanack-table",
+                    )
+                    almanack_keys_state = gr.State([])
+                with gr.Column(scale=5):
+                    almanack_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Load The Almanack, then click a row.</div>',
+                        label="Almanack Detail",
+                    )
+                    almanack_share_text = gr.Textbox(
+                        value="Load The Almanack, then click a row.",
+                        label="Copyable Gmail Text",
+                        lines=14,
+                        max_lines=24,
+                        interactive=False,
+                        buttons=["copy"],
+                    )
+                    almanack_evidence_table = gr.Dataframe(
+                        value=[],
+                        headers=ALMANACK_EVIDENCE_HEADERS,
+                        label="Why This Row?",
+                        interactive=False,
+                        wrap=True,
+                    )
+                    with gr.Row():
+                        almanack_duel_a = gr.Textbox(label="Duel A", placeholder="Person id")
+                        almanack_duel_b = gr.Textbox(label="Duel B", placeholder="Person id")
+                    almanack_duel_button = gr.Button("Compare People")
+                    almanack_duel_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Enter two person ids to compare their Almanack traces.</div>',
+                        label="Almanack Duel",
+                    )
+                    almanack_duel_text = gr.Textbox(
+                        value="Enter two person ids to compare.",
+                        label="Duel Copyable Text",
+                        lines=10,
+                        max_lines=20,
+                        interactive=False,
+                        buttons=["copy"],
+                    )
+
         with gr.Tab("Settlements") as settlements_tab:
             with gr.Row(elem_classes=["world-browser"]):
                 with gr.Column(scale=5):
@@ -8609,6 +9373,37 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             load_people_browser,
             person_browser_inputs,
             [person_table, person_status, person_ids_state],
+        )
+        almanack_inputs = [
+            almanack_world,
+            almanack_category,
+            almanack_metric,
+            almanack_life,
+            almanack_source,
+            almanack_search,
+            almanack_min_value,
+            almanack_limit,
+            almanack_rank_mode,
+        ]
+        almanack_outputs = [
+            almanack_table,
+            almanack_status,
+            almanack_keys_state,
+            almanack_sheet,
+            almanack_share_text,
+        ]
+        almanack_load.click(load_almanack_browser, almanack_inputs, almanack_outputs)
+        almanack_refresh.click(refresh_almanack_browser, almanack_inputs, almanack_outputs)
+        almanack_search.submit(load_almanack_browser, almanack_inputs, almanack_outputs)
+        almanack_table.select(
+            select_almanack_from_table,
+            [almanack_keys_state, almanack_world],
+            [almanack_sheet, almanack_share_text, almanack_evidence_table],
+        )
+        almanack_duel_button.click(
+            load_almanack_duel,
+            [almanack_world, almanack_duel_a, almanack_duel_b],
+            [almanack_duel_sheet, almanack_duel_text],
         )
         settlement_browser_inputs = [
             settlement_world,

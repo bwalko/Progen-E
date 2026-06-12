@@ -33,37 +33,6 @@ specific measured visual/debug gap from generated SVGs, map debug JSON, browser
 behavior, or map-seed comparison fixtures. Do not keep a broad "continue map
 tuning" item open without a concrete symptom and completion boundary.
 
-## Placename Length And Visible `-by` Tuning
-
-Current research note: `dev_rules/placenames.md`.
-
-Problem:
-
-- Domesday original-spelling forms are much shorter than current generated
-  settlement names: parsed baseline median 8 letters, 95th percentile 12, max
-  16; a fresh Progen-E 240-name settlement sample had median 11, 95th percentile
-  15, max 18, and 30.0% longer than 12.
-- The current save has only 3 active settlement rows, but all 3 are long
-  locative names and 2 of 3 visibly end in a `-by` family suffix. Treat that as
-  stale symptom evidence, not a broad distribution.
-
-Completion boundary:
-
-1. Add display-length budgeting to generated settlement names so routine labels
-   target median 7-9 letters, 90th percentile no more than 12, 95th percentile
-   no more than 13, and hard-cap at 16.
-2. Prevent locative display suffixes (`by`, `fordby`, `havenby`, `wellby`) from
-   pushing names over the length budget; preserve the locative detail in
-   etymology.
-3. Keep routine display names to 1-2 visible stems, make 3-stem names rare, and
-   disable 4-stem settlement labels.
-4. Add deterministic tests or a utility sample asserting length percentiles and
-   visible `-by` family rate against the targets in `dev_rules/placenames.md`.
-5. Verify with `python -m unittest unit_test.test_placenames
-   unit_test.test_place_namer` and a fresh generated-name sample. Do not rewrite
-   old save rows automatically; reset/regenerate worlds when old labels should
-   disappear.
-
 ## Scale Population Simulation Toward Millions
 
 ### Current Baseline And Targets

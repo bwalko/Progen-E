@@ -1228,6 +1228,155 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         )
         self.assertIn("history summary rows", summary_status)
 
+    def test_almanack_refresh_loads_rankings_and_row_details(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            config_path = Path(tmp) / "config.sqlite"
+            with closing(sqlite3.connect(config_path)) as cfg:
+                cfg.execute(
+                    """
+                    CREATE TABLE genome (
+                        trait TEXT,
+                        "deficient deviation" TEXT,
+                        "optimal centerpoint" TEXT,
+                        "excess deviation" TEXT,
+                        "deficient description" TEXT,
+                        "optimal description" TEXT,
+                        "excess description" TEXT
+                    )
+                    """
+                )
+                cfg.commit()
+            with closing(sqlite3.connect(path)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Ari", "Vale")
+                _insert_compact_person(con, 2, "Bela", "Reed")
+                _insert_compact_person(con, 3, "Caro", "Ash")
+                con.execute(
+                    """
+                    UPDATE simulation_people
+                    SET father_id = 1, mother_id = 2, birthyear = 1005
+                    WHERE person_id = 3
+                    """
+                )
+                con.execute(
+                    """
+                    INSERT INTO simulation_people_light (
+                        person_id, name, birthyear, deathyear, is_alive, gender,
+                        species, ethnic, job_family, child_count,
+                        child_person_ids_json, child_birthyears_json
+                    )
+                    VALUES (
+                        100, 'Mira Lowdetail', 970, NULL, 1, 'female',
+                        'human', 'test', 'farm', 2, '[901,902]', '[990,992]'
+                    )
+                    """
+                )
+                append_simulation_event_rows(
+                    con,
+                    "default",
+                    [
+                        (
+                            1001,
+                            "murder",
+                            {
+                                "killer_person_id": 1,
+                                "victim_person_id": 2,
+                                "incident_kind": "feud_killing",
+                            },
+                        ),
+                        (
+                            1002,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 2,
+                                "target_person_id": 1,
+                                "loss_value": 0.4,
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: (
+                config_path if db_kind == "Config DB" else path
+            )
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                empty_table, empty_status, _, _, _ = gdb.load_almanack_browser(
+                    "default",
+                    "All",
+                    "Murders Committed",
+                    "All",
+                    "Both",
+                    "",
+                    "",
+                    50,
+                )
+                murder_table, murder_status, murder_keys, _, _ = gdb.refresh_almanack_browser(
+                    "default",
+                    "All",
+                    "Murders Committed",
+                    "All",
+                    "Both",
+                    "",
+                    "",
+                    50,
+                )
+                person_html, person_share, person_evidence = gdb.select_almanack_from_table(
+                    murder_keys,
+                    "default",
+                    types.SimpleNamespace(index=0),
+                )
+                passive_table, passive_status, passive_keys, _, _ = gdb.load_almanack_browser(
+                    "default",
+                    "Family",
+                    "Recorded Children",
+                    "All",
+                    "Passive explicit",
+                    "Mira",
+                    "",
+                    50,
+                )
+                passive_html, passive_share, passive_evidence = gdb.select_almanack_from_table(
+                    passive_keys,
+                    "default",
+                    types.SimpleNamespace(index=0),
+                )
+                duel_html, duel_text = gdb.load_almanack_duel("default", "1", "2")
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        murder_rows = self._history_table_rows(murder_table)
+        passive_rows = self._history_table_rows(passive_table)
+        evidence_rows = self._history_table_rows(person_evidence)
+        passive_evidence_rows = self._history_table_rows(passive_evidence)
+        self.assertEqual(empty_table["headers"], gdb.ALMANACK_HEADERS)
+        self.assertIn("cache is empty", empty_status)
+        self.assertIn("Refreshed", murder_status)
+        self.assertIn("rank mode=Raw Value", murder_status)
+        self.assertEqual(murder_rows[0]["Name"], "Ari Vale")
+        self.assertEqual(murder_rows[0]["Metric"], "Murders Committed")
+        self.assertIn("World Rank", murder_rows[0])
+        self.assertIn("Ari Vale", person_html)
+        self.assertIn("Record ID: 1", person_share)
+        self.assertEqual(evidence_rows[0]["Source"], "simulation_events")
+        self.assertIn("killer", {str(row["Role"]) for row in evidence_rows})
+        self.assertIn("showing 1 Almanack", passive_status)
+        self.assertEqual(passive_rows[0]["Name"], "Mira Lowdetail")
+        self.assertEqual(passive_rows[0]["Source"], "Passive explicit")
+        self.assertIn("Passive person #100", passive_html)
+        self.assertIn("Recorded children: 2", passive_share)
+        self.assertEqual(passive_evidence_rows[0]["Source"], "simulation_people_light")
+        self.assertIn("Almanack Duel", duel_html)
+        self.assertIn("A: Ari Vale", duel_text)
+
     def test_history_lenses_combine_admin_truth_and_event_records(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "save.sqlite"
@@ -1810,6 +1959,32 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         con = _memory_save()
         _attach_empty_genome_config(con)
         ensure_person_archive_score_schema(con)
+        component_json = json.dumps(
+            {
+                "schema": "person_archive_score_components.v2",
+                "score_version": 2,
+                "formula_version": 2,
+                "summary": "Interesting but obscure: event traces give the life story shape, but sparse public records limit formal recognition.",
+                "totals": {
+                    "narrative_heat_total": 73.25,
+                    "archive_recognition_index": 41.5,
+                    "hidden_heat": 31.75,
+                    "violet_marginalia_score": 0.48,
+                },
+                "bucket_labels": {
+                    "archive_quadrant": "interesting but obscure",
+                    "narrative": "high",
+                },
+                "components": {},
+                "top_event_types": [["murder", 1]],
+                "top_roles": [["witness", 1]],
+                "evidence_counts": {"events": 2, "public_records": 0},
+                "data_caveats": ["Sparse public records; top reasons may be incomplete."],
+                "top_reason_summaries": [],
+                "source_ids": {"events": [7], "source_event_max_id": 7},
+            },
+            separators=(",", ":"),
+        )
         con.execute(
             """
             insert into simulation_person_archive_scores (
@@ -1819,14 +1994,71 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 narrative_heat_rarity, narrative_heat_volatility,
                 narrative_heat_legacy, hidden_heat, violet_marginalia_score,
                 violet_marginalia, recognition_bucket, narrative_bucket,
+                component_json,
                 updated_at
             )
             values (
                 1, 73.25, 41.5, 22.0, 8.0, 12.0, 7.0, 9.0, 6.0,
                 9.25, 31.75, 0.48, 1, 'interesting but obscure', 'high',
+                ?,
                 '2026-01-01T00:00:00+00:00'
             )
+            """,
+            (component_json,),
+        )
+        con.executemany(
             """
+            insert into simulation_person_archive_score_reasons (
+                person_id, component_key, axis, contribution, source_kind,
+                source_id, source_year, role, label, explanation, sort_rank,
+                score_version
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    1,
+                    "narrative_heat_events",
+                    "narrative",
+                    22.0,
+                    "event",
+                    7,
+                    100,
+                    "witness",
+                    "Major event witness",
+                    "A major event role gives the life story shape.",
+                    1,
+                    2,
+                ),
+                (
+                    1,
+                    "ari_public_role",
+                    "ari",
+                    8.0,
+                    "fact",
+                    None,
+                    None,
+                    "",
+                    "Public role trace",
+                    "A public role makes the person easier to identify.",
+                    1,
+                    2,
+                ),
+                (
+                    1,
+                    "ari_suppression_obscurity_penalty",
+                    "obscurity",
+                    -8.0,
+                    "fact",
+                    None,
+                    None,
+                    "",
+                    "Sparse public records",
+                    "No public archive records currently attach to this person.",
+                    1,
+                    2,
+                ),
+            ],
         )
         row, person = gdb._lookup_person(con, "test", 1)
 
@@ -1837,12 +2069,24 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Narrative Heat", sheet)
         self.assertIn("ARI", sheet)
         self.assertIn("Violet Marginalia", sheet)
+        self.assertIn("Why this person was noticed", sheet)
+        self.assertIn("Archive Quadrant", sheet)
+        self.assertIn("Narrative Heat Drivers", sheet)
+        self.assertIn("ARI Drivers", sheet)
+        self.assertIn("Obscurity / Suppression Drivers", sheet)
+        self.assertIn("Major event witness", sheet)
+        self.assertIn("Sparse public records", sheet)
         self.assertIn("interesting but obscure", sheet)
         self.assertIn('title="0-100: how much visible story material', sheet)
         self.assertIn('title="Archive Recognition Index, 0-100', sheet)
         self.assertIn("Archive Scores:\n- Narrative heat: 73.2", share)
         self.assertIn("- ARI: 41.5", share)
         self.assertIn("- Violet marginalia: yes (0.5)", share)
+        self.assertIn("- Archive quadrant: interesting but obscure", share)
+        self.assertIn("- Why noticed: Interesting but obscure", share)
+        self.assertIn("- Top reasons:", share)
+        self.assertIn("Major event witness", share)
+        self.assertIn("- Caveat: Sparse public records", share)
 
     def test_legacy_scores_hide_rows_below_display_threshold(self) -> None:
         class _LegacyFixture:

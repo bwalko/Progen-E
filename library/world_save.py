@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 15
+SAVE_SCHEMA_VERSION = 17
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -77,6 +77,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_settlement_lookup",
     "simulation_people",
     "simulation_person_archive_scores",
+    "simulation_person_archive_score_reasons",
     "simulation_people_light",
     "simulation_cohorts",
     "simulation_promotion_log",
@@ -319,7 +320,24 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
             f"save.sqlite schema version {version} is newer than supported "
             f"version {SAVE_SCHEMA_VERSION}"
         )
-    if version not in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, SAVE_SCHEMA_VERSION):
+    if version not in (
+        0,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        SAVE_SCHEMA_VERSION,
+    ):
         raise RuntimeError(
             f"save.sqlite schema version {version} needs a migration before "
             f"this code can open it"
@@ -4875,6 +4893,9 @@ def _write_rebuilt_save_sqlite(
             _backfill_simulation_faction_memory(conn)
             _backfill_simulation_institutions(conn)
             _backfill_simulation_innovations(conn)
+            from library.person_almanack import refresh_person_almanack
+
+            refresh_person_almanack(conn)
             _stamp_save_schema_version(conn, int(target_schema_version))
             conn.commit()
         finally:
@@ -5013,9 +5034,11 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _ensure_simulation_innovation_tables(conn)
     _ensure_simulation_people_table(conn)
     from library.person_archive_scores import ensure_person_archive_score_schema
+    from library.person_almanack import ensure_person_almanack_schema
 
     ensure_person_archive_score_schema(conn)
     _ensure_hybrid_population_tables(conn)
+    ensure_person_almanack_schema(conn)
     conn.executescript(_CREATE_SIMULATION_REGIONS)
     _ensure_simulation_settlements_table(conn)
     _migrate_cap_named_columns(conn)
@@ -5979,6 +6002,10 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         ensure_checkpoint_schema(conn)
         conn.execute("DELETE FROM simulation_people")
         conn.execute("DELETE FROM simulation_person_archive_scores")
+        conn.execute("DELETE FROM simulation_person_archive_score_reasons")
+        conn.execute("DELETE FROM simulation_person_almanack_metrics")
+        conn.execute("DELETE FROM simulation_person_almanack_cache")
+        conn.execute("DELETE FROM simulation_person_almanack_evidence")
         conn.execute("DELETE FROM simulation_people_light")
         conn.execute("DELETE FROM simulation_cohorts")
         conn.execute("DELETE FROM simulation_promotion_log")
@@ -7664,6 +7691,14 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             year, "checkpoint", "person_archive_score_rows", archive_score_rows
         )
         t0 = _profile_accumulate("checkpoint.snapshot_person_archive_scores", t0)
+
+        from library.person_almanack import refresh_person_almanack
+
+        almanack_rows = refresh_person_almanack(conn, simulation_year=year)
+        simulation_timing.record_gauge(
+            year, "checkpoint", "person_almanack_metric_rows", almanack_rows
+        )
+        t0 = _profile_accumulate("checkpoint.snapshot_person_almanack", t0)
 
         cur.execute(
             """

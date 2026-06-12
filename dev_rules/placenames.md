@@ -44,7 +44,7 @@ Additional entry facts:
   of unique forms. Exact `by` is rare in the manuscript spellings because `bi`
   is a common Domesday spelling of the same visible family.
 
-Progen-E evidence from the current checkout:
+Historical Progen-E evidence before the June 2026 tuning pass:
 
 - Current `worlds/default/save.sqlite` has only 3 active settlement rows with
   display names, so it is symptom evidence rather than a broad sample.
@@ -56,15 +56,26 @@ Progen-E evidence from the current checkout:
   It produced no visible `-by` names because that helper does not apply the
   locative display branch.
 
+Current implementation status:
+
+- `library.placenames_generation` now budgets settlement display labels near
+  generation time and prefers candidates at 9 letters or less before falling
+  back to longer-but-bounded candidates.
+- The locative display path no longer fabricates `havenby`, `fordby`, or
+  `wellby`. It only tries simple `by`, and skips visible suffixing when the
+  base already ends in `by`, `byr`, `haven`, `ford`, or `well`, or when `by`
+  would exceed the display budget.
+- Locative anchors are still preserved in etymology, so a place can record that
+  it was named by a ford/harbor/well without forcing that anchor into the map
+  label.
+
 Interpretation:
 
-- The earlier `-by` flood has been reduced in the core generator, but old saves
-  can still show stale long locative names.
-- Even without locative suffixes, current generated settlement names are too
-  long against an 11th-century English/Domesday baseline.
-- The main current pressure comes from long patronymic stems plus settlement
-  affixes; locative display can then add `by`, `fordby`, `havenby`, or `wellby`
-  on top of an already-long base.
+- Old saves and report artifacts can still show stale long locative names until
+  the world is reset/regenerated; the tuning pass does not rewrite existing
+  display rows automatically.
+- Future placename work should treat new long labels or high visible `-by` rates
+  as regressions to measure with fresh generated-name samples before retuning.
 
 ## Tuning Targets
 
@@ -87,7 +98,7 @@ longer and should continue to preserve the naming trail.
 
 ## Implementation Guidance
 
-- Add an explicit display-length budget near settlement-name composition.
+- Keep the explicit display-length budget near settlement-name composition.
   Measure letters after `normalize_placename_stem` / display formatting, not raw
   etymology text.
 - Prefer rerolling or selecting a shorter mode over blind truncation. Truncation
@@ -95,9 +106,11 @@ longer and should continue to preserve the naming trail.
 - For patronymic names, avoid using very long first names as settlement stems.
   If the chosen personal name is already longer than about 8-9 letters, pick a
   shorter eligible name, use a short form, or fall back to a non-patronymic mode.
-- For locative display, do not append `by`, `fordby`, `havenby`, or `wellby` if
-  the result would exceed the target budget. Keep the locative anchor in
-  etymology even when the visible name stays short.
+- For locative display, do not synthesize anchor-specific compound suffixes such
+  as `havenby`, `fordby`, or `wellby`. If visible locative flavor is used, keep
+  it to simple `by` and skip it when the result would exceed the target budget
+  or duplicate an existing `by`/`haven`/`ford`/`well` ending.
+- Keep the locative anchor in etymology even when the visible name stays short.
 - Keep visible suffix and etymology separate. The user should be able to see
   "named by a ford" in the detail sheet without the map becoming a wall of
   `-fordby` labels.

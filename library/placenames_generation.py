@@ -65,6 +65,11 @@ _LOCATIVE_ANCHOR_KINDS = {
 # Visible locative compounds are flavorful, but if every anchored settlement gets
 # one the map collapses into a wall of "-by" names.
 LOCATIVE_DISPLAY_PROBABILITY = 0.18
+SETTLEMENT_DISPLAY_IDEAL_LETTERS = 9
+SETTLEMENT_DISPLAY_TARGET_LETTERS = 12
+SETTLEMENT_DISPLAY_HARD_CAP_LETTERS = 16
+SETTLEMENT_PERSONAL_STEM_TARGET_LETTERS = 8
+SETTLEMENT_NAME_CANDIDATE_ATTEMPTS = 18
 
 
 def _join_etymology_parts(*parts: str) -> str:
@@ -83,18 +88,35 @@ def _unique_display_name(name: str, used_names: set[str]) -> str:
     return f"{base}{idx}"
 
 
-def _locative_settlement_display(base_name: str, anchor_kind: str, used_names: set[str]) -> str:
+def _display_letter_count(name: str) -> int:
+    return sum(1 for ch in (name or "") if ch.isalpha())
+
+
+def _settlement_candidate_rank(gen: "GeneratedSettlementName") -> tuple[int, int, int, int]:
+    letters = _display_letter_count(gen.display_name)
+    over_target = max(0, letters - SETTLEMENT_DISPLAY_TARGET_LETTERS)
+    over_hard = max(0, letters - SETTLEMENT_DISPLAY_HARD_CAP_LETTERS)
+    mode_penalty = 0 if gen.mode == "patronymic" else 1
+    return (1 if over_hard else 0, over_target, letters, mode_penalty)
+
+
+def _best_settlement_candidate(
+    current: "GeneratedSettlementName" | None,
+    candidate: "GeneratedSettlementName",
+) -> "GeneratedSettlementName":
+    if current is None or _settlement_candidate_rank(candidate) < _settlement_candidate_rank(current):
+        return candidate
+    return current
+
+
+def _locative_settlement_display(base_name: str, anchor_kind: str, used_names: set[str]) -> str | None:
     """Readable settlement form for a town named by position near a natural feature."""
     base = normalize_placename_stem(base_name)
-    kind = (anchor_kind or "").strip().lower()
-    suffix = "by"
-    if kind in {"harbor", "bay", "coast"}:
-        suffix = "havenby"
-    elif kind in {"ford"}:
-        suffix = "fordby"
-    elif kind in {"spring", "well"}:
-        suffix = "wellby"
-    candidate = format_toponym_display(join_tokens(base, suffix))
+    if base.casefold().endswith(("by", "byr", "haven", "ford", "well")):
+        return None
+    candidate = format_toponym_display(join_tokens(base, "by"))
+    if _display_letter_count(candidate) > SETTLEMENT_DISPLAY_TARGET_LETTERS:
+        return None
     return _unique_display_name(candidate, used_names)
 
 
@@ -336,15 +358,29 @@ def _resolve_first_name_for_culture(
     culture: str,
     rng: random.Random,
     db_path: Path | str | None,
+    max_stem_letters: int | None = None,
+    attempts: int = 1,
 ) -> str:
     """First-name stem for ``patronymic`` mode when no prominent resident is available.
 
-    Falls back across cultures (then any culture) so seeding never crashes on a
-    placename culture missing from the ``first_name`` table.
+    Samples a small deterministic pool when a display budget is supplied, then
+    returns the shortest covered-culture name if none land within budget.
     """
-    name = sample_first_name_for_ethnic(ethnic=culture, rng=rng, db_path=db_path)
-    if name:
-        return name
+    best_name = ""
+    best_len = 10**9
+    max_letters = max_stem_letters if max_stem_letters is not None else 10**9
+    for _ in range(max(1, int(attempts))):
+        name = sample_first_name_for_ethnic(ethnic=culture, rng=rng, db_path=db_path)
+        if not name:
+            continue
+        stem_len = _display_letter_count(normalize_placename_stem(name))
+        if stem_len < best_len:
+            best_name = name
+            best_len = stem_len
+        if stem_len <= max_letters:
+            return name
+    if best_name:
+        return best_name
     raise LookupError(
         f"sample_first_name_for_ethnic returned empty for culture={culture!r}; "
         "expected ethnic.csv / first_name.csv coverage for placename cultures."
@@ -390,6 +426,102 @@ def _pick_dual_affix_pair(
     return row1, row2
 
 
+def _build_dual_affix_settlement_candidate(
+    *,
+    rng: random.Random,
+    lex: PlacenameLexicon,
+    primary_culture: str,
+    mapped_weights: dict[str, float],
+    cat_w: dict[str, float],
+    inhabitant_cultures: set[str] | None,
+) -> GeneratedSettlementName | None:
+    pair = _pick_dual_affix_pair(
+        rng=rng,
+        lex=lex,
+        primary_culture=primary_culture,
+        mapped_weights=mapped_weights,
+        cat_w=cat_w,
+        inhabitant_cultures=inhabitant_cultures,
+    )
+    if pair is None:
+        return None
+    row1, row2 = pair
+    v1 = row1.pick_settlement_affix_variant(rng)
+    v2 = row2.pick_settlement_affix_variant(rng)
+    dual_display = _compose_dual_affix(v1, v2)
+    if dual_display is None:
+        return None
+    display = _settlement_display_with_sound_law(
+        dual_display,
+        rng=rng,
+        culture=row1.culture,
+    )
+    etym = _join_etymology_parts(row1.original_meaning, row2.original_meaning)
+    c2 = row2.culture if row2.culture != row1.culture else None
+    cat2 = row2.category if row2.category != row1.category else None
+    return GeneratedSettlementName(
+        display_name=display,
+        etymology=etym,
+        primary_category=row1.category,
+        secondary_category=cat2,
+        primary_meaning=row1.original_meaning,
+        secondary_meaning=row2.original_meaning,
+        culture_primary=row1.culture,
+        culture_secondary=c2,
+        mode="dual_affix",
+    )
+
+
+def _build_patronymic_settlement_candidate(
+    *,
+    rng: random.Random,
+    lex: PlacenameLexicon,
+    primary_culture: str,
+    mapped_weights: dict[str, float],
+    cat_w: dict[str, float],
+    prominent_person: tuple[str, str, str] | None,
+    db_path: Path | str | None,
+) -> GeneratedSettlementName:
+    fn_clean = ""
+    if prominent_person is not None:
+        fn_clean = (prominent_person[0] or "").strip()
+    if not fn_clean or (
+        _display_letter_count(normalize_placename_stem(fn_clean))
+        > SETTLEMENT_PERSONAL_STEM_TARGET_LETTERS
+    ):
+        fn_clean = _resolve_first_name_for_culture(
+            culture=primary_culture,
+            rng=rng,
+            db_path=db_path,
+            max_stem_letters=SETTLEMENT_PERSONAL_STEM_TARGET_LETTERS,
+            attempts=4,
+        )
+    stem = normalize_placename_stem(fn_clean)
+
+    pool = list(lex.by_culture.get(primary_culture, []))
+    if not pool:
+        pool = list(lex.rows)
+    row = _pick_row(rng, lex, pool, mapped_weights, cat_w)
+    affix = row.pick_settlement_affix_variant(rng)
+    display = _settlement_display_with_sound_law(
+        apply_affix_template(affix, stem),
+        rng=rng,
+        culture=row.culture,
+    )
+    etym = _join_etymology_parts(fn_clean, row.original_meaning)
+    return GeneratedSettlementName(
+        display_name=display,
+        etymology=etym,
+        primary_category=row.category,
+        secondary_category=None,
+        primary_meaning=row.original_meaning,
+        secondary_meaning=None,
+        culture_primary=row.culture,
+        culture_secondary=None,
+        mode="patronymic",
+    )
+
+
 def generate_settlement_name(
     *,
     rng: random.Random,
@@ -428,80 +560,48 @@ def generate_settlement_name(
         cultures = list(lex.by_culture.keys())
         mapped_weights = {c: 1.0 / len(cultures) for c in cultures}
 
-    use_dual = rng.random() < max(0.0, min(1.0, dual_affix_probability))
-
     primary_culture = (
         resolve_placename_culture(prominent_person[2], lex, rng)
         if prominent_person is not None and (prominent_person[2] or "").strip()
         else _weighted_choice(rng, [(c, w) for c, w in mapped_weights.items()])
     )
 
+    use_dual = rng.random() < max(0.0, min(1.0, dual_affix_probability))
+    best: GeneratedSettlementName | None = None
+
     if use_dual:
-        pair = _pick_dual_affix_pair(
+        for _ in range(4):
+            candidate = _build_dual_affix_settlement_candidate(
+                rng=rng,
+                lex=lex,
+                primary_culture=primary_culture,
+                mapped_weights=mapped_weights,
+                cat_w=cat_w,
+                inhabitant_cultures=inhabitant_cultures,
+            )
+            if candidate is None:
+                continue
+            best = _best_settlement_candidate(best, candidate)
+            if _display_letter_count(candidate.display_name) <= SETTLEMENT_DISPLAY_IDEAL_LETTERS:
+                return candidate
+
+    for _ in range(SETTLEMENT_NAME_CANDIDATE_ATTEMPTS):
+        candidate = _build_patronymic_settlement_candidate(
             rng=rng,
             lex=lex,
             primary_culture=primary_culture,
             mapped_weights=mapped_weights,
             cat_w=cat_w,
-            inhabitant_cultures=inhabitant_cultures,
+            prominent_person=prominent_person,
+            db_path=effective_db_path,
         )
-        if pair is not None:
-            row1, row2 = pair
-            v1 = row1.pick_settlement_affix_variant(rng)
-            v2 = row2.pick_settlement_affix_variant(rng)
-            dual_display = _compose_dual_affix(v1, v2)
-            if dual_display is not None:
-                display = _settlement_display_with_sound_law(
-                    dual_display,
-                    rng=rng,
-                    culture=row1.culture,
-                )
-                etym = _join_etymology_parts(row1.original_meaning, row2.original_meaning)
-                c2 = row2.culture if row2.culture != row1.culture else None
-                cat2 = row2.category if row2.category != row1.category else None
-                return GeneratedSettlementName(
-                    display_name=display,
-                    etymology=etym,
-                    primary_category=row1.category,
-                    secondary_category=cat2,
-                    primary_meaning=row1.original_meaning,
-                    secondary_meaning=row2.original_meaning,
-                    culture_primary=row1.culture,
-                    culture_secondary=c2,
-                    mode="dual_affix",
-                )
+        best = _best_settlement_candidate(best, candidate)
+        if _display_letter_count(candidate.display_name) <= SETTLEMENT_DISPLAY_IDEAL_LETTERS:
+            return candidate
 
-    fn_clean = ""
-    if prominent_person is not None:
-        fn_clean = (prominent_person[0] or "").strip()
-    if not fn_clean:
-        fn_clean = _resolve_first_name_for_culture(
-            culture=primary_culture, rng=rng, db_path=effective_db_path
-        )
-    stem = normalize_placename_stem(fn_clean)
-
-    pool = list(lex.by_culture.get(primary_culture, []))
-    if not pool:
-        pool = list(lex.rows)
-    row = _pick_row(rng, lex, pool, mapped_weights, cat_w)
-    affix = row.pick_settlement_affix_variant(rng)
-    display = _settlement_display_with_sound_law(
-        apply_affix_template(affix, stem),
-        rng=rng,
-        culture=row.culture,
-    )
-    etym = _join_etymology_parts(fn_clean, row.original_meaning)
-    return GeneratedSettlementName(
-        display_name=display,
-        etymology=etym,
-        primary_category=row.category,
-        secondary_category=None,
-        primary_meaning=row.original_meaning,
-        secondary_meaning=None,
-        culture_primary=row.culture,
-        culture_secondary=None,
-        mode="patronymic",
-    )
+    if best is None:
+        raise LookupError(f"No placename candidates available for culture={primary_culture!r}")
+    return best
 
 
 def seed_settlement_naming_for_region(
@@ -575,7 +675,13 @@ def seed_settlement_naming_for_region(
             primary_kind=primary_kind,
             probability=locative_display_probability,
         ):
-            display = _locative_settlement_display(gen.display_name, anchor_kind, used_names)
+            locative_display = _locative_settlement_display(
+                gen.display_name,
+                anchor_kind,
+                used_names,
+            )
+            if locative_display is not None:
+                display = locative_display
         gen = replace(
             gen,
             display_name=display,

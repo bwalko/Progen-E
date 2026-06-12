@@ -20,8 +20,12 @@ from library.ethnic_proto_placewords import (
 )
 from library.geography import get_region
 from library.placenames_generation import (
-    _should_use_locative_display,
+    SETTLEMENT_DISPLAY_HARD_CAP_LETTERS,
+    SETTLEMENT_DISPLAY_TARGET_LETTERS,
     _compose_dual_affix,
+    _display_letter_count,
+    _locative_settlement_display,
+    _should_use_locative_display,
     generate_settlement_name,
     region_ethnic_weights,
     seed_settlement_naming_for_region,
@@ -101,6 +105,17 @@ class TestJoinAndAffix(unittest.TestCase):
                 probability=1.0,
             )
         )
+
+    def test_locative_display_uses_simple_by_and_respects_budget(self) -> None:
+        self.assertEqual(_locative_settlement_display("Oak", "coast", set()), "Oakby")
+        self.assertEqual(_locative_settlement_display("Oak", "ford", set()), "Oakby")
+        self.assertEqual(_locative_settlement_display("Oak", "well", set()), "Oakby")
+        self.assertIsNone(_locative_settlement_display("Stonehaven", "coast", set()))
+        for forbidden in ("havenby", "fordby", "wellby"):
+            self.assertNotIn(
+                forbidden,
+                (_locative_settlement_display("Oak", "coast", set()) or "").casefold(),
+            )
 
 
 
@@ -252,6 +267,38 @@ class TestPlacenameGeneration(unittest.TestCase):
                 self.assertNotIn(g.primary_category.casefold(), d)
                 if g.secondary_category:
                     self.assertNotIn(g.secondary_category.casefold(), d)
+
+    def test_settlement_display_length_distribution_matches_budget(self) -> None:
+        region = get_region("aeria_north", world="default", db_path=self.cfg)
+        weights = {"Middle English": 1.0}
+        lengths: list[int] = []
+        by_family_count = 0
+        forbidden_compound_count = 0
+        for trial in range(240):
+            g = generate_settlement_name(
+                rng=random.Random(20260612 + trial),
+                lex=self.lex,
+                ethnic_weights=weights,
+                region=region,
+                prominent_person=None,
+                db_path=self.cfg,
+            )
+            display = g.display_name.casefold()
+            lengths.append(_display_letter_count(display))
+            if display.endswith(("by", "bi", "byr")):
+                by_family_count += 1
+            if display.endswith(("havenby", "fordby", "wellby")):
+                forbidden_compound_count += 1
+        ordered = sorted(lengths)
+        median = ordered[len(ordered) // 2]
+        p90 = ordered[math.ceil(len(ordered) * 0.90) - 1]
+        p95 = ordered[math.ceil(len(ordered) * 0.95) - 1]
+        self.assertLessEqual(median, 9)
+        self.assertLessEqual(p90, SETTLEMENT_DISPLAY_TARGET_LETTERS)
+        self.assertLessEqual(p95, 13)
+        self.assertLessEqual(max(ordered), SETTLEMENT_DISPLAY_HARD_CAP_LETTERS)
+        self.assertLessEqual(by_family_count / len(lengths), 0.05)
+        self.assertEqual(forbidden_compound_count, 0)
 
     def test_locative_anchor_keeps_etymology_without_forcing_by_display(self) -> None:
         class _Ctx:

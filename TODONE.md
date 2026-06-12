@@ -1,5 +1,46 @@
 # TODONE
 
+## Placename Length And Visible `-by` Tuning
+
+- Added settlement display-length budgeting in `library.placenames_generation`:
+  - generated settlement candidates now prefer routine labels at 9 letters or
+    less, keep the 90th-percentile target at 12 letters, and retain a hard cap
+    target of 16 letters;
+  - patronymic generation samples short covered-culture first-name stems before
+    accepting a long stem;
+  - dual-affix and patronymic candidates are ranked so the generator keeps the
+    shortest acceptable display candidate instead of accepting the first long
+    output.
+- Removed the code-side fabricated locative compound suffixes:
+  - `havenby`, `fordby`, and `wellby` are no longer synthesized by
+    `_locative_settlement_display`;
+  - locative display now only tries simple `by`;
+  - the simple `by` suffix is skipped when the base already ends in `by`,
+    `byr`, `haven`, `ford`, or `well`, or when the visible result would exceed
+    the display budget.
+- Preserved locative detail in etymology:
+  - names can still record anchors such as "by ford ..." or "by harbor ..."
+    in the etymology trail;
+  - visible display labels no longer need to show that anchor as a compound
+    suffix.
+- Added focused regression coverage in `unit_test.test_placenames`:
+  - direct tests prove coast/ford/well anchors use simple `by` and never produce
+    configless `havenby`, `fordby`, or `wellby`;
+  - a deterministic 240-name generated settlement sample asserts median,
+    90th-percentile, 95th-percentile, and maximum display lengths against the
+    Domesday-style targets.
+- Verified with:
+  - `python -m py_compile library\placenames_generation.py
+    unit_test\test_placenames.py`;
+  - focused new regression/distribution tests, including the deterministic
+    240-name sample with visible `by`/`bi`/`byr` rate and forbidden compound
+    suffix assertions;
+  - `python -m unittest unit_test.test_placenames unit_test.test_place_namer`
+    (40 tests, 283.206s).
+- Old save/report rows that already contain long locative display names are not
+  rewritten automatically; reset or regenerate worlds when those stale labels
+  should disappear.
+
 ## World Map Road Density Tuning
 
 - Added corridor-aware suppression for minor settlement road overlays:
