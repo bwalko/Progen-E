@@ -426,6 +426,11 @@ def _genome_signal_payload(
         "assertiveness",
         "neurochemical",
         "ambition",
+        "creativity",
+        "perception",
+        "generosity",
+        "loyalty",
+        "mating drive",
     )
     return {
         trait: round(_trait(rec, trait), 3)
@@ -2433,6 +2438,8 @@ def _maybe_affair_scandal_in_settlement(
                 "modesty",
                 "honesty",
                 "neurochemical",
+                "generosity",
+                "perception",
                 "assertiveness",
                 "persuasion",
                 "discipline",
@@ -2836,6 +2843,8 @@ def _maybe_property_crime_in_settlement(
                 "perception",
                 "ambition",
                 "frugality",
+                "generosity",
+                "neurochemical",
                 "adaptability",
             ),
         ),

@@ -30,6 +30,14 @@ from library.reproduction import (
     conception_rng,
     having_sex_birth_event,
 )
+from library.relationship_attraction import (
+    deterministic_pair_rng,
+    partner_formation_probability_01,
+    person_prosperity_01,
+    person_relationship_desirability_01,
+    relationship_pair_score_01,
+    relationship_trait_data_available,
+)
 from library.simulation_careers import resource_pressure_for_person
 from library import simulation_timing
 from library.simulation_context import SimulationContext, SimulationPersonRecord
@@ -41,6 +49,8 @@ KIN_PAIR_GRANDPARENT_GRANDCHILD_PROB = 0.000002
 KIN_PAIR_FULL_SIBLING_PROB = 0.000005
 KIN_PAIR_HALF_SIBLING_PROB = 0.00002
 KIN_PAIR_RNG_STREAM = 612_047
+PARTNER_FORMATION_RNG_STREAM = 712_831
+PASSIVE_MARRIAGE_OFFER_RNG_STREAM = 914_591
 PAIRING_EXHAUSTIVE_PAIR_LIMIT = 25_000
 PAIRING_CANDIDATE_ATTEMPTS_PER_PERSON = 8
 PASSIVE_MARRIAGE_PROMOTION_CAP_PER_YEAR = 24
@@ -160,6 +170,75 @@ def _pairing_allowed_by_kinship(
         return True, None, None
     rng = _kin_pairing_rng(ctx, year, int(a.person_id), int(b.person_id))
     return rng.random() < probability, relation, probability
+
+
+def _record_prosperity_01(
+    ctx: SimulationContext,
+    rec: SimulationPersonRecord,
+    *,
+    resource_facts=None,
+) -> float:
+    try:
+        pressure = resource_pressure_for_person(
+            ctx, rec, resource_facts=resource_facts
+        )
+    except (FileNotFoundError, LookupError):
+        pressure = None
+    return person_prosperity_01(
+        rec.person,
+        resource_pressure=pressure,
+    )
+
+
+def _partner_pair_attraction_score_01(
+    ctx: SimulationContext,
+    year: int,
+    a: SimulationPersonRecord,
+    b: SimulationPersonRecord,
+    *,
+    resource_facts=None,
+) -> float:
+    return relationship_pair_score_01(
+        a.person,
+        b.person,
+        int(year),
+        prosperity_a_01=_record_prosperity_01(ctx, a, resource_facts=resource_facts),
+        prosperity_b_01=_record_prosperity_01(ctx, b, resource_facts=resource_facts),
+    )
+
+
+def _partner_pair_formation_probability(
+    ctx: SimulationContext,
+    year: int,
+    a: SimulationPersonRecord,
+    b: SimulationPersonRecord,
+    *,
+    resource_facts=None,
+) -> tuple[float, float]:
+    if not relationship_trait_data_available(a.person) and not relationship_trait_data_available(b.person):
+        return 1.0, 0.68
+    score = _partner_pair_attraction_score_01(
+        ctx, int(year), a, b, resource_facts=resource_facts
+    )
+    return partner_formation_probability_01(score), score
+
+
+def _passive_marriage_offer_probability(
+    ctx: SimulationContext,
+    year: int,
+    rec: SimulationPersonRecord,
+    *,
+    resource_facts=None,
+) -> tuple[float, float]:
+    if not relationship_trait_data_available(rec.person):
+        return 1.0, 0.68
+    prosperity = _record_prosperity_01(ctx, rec, resource_facts=resource_facts)
+    score = person_relationship_desirability_01(
+        rec.person,
+        int(year),
+        prosperity_01=prosperity,
+    )
+    return partner_formation_probability_01(score), score
 
 
 def _format_government_report_appendix(ctx: SimulationContext) -> list[str]:
@@ -470,6 +549,7 @@ def _pair_from_records(
     records: list[SimulationPersonRecord],
     year: int,
     paired_ids: set[int],
+    resource_facts=None,
 ) -> None:
     prof = simulation_timing.active_for_year(year)
     tpc = time.perf_counter
@@ -504,25 +584,77 @@ def _pair_from_records(
         + len(remaining_females)
     )
     for male in eligible_males:
-        chosen: tuple[SimulationPersonRecord, str | None, float | None] | None = None
+        chosen: tuple[
+            SimulationPersonRecord,
+            str | None,
+            float | None,
+            float,
+            float,
+        ] | None = None
         if bounded:
             attempts = min(PAIRING_CANDIDATE_ATTEMPTS_PER_PERSON, len(remaining_females))
             candidates = rng.sample(remaining_females, attempts) if attempts else []
         else:
             candidates = remaining_females
+        successful_candidates: list[
+            tuple[float, float, int, SimulationPersonRecord, str | None, float | None]
+        ] = []
         for female in candidates:
             allowed, relation, probability = _pairing_allowed_by_kinship(
                 ctx, year, male, female
             )
-            if allowed:
-                chosen = (female, relation, probability)
-                break
+            if not allowed:
+                continue
+            formation_probability, attraction_score = _partner_pair_formation_probability(
+                ctx,
+                int(year),
+                male,
+                female,
+                resource_facts=resource_facts,
+            )
+            prng = deterministic_pair_rng(
+                int(year),
+                int(getattr(ctx, "placename_rng_salt", 0)),
+                int(male.person_id),
+                int(female.person_id),
+                stream=PARTNER_FORMATION_RNG_STREAM,
+            )
+            if prng.random() >= formation_probability:
+                continue
+            successful_candidates.append(
+                (
+                    attraction_score,
+                    formation_probability,
+                    -int(female.person_id),
+                    female,
+                    relation,
+                    probability,
+                )
+            )
+        if successful_candidates:
+            successful_candidates.sort(reverse=True)
+            attraction_score, formation_probability, _, female, relation, probability = (
+                successful_candidates[0]
+            )
+            chosen = (
+                female,
+                relation,
+                probability,
+                attraction_score,
+                formation_probability,
+            )
         if chosen is None:
             continue
-        female, relation, probability = chosen
+        female, relation, probability, attraction_score, formation_probability = chosen
         a_id = male.person_id
         b_id = female.person_id
         ctx.add_couple(a_id, b_id)
+        ctx._pending_simulation_events[-1][2].update(
+            {
+                "attraction_fit_score": round(attraction_score, 4),
+                "formation_probability": round(formation_probability, 4),
+            }
+        )
         if relation is not None:
             ctx._pending_simulation_events[-1][2].update(
                 {
@@ -551,6 +683,7 @@ def _promote_passive_spouses_for_unpaired_detailed(
     year: int,
     by_settlement: dict[str, list[SimulationPersonRecord]],
     paired_ids: set[int],
+    resource_facts=None,
 ) -> None:
     prof = simulation_timing.active_for_year(year)
     tpc = time.perf_counter
@@ -571,6 +704,21 @@ def _promote_passive_spouses_for_unpaired_detailed(
                     simulation_timing.accumulate("pairing.passive_promote.scan", tpc() - t0)
                 return
             if rec.is_founder or rec.person_id in paired_ids or not _is_mature(rec, year):
+                continue
+            offer_probability, attraction_score = _passive_marriage_offer_probability(
+                ctx,
+                int(year),
+                rec,
+                resource_facts=resource_facts,
+            )
+            offer_rng = deterministic_pair_rng(
+                int(year),
+                int(getattr(ctx, "placename_rng_salt", 0)),
+                int(rec.person_id),
+                0,
+                stream=PASSIVE_MARRIAGE_OFFER_RNG_STREAM,
+            )
+            if offer_rng.random() >= offer_probability:
                 continue
             spouse_gender = _opposite_binary_gender(rec.person.gender)
             if spouse_gender is None:
@@ -593,7 +741,11 @@ def _promote_passive_spouses_for_unpaired_detailed(
                 continue
             ctx.add_couple(rec.person_id, promoted.person_id)
             ctx._pending_simulation_events[-1][2].update(
-                {"passive_promotion_reason": "marriage_into_detailed_family"}
+                {
+                    "passive_promotion_reason": "marriage_into_detailed_family",
+                    "attraction_fit_score": round(attraction_score, 4),
+                    "formation_probability": round(offer_probability, 4),
+                }
             )
             paired_ids.add(rec.person_id)
             paired_ids.add(promoted.person_id)

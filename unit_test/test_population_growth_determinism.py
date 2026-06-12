@@ -700,6 +700,95 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
         self.assertNotIn((son.person_id, mother.person_id), ctx.couples)
         self.assertIn((son.person_id, other.person_id), ctx.couples)
 
+    def test_pairing_gate_leaves_severe_pariah_unpaired(self) -> None:
+        ctx = SimulationContext(
+            db_path=Path("unused-config.sqlite"),
+            save_db_path=Path("unused-save.sqlite"),
+            world="default",
+            simulation_start_year=START_YEAR,
+            current_year=START_YEAR,
+            settlements_by_id={
+                "region:s1": SettlementState(region_id="region", settlement_id="region:s1"),
+            },
+        )
+
+        def person(
+            first: str,
+            gender: str,
+            traits: dict[str, float],
+            *,
+            attractiveness_01: float,
+        ) -> Person:
+            base_traits = {
+                "physical": 0.0,
+                "symmetry": 0.0,
+                "intellect": 0.0,
+                "neurochemical": 0.0,
+                "mating drive": 0.0,
+                "persuasion": 0.0,
+                "wit": 0.0,
+            }
+            base_traits.update(traits)
+            return Person(
+                first_name=first,
+                last_name="Gate",
+                gender=gender,
+                ethnic="Human",
+                species="Human",
+                birthyear=START_YEAR - 30,
+                birthplace_region_id="region",
+                birthplace_settlement_id="region:s1",
+                current_settlement_id="region:s1",
+                min_fertility_age=18,
+                genome=dict(base_traits),
+                mind_body=dict(base_traits),
+                attractiveness_01=attractiveness_01,
+            )
+
+        pariah = ctx.add_person(
+            person=person(
+                "Pariah",
+                "Male",
+                {
+                    "physical": 96.0,
+                    "symmetry": -96.0,
+                    "intellect": 96.0,
+                    "neurochemical": 96.0,
+                },
+                attractiveness_01=0.02,
+            ),
+            is_founder=False,
+        )
+        healthy = ctx.add_person(
+            person=person("Healthy", "Male", {}, attractiveness_01=0.95),
+            is_founder=False,
+        )
+        first_match = ctx.add_person(
+            person=person("First", "Female", {}, attractiveness_01=0.90),
+            is_founder=False,
+        )
+        second_match = ctx.add_person(
+            person=person("Second", "Female", {}, attractiveness_01=0.90),
+            is_founder=False,
+        )
+
+        rng = MagicMock()
+        rng.random.return_value = 0.5
+        with patch("library.population_growth_runner.deterministic_pair_rng", return_value=rng):
+            pair_people_by_settlement_then_region(
+                ctx, START_YEAR, ctx.current_people_by_settlement()
+            )
+
+        self.assertNotIn(pariah.person_id, {pid for pair in ctx.couples for pid in pair})
+        self.assertTrue(
+            any(
+                healthy.person_id in pair
+                and (first_match.person_id in pair or second_match.person_id in pair)
+                for pair in ctx.couples
+            )
+        )
+        self.assertIn("attraction_fit_score", ctx._pending_simulation_events[-1][2])
+
     def test_parent_child_pairing_possible_only_through_tiny_exception(self) -> None:
         ctx = SimulationContext(
             db_path=Path("unused-config.sqlite"),

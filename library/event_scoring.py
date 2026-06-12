@@ -377,6 +377,15 @@ VIOLENT_ACTOR_SPEC = EventPropensitySpec(
         "isolated": 0.04,
         "battlefield": 0.05,
     },
+    composite_weights={
+        "short fuse": 0.04,
+        "slow fuse": 0.03,
+        "patient grudge": 0.04,
+        "grudge nurturer": 0.04,
+        "possessive lover": 0.05,
+        "paranoid tester": 0.04,
+        "destructive spark": 0.04,
+    },
 )
 
 PROPERTY_CRIME_SPEC = EventPropensitySpec(
@@ -410,6 +419,15 @@ PROPERTY_CRIME_SPEC = EventPropensitySpec(
         "market_day": 0.04,
         "storehouse_access": 0.05,
         "shared_household": 0.03,
+    },
+    composite_weights={
+        "rank hunger": 0.04,
+        "scorekeeper": 0.04,
+        "bottomless want": 0.05,
+        "pinched miser": 0.04,
+        "opportunistic chameleon": 0.04,
+        "sweet withholder": 0.03,
+        "hardened heart": 0.03,
     },
 )
 
@@ -445,6 +463,14 @@ SCANDAL_EXPOSURE_SPEC = EventPropensitySpec(
         "co_residence": 0.04,
         "court": 0.03,
         "public_witness": 0.05,
+    },
+    composite_weights={
+        "possessive lover": 0.05,
+        "restless lover": 0.04,
+        "consuming caregiver": 0.04,
+        "paranoid tester": 0.04,
+        "dramatic leaver": 0.03,
+        "bottomless want": 0.03,
     },
 )
 
@@ -699,10 +725,64 @@ def property_crime_skill_factor(subject: Any) -> float:
     ) * predatory_intent
 
 
+def instability_crime_pressure(subject: Any) -> float:
+    """Extreme unstable, delusional, or paranoid traits that can spill into crime."""
+
+    return clamp01(
+        positive_extreme(subject, "neurochemical") * 0.55
+        + positive_extreme(subject, "creativity") * 0.20
+        + positive_extreme(subject, "intellect") * 0.15
+        + positive_extreme(subject, "perception") * 0.10
+    )
+
+
+def greed_crime_pressure(subject: Any) -> float:
+    """Ruthless, miserly, and envious extremes most relevant to property crime."""
+
+    return clamp01(
+        positive_extreme(subject, "ambition") * 0.35
+        + positive_extreme(subject, "frugality") * 0.30
+        + negative_extreme(subject, "generosity") * 0.35
+    )
+
+
+def jealousy_crime_pressure(
+    subject: Any, *, context: EventScoringContext | None = None
+) -> float:
+    """Possessive/envious extremes, strongest under relationship opportunity."""
+
+    base = clamp01(
+        negative_extreme(subject, "generosity") * 0.24
+        + positive_extreme(subject, "loyalty") * 0.22
+        + positive_extreme(subject, "mating drive") * 0.22
+        + positive_extreme(subject, "perception") * 0.20
+        + positive_extreme(subject, "neurochemical") * 0.12
+    )
+    if base <= 0.0:
+        return 0.0
+    if context is None:
+        return base * 0.25
+    pressure_tags = {str(tag).strip().lower() for tag in context.pressure_tags}
+    opportunity_tags = {str(tag).strip().lower() for tag in context.opportunity_tags}
+    context_factor = 0.25
+    if "relationship_strain" in pressure_tags:
+        context_factor += 0.45
+    if opportunity_tags.intersection({"co_residence", "shared_household", "privacy"}):
+        context_factor += 0.25
+    return base * clamp01(context_factor)
+
+
 def violent_actor_propensity(
     subject: Any, *, context: EventScoringContext | None = None
 ) -> float:
-    return score_propensity(subject, VIOLENT_ACTOR_SPEC, context=context)
+    extra_risk = (
+        instability_crime_pressure(subject) * 0.14
+        + jealousy_crime_pressure(subject, context=context) * 0.24
+        + greed_crime_pressure(subject) * 0.03
+    )
+    return score_propensity(
+        subject, VIOLENT_ACTOR_SPEC, context=context, extra_risk=extra_risk
+    )
 
 
 def property_crime_propensity(
@@ -712,14 +792,24 @@ def property_crime_propensity(
         subject,
         PROPERTY_CRIME_SPEC,
         context=context,
-        extra_risk=property_crime_skill_factor(subject),
+        extra_risk=(
+            property_crime_skill_factor(subject)
+            + greed_crime_pressure(subject) * 0.20
+            + instability_crime_pressure(subject) * 0.04
+        ),
     )
 
 
 def scandal_exposure_propensity(
     subject: Any, *, context: EventScoringContext | None = None
 ) -> float:
-    return score_propensity(subject, SCANDAL_EXPOSURE_SPEC, context=context)
+    extra_risk = (
+        jealousy_crime_pressure(subject, context=context) * 0.12
+        + instability_crime_pressure(subject) * 0.04
+    )
+    return score_propensity(
+        subject, SCANDAL_EXPOSURE_SPEC, context=context, extra_risk=extra_risk
+    )
 
 
 def public_virtue_propensity(

@@ -92,6 +92,42 @@ class TestMindBody(unittest.TestCase):
         o_score = attractiveness_01(old, 2020)
         self.assertGreater(y_score, o_score)
 
+    def test_attractiveness_drops_sharply_for_physical_and_symmetry_extremes(self) -> None:
+        ideal_traits = {
+            "physical": 0.0,
+            "symmetry": 0.0,
+            "intellect": 0.0,
+            "neurochemical": 0.0,
+            "mating drive": 0.0,
+            "persuasion": 0.0,
+            "wit": 0.0,
+        }
+        extreme_traits = dict(ideal_traits)
+        extreme_traits["physical"] = 96.0
+        extreme_traits["symmetry"] = -96.0
+        ideal = Person(
+            first_name="I",
+            last_name="Z",
+            gender="Female",
+            ethnic="Human",
+            species="Human",
+            birthyear=2000,
+            genome=ideal_traits,
+            mind_body=dict(ideal_traits),
+        )
+        extreme = Person(
+            first_name="E",
+            last_name="Z",
+            gender="Female",
+            ethnic="Human",
+            species="Human",
+            birthyear=2000,
+            genome=extreme_traits,
+            mind_body=dict(extreme_traits),
+        )
+
+        self.assertLess(attractiveness_01(extreme, 2020), attractiveness_01(ideal, 2020) * 0.55)
+
     def test_work_trait_values_backfills_from_genome(self) -> None:
         p = Person(
             first_name="A",

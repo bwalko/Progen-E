@@ -13,6 +13,12 @@ from library.mind_body import attractiveness_01 as attractiveness_score
 from library.mind_body import work_trait_values
 from library.person import Person
 from library.population_growth_runner import _is_mature
+from library.relationship_attraction import (
+    pair_extreme_fit_multiplier,
+    paramour_formation_multiplier,
+    person_prosperity_01,
+    relationship_pair_score_01,
+)
 from library.reproduction import pair_prosperity_01
 from library.simulation_careers import resource_pressure_for_person
 
@@ -209,7 +215,12 @@ def _paramour_orientation_multiplier(
 
 
 def _paramour_pair_probability(
-    a: Person, b: Person, ctx: SimulationContext | None = None
+    a: Person,
+    b: Person,
+    ctx: SimulationContext | None = None,
+    year: int | None = None,
+    prosperity_a_01: float | None = None,
+    prosperity_b_01: float | None = None,
 ) -> float:
     return _paramour_pair_probability_from_impulses(
         a,
@@ -217,6 +228,9 @@ def _paramour_pair_probability(
         ctx,
         _paramour_impulse_01(a),
         _paramour_impulse_01(b),
+        year=year,
+        prosperity_a_01=prosperity_a_01,
+        prosperity_b_01=prosperity_b_01,
     )
 
 
@@ -226,13 +240,30 @@ def _paramour_pair_probability_from_impulses(
     ctx: SimulationContext | None,
     impulse_a: float,
     impulse_b: float,
+    *,
+    year: int | None = None,
+    prosperity_a_01: float | None = None,
+    prosperity_b_01: float | None = None,
 ) -> float:
     impulse = (float(impulse_a) + float(impulse_b)) / 2.0
+    y = (
+        int(year)
+        if year is not None
+        else max(int(a.birthyear), int(b.birthyear)) + 30
+    )
+    attraction_fit = relationship_pair_score_01(
+        a,
+        b,
+        y,
+        prosperity_a_01=prosperity_a_01,
+        prosperity_b_01=prosperity_b_01,
+    )
     return min(
         0.28,
         PARAMOUR_FORMATION_TRIAL_PROB
         * impulse
-        * _paramour_orientation_multiplier(ctx, a, b),
+        * _paramour_orientation_multiplier(ctx, a, b)
+        * paramour_formation_multiplier(attraction_fit),
     )
 
 
@@ -240,12 +271,23 @@ def _paramour_bond_score_01(
     ctx: SimulationContext, ra, rb, year: int, resource_facts=None
 ) -> float:
     pa, pb = ra.person, rb.person
-    romantic = _romantic_infatuation_score(pa, pb, int(year))
+    pressure_a = resource_pressure_for_person(ctx, ra, resource_facts=resource_facts)
+    pressure_b = resource_pressure_for_person(ctx, rb, resource_facts=resource_facts)
+    prosperity_a = person_prosperity_01(pa, resource_pressure=pressure_a)
+    prosperity_b = person_prosperity_01(pb, resource_pressure=pressure_b)
+    attraction_fit = relationship_pair_score_01(
+        pa,
+        pb,
+        int(year),
+        prosperity_a_01=prosperity_a,
+        prosperity_b_01=prosperity_b,
+        sustain=True,
+    )
     prosperity = pair_prosperity_01(
         pa,
         pb,
-        pressure_a=resource_pressure_for_person(ctx, ra, resource_facts=resource_facts),
-        pressure_b=resource_pressure_for_person(ctx, rb, resource_facts=resource_facts),
+        pressure_a=pressure_a,
+        pressure_b=pressure_b,
     )
     stability = 1.0 - (
         _deviation_01(pa, "neurochemical") + _deviation_01(pb, "neurochemical")
@@ -253,7 +295,7 @@ def _paramour_bond_score_01(
     patience = (
         _positive_trait_01(pa, "patience") + _positive_trait_01(pb, "patience")
     ) / 2.0
-    return _clamp01(0.45 * romantic + 0.25 * prosperity + 0.20 * stability + 0.10 * patience)
+    return _clamp01(0.35 * attraction_fit + 0.25 * prosperity + 0.25 * stability + 0.15 * patience)
 
 
 def _has_outside_paramour(person: Person, partner_id: int) -> bool:
@@ -318,6 +360,29 @@ def _person_breakup_stress_01(
     if hp is not None and float(hp) < 0.15:
         stress += 0.12
         reasons.append("household_hardship")
+
+    partner_rec = ctx.id_to_record.get(int(partner_id))
+    if partner_rec is not None:
+        pressure_self = resource_pressure_for_person(ctx, rec, resource_facts=resource_facts)
+        pressure_partner = resource_pressure_for_person(
+            ctx, partner_rec, resource_facts=resource_facts
+        )
+        attraction_fit = relationship_pair_score_01(
+            p,
+            partner_rec.person,
+            int(ctx.current_year if ctx.current_year is not None else p.birthyear),
+            prosperity_a_01=person_prosperity_01(p, resource_pressure=pressure_self),
+            prosperity_b_01=person_prosperity_01(
+                partner_rec.person, resource_pressure=pressure_partner
+            ),
+            sustain=True,
+        )
+        if attraction_fit < 0.24:
+            stress += 0.06 + 0.18 * (0.24 - attraction_fit) / 0.24
+            reasons.append("low_attraction_fit")
+        if pair_extreme_fit_multiplier(p, partner_rec.person) < 0.35:
+            stress += 0.08
+            reasons.append("extreme_trait_mismatch")
 
     return _clamp01(stress), reasons
 
@@ -578,6 +643,7 @@ def _maybe_form_paramours_one_settlement(
     rng: random.Random,
     residents: list[int],
     impulse_cache: dict[int, float] | None = None,
+    resource_facts=None,
 ) -> None:
     """Low-rate formation from a bounded yearly contact budget in one settlement."""
     n = len(residents)
@@ -601,6 +667,7 @@ def _maybe_form_paramours_one_settlement(
             ia,
             ib,
             impulse_cache=impulse_cache,
+            resource_facts=resource_facts,
         )
 
 
@@ -672,6 +739,7 @@ def _maybe_form_paramour_pair(
     ib: int,
     *,
     impulse_cache: dict[int, float] | None = None,
+    resource_facts=None,
 ) -> None:
     ra = ctx.id_to_record.get(ia)
     rb = ctx.id_to_record.get(ib)
@@ -687,18 +755,36 @@ def _maybe_form_paramour_pair(
     if not paramour_pair_eligible(ra, rb, int(year)):
         return
     if impulse_cache is None:
-        formation_probability = _paramour_pair_probability(pa, pb, ctx)
+        pressure_a = resource_pressure_for_person(ctx, ra, resource_facts=resource_facts)
+        pressure_b = resource_pressure_for_person(ctx, rb, resource_facts=resource_facts)
+        prosperity_a = person_prosperity_01(pa, resource_pressure=pressure_a)
+        prosperity_b = person_prosperity_01(pb, resource_pressure=pressure_b)
+        formation_probability = _paramour_pair_probability(
+            pa,
+            pb,
+            ctx,
+            int(year),
+            prosperity_a_01=prosperity_a,
+            prosperity_b_01=prosperity_b,
+        )
     else:
         if ia not in impulse_cache:
             impulse_cache[ia] = _paramour_impulse_01(pa)
         if ib not in impulse_cache:
             impulse_cache[ib] = _paramour_impulse_01(pb)
+        pressure_a = resource_pressure_for_person(ctx, ra, resource_facts=resource_facts)
+        pressure_b = resource_pressure_for_person(ctx, rb, resource_facts=resource_facts)
+        prosperity_a = person_prosperity_01(pa, resource_pressure=pressure_a)
+        prosperity_b = person_prosperity_01(pb, resource_pressure=pressure_b)
         formation_probability = _paramour_pair_probability_from_impulses(
             pa,
             pb,
             ctx,
             impulse_cache[ia],
             impulse_cache[ib],
+            year=int(year),
+            prosperity_a_01=prosperity_a,
+            prosperity_b_01=prosperity_b,
         )
     if rng.random() > formation_probability:
         return
@@ -711,13 +797,30 @@ def _maybe_form_paramour_pair(
                 "orientation_multiplier": round(
                     _paramour_orientation_multiplier(ctx, pa, pb), 4
                 ),
+                "attraction_fit_score": round(
+                    relationship_pair_score_01(
+                        pa,
+                        pb,
+                        int(year),
+                        prosperity_a_01=person_prosperity_01(
+                            pa, resource_pressure=pressure_a
+                        ),
+                        prosperity_b_01=person_prosperity_01(
+                            pb, resource_pressure=pressure_b
+                        ),
+                    ),
+                    4,
+                ),
+                "extreme_fit_multiplier": round(pair_extreme_fit_multiplier(pa, pb), 4),
             }
         )
     except (LookupError, ValueError):
         pass
 
 
-def maybe_form_paramours(ctx: SimulationContext, year: int, rng: random.Random) -> None:
+def maybe_form_paramours(
+    ctx: SimulationContext, year: int, rng: random.Random, resource_facts=None
+) -> None:
     cols = ctx.alive_person_columns(year)
     candidate_mask = (cols.ages >= PARAMOUR_MIN_SIM_AGE) & (~cols.has_paramour)
     impulse_cache: dict[int, float] = {}
@@ -739,6 +842,7 @@ def maybe_form_paramours(ctx: SimulationContext, year: int, rng: random.Random) 
             rng,
             ids,
             impulse_cache=impulse_cache,
+            resource_facts=resource_facts,
         )
 
 
@@ -851,12 +955,19 @@ def _maybe_form_same_sex_couples_one_gender(
         if _close_kin_blocked(ra, rb):
             continue
         pa, pb = ra.person, rb.person
-        romantic = _romantic_infatuation_score(pa, pb, year)
         pa_p = resource_pressure_for_person(ctx, ra, resource_facts=resource_facts)
         pb_p = resource_pressure_for_person(ctx, rb, resource_facts=resource_facts)
         prosperity = pair_prosperity_01(pa, pb, pressure_a=pa_p, pressure_b=pb_p)
+        romantic = _romantic_infatuation_score(pa, pb, year)
+        attraction_fit = relationship_pair_score_01(
+            pa,
+            pb,
+            int(year),
+            prosperity_a_01=person_prosperity_01(pa, resource_pressure=pa_p),
+            prosperity_b_01=person_prosperity_01(pb, resource_pressure=pb_p),
+        )
         p_acc = _same_sex_acceptance_probability(
-            romantic_01=romantic, prosperity_01=prosperity
+            romantic_01=attraction_fit, prosperity_01=prosperity
         )
         prng = _same_sex_pair_rng(year, salt, sid, ia, ib)
         if prng.random() >= p_acc:
@@ -876,6 +987,8 @@ def _maybe_form_same_sex_couples_one_gender(
                 "person_b_id": ib,
                 "settlement_id": sid,
                 "romantic_score": round(romantic, 4),
+                "attraction_fit_score": round(attraction_fit, 4),
+                "extreme_fit_multiplier": round(pair_extreme_fit_multiplier(pa, pb), 4),
                 "prosperity_01": round(prosperity, 4),
                 "acceptance_probability": round(p_acc, 4),
                 "partnership_motive": "same_sex_romantic",
@@ -972,7 +1085,7 @@ def simulation_social_annual_tick(ctx: SimulationContext, year: int) -> None:
     if prof:
         simulation_timing.accumulate("social.partner_breakups", tpc() - t0)
         t0 = tpc()
-    maybe_form_paramours(ctx, year, rng)
+    maybe_form_paramours(ctx, year, rng, resource_facts=resource_facts)
     if prof:
         simulation_timing.accumulate("social.form_paramours", tpc() - t0)
         t0 = tpc()

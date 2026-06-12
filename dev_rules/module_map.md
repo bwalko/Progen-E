@@ -58,6 +58,8 @@ Quick orientation for `library`, `utils`, and `unit_test`.
   - World clock: reads `world_start` from config DB; persists `world_state` in the save DB.
 - `library/body_interpreter.py`
   - Converts mature metrics into interpreted child/immature physique values.
+- `library/relationship_attraction.py`
+  - Shared relationship desirability and fit scoring for partner/paramour formation and sustainment. Combines current attractiveness, physical/symmetry/intellect/neurochemical extremes, mutual-extreme compatibility, and personal prosperity so romance decisions use one tuned signal.
 - `library/personality_interpreter.py`
   - Narrative trait callouts based on distance from ordinary genome magnitude.
 - `library/person.py`

@@ -19,6 +19,7 @@ from library.incident_rates import (
     clear_incident_rate_cache,
     incident_rate_for_year,
 )
+from library.event_scoring import EventScoringContext
 from library.simulation_context import SimulationContext
 from library.simulation_incidents import (
     _build_incident_scoring_facts,
@@ -28,10 +29,13 @@ from library.simulation_incidents import (
     _murder_annual_event_cap,
     _murder_settlement_trial_count,
     knowledge_culture_propensity,
+    MURDER_PROPENSITY_THRESHOLD,
     property_crime_propensity,
     public_virtue_propensity,
     scandal_exposure_propensity,
+    SCANDAL_PROPENSITY_THRESHOLD,
     simulation_incidents_annual_tick,
+    THEFT_PROPENSITY_THRESHOLD,
     violent_actor_propensity,
 )
 from library.polity import OfficeSeatState
@@ -159,6 +163,32 @@ DULL_GENOME = _genome(
     civics=-70,
     wit=-65,
     adaptability=-60,
+)
+
+INSTABILITY_CRIME_GENOME = _genome(
+    neurochemical=95,
+    creativity=95,
+    perception=95,
+    patience=-80,
+    temperance=-80,
+)
+
+GREED_CRIME_GENOME = _genome(
+    ambition=95,
+    frugality=95,
+    generosity=-95,
+    justice=-50,
+    honesty=-50,
+)
+
+JEALOUSY_CRIME_GENOME = _genome(
+    **{
+        "mating drive": 95,
+        "loyalty": 95,
+        "perception": 95,
+        "generosity": -95,
+        "neurochemical": 90,
+    }
 )
 
 
@@ -309,6 +339,37 @@ class TestSimulationIncidents(unittest.TestCase):
 
             self.assertGreater(property_crime_propensity(actor), 0.75)
             self.assertLess(property_crime_propensity(peaceful), 0.05)
+
+    def test_instability_greed_and_jealousy_raise_crime_propensities(self) -> None:
+        relationship_context = EventScoringContext(
+            pressure_tags=frozenset({"relationship_strain"}),
+            opportunity_tags=frozenset({"co_residence", "shared_household"}),
+        )
+
+        self.assertGreater(
+            violent_actor_propensity(INSTABILITY_CRIME_GENOME),
+            MURDER_PROPENSITY_THRESHOLD,
+        )
+        self.assertGreater(
+            property_crime_propensity(GREED_CRIME_GENOME),
+            THEFT_PROPENSITY_THRESHOLD + 0.20,
+        )
+        self.assertLess(
+            violent_actor_propensity(JEALOUSY_CRIME_GENOME),
+            MURDER_PROPENSITY_THRESHOLD,
+        )
+        self.assertGreater(
+            violent_actor_propensity(
+                JEALOUSY_CRIME_GENOME, context=relationship_context
+            ),
+            MURDER_PROPENSITY_THRESHOLD,
+        )
+        self.assertGreater(
+            scandal_exposure_propensity(
+                JEALOUSY_CRIME_GENOME, context=relationship_context
+            ),
+            SCANDAL_PROPENSITY_THRESHOLD + 0.20,
+        )
 
     def test_incident_context_map_uses_pressure_offices_and_family_indexes(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

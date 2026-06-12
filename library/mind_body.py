@@ -85,31 +85,41 @@ def _elderly_attractiveness_multiplier(person: "Person", year: int) -> float:
     return max(0.38, 1.0 - 0.0125 * excess)
 
 
-def _romantic_trait_keys() -> tuple[str, ...]:
+def _romantic_trait_weights() -> tuple[tuple[str, float], ...]:
     return (
-        "mating drive",
-        "persuasion",
-        "symmetry",
-        "wit",
-        "neurochemical",
+        ("symmetry", 0.34),
+        ("physical", 0.24),
+        ("neurochemical", 0.18),
+        ("intellect", 0.12),
+        ("persuasion", 0.06),
+        ("wit", 0.04),
+        ("mating drive", 0.02),
     )
 
 
+def _near_ideal_signal_01(value: float) -> float:
+    """Nonlinear appeal for genome/mind-body values where 0 is the ideal."""
+    magnitude = max(0.0, min(1.0, abs(float(value)) / 100.0))
+    return max(0.0, 1.0 - magnitude) ** 1.55
+
+
 def base_romantic_trait_score_01(person: "Person") -> float:
-    """Near-ideal band average over romantic trait keys from current mind/body."""
+    """Weighted romantic appeal from current mind/body.
+
+    Symmetry and physical condition dominate first impressions, while severe
+    neurochemical or intellectual extremes pull the score down sharply.
+    """
     traits = work_trait_values(person)
-    keys = _romantic_trait_keys()
     acc = 0.0
-    n = 0
-    for k in keys:
+    total_weight = 0.0
+    for k, weight in _romantic_trait_weights():
         if k not in traits:
             continue
-        mag = abs(float(traits[k]))
-        acc += max(0.0, 1.0 - mag / 100.0)
-        n += 1
-    if n <= 0:
+        acc += _near_ideal_signal_01(float(traits[k])) * float(weight)
+        total_weight += float(weight)
+    if total_weight <= 0.0:
         return 0.5
-    return max(0.0, min(1.0, acc / n))
+    return max(0.0, min(1.0, acc / total_weight))
 
 
 def attractiveness_01(person: "Person", year: int) -> float:

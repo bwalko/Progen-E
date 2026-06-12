@@ -24,6 +24,10 @@ if "numpy" not in sys.modules and importlib.util.find_spec("numpy") is None:
     )
 
 from library.person import Person
+from library.relationship_attraction import (
+    pair_extreme_fit_multiplier,
+    relationship_pair_score_01,
+)
 from library.simulation_social import (
     PARAMOUR_CONTACT_TRIAL_ABSOLUTE_CAP,
     PARAMOUR_EXHAUSTIVE_PAIR_LIMIT,
@@ -45,9 +49,17 @@ def _person(
     partner_id: int | None = None,
     paramour_id: int | None = None,
     sexual_nature: str = "heterosexual",
+    attractiveness_01: float = 0.75,
+    household_prosperity: float | None = None,
+    job_prosperity_01: float | None = None,
 ) -> Person:
     base_traits = {
+        "physical": 0.0,
+        "symmetry": 0.0,
+        "intellect": 0.0,
         "mating drive": 0.0,
+        "persuasion": 0.0,
+        "wit": 0.0,
         "loyalty": 0.0,
         "neurochemical": 0.0,
         "empathy": 0.0,
@@ -69,7 +81,9 @@ def _person(
         genome=dict(base_traits),
         mind_body=dict(base_traits),
         sexual_nature=sexual_nature,
-        attractiveness_01=0.75,
+        attractiveness_01=attractiveness_01,
+        household_prosperity=household_prosperity,
+        job_prosperity_01=job_prosperity_01,
     )
 
 
@@ -199,6 +213,53 @@ class TestSimulationSocialBreakups(unittest.TestCase):
         self.assertLess(
             _paramour_pair_probability(restrained, neutral),
             _paramour_pair_probability(tempted, neutral),
+        )
+
+    def test_extreme_instability_needs_matching_extreme_fit(self) -> None:
+        unstable = _person(1, {"neurochemical": 96.0})
+        stable = _person(2, {"neurochemical": 0.0})
+        also_unstable = _person(4, {"neurochemical": -96.0})
+
+        self.assertLess(
+            pair_extreme_fit_multiplier(unstable, stable),
+            pair_extreme_fit_multiplier(unstable, also_unstable),
+        )
+        self.assertLess(
+            _paramour_pair_probability(unstable, stable, year=1000),
+            _paramour_pair_probability(unstable, also_unstable, year=1000),
+        )
+
+    def test_wealth_compensates_for_low_attractiveness(self) -> None:
+        poor = _person(
+            1,
+            {"physical": 88.0, "symmetry": -88.0},
+            attractiveness_01=0.05,
+            household_prosperity=0.0,
+            job_prosperity_01=0.0,
+        )
+        rich = replace(
+            poor,
+            household_prosperity=1.0,
+            job_prosperity_01=1.0,
+        )
+        neutral = _person(2, {})
+
+        self.assertGreater(
+            relationship_pair_score_01(rich, neutral, 1000),
+            relationship_pair_score_01(poor, neutral, 1000),
+        )
+
+    def test_beautiful_hot_mess_forms_better_than_it_sustains(self) -> None:
+        hot_mess = _person(
+            1,
+            {"physical": 0.0, "symmetry": 0.0, "neurochemical": 96.0},
+            attractiveness_01=0.98,
+        )
+        neutral = _person(2, {})
+
+        self.assertGreater(
+            relationship_pair_score_01(hot_mess, neutral, 1000),
+            relationship_pair_score_01(hot_mess, neutral, 1000, sustain=True),
         )
 
     def test_same_sex_homosexual_paramour_probability_rises_when_married(self) -> None:
