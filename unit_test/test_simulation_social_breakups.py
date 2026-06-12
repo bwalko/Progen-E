@@ -26,6 +26,7 @@ if "numpy" not in sys.modules and importlib.util.find_spec("numpy") is None:
 from library.person import Person
 from library.relationship_attraction import (
     pair_extreme_fit_multiplier,
+    partner_formation_probability_01,
     relationship_pair_score_01,
 )
 from library.simulation_social import (
@@ -227,6 +228,15 @@ class TestSimulationSocialBreakups(unittest.TestCase):
         self.assertLess(
             _paramour_pair_probability(unstable, stable, year=1000),
             _paramour_pair_probability(unstable, also_unstable, year=1000),
+        )
+
+    def test_partner_formation_probability_is_strict_at_low_scores(self) -> None:
+        self.assertEqual(partner_formation_probability_01(0.12), 0.0)
+        self.assertLess(partner_formation_probability_01(0.20), 0.021)
+        self.assertLess(partner_formation_probability_01(0.30), 0.08)
+        self.assertGreater(
+            partner_formation_probability_01(0.50),
+            partner_formation_probability_01(0.30),
         )
 
     def test_wealth_compensates_for_low_attractiveness(self) -> None:

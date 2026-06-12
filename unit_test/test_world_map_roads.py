@@ -770,6 +770,41 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertIsNotNone(_edge(roads, "a", "b"))
         self.assertIsNotNone(_edge(roads, "b", "c"))
 
+    def test_minor_road_inside_stronger_corridor_is_suppressed(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {
+                    "a": (0.10, 0.50),
+                    "b": (0.90, 0.50),
+                    "c": (0.20, 0.52),
+                    "d": (0.80, 0.52),
+                },
+                [(10, "a", "b", 30), (10, "c", "d", 1)],
+            )
+
+            roads = build_settlement_road_overlays(geometry=_geometry(), save_db_path=save)
+
+        self.assertIsNone(_edge(roads, "c", "d"))
+        self.assertTrue(any(road.usage >= 30.0 for road in roads))
+
+    def test_minor_branch_to_distinct_destination_survives_main_corridor(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {
+                    "a": (0.10, 0.50),
+                    "b": (0.90, 0.50),
+                    "c": (0.20, 0.52),
+                    "e": (0.45, 0.78),
+                },
+                [(10, "a", "b", 30), (10, "c", "e", 1)],
+            )
+
+            roads = build_settlement_road_overlays(geometry=_geometry(), save_db_path=save)
+
+        self.assertIsNotNone(_edge(roads, "c", "e"))
+
     def test_cross_region_actual_road_follows_configured_land_route(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             save = _make_save(

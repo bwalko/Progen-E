@@ -58,7 +58,25 @@ class TestPopulationBirthVariance(unittest.TestCase):
                     simulation_year=2000,
                     db_path=cfg,
                 ),
-                genome={"mating drive": -40.0},
+                genome={
+                    "physical": 0.0,
+                    "symmetry": 0.0,
+                    "intellect": 0.0,
+                    "neurochemical": 0.0,
+                    "mating drive": -40.0,
+                    "persuasion": 0.0,
+                    "wit": 0.0,
+                },
+                mind_body={
+                    "physical": 0.0,
+                    "symmetry": 0.0,
+                    "intellect": 0.0,
+                    "neurochemical": 0.0,
+                    "mating drive": -40.0,
+                    "persuasion": 0.0,
+                    "wit": 0.0,
+                },
+                attractiveness_01=0.7,
             )
             f_lo = replace(
                 generate_person_random(
@@ -67,13 +85,84 @@ class TestPopulationBirthVariance(unittest.TestCase):
                     simulation_year=2000,
                     db_path=cfg,
                 ),
-                genome={"mating drive": -40.0},
+                genome=dict(m_lo.genome),
+                mind_body=dict(m_lo.mind_body),
+                attractiveness_01=0.7,
             )
-            m_hi = replace(m_lo, genome={"mating drive": 55.0})
-            f_hi = replace(f_lo, genome={"mating drive": 55.0})
+            hi_traits = dict(m_lo.mind_body)
+            hi_traits["mating drive"] = 55.0
+            m_hi = replace(m_lo, genome=dict(hi_traits), mind_body=dict(hi_traits))
+            f_hi = replace(f_lo, genome=dict(hi_traits), mind_body=dict(hi_traits))
             p_lo = annual_conception_probability(m_lo, f_lo, pressure=0.5)
             p_hi = annual_conception_probability(m_hi, f_hi, pressure=0.5)
             self.assertGreater(p_hi, p_lo)
+
+    def test_annual_conception_penalizes_poor_relationship_fit(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ideal_traits = {
+                "physical": 0.0,
+                "symmetry": 0.0,
+                "intellect": 0.0,
+                "neurochemical": 0.0,
+                "mating drive": 0.0,
+                "persuasion": 0.0,
+                "wit": 0.0,
+            }
+            severe_traits = dict(
+                ideal_traits,
+                physical=96.0,
+                symmetry=-96.0,
+                intellect=96.0,
+                neurochemical=96.0,
+            )
+            mother = generate_person_random(
+                gender="Female",
+                age=25,
+                simulation_year=2000,
+                db_path=cfg,
+            )
+            father = generate_person_random(
+                gender="Male",
+                age=25,
+                simulation_year=2000,
+                db_path=cfg,
+            )
+            healthy_mother = replace(
+                mother,
+                genome=dict(ideal_traits),
+                mind_body=dict(ideal_traits),
+                attractiveness_01=0.85,
+            )
+            severe_mother = replace(
+                mother,
+                genome=dict(severe_traits),
+                mind_body=dict(severe_traits),
+                attractiveness_01=0.03,
+            )
+            healthy_father = replace(
+                father,
+                genome=dict(ideal_traits),
+                mind_body=dict(ideal_traits),
+                attractiveness_01=0.85,
+            )
+
+            p_healthy = annual_conception_probability(
+                healthy_mother,
+                healthy_father,
+                pressure=0.5,
+                simulation_year=2000,
+            )
+            p_severe = annual_conception_probability(
+                severe_mother,
+                healthy_father,
+                pressure=0.5,
+                simulation_year=2000,
+            )
+
+            self.assertLess(p_severe, p_healthy * 0.35)
 
     def test_eligible_for_birth_not_biennial_parity(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

@@ -215,7 +215,10 @@ def _partner_pair_formation_probability(
     *,
     resource_facts=None,
 ) -> tuple[float, float]:
-    if not relationship_trait_data_available(a.person) and not relationship_trait_data_available(b.person):
+    if (
+        not relationship_trait_data_available(a.person)
+        and not relationship_trait_data_available(b.person)
+    ):
         return 1.0, 0.68
     score = _partner_pair_attraction_score_01(
         ctx, int(year), a, b, resource_facts=resource_facts
@@ -596,7 +599,7 @@ def _pair_from_records(
             candidates = rng.sample(remaining_females, attempts) if attempts else []
         else:
             candidates = remaining_females
-        successful_candidates: list[
+        candidate_scores: list[
             tuple[float, float, int, SimulationPersonRecord, str | None, float | None]
         ] = []
         for female in candidates:
@@ -612,16 +615,7 @@ def _pair_from_records(
                 female,
                 resource_facts=resource_facts,
             )
-            prng = deterministic_pair_rng(
-                int(year),
-                int(getattr(ctx, "placename_rng_salt", 0)),
-                int(male.person_id),
-                int(female.person_id),
-                stream=PARTNER_FORMATION_RNG_STREAM,
-            )
-            if prng.random() >= formation_probability:
-                continue
-            successful_candidates.append(
+            candidate_scores.append(
                 (
                     attraction_score,
                     formation_probability,
@@ -631,11 +625,20 @@ def _pair_from_records(
                     probability,
                 )
             )
-        if successful_candidates:
-            successful_candidates.sort(reverse=True)
+        if candidate_scores:
+            candidate_scores.sort(reverse=True)
             attraction_score, formation_probability, _, female, relation, probability = (
-                successful_candidates[0]
+                candidate_scores[0]
             )
+            prng = deterministic_pair_rng(
+                int(year),
+                int(getattr(ctx, "placename_rng_salt", 0)),
+                int(male.person_id),
+                int(female.person_id),
+                stream=PARTNER_FORMATION_RNG_STREAM,
+            )
+            if prng.random() >= formation_probability:
+                continue
             chosen = (
                 female,
                 relation,
@@ -892,7 +895,10 @@ def births_by_settlement(
                 simulation_timing.accumulate("births.resource_pressure", tpc() - t0)
                 t0 = tpc()
             p_try = annual_conception_probability(
-                rec.person, father.person, pressure=pressure
+                rec.person,
+                father.person,
+                pressure=pressure,
+                simulation_year=year,
             )
             crng = conception_rng(year, sim_seed, rec.person_id, father_id)
             if crng.random() >= p_try:

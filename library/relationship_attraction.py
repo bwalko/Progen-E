@@ -196,18 +196,23 @@ def relationship_pair_score_01(
 
 def partner_formation_probability_01(pair_score_01: float) -> float:
     score = clamp01(pair_score_01)
+    if score < 0.16:
+        return 0.0
+    if score < 0.24:
+        x = (score - 0.16) / 0.08
+        return 0.02 * (x * x)
+    if score < 0.38:
+        x = (score - 0.24) / 0.14
+        return 0.02 + 0.14 * (x ** 1.55)
     if score >= 0.58:
         return 0.99
-    if score >= 0.38:
-        return 0.62 + 1.65 * (score - 0.38)
-    if score >= 0.18:
-        return 0.08 + 2.70 * (score - 0.18)
-    return 0.01 * (score / 0.18)
+    x = (score - 0.38) / 0.20
+    return 0.24 + 0.62 * (x ** 1.15)
 
 
 def paramour_formation_multiplier(pair_score_01: float) -> float:
     score = clamp01(pair_score_01)
-    return clamp01(0.06 + 3.25 * (score ** 1.45)) * 3.2
+    return clamp01(2.85 * (score ** 1.75)) * 2.65
 
 
 def deterministic_pair_rng(

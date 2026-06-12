@@ -37,6 +37,7 @@ from library.population_growth_runner import (
     ensure_detailed_floor_for_active_settlements,
     generate_population_founder,
     _migration_arrivals_by_settlement_from_events,
+    _pair_from_records,
     _promote_passive_context_for_migration_arrivals,
     pair_people_by_settlement_then_region,
     refresh_passive_background_cohorts,
@@ -788,6 +789,52 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
             )
         )
         self.assertIn("attraction_fit_score", ctx._pending_simulation_events[-1][2])
+
+    def test_pairing_rolls_only_best_candidate_once_per_scope(self) -> None:
+        ctx = SimulationContext(
+            db_path=Path("unused-config.sqlite"),
+            save_db_path=Path("unused-save.sqlite"),
+            world="default",
+            simulation_start_year=START_YEAR,
+            current_year=START_YEAR,
+            settlements_by_id={
+                "region:s1": SettlementState(region_id="region", settlement_id="region:s1"),
+            },
+        )
+
+        def person(first: str, gender: str, attractiveness_01: float) -> Person:
+            return Person(
+                first_name=first,
+                last_name="Lottery",
+                gender=gender,
+                ethnic="Human",
+                species="Human",
+                birthyear=START_YEAR - 30,
+                birthplace_region_id="region",
+                birthplace_settlement_id="region:s1",
+                current_settlement_id="region:s1",
+                min_fertility_age=18,
+                attractiveness_01=attractiveness_01,
+            )
+
+        ctx.add_person(person=person("Suitor", "Male", 0.25), is_founder=False)
+        for idx, attractiveness in enumerate((0.30, 0.45, 0.60, 0.75), start=1):
+            ctx.add_person(
+                person=person(f"Candidate{idx}", "Female", attractiveness),
+                is_founder=False,
+            )
+
+        rng = MagicMock()
+        rng.random.return_value = 1.0
+        with patch(
+            "library.population_growth_runner.deterministic_pair_rng",
+            return_value=rng,
+        ) as rng_factory:
+            records = ctx.current_people_by_settlement()["region:s1"]
+            _pair_from_records(ctx, records, START_YEAR, set())
+
+        self.assertEqual(rng_factory.call_count, 1)
+        self.assertEqual(ctx.couples, [])
 
     def test_parent_child_pairing_possible_only_through_tiny_exception(self) -> None:
         ctx = SimulationContext(

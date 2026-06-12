@@ -128,6 +128,11 @@ _SEA_REGION_ROUTE_CACHE: dict[
     tuple[tuple[str, ...], list[Point], float] | None,
 ] = {}
 _COAST_DISTANCE_CACHE: dict[int, tuple[int, dict[Point, float]]] = {}
+_REDUNDANT_MINOR_ROAD_MAX_USAGE_FRACTION = 0.10
+_REDUNDANT_MINOR_ROAD_MIN_USAGE = 8.0
+_REDUNDANT_MAIN_ROAD_MIN_USAGE = 12.0
+_REDUNDANT_MAIN_ROAD_USAGE_RATIO = 2.25
+_REDUNDANT_ROAD_NEAR_FRACTION = 0.74
 
 
 def _quote_identifier(name: str) -> str:
@@ -2170,6 +2175,84 @@ def _point_polyline_distance(point: Point, points: list[Point]) -> float:
     return min(_point_segment_distance(point, a, b) for a, b in zip(points, points[1:]))
 
 
+def _road_corridor_distance(segment: _RoadSegment) -> float:
+    return max(0.014, min(0.030, segment.length * 0.12 + 0.008))
+
+
+def _polyline_near_fraction(
+    points: list[Point],
+    reference: list[Point],
+    *,
+    max_distance: float,
+) -> float:
+    if len(points) < 2 or len(reference) < 2:
+        return 0.0
+    total_length = 0.0
+    near_length = 0.0
+    for a, b in zip(points, points[1:]):
+        length = math.hypot(b[0] - a[0], b[1] - a[1])
+        if length <= 1e-9:
+            continue
+        total_length += length
+        sample_count = max(1, min(10, int(math.ceil(length / max(0.006, max_distance * 0.65)))))
+        near_samples = 0
+        for idx in range(sample_count):
+            t = (idx + 0.5) / sample_count
+            point = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+            if _point_polyline_distance(point, reference) <= max_distance:
+                near_samples += 1
+        near_length += length * (near_samples / sample_count)
+    if total_length <= 0.0:
+        return 0.0
+    return near_length / total_length
+
+
+def _is_redundant_minor_road(
+    segment: _RoadSegment,
+    kept_segments: list[_RoadSegment],
+    *,
+    max_usage: float,
+) -> bool:
+    minor_limit = max(
+        _REDUNDANT_MINOR_ROAD_MIN_USAGE,
+        max_usage * _REDUNDANT_MINOR_ROAD_MAX_USAGE_FRACTION,
+    )
+    if segment.usage > minor_limit:
+        return False
+
+    corridor_distance = _road_corridor_distance(segment)
+    endpoint_distance = corridor_distance * 1.35
+    for main in kept_segments:
+        if main.usage < _REDUNDANT_MAIN_ROAD_MIN_USAGE:
+            continue
+        if main.usage < segment.usage * _REDUNDANT_MAIN_ROAD_USAGE_RATIO:
+            continue
+        first_near = _point_polyline_distance(segment.points[0], main.points) <= endpoint_distance
+        last_near = _point_polyline_distance(segment.points[-1], main.points) <= endpoint_distance
+        if not (first_near and last_near):
+            continue
+        near_fraction = _polyline_near_fraction(
+            segment.points,
+            main.points,
+            max_distance=corridor_distance,
+        )
+        if near_fraction >= _REDUNDANT_ROAD_NEAR_FRACTION:
+            return True
+    return False
+
+
+def _filter_redundant_minor_roads(segments: list[_RoadSegment]) -> list[_RoadSegment]:
+    if len(segments) < 2:
+        return segments
+    max_usage = max((segment.usage for segment in segments), default=0.0)
+    kept: list[_RoadSegment] = []
+    for segment in sorted(segments, key=lambda s: (-s.usage, s.from_settlement_id, s.to_settlement_id)):
+        if _is_redundant_minor_road(segment, kept, max_usage=max_usage):
+            continue
+        kept.append(segment)
+    return kept
+
+
 def _network_route(
     segments: dict[tuple[str, str], _RoadSegment],
     start: str,
@@ -2335,6 +2418,7 @@ def _best_via_node(
 
 def _finalize_edges(segments: dict[tuple[str, str], _RoadSegment]) -> list[RoadMapEdge]:
     usable = [segment for segment in segments.values() if segment.usage > 0.0 and len(segment.points) >= 2]
+    usable = _filter_redundant_minor_roads(usable)
     max_usage = max((segment.usage for segment in usable), default=0.0)
     out: list[RoadMapEdge] = []
     for segment in usable:

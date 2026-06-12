@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from library.generator import generate_person_from_birth
 from library.person import Person
+from library.relationship_attraction import relationship_pair_score_01
 
 if TYPE_CHECKING:
     from library.simulation_context import SimulationContext
@@ -243,13 +244,28 @@ def pair_prosperity_01(
     return 0.5 * wage_avg + 0.5 * (1.0 - pf)
 
 
+def relationship_conception_multiplier_01(pair_score_01: float) -> float:
+    """Reduce conception for relationship fits too weak to sustain family formation."""
+    score = max(0.0, min(1.0, float(pair_score_01)))
+    if score >= 0.38:
+        return 1.0
+    if score >= 0.26:
+        x = (score - 0.26) / 0.12
+        return 0.35 + 0.65 * (x ** 1.15)
+    if score >= 0.14:
+        x = (score - 0.14) / 0.12
+        return 0.07 + 0.28 * (x ** 1.35)
+    return 0.02 * (score / 0.14)
+
+
 def annual_conception_probability(
     mother: Person,
     father: Person,
     *,
     pressure: float | None,
+    simulation_year: int | None = None,
 ) -> float:
-    """Blend mating drive, dual employment prosperity, and inverse resource pressure."""
+    """Blend mating drive, household pressure, prosperity, and relationship fit."""
     drive_avg = (_mating_drive_component(mother) + _mating_drive_component(father)) / 2.0
     prosperity = pair_prosperity_01(
         mother, father, pressure_a=pressure, pressure_b=pressure
@@ -257,7 +273,17 @@ def annual_conception_probability(
     p = BIRTH_BASE_CONCEPTION_PROB
     p += BIRTH_PROSPERITY_INVERSE_WEIGHT * (1.0 - prosperity)
     p += BIRTH_MATING_DRIVE_WEIGHT * (drive_avg - 0.5) * 2.0
-    return max(BIRTH_P_MIN, min(BIRTH_P_MAX, p))
+    p = max(BIRTH_P_MIN, min(BIRTH_P_MAX, p))
+    year = (
+        int(simulation_year)
+        if simulation_year is not None
+        else max(int(mother.birthyear), int(father.birthyear)) + 30
+    )
+    pair_score = relationship_pair_score_01(mother, father, year, sustain=True)
+    return max(
+        0.0,
+        min(BIRTH_P_MAX, p * relationship_conception_multiplier_01(pair_score)),
+    )
 
 
 def conception_rng(year: int, seed: int, mother_id: int, father_id: int) -> random.Random:

@@ -1,5 +1,26 @@
 # TODONE
 
+## World Map Road Density Tuning
+
+- Added corridor-aware suppression for minor settlement road overlays:
+  - weak roads whose endpoints and path sit inside a much stronger road corridor
+    are filtered before SVG rendering;
+  - roads that branch away to a distinct destination remain eligible to render.
+- Verified against the current default save after refreshing config:
+  - current save year: 1299;
+  - active settlements: 83;
+  - latest-year movement rows: 2,475;
+  - road overlays: 238 before -> 148 after;
+  - actual-use roads: 212 before -> 132 after;
+  - implied-only roads: 26 before -> 16 after;
+  - sea routes stayed at 19.
+- Added focused road-overlay regressions for redundant minor corridor roads and
+  distinct-destination branch roads.
+- Verified with `python -m py_compile library\world_map_roads.py
+  unit_test\test_world_map_roads.py`, `python -m unittest
+  unit_test.test_world_map_roads`, and default-world SVG/debug exports before
+  and after the change.
+
 ## Genome And Context Scoring Workstream Completion
 
 - Completed Workstream 2 for the current event-system scoring foundation.
