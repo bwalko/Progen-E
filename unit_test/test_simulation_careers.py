@@ -51,6 +51,7 @@ from library.simulation_careers import (
     job_eligibility_age,
     job_loss_probability,
     lose_job,
+    maybe_lose_job,
     maybe_migrate_job_seeker_household,
     premium_job_roll_probability,
     rehire_probability,
@@ -58,6 +59,7 @@ from library.simulation_careers import (
     resource_pressure_for_person,
     score_genome_job_row,
     simulation_careers_annual_tick,
+    _job_home_childcare_compatible,
     _job_allowed_for_person,
     _parse_job_token,
 )
@@ -605,6 +607,60 @@ class TestSimulationCareers(unittest.TestCase):
         self.assertIsNotNone(assignment)
         assert assignment is not None
         self.assertIn(assignment.job, {"software engineer", "analyst"})
+
+    def test_primary_childcare_does_not_displace_child_rearer_role(self) -> None:
+        class _ForcedCareFacts:
+            def duty_for(self, *_args, **_kwargs) -> float:
+                return 0.85
+
+        class _ZeroRandom:
+            def random(self) -> float:
+                return 0.0
+
+        self.assertTrue(_job_home_childcare_compatible("child rearer", "household_care"))
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            _create_config_db(cfg)
+            ctx = _ctx(cfg, sav, year=2000, history_start=2000)
+            rec = SimulationPersonRecord(
+                person_id=1,
+                person=replace(
+                    _person(birthyear=1980, genome={"focus": 0.0}),
+                    gender="Female",
+                    gender_mind="feminine",
+                    job="child rearer",
+                    job_market_type="household_care",
+                    household_role="primary_child_rearer",
+                    employment_status="employed",
+                ),
+                is_founder=True,
+            )
+            ctx.people = [rec]
+            ctx.id_to_record = {1: rec}
+            ctx.current_people_ids = {1}
+
+            with (
+                patch("library.simulation_careers.job_loss_probability", return_value=0.0),
+                patch("library.simulation_careers.random.Random", return_value=_ZeroRandom()),
+            ):
+                lost = maybe_lose_job(
+                    ctx,
+                    rec,
+                    2000,
+                    fitness=career_fitness(rec.person),
+                    pressure=0.0,
+                    career_facts=_ForcedCareFacts(),
+                )
+
+        self.assertFalse(lost)
+        self.assertEqual(rec.person.job, "child rearer")
+        self.assertEqual(rec.person.employment_status, "employed")
+        self.assertNotIn(
+            "job_lost",
+            [event_type for _year, event_type, _payload in ctx._pending_simulation_events],
+        )
 
     def test_scoring_matches_genome_band_semantics(self) -> None:
         self.assertGreater(score_genome_job_row(0, "optimal"), score_genome_job_row(80, "optimal"))

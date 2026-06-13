@@ -204,7 +204,10 @@ class TestPersonArchiveScores(unittest.TestCase):
             self.assertIsNotNone(explanation)
             assert explanation is not None
             self.assertEqual(explanation["score_version"], 2)
-            self.assertIn("remembered", str(explanation["summary"]).lower())
+            self.assertIn("life story shape", str(explanation["summary"]).lower())
+            self.assertFalse(
+                str(explanation["summary"]).lower().startswith("interesting and remembered:")
+            )
             self.assertIn("scores", explanation)
             self.assertIn("top_reasons", explanation)
             self.assertTrue(explanation["top_reasons"])

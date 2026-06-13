@@ -191,6 +191,7 @@ from library.event_prose import (  # noqa: E402
     load_public_unknown_prose,
 )
 from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID  # noqa: E402
+from library.job_archetypes import normalize_job_catalog_key  # noqa: E402
 from library.person_almanack import (  # noqa: E402
     metric_definition_choices,
     metric_categories,
@@ -806,21 +807,27 @@ body.dark .person-sheet,
 }
 .history-timeline {
     display: flex;
+    flex-wrap: wrap;
     align-items: stretch;
-    gap: 4px;
+    align-content: flex-start;
+    gap: 6px;
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     min-height: 54px;
 }
 .history-list {
     width: 100%;
 }
 .history-segment {
-    min-width: 44px;
+    flex-basis: var(--history-segment-min-width, 92px);
+    min-width: min(100%, var(--history-segment-min-width, 92px));
     max-width: 100%;
     border-left: 3px solid var(--person-sheet-accent);
     background: var(--person-sheet-relation-bg);
     color: var(--person-sheet-text) !important;
     padding: 7px 8px;
+    box-sizing: border-box;
     overflow: hidden;
     transition: min-width .15s ease, box-shadow .15s ease;
 }
@@ -839,15 +846,18 @@ body.dark .person-sheet,
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.history-segment:hover,
-.history-segment:focus {
+.history-segment:not(.history-gap):hover,
+.history-segment:not(.history-gap):focus {
     min-width: 160px;
     overflow: visible;
     box-shadow: 0 4px 12px rgba(60, 45, 20, .14);
     z-index: 1;
 }
 .history-gap {
-    min-width: 12px;
+    flex: 0 0 var(--history-gap-width, 8px);
+    min-width: var(--history-gap-width, 8px);
+    max-width: var(--history-gap-width, 8px);
+    padding: 0;
     border-left: 0;
     background: repeating-linear-gradient(
         90deg,
@@ -3922,32 +3932,23 @@ def _row_alive(row: sqlite3.Row) -> bool:
         return False
 
 
-def _child_died_young(child: sqlite3.Row, trait_slots: tuple[str, ...]) -> bool:
-    person = _person_from_row(child, trait_slots)
-    if _row_alive(child):
-        return False
-    try:
-        birthyear = int(person.get("birthyear"))
-        deathyear = int(person.get("deathyear"))
-    except (TypeError, ValueError):
-        return False
-    return deathyear - birthyear < 16
-
-
-def _children_summary_text(
-    children: list[sqlite3.Row], trait_slots: tuple[str, ...]
-) -> str:
+def _children_summary_text(children: list[sqlite3.Row]) -> str:
     total = len(children)
     if total == 0:
         return "No recorded children."
-    alive = sum(1 for child in children if _row_alive(child))
-    lost_young = sum(1 for child in children if _child_died_young(child, trait_slots))
     child_word = "child" if total == 1 else "children"
-    return (
-        f"{total} recorded {child_word}, "
-        f"{lost_young} died before 16, "
-        f"{alive} alive."
-    )
+    return f"{total} recorded {child_word}."
+
+
+def _child_years_label(child: sqlite3.Row, person: dict[str, object]) -> str:
+    birthyear = person.get("birthyear")
+    birth_text = str(birthyear) if birthyear not in (None, "") else "unknown"
+    deathyear = person.get("deathyear")
+    if deathyear not in (None, ""):
+        return f"b. {birth_text}, d. {deathyear}"
+    if _row_alive(child):
+        return f"b. {birth_text}, alive"
+    return f"b. {birth_text}, d. unknown"
 
 
 def _person_child_items_html(
@@ -3955,29 +3956,20 @@ def _person_child_items_html(
     world: str,
     children: list[sqlite3.Row],
     trait_slots: tuple[str, ...],
-    *,
-    visible_limit: int = 12,
 ) -> list[str]:
     if not children:
         return ['<div class="relation muted">No recorded children</div>']
     items: list[str] = []
-    for child in children[:visible_limit]:
+    for child in children:
         person = _person_from_row(child, trait_slots)
         title = f"{_person_name(person)} ({_person_years_label(person)})"
-        status = "alive" if _row_alive(child) else "dead"
-        if _child_died_young(child, trait_slots):
-            status = "died before 16"
+        years = _child_years_label(child, person)
         items.append(
             '<div class="relation relation-compact" '
             f'title="{html.escape(title, quote=True)}">'
             f'{_person_link_html_compact(con, world, child["person_id"])}'
-            f'<br><span class="muted">{html.escape(status)}</span>'
+            f'<br><span class="muted">{html.escape(years)}</span>'
             '</div>'
-        )
-    hidden = len(children) - visible_limit
-    if hidden > 0:
-        items.append(
-            f'<div class="relation muted">+ {hidden} more recorded children not shown</div>'
         )
     return items
 
@@ -4102,6 +4094,22 @@ def _job_loss_nuance_parts(payload: dict[str, object]) -> list[str]:
     elif career is not None:
         parts.append(f"career fitness {career:.2f}")
     return parts
+
+
+def _is_household_childcare_payload(payload: dict[str, object], *job_keys: str) -> bool:
+    jobs = {
+        normalize_job_catalog_key(str(payload.get(key) or ""))
+        for key in job_keys
+        if payload.get(key)
+    }
+    if "child rearer" not in jobs:
+        return False
+    return (
+        str(payload.get("job_market_type") or "").strip().lower() == "household_care"
+        or str(payload.get("household_role") or "").strip().lower() == "primary_child_rearer"
+        or str(payload.get("placement_reason") or "").strip().lower()
+        == "primary_child_rearing"
+    )
 
 
 def _event_float(payload: dict[str, object], key: str) -> float | None:
@@ -4598,8 +4606,13 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         job = payload.get("job") or "a job"
         descriptor = payload.get("descriptor")
         fitness = _event_fitness_score(payload)
-        bits = [f"{person} became {job}"]
-        if descriptor:
+        household_childcare = _is_household_childcare_payload(payload, "job")
+        bits = (
+            [f"{person} took on household childcare as {job}"]
+            if household_childcare
+            else [f"{person} became {job}"]
+        )
+        if descriptor and not household_childcare:
             bits.append(f"matched through {descriptor}")
         if fitness is not None:
             bits.append(f"fitness {fitness:.2f}")
@@ -4666,6 +4679,8 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         new_job = payload.get("new_job") or payload.get("job") or "work"
         years = payload.get("unemployment_years")
         span = f" after {years} unemployed year{'s' if years != 1 else ''}" if years is not None else ""
+        if _is_household_childcare_payload(payload, "new_job", "job"):
+            return f"{person} resumed household childcare as {new_job}{span}."
         return f"{person} found work as {new_job}{span}."
 
     if event_type == "murder":
@@ -4820,8 +4835,13 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         job = html.escape(str(payload.get("job") or "a job"))
         descriptor = payload.get("descriptor")
         fitness = _event_fitness_score(payload)
-        bits = [f"{person} became {job}"]
-        if descriptor:
+        household_childcare = _is_household_childcare_payload(payload, "job")
+        bits = (
+            [f"{person} took on household childcare as {job}"]
+            if household_childcare
+            else [f"{person} became {job}"]
+        )
+        if descriptor and not household_childcare:
             bits.append(f"matched through {html.escape(str(descriptor))}")
         if fitness is not None:
             bits.append(f"fitness {fitness:.2f}")
@@ -4891,6 +4911,8 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         new_job = html.escape(str(payload.get("new_job") or payload.get("job") or "work"))
         years = payload.get("unemployment_years")
         span = f" after {years} unemployed year{'s' if years != 1 else ''}" if years is not None else ""
+        if _is_household_childcare_payload(payload, "new_job", "job"):
+            return f"{person} resumed household childcare as {new_job}{span}."
         return f"{person} found work as {new_job}{span}."
 
     if event_type == "murder":
@@ -5005,6 +5027,13 @@ def _event_year(event: sqlite3.Row) -> int | None:
         return None
 
 
+def _history_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _history_open_end_year(person: dict[str, object], current_year: int | None) -> int | None:
     try:
         deathyear = person.get("deathyear")
@@ -5017,6 +5046,14 @@ def _history_year_range(start_year: object, end_year: object) -> str:
     start = str(start_year) if start_year not in (None, "") else "unknown"
     end = str(end_year) if end_year not in (None, "") else "present"
     return f"{start}-{end}"
+
+
+def _history_year_span(entry: dict[str, object]) -> int | None:
+    start = _history_int(entry.get("start_year"))
+    end = _history_int(entry.get("end_year"))
+    if start is None or end is None:
+        return None
+    return end - start
 
 
 def _job_history_entries(
@@ -5201,24 +5238,23 @@ def _history_entries_for_person(
     return jobs, partners, paramours
 
 
-def _history_int(value: object) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _history_duration(entry: dict[str, object]) -> int:
-    start = _history_int(entry.get("start_year"))
-    end = _history_int(entry.get("end_year"))
-    if start is None or end is None:
+    span = _history_year_span(entry)
+    if span is None:
         return 1
-    return max(1, end - start)
+    return max(1, span)
 
 
 def _history_duration_text(entry: dict[str, object]) -> str:
     duration = _history_duration(entry)
     return f"{duration} year{'s' if duration != 1 else ''}"
+
+
+def _history_gap_width(entry: dict[str, object]) -> int:
+    span = _history_year_span(entry)
+    if span is not None and span <= 0:
+        return 0
+    return min(24, max(6, _history_duration(entry) * 4))
 
 
 def _history_timeline_html(
@@ -5240,9 +5276,12 @@ def _history_timeline_html(
             title_parts.append(str(entry.get("label")))
         title = " | ".join(title_parts)
         if is_gap(entry):
+            gap_width = _history_gap_width(entry)
+            if gap_width <= 0:
+                continue
             items.append(
                 '<div class="history-segment history-gap" '
-                f'style="flex-grow: {duration}" '
+                f'style="--history-gap-width: {gap_width}px" '
                 f'title="{html.escape(title, quote=True)}" '
                 f'aria-label="{html.escape(title, quote=True)}"></div>'
             )
@@ -5254,6 +5293,8 @@ def _history_timeline_html(
             f'{segment_html(entry)}'
             '</div>'
         )
+    if not items:
+        return [f'<div class="relation muted">{html.escape(empty_text)}</div>']
     return ['<div class="history-timeline">' + "".join(items) + "</div>"]
 
 
@@ -5997,15 +6038,23 @@ def _archive_score_payload(score: sqlite3.Row | None) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _strip_archive_summary_bucket(summary: object, bucket: object) -> str:
+    text = str(summary or "").strip()
+    bucket_text = str(bucket or "").strip()
+    if not text or not bucket_text:
+        return text
+    prefix = f"{bucket_text[:1].upper()}{bucket_text[1:]}:"
+    if text.lower().startswith(prefix.lower()):
+        return text[len(prefix):].lstrip()
+    return text
+
+
 def _archive_score_summary(score: sqlite3.Row, payload: dict[str, object]) -> str:
     summary = str(payload.get("summary") or "").strip()
     if summary:
-        return summary
-    bucket = str(score["recognition_bucket"] or "ordinary or poorly preserved").strip()
-    if bucket:
-        bucket = bucket[:1].upper() + bucket[1:]
+        return _strip_archive_summary_bucket(summary, score["recognition_bucket"])
     return (
-        f"{bucket}: Narrative Heat {_format_archive_score(score['narrative_heat_total'])}, "
+        f"Narrative Heat {_format_archive_score(score['narrative_heat_total'])}, "
         f"ARI {_format_archive_score(score['archive_recognition_index'])}."
     )
 
@@ -6328,7 +6377,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     paramour_html = _person_link_html(con, world, person.get("paramour_person_id")) if person.get("paramour_person_id") else "None"
     trait_slots = _trait_slots_for_world(world)
     children = _person_children_rows(con, world, row["person_id"])
-    child_summary = _children_summary_text(children, trait_slots)
+    child_summary = _children_summary_text(children)
     child_items = _person_child_items_html(con, world, children, trait_slots)
 
     events = _person_event_rows(con, world, row["person_id"])
@@ -6632,13 +6681,16 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
 
     trait_slots = _trait_slots_for_world(world)
     children = _person_children_rows(con, world, row["person_id"])
-    child_summary = _children_summary_text(children, trait_slots)
-    child_lines = [
-        f"- {_person_name(_person_from_row(child, trait_slots))}"
-        for child in children[:12]
-    ] or ["- No recorded children."]
-    if len(children) > 12:
-        child_lines.append(f"- + {len(children) - 12} more recorded children not shown.")
+    child_summary = _children_summary_text(children)
+    child_lines: list[str] = []
+    for child in children:
+        child_person = _person_from_row(child, trait_slots)
+        child_lines.append(
+            f"- {_person_name(child_person)} "
+            f"({_child_years_label(child, child_person)})"
+        )
+    if not child_lines:
+        child_lines.append("- No recorded children.")
 
     events = _person_event_rows(con, world, row["person_id"])
     job_history, partner_history, paramour_history = _history_entries_for_person(

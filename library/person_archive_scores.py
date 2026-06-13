@@ -665,17 +665,15 @@ def load_person_archive_explanation(
             reasons = [dict(item) for item in fallback if isinstance(item, dict)][
                 : max(0, int(max_reasons))
             ]
+    summary = component_payload.get("summary") or _fallback_score_summary(
+        score.get("recognition_bucket"),
+        score.get("narrative_heat_total"),
+        score.get("archive_recognition_index"),
+    )
     return {
         "person_id": int(person_id),
         "score_version": int(score.get("score_version") or SCORE_FORMULA_VERSION),
-        "summary": _clean_text(
-            component_payload.get("summary")
-            or _fallback_score_summary(
-                score.get("recognition_bucket"),
-                score.get("narrative_heat_total"),
-                score.get("archive_recognition_index"),
-            )
-        ),
+        "summary": _strip_summary_bucket(summary, score.get("recognition_bucket")),
         "scores": {
             "narrative_heat_total": _coerce_float(score.get("narrative_heat_total")) or 0.0,
             "archive_recognition_index": _coerce_float(score.get("archive_recognition_index")) or 0.0,
@@ -1687,7 +1685,6 @@ def _component_json_payload(
         "summary": _score_summary(
             narrative_total=narrative_total,
             ari_total=ari_total,
-            recognition_bucket=recognition_bucket,
             reasons=reasons,
         ),
         "totals": totals,
@@ -1774,29 +1771,35 @@ def _score_summary(
     *,
     narrative_total: float,
     ari_total: float,
-    recognition_bucket: str,
     reasons: list[ScoreReason],
 ) -> str:
     narrative_reason = _first_reason_label(reasons, "narrative")
     ari_reason = _first_reason_label(reasons, "ari")
     obscure_reason = _first_reason_label(reasons, "obscurity")
-    quadrant = _sentence_case(recognition_bucket or _recognition_bucket(narrative_total, ari_total))
     if narrative_total >= 45.0 and ari_total >= 45.0:
-        tail = f"{narrative_reason} gives the life story shape, while {ari_reason} makes it legible to the archive."
+        return f"{narrative_reason} gives the life story shape, while {ari_reason} makes it legible to the archive."
     elif narrative_total >= 45.0:
-        tail = f"{narrative_reason} gives the life story shape, but {obscure_reason} limits formal recognition."
+        return f"{narrative_reason} gives the life story shape, but {obscure_reason} limits formal recognition."
     elif ari_total >= 45.0:
-        tail = f"{ari_reason} makes the person visible even though the recorded life is comparatively quiet."
-    else:
-        tail = f"{narrative_reason} is the strongest surviving trace, with little formal archive recognition."
-    return f"{quadrant}: {tail}"
+        return f"{ari_reason} makes the person visible even though the recorded life is comparatively quiet."
+    return f"{narrative_reason} is the strongest surviving trace, with little formal archive recognition."
 
 
-def _fallback_score_summary(bucket: object, narrative_heat: object, ari: object) -> str:
-    quadrant = _sentence_case(_clean_text(bucket) or "ordinary or poorly preserved")
+def _fallback_score_summary(_bucket: object, narrative_heat: object, ari: object) -> str:
     narrative = _coerce_float(narrative_heat) or 0.0
     recognition = _coerce_float(ari) or 0.0
-    return f"{quadrant}: Narrative Heat {narrative:.1f}, ARI {recognition:.1f}."
+    return f"Narrative Heat {narrative:.1f}, ARI {recognition:.1f}."
+
+
+def _strip_summary_bucket(summary: object, bucket: object) -> str:
+    text = _clean_text(summary)
+    bucket_text = _clean_text(bucket)
+    if not text or not bucket_text:
+        return text
+    prefix = f"{_sentence_case(bucket_text)}:"
+    if text.lower().startswith(prefix.lower()):
+        return text[len(prefix):].lstrip()
+    return text
 
 
 def _first_reason_label(reasons: list[ScoreReason], axis: str) -> str:

@@ -859,10 +859,13 @@ def _job_home_childcare_compatible(job_title: str | None, job_family: str | None
     if not jk:
         return False
     fam = (job_family or "").strip().lower()
+    if fam == "household_care":
+        return True
     if fam == "domestic":
         return True
     home_parts = (
         "parent",
+        "child rearer",
         "child watcher",
         "caretaker",
         "caregiver",
@@ -2760,8 +2763,10 @@ def maybe_lose_job(
     primary_care_pull = _primary_childcare_pull(rec.person, duty)
     out_of_home_primary_care_conflict = False
     if primary_care_pull > 0.0:
-        market_catalog = JobMarketCatalog.load(ctx.db_path)
-        job_family = market_catalog.lookup(rec.person.job).job_family
+        job_family = str(rec.person.job_market_type or "").strip().lower()
+        if not job_family:
+            market_catalog = JobMarketCatalog.load(ctx.db_path)
+            job_family = market_catalog.lookup(rec.person.job).job_family
         if not _job_home_childcare_compatible(rec.person.job, job_family):
             out_of_home_primary_care_conflict = True
             p = max(

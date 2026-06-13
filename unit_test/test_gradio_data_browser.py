@@ -1631,6 +1631,43 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertNotIn("0.99", text)
         self.assertNotIn("0.99", html)
 
+    def test_household_childcare_job_events_read_as_household_role(self) -> None:
+        con = _memory_save()
+        assigned = _event_row(
+            con,
+            "job_assigned",
+            {
+                "person_id": 1,
+                "job": "child rearer",
+                "descriptor": "primary child rearing",
+                "placement_reason": "primary_child_rearing",
+                "job_market_type": "household_care",
+                "household_role": "primary_child_rearer",
+            },
+        )
+        ended = _event_row(
+            con,
+            "unemployment_ended",
+            {
+                "person_id": 1,
+                "new_job": "child rearer",
+                "placement_reason": "primary_child_rearing",
+                "unemployment_years": 0,
+            },
+        )
+
+        assigned_text = _event_sentence(con, "test", assigned, 1)
+        assigned_html = _event_sentence_html(con, "test", assigned, 1)
+        ended_text = _event_sentence(con, "test", ended, 1)
+        ended_html = _event_sentence_html(con, "test", ended, 1)
+
+        self.assertIn("took on household childcare as child rearer", assigned_text)
+        self.assertIn("took on household childcare as child rearer", assigned_html)
+        self.assertNotIn("matched through primary child rearing", assigned_text)
+        self.assertIn("resumed household childcare as child rearer", ended_text)
+        self.assertIn("resumed household childcare as child rearer", ended_html)
+        self.assertNotIn("found work as child rearer", ended_text)
+
     def test_person_sheet_event_uses_owner_first_name_only(self) -> None:
         con = _memory_save()
         event = _event_row(
@@ -1782,6 +1819,8 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("history-timeline", job_section)
         self.assertIn("history-segment", job_section)
         self.assertIn("history-gap", job_section)
+        self.assertIn("--history-gap-width: 20px", job_section)
+        self.assertNotIn('history-gap" style="flex-grow', job_section)
         self.assertIn("flex-grow: 5", job_section)
         self.assertIn("flex-grow: 10", job_section)
         self.assertIn("smith", job_section)
@@ -1799,7 +1838,38 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Partner History:\n- 101-115: Bea Forge", share)
         self.assertIn("Paramour History:\n- 103-112: Cato Vale", share)
 
-    def test_person_sheet_children_summary_counts_all_children(self) -> None:
+    def test_job_history_gaps_do_not_expand_short_unemployment_spans(self) -> None:
+        items = gdb._job_history_items_html(
+            [
+                {"start_year": 100, "end_year": 105, "label": "smith"},
+                {"start_year": 105, "end_year": 105, "label": "Unemployed"},
+                {"start_year": 105, "end_year": 106, "label": "scribe"},
+                {"start_year": 106, "end_year": 107, "label": "Unemployed"},
+                {"start_year": 107, "end_year": 110, "label": "brewer"},
+            ]
+        )
+        html_text = "".join(items)
+
+        self.assertEqual(html_text.count('class="history-segment history-gap"'), 1)
+        self.assertNotIn("105-105", html_text)
+        self.assertIn("--history-gap-width: 6px", html_text)
+        self.assertNotIn('history-gap" style="flex-grow', html_text)
+        self.assertIn("flex-grow: 1", html_text)
+        self.assertIn("flex-grow: 3", html_text)
+
+    def test_history_timeline_css_wraps_overcrowded_rows(self) -> None:
+        self.assertIn("flex-wrap: wrap;", gdb.APP_CSS)
+        self.assertIn("align-content: flex-start;", gdb.APP_CSS)
+        self.assertIn(
+            "flex-basis: var(--history-segment-min-width, 92px);",
+            gdb.APP_CSS,
+        )
+        self.assertIn(
+            "min-width: min(100%, var(--history-segment-min-width, 92px));",
+            gdb.APP_CSS,
+        )
+
+    def test_person_sheet_children_list_shows_all_children_with_years(self) -> None:
         con = _memory_save()
         _attach_empty_genome_config(con)
         children = [
@@ -1839,10 +1909,20 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         sheet = gdb._render_person_sheet(con, "test", row, person)
         share = gdb._render_person_share_text(con, "test", row, person)
 
-        self.assertIn("14 recorded children, 2 died before 16, 10 alive.", sheet)
-        self.assertIn("+ 2 more recorded children not shown", sheet)
-        self.assertIn("- 14 recorded children, 2 died before 16, 10 alive.", share)
-        self.assertIn("- + 2 more recorded children not shown.", share)
+        self.assertIn("14 recorded children.", sheet)
+        self.assertIn(">Cal</a><br><span class=\"muted\">b. 10, alive</span>", sheet)
+        self.assertIn(">Dee</a><br><span class=\"muted\">b. 11, d. 14</span>", sheet)
+        self.assertIn(">Gil</a><br><span class=\"muted\">b. 14, d. unknown</span>", sheet)
+        self.assertIn(">Kid15</a><br><span class=\"muted\">b. 35, alive</span>", sheet)
+        self.assertNotIn("died before 16", sheet)
+        self.assertNotIn("more recorded children not shown", sheet)
+        self.assertIn("- 14 recorded children.", share)
+        self.assertIn("- Cal Forge (b. 10, alive)", share)
+        self.assertIn("- Dee Forge (b. 11, d. 14)", share)
+        self.assertIn("- Gil Forge (b. 14, d. unknown)", share)
+        self.assertIn("- Kid15 Forge (b. 35, alive)", share)
+        self.assertNotIn("died before 16", share)
+        self.assertNotIn("more recorded children not shown", share)
 
     def test_person_sheet_prominently_lists_consequence_ledgers(self) -> None:
         con = _memory_save()
@@ -2202,6 +2282,14 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("ARI", sheet)
         self.assertIn("Violet Marginalia", sheet)
         self.assertIn("Why this person was noticed", sheet)
+        self.assertIn(
+            "<strong>Why this person was noticed:</strong> event traces give the life story shape",
+            sheet,
+        )
+        self.assertNotIn(
+            "<strong>Why this person was noticed:</strong> Interesting but obscure:",
+            sheet,
+        )
         self.assertIn("Archive Quadrant", sheet)
         self.assertIn("Narrative Heat Drivers", sheet)
         self.assertIn("ARI Drivers", sheet)
@@ -2215,7 +2303,8 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("- ARI: 41.5", share)
         self.assertIn("- Violet marginalia: yes (0.5)", share)
         self.assertIn("- Archive quadrant: interesting but obscure", share)
-        self.assertIn("- Why noticed: Interesting but obscure", share)
+        self.assertIn("- Why noticed: event traces give the life story shape", share)
+        self.assertNotIn("- Why noticed: Interesting but obscure:", share)
         self.assertIn("- Top reasons:", share)
         self.assertIn("Major event witness", share)
         self.assertIn("- Caveat: Sparse public records", share)
