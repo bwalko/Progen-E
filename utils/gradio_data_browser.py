@@ -805,33 +805,97 @@ body.dark .person-sheet,
     color: var(--person-sheet-muted) !important;
     margin: 0 0 8px;
 }
-.history-timeline {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: stretch;
-    align-content: flex-start;
-    gap: 6px;
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-    min-height: 54px;
-}
 .history-list {
     width: 100%;
 }
-.history-segment {
-    flex-basis: var(--history-segment-min-width, 92px);
-    min-width: min(100%, var(--history-segment-min-width, 92px));
+.history-lifespan-grid {
+    display: grid;
+    grid-template-columns: minmax(92px, 150px) minmax(0, 1fr);
+    column-gap: 8px;
+    row-gap: 4px;
+    width: 100%;
     max-width: 100%;
-    border-left: 3px solid var(--person-sheet-accent);
-    background: var(--person-sheet-relation-bg);
-    color: var(--person-sheet-text) !important;
-    padding: 7px 8px;
+    min-width: 0;
+    overflow-x: hidden;
+    padding-bottom: 2px;
     box-sizing: border-box;
-    overflow: hidden;
-    transition: min-width .15s ease, box-shadow .15s ease;
 }
-.history-segment strong,
+.history-axis-spacer {
+    min-height: 40px;
+}
+.history-axis {
+    position: relative;
+    min-width: 0;
+    min-height: 40px;
+    border-bottom: 1px solid var(--person-sheet-border);
+    overflow: hidden;
+}
+.history-axis-tick {
+    position: absolute;
+    bottom: 4px;
+    transform: translateX(-50%);
+    color: var(--person-sheet-muted) !important;
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+}
+.history-axis-tick-up {
+    bottom: calc(4px + 1em);
+}
+.history-axis-tick-edge-start {
+    transform: translateX(0);
+}
+.history-axis-tick-edge-end {
+    transform: translateX(-100%);
+}
+.history-row-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--person-sheet-text) !important;
+    background: var(--person-sheet-relation-bg);
+    border-left: 3px solid var(--person-sheet-accent);
+    padding: 6px 8px;
+    box-sizing: border-box;
+}
+.history-row-track {
+    position: relative;
+    min-width: 0;
+    min-height: 30px;
+    background: var(--person-sheet-card-bg);
+    border-left: 1px solid var(--person-sheet-border);
+    border-right: 1px solid var(--person-sheet-border);
+    overflow: hidden;
+}
+.history-gridline {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 1px;
+    background: var(--person-sheet-border);
+    opacity: .72;
+    pointer-events: none;
+}
+.history-bar {
+    position: absolute;
+    top: 8px;
+    left: var(--history-bar-left);
+    width: var(--history-bar-width);
+    min-width: 4px;
+    height: 14px;
+    border-radius: 2px;
+    background: var(--person-sheet-accent);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
+    cursor: help;
+}
+.history-bar:hover,
+.history-bar:focus {
+    background: var(--person-sheet-link-hover);
+    box-shadow: 0 2px 10px rgba(60, 45, 20, .22);
+    outline: 2px solid rgba(47, 102, 122, .25);
+    outline-offset: 2px;
+    z-index: 1;
+}
 .event-card-title {
     display: block;
     color: var(--person-sheet-title) !important;
@@ -839,33 +903,16 @@ body.dark .person-sheet,
     line-height: 1.15;
     margin-bottom: 3px;
 }
-.history-segment span,
 .event-card-body {
     display: block;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.history-segment:not(.history-gap):hover,
-.history-segment:not(.history-gap):focus {
-    min-width: 160px;
-    overflow: visible;
-    box-shadow: 0 4px 12px rgba(60, 45, 20, .14);
-    z-index: 1;
-}
-.history-gap {
-    flex: 0 0 var(--history-gap-width, 8px);
-    min-width: var(--history-gap-width, 8px);
-    max-width: var(--history-gap-width, 8px);
-    padding: 0;
-    border-left: 0;
-    background: repeating-linear-gradient(
-        90deg,
-        transparent 0,
-        transparent 5px,
-        rgba(111, 96, 70, .16) 5px,
-        rgba(111, 96, 70, .16) 7px
-    );
+@media (max-width: 720px) {
+    .history-lifespan-grid {
+        grid-template-columns: minmax(76px, 110px) minmax(0, 1fr);
+    }
 }
 .event-card-details {
     margin-top: 5px;
@@ -1186,8 +1233,55 @@ def _resolve_saved_world(con: sqlite3.Connection, selected_world: str) -> str:
     return selected
 
 
+def _display_year_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_year(value: object, *, unknown_text: str = "unknown") -> str:
+    if value in (None, ""):
+        return unknown_text
+    year = _display_year_int(value)
+    if year is None:
+        return str(value)
+    if year < 0:
+        return f"{abs(year)} BCE"
+    return str(year)
+
+
+def _format_year_blank(value: object) -> str:
+    return "" if value in (None, "") else _format_year(value)
+
+
+def _format_year_span(start_year: object, end_year: object = None) -> str:
+    if start_year in (None, "") and end_year in (None, ""):
+        return "Unknown years"
+    if end_year in (None, ""):
+        return _format_year(start_year)
+    if start_year in (None, ""):
+        return f"until {_format_year(end_year)}"
+    return f"{_format_year(start_year)}-{_format_year(end_year)}"
+
+
+def _dataframe_display_value(header: str, value: object) -> object:
+    if header in {"Year", "Born", "Died", "Founded"}:
+        return _format_year_blank(value)
+    return value
+
+
 def _dataframe(rows: Iterable[sqlite3.Row | dict[str, object]], headers: list[str], *, key: str | None = None) -> gr.Dataframe:
-    values = [[row.get(header, "") if isinstance(row, dict) else row[header] for header in headers] for row in rows]
+    values = [
+        [
+            _dataframe_display_value(
+                header,
+                row.get(header, "") if isinstance(row, dict) else row[header],
+            )
+            for header in headers
+        ]
+        for row in rows
+    ]
     if key and key.startswith("places-"):
         _log_info("dataframe key=%s rows=%s columns=%s", key, len(values), len(headers))
     return gr.Dataframe(
@@ -2374,8 +2468,9 @@ def _rediscovery_detail_row(
     confidence = ""
     if row["confidence"] not in (None, ""):
         confidence = f"{float(row['confidence']):.2f}"
+    summary_year = row["rediscovered_year"] if row["rediscovered_year"] not in (None, "") else row["sim_year"]
     summary = (
-        f"{row['rediscovered_year'] or row['sim_year']}: {source} recovered "
+        f"{_format_year(summary_year)}: {source} recovered "
         f"{_display_token(row['event_type'])} record {row['record_key'] or row['record_id']} "
         f"with confidence {confidence or 'unknown'}; preserved at {preserved_at}; "
         f"distortion: {distortion}."
@@ -2676,8 +2771,8 @@ def _person_summary_row(
         "Name": _person_name(person),
         "Life": "Alive" if row["is_alive"] else "Dead",
         "Age": age,
-        "Born": birthyear or "",
-        "Died": deathyear or "",
+        "Born": _format_year_blank(birthyear),
+        "Died": _format_year_blank(deathyear),
         "Gender": person.get("gender") or "",
         "Species": person.get("species") or "",
         "Ethnic": person.get("ethnic") or "",
@@ -3000,10 +3095,10 @@ def _almanack_year_span(row: dict[str, object]) -> str:
     if first in (None, "") and last in (None, ""):
         return ""
     if first == last or last in (None, ""):
-        return str(first)
+        return _format_year(first)
     if first in (None, ""):
-        return str(last)
-    return f"{first}-{last}"
+        return _format_year(last)
+    return _format_year_span(first, last)
 
 
 def _shorten_table_text(value: object, limit: int = 96) -> str:
@@ -3683,7 +3778,7 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
                 _detail_card("Patronage Ties", prestige_metrics["patronage_ties"]),
                 _detail_card("Domestic Service", prestige_metrics["domestic_service"]),
                 _detail_card("Elite Investments", prestige_metrics["elite_investments"]),
-                _detail_card("Founded", row["founded_sim_year"] or "Unknown"),
+                _detail_card("Founded", _format_year(row["founded_sim_year"], unknown_text="Unknown")),
             ]
         )
         name_bits = [row["etymology"], row["name_category_primary"], row["name_culture_primary"]]
@@ -3764,10 +3859,7 @@ def _person_link_text(con: sqlite3.Connection, world: str, person_id: object) ->
     row, person = _lookup_person(con, world, person_id)
     if not row:
         return "Unknown"
-    years = f"b. {person.get('birthyear', '?')}"
-    if person.get("deathyear") is not None:
-        years += f"-{person.get('deathyear')}"
-    return f"{_person_name(person)} ({years})"
+    return f"{_person_name(person)} ({_person_years_label(person)})"
 
 
 def _person_link_onclick(person_id: int) -> str:
@@ -3795,9 +3887,7 @@ def _person_link_html(con: sqlite3.Connection, world: str, person_id: object) ->
     if not row:
         return "Unknown"
     name = html.escape(_person_name(person))
-    years = f"b. {person.get('birthyear', '?')}"
-    if person.get("deathyear") is not None:
-        years += f"-{person.get('deathyear')}"
+    years = _person_years_label(person)
     label = f"{name} <span class=\"muted\">({html.escape(years)})</span>"
     return (
         f'<a href="#" class="person-link" '
@@ -3807,9 +3897,9 @@ def _person_link_html(con: sqlite3.Connection, world: str, person_id: object) ->
 
 
 def _person_years_label(person: dict[str, object]) -> str:
-    years = f"b. {person.get('birthyear', '?')}"
+    years = f"b. {_format_year(person.get('birthyear'), unknown_text='?')}"
     if person.get("deathyear") is not None:
-        years += f"-{person.get('deathyear')}"
+        years += f"-{_format_year(person.get('deathyear'))}"
     return years
 
 
@@ -3942,10 +4032,10 @@ def _children_summary_text(children: list[sqlite3.Row]) -> str:
 
 def _child_years_label(child: sqlite3.Row, person: dict[str, object]) -> str:
     birthyear = person.get("birthyear")
-    birth_text = str(birthyear) if birthyear not in (None, "") else "unknown"
+    birth_text = _format_year(birthyear)
     deathyear = person.get("deathyear")
     if deathyear not in (None, ""):
-        return f"b. {birth_text}, d. {deathyear}"
+        return f"b. {birth_text}, d. {_format_year(deathyear)}"
     if _row_alive(child):
         return f"b. {birth_text}, alive"
     return f"b. {birth_text}, d. unknown"
@@ -5043,8 +5133,8 @@ def _history_open_end_year(person: dict[str, object], current_year: int | None) 
 
 
 def _history_year_range(start_year: object, end_year: object) -> str:
-    start = str(start_year) if start_year not in (None, "") else "unknown"
-    end = str(end_year) if end_year not in (None, "") else "present"
+    start = _format_year(start_year)
+    end = _format_year(end_year, unknown_text="present")
     return f"{start}-{end}"
 
 
@@ -5250,66 +5340,195 @@ def _history_duration_text(entry: dict[str, object]) -> str:
     return f"{duration} year{'s' if duration != 1 else ''}"
 
 
-def _history_gap_width(entry: dict[str, object]) -> int:
-    span = _history_year_span(entry)
-    if span is not None and span <= 0:
-        return 0
-    return min(24, max(6, _history_duration(entry) * 4))
+def _history_lifespan_bounds(
+    entries: list[dict[str, object]],
+    person: dict[str, object] | None,
+    current_year: int | None,
+) -> tuple[int, int]:
+    person = person or {}
+    start = _history_int(person.get("birthyear"))
+    end = _history_open_end_year(person, current_year)
+    known_years: list[int] = []
+    for entry in entries:
+        for key in ("start_year", "end_year"):
+            year = _history_int(entry.get(key))
+            if year is not None:
+                known_years.append(year)
+    if start is None:
+        start = min(known_years) if known_years else 0
+    if end is None:
+        end = max(known_years) if known_years else start
+    if end < start:
+        end = start
+    return start, end
 
 
-def _history_timeline_html(
+def _history_tick_step(span: int) -> int:
+    if span <= 10:
+        return 1
+    if span <= 30:
+        return 5
+    if span <= 120:
+        return 10
+    if span <= 250:
+        return 25
+    if span <= 600:
+        return 50
+    return 100
+
+
+def _history_axis_ticks(start_year: int, end_year: int) -> list[int]:
+    if end_year <= start_year:
+        return [start_year]
+    step = _history_tick_step(end_year - start_year)
+    ticks = [start_year]
+    while True:
+        first = -(-start_year // step) * step
+        generated: list[int] = []
+        year = first
+        while year < end_year:
+            if year > start_year:
+                generated.append(year)
+            year += step
+        candidate = [start_year, *generated, end_year]
+        if len(candidate) <= 9 or step >= 1000:
+            ticks = candidate
+            break
+        step *= 2
+    deduped: list[int] = []
+    for tick in ticks:
+        if tick not in deduped:
+            deduped.append(tick)
+    return deduped
+
+
+def _history_position_pct(year: int, start_year: int, end_year: int) -> float:
+    span = max(1, end_year - start_year)
+    return ((year - start_year) / float(span)) * 100.0
+
+
+def _history_bar_position(
+    entry: dict[str, object],
+    start_year: int,
+    end_year: int,
+) -> tuple[float, float]:
+    entry_start = _history_int(entry.get("start_year"))
+    entry_end = _history_int(entry.get("end_year"))
+    visible_start = max(start_year, entry_start if entry_start is not None else start_year)
+    visible_end = min(end_year, entry_end if entry_end is not None else end_year)
+    if visible_end < visible_start:
+        visible_end = visible_start
+    left = _history_position_pct(visible_start, start_year, end_year)
+    right = _history_position_pct(visible_end, start_year, end_year)
+    min_width = 0.8 if end_year > start_year else 100.0
+    width = max(min_width, right - left)
+    if left + width > 100.0:
+        left = max(0.0, 100.0 - width)
+    return left, min(width, 100.0)
+
+
+def _history_bar_title(entry: dict[str, object], label: str) -> str:
+    parts = [
+        _history_year_range(entry.get("start_year"), entry.get("end_year")),
+        _history_duration_text(entry),
+    ]
+    clean_label = str(label or "").strip()
+    if clean_label:
+        parts.append(clean_label)
+    return " | ".join(parts)
+
+
+def _history_lifespan_grid_html(
     entries: list[dict[str, object]],
     *,
+    person: dict[str, object] | None,
+    current_year: int | None,
     empty_text: str,
-    segment_html: Callable[[dict[str, object]], str],
-    is_gap: Callable[[dict[str, object]], bool] | None = None,
+    row_key: Callable[[dict[str, object]], str],
+    row_label_html: Callable[[dict[str, object]], str],
+    bar_label_text: Callable[[dict[str, object]], str],
+    skip_entry: Callable[[dict[str, object]], bool] | None = None,
 ) -> list[str]:
-    if not entries:
+    skip_entry = skip_entry or (lambda _entry: False)
+    visible_entries = [entry for entry in entries if not skip_entry(entry)]
+    if not visible_entries:
         return [f'<div class="relation muted">{html.escape(empty_text)}</div>']
-    is_gap = is_gap or (lambda _entry: False)
-    items: list[str] = []
-    for entry in entries:
-        duration = _history_duration(entry)
-        year_range = _history_year_range(entry.get("start_year"), entry.get("end_year"))
-        title_parts = [year_range, _history_duration_text(entry)]
-        if entry.get("label"):
-            title_parts.append(str(entry.get("label")))
-        title = " | ".join(title_parts)
-        if is_gap(entry):
-            gap_width = _history_gap_width(entry)
-            if gap_width <= 0:
-                continue
-            items.append(
-                '<div class="history-segment history-gap" '
-                f'style="--history-gap-width: {gap_width}px" '
+
+    start_year, end_year = _history_lifespan_bounds(visible_entries, person, current_year)
+    ticks = _history_axis_ticks(start_year, end_year)
+    tick_marks = "".join(
+        '<span class="history-axis-tick'
+        f'{" history-axis-tick-up" if index % 2 else ""}'
+        f'{" history-axis-tick-edge-start" if index == 0 else ""}'
+        f'{" history-axis-tick-edge-end" if index == len(ticks) - 1 else ""}" '
+        f'style="left: {_history_position_pct(tick, start_year, end_year):.3f}%">'
+        f'{html.escape(_format_year(tick))}</span>'
+        for index, tick in enumerate(ticks)
+    )
+    grid_lines = "".join(
+        '<span class="history-gridline" '
+        f'style="left: {_history_position_pct(tick, start_year, end_year):.3f}%"></span>'
+        for tick in ticks
+    )
+
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for entry in visible_entries:
+        grouped.setdefault(row_key(entry), []).append(entry)
+
+    row_items: list[str] = [
+        '<div class="history-axis-spacer" aria-hidden="true"></div>',
+        f'<div class="history-axis">{tick_marks}</div>',
+    ]
+    for group_entries in grouped.values():
+        first_entry = group_entries[0]
+        bars: list[str] = []
+        for entry in group_entries:
+            left, width = _history_bar_position(entry, start_year, end_year)
+            label = bar_label_text(entry)
+            title = _history_bar_title(entry, label)
+            bars.append(
+                '<span class="history-bar" tabindex="0" '
+                f'style="--history-bar-left: {left:.3f}%; --history-bar-width: {width:.3f}%" '
                 f'title="{html.escape(title, quote=True)}" '
-                f'aria-label="{html.escape(title, quote=True)}"></div>'
+                f'aria-label="{html.escape(title, quote=True)}">'
+                f'<span class="sr-only">{html.escape(title)}</span>'
+                '</span>'
             )
-            continue
-        items.append(
-            '<div class="history-segment" tabindex="0" '
-            f'style="flex-grow: {duration}" '
-            f'title="{html.escape(title, quote=True)}">'
-            f'{segment_html(entry)}'
-            '</div>'
-        )
-    if not items:
-        return [f'<div class="relation muted">{html.escape(empty_text)}</div>']
-    return ['<div class="history-timeline">' + "".join(items) + "</div>"]
-
-
-def _job_history_items_html(entries: list[dict[str, object]]) -> list[str]:
-    def segment(entry: dict[str, object]) -> str:
-        return (
-            f'<strong>{html.escape(_history_year_range(entry.get("start_year"), entry.get("end_year")))}</strong>'
-            f'<span>{html.escape(str(entry.get("label") or "Unknown"))}</span>'
+        row_items.append(
+            f'<div class="history-row-label">{row_label_html(first_entry)}</div>'
+            f'<div class="history-row-track">{grid_lines}{"".join(bars)}</div>'
         )
 
-    return _history_timeline_html(
+    axis_label = (
+        f"{_format_year(start_year)} to {_format_year(end_year)}"
+        if start_year != end_year
+        else _format_year(start_year)
+    )
+    return [
+        '<div class="history-lifespan-grid" '
+        f'aria-label="Timeline from {html.escape(axis_label, quote=True)}">'
+        + "".join(row_items)
+        + "</div>"
+    ]
+
+
+def _job_history_items_html(
+    entries: list[dict[str, object]],
+    person: dict[str, object] | None = None,
+    current_year: int | None = None,
+) -> list[str]:
+    def label(entry: dict[str, object]) -> str:
+        return str(entry.get("label") or "Unknown").strip() or "Unknown"
+
+    return _history_lifespan_grid_html(
         entries,
+        person=person,
+        current_year=current_year,
         empty_text="No recorded job history",
-        segment_html=segment,
-        is_gap=lambda entry: str(entry.get("label") or "") == "Unemployed",
+        row_key=lambda entry: label(entry).casefold(),
+        row_label_html=lambda entry: html.escape(label(entry)),
+        bar_label_text=label,
+        skip_entry=lambda entry: label(entry) == "Unemployed",
     )
 
 
@@ -5318,17 +5537,17 @@ def _relationship_history_items_html(
     world: str,
     entries: list[dict[str, object]],
     empty_text: str,
+    person: dict[str, object] | None = None,
+    current_year: int | None = None,
 ) -> list[str]:
-    def segment(entry: dict[str, object]) -> str:
-        return (
-            f'<strong>{html.escape(_history_year_range(entry.get("start_year"), entry.get("end_year")))}</strong>'
-            f'<span>{_person_link_html_compact(con, world, entry.get("person_id"))}</span>'
-        )
-
-    return _history_timeline_html(
+    return _history_lifespan_grid_html(
         entries,
+        person=person,
+        current_year=current_year,
         empty_text=empty_text,
-        segment_html=segment,
+        row_key=lambda entry: str(entry.get("person_id")),
+        row_label_html=lambda entry: _person_link_html_compact(con, world, entry.get("person_id")),
+        bar_label_text=lambda entry: _person_link_text(con, world, entry.get("person_id")),
     )
 
 
@@ -5478,13 +5697,7 @@ def _person_knowledge_effect_rows(
 
 
 def _year_span_text(start_year: object, end_year: object = None) -> str:
-    if start_year in (None, "") and end_year in (None, ""):
-        return "Unknown years"
-    if end_year in (None, ""):
-        return str(start_year)
-    if start_year in (None, ""):
-        return f"until {end_year}"
-    return f"{start_year}-{end_year}"
+    return _format_year_span(start_year, end_year)
 
 
 def _place_tail(row: sqlite3.Row | dict[str, object]) -> str:
@@ -6307,7 +6520,7 @@ def _person_patronage_items_html(
             role = "Client of"
         years = ""
         if row["start_year"] is not None:
-            years = f" since {html.escape(str(row['start_year']))}"
+            years = f" since {html.escape(_format_year(row['start_year']))}"
         strength = _format_01_score(row["strength_01"])
         kind = str(row["tie_kind"] or "patronage").replace("_", " ")
         status = str(row["status"] or "active").replace("_", " ")
@@ -6345,7 +6558,7 @@ def _person_status_mobility_items_html(
         sentence = _event_sentence_html(con, world, event, person_id)
         items.append(
             '<div class="relation event-card">'
-            f'<strong class="event-card-title">{html.escape(str(event["sim_year"]))} · '
+            f'<strong class="event-card-title">{html.escape(_format_year(event["sim_year"]))} · '
             f'{html.escape(str(event["event_type"]).replace("_", " ").title())}</strong><br>'
             f'<span class="event-card-body">{sentence}</span>'
             '</div>'
@@ -6363,8 +6576,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     end_year = deathyear if deathyear is not None else current_year
     age = int(end_year) - int(birthyear) if birthyear is not None and end_year is not None else "Unknown"
     life = "Alive" if row["is_alive"] else "Dead"
-    years = f"{birthyear or '?'}"
-    years += f" - {deathyear}" if deathyear is not None else f" - {current_year or '?'}"
+    years = (
+        f"{_format_year(birthyear, unknown_text='?')} - "
+        f"{_format_year(deathyear if deathyear is not None else current_year, unknown_text='?')}"
+    )
     birthplace = person.get("birthplace") or _settlement_name(con, world, person.get("birthplace_settlement_id"))
     current_place = _settlement_name(con, world, person.get("current_settlement_id")) or "None"
     father = _person_link_text(con, world, row["father_id"]) if row["father_id"] else "Unknown"
@@ -6414,25 +6629,29 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     knowledge_effect_items = _person_knowledge_effect_items_html(
         con, world, knowledge_effect_rows, row["person_id"]
     )
-    job_items = _job_history_items_html(job_history)
+    job_items = _job_history_items_html(job_history, person, current_year)
     partner_items = _relationship_history_items_html(
         con,
         world,
         partner_history,
         "No recorded partner history",
+        person,
+        current_year,
     )
     paramour_items = _relationship_history_items_html(
         con,
         world,
         paramour_history,
         "No recorded paramour history",
+        person,
+        current_year,
     )
     event_items: list[str] = []
     for event in events:
         sentence = _event_sentence_html(con, world, event, row["person_id"])
         event_items.append(
             '<div class="relation event-card">'
-            f'<strong class="event-card-title">{html.escape(str(event["sim_year"]))} · '
+            f'<strong class="event-card-title">{html.escape(_format_year(event["sim_year"]))} · '
             f'{html.escape(str(event["event_type"]).replace("_", " ").title())}</strong><br>'
             f'<span class="event-card-body">{sentence}</span>'
             '</div>'
@@ -6731,14 +6950,20 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     )
     event_lines: list[str] = []
     for event in events:
-        event_lines.append(f"- {event['sim_year']}: {_event_sentence(con, world, event, row['person_id'])}")
+        event_lines.append(
+            f"- {_format_year(event['sim_year'])}: {_event_sentence(con, world, event, row['person_id'])}"
+        )
     if not event_lines:
         event_lines.append("- No matching events found.")
 
     tags = [*list(person.get("genome_trait_phrases") or []), *list(person.get("genome_composite_names") or [])]
     tags_text = ", ".join(str(tag) for tag in tags) if tags else "No standout tags recorded."
-    years = f"born {birthyear or 'unknown'}"
-    years += f", died {deathyear}" if deathyear is not None else f", current year {current_year or 'unknown'}"
+    years = f"born {_format_year(birthyear)}"
+    years += (
+        f", died {_format_year(deathyear)}"
+        if deathyear is not None
+        else f", current year {_format_year(current_year)}"
+    )
 
     return "\n".join(
         [
@@ -6934,8 +7159,8 @@ def render_passive_almanack_outputs(world: str, person_id: object) -> tuple[str,
         life = "Alive" if int(row["is_alive"] or 0) else "Dead"
         birthyear = row["birthyear"] if "birthyear" in row.keys() else ""
         deathyear = row["deathyear"] if "deathyear" in row.keys() else ""
-        years = f"{birthyear or '?'}"
-        years += f" - {deathyear}" if deathyear not in (None, "") else ""
+        years = _format_year(birthyear, unknown_text="?")
+        years += f" - {_format_year(deathyear)}" if deathyear not in (None, "") else ""
         home = _passive_almanack_home(row)
         job_family = row["job_family"] if "job_family" in row.keys() else ""
         child_count = row["child_count"] if "child_count" in row.keys() else 0
@@ -6943,7 +7168,9 @@ def render_passive_almanack_outputs(world: str, person_id: object) -> tuple[str,
         child_years = ""
         if "child_birthyears_json" in row.keys() and row["child_birthyears_json"]:
             try:
-                child_years = ", ".join(str(y) for y in json.loads(str(row["child_birthyears_json"]))[:8])
+                child_years = ", ".join(
+                    _format_year(y) for y in json.loads(str(row["child_birthyears_json"]))[:8]
+                )
             except (TypeError, ValueError, json.JSONDecodeError):
                 child_years = ""
     cards = "".join(
@@ -7679,10 +7906,7 @@ def _snapshot_person_link_text(snapshot: dict[str, object], person_id: object) -
     person = _snapshot_person(snapshot, person_id)
     if not person:
         return "Unknown"
-    years = f"b. {person.get('birthyear', '?')}"
-    if person.get("deathyear") is not None:
-        years += f"-{person.get('deathyear')}"
-    return f"{_person_name(person)} ({years})"
+    return f"{_person_name(person)} ({_person_years_label(person)})"
 
 
 def _snapshot_settlement_name(snapshot: dict[str, object], settlement_id: object) -> str:
@@ -8833,7 +9057,7 @@ def _render_town_sheet_from_snapshot(snapshot: dict[str, object], settlement_id:
             _detail_card("Market Pull", _fmt_number(row.get("market_pull"))),
             _detail_card("Prosperity", _fmt_number(row.get("prosperity_pool"))),
             _detail_card("Polity", _snapshot_polity_names_for_settlement(snapshot, sid, rid) or "None"),
-            _detail_card("Founded", row.get("founded_sim_year") or "Unknown"),
+            _detail_card("Founded", _format_year(row.get("founded_sim_year"), unknown_text="Unknown")),
         ]
     )
     name_bits = [row.get("etymology"), row.get("name_category_primary"), row.get("name_culture_primary")]
@@ -8890,7 +9114,9 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
             target = _snapshot_settlement_name(snapshot, target)
         elif terr.get("target_kind") == "region":
             target = _snapshot_region_display_name(snapshot, target)
-        territory_items.append(f"{terr.get('target_kind')}: {target} since {terr.get('since_sim_year')}")
+        territory_items.append(
+            f"{terr.get('target_kind')}: {target} since {_format_year(terr.get('since_sim_year'))}"
+        )
     seat_items = []
     for seat in seats[:16]:
         holder = _snapshot_person_link_text(snapshot, seat.get("holder_person_id")) if seat.get("holder_person_id") else "vacant"
@@ -8906,7 +9132,7 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
             _detail_card("Held Seats", sum(1 for seat in seats if seat.get("holder_person_id") is not None)),
             _detail_card("Vassals", len(vassals)),
             _detail_card("Capital", _snapshot_settlement_name(snapshot, row.get("capital_settlement_id")) or "None"),
-            _detail_card("Founded", row.get("founded_sim_year") or "Unknown"),
+            _detail_card("Founded", _format_year(row.get("founded_sim_year"), unknown_text="Unknown")),
         ]
     )
     return (
@@ -9246,7 +9472,7 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
             _detail_card("Domestic Service", prestige_metrics["domestic_service"]),
             _detail_card("Elite Investments", prestige_metrics["elite_investments"]),
             _detail_card("Polity", _polity_names_for_settlement(con, sid, rid) or "None"),
-            _detail_card("Founded", row["founded_sim_year"] or "Unknown"),
+            _detail_card("Founded", _format_year(row["founded_sim_year"], unknown_text="Unknown")),
         ]
     )
     name_bits = [row["etymology"], row["name_category_primary"], row["name_culture_primary"]]
@@ -9319,7 +9545,7 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
             target = _settlement_name(con, world, target)
         elif terr["target_kind"] == "region":
             target = _history_region_label(con, world, target)
-        territory_items.append(f"{terr['target_kind']}: {target} since {terr['since_sim_year']}")
+        territory_items.append(f"{terr['target_kind']}: {target} since {_format_year(terr['since_sim_year'])}")
     seat_items = []
     for seat in seats[:16]:
         holder = _person_link_text(con, world, seat["holder_person_id"]) if seat["holder_person_id"] else "vacant"
@@ -9335,7 +9561,7 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
             _detail_card("Held Seats", sum(1 for s in seats if s["holder_person_id"] is not None)),
             _detail_card("Vassals", len(vassals)),
             _detail_card("Capital", _settlement_name(con, world, row["capital_settlement_id"]) or "None"),
-            _detail_card("Founded", row["founded_sim_year"] or "Unknown"),
+            _detail_card("Founded", _format_year(row["founded_sim_year"], unknown_text="Unknown")),
         ]
     )
     return (
@@ -9733,7 +9959,7 @@ def _sim_progress_html(
     return (
         '<div class="sim-progress-card" role="status" aria-live="polite">'
         '<div class="sim-progress-label">'
-        f'<span>Year {html.escape(str(current))} / {html.escape(str(end))}</span>'
+        f'<span>Year {html.escape(_format_year(current))} / {html.escape(_format_year(end))}</span>'
         f'<span>Elapsed {html.escape(elapsed)}</span>'
         '</div>'
         '<div class="sim-progress-track" aria-hidden="true">'
@@ -9790,7 +10016,7 @@ def run_simulation_from_ui(
     stderr_lines: list[str] = []
     start_t = time.perf_counter()
     yield (
-        f"Simulation starting. Elapsed 00:00:00. Year {start_int} / {end_year}.",
+        f"Simulation starting. Elapsed 00:00:00. Year {_format_year(start_int)} / {_format_year(end_year)}.",
         command_text,
         "",
         "",
@@ -9843,7 +10069,7 @@ def run_simulation_from_ui(
         if changed or now - last_emit >= 1.0:
             last_emit = now
             yield (
-                f"Running. Elapsed {elapsed}. Year {current_year} / {expected_end}.",
+                f"Running. Elapsed {elapsed}. Year {_format_year(current_year)} / {_format_year(expected_end)}.",
                 command_text,
                 "".join(reversed(stdout_lines)),
                 "".join(stderr_lines),
@@ -9855,7 +10081,7 @@ def run_simulation_from_ui(
     return_code = proc.wait()
     elapsed = _elapsed_hhmmss(time.perf_counter() - start_t)
     final_status = (
-        f"Simulation finished. Elapsed {elapsed}. Year {end_year} / {end_year}."
+        f"Simulation finished. Elapsed {elapsed}. Year {_format_year(end_year)} / {_format_year(end_year)}."
         if return_code == 0
         else f"Simulation failed with exit code {return_code}. Elapsed {elapsed}."
     )

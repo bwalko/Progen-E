@@ -1814,25 +1814,26 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         job_section = sheet[sheet.index("Job History"):sheet.index("Partner History")]
         partner_section = sheet[sheet.index("Partner History"):sheet.index("Paramour History")]
         paramour_section = sheet[sheet.index("Paramour History"):sheet.index(">Events</h3>")]
-        self.assertLess(job_section.index("100-105"), job_section.index("105-110"))
-        self.assertLess(job_section.index("105-110"), job_section.index("110-120"))
-        self.assertIn("history-timeline", job_section)
-        self.assertIn("history-segment", job_section)
-        self.assertIn("history-gap", job_section)
-        self.assertIn("--history-gap-width: 20px", job_section)
-        self.assertNotIn('history-gap" style="flex-grow', job_section)
-        self.assertIn("flex-grow: 5", job_section)
-        self.assertIn("flex-grow: 10", job_section)
+        self.assertIn("history-lifespan-grid", job_section)
+        self.assertIn("history-axis", job_section)
+        self.assertIn("history-row-label", job_section)
+        self.assertIn("history-row-track", job_section)
+        self.assertIn('class="history-bar"', job_section)
+        self.assertIn('aria-label="Timeline from 0 to 120"', job_section)
+        self.assertIn('title="100-105 | 5 years | smith"', job_section)
+        self.assertIn('title="110-120 | 10 years | scribe"', job_section)
         self.assertIn("smith", job_section)
-        self.assertNotIn(">Unemployed<", job_section)
+        self.assertNotIn("Unemployed", job_section)
         self.assertIn("scribe", job_section)
         self.assertIn("101-115", partner_section)
         self.assertIn(">Bea</a>", partner_section)
         self.assertIn('title="Bea Forge (b. 8)"', partner_section)
+        self.assertIn('title="101-115 | 14 years | Bea Forge (b. 8)"', partner_section)
         self.assertIn("person-link", partner_section)
         self.assertIn("103-112", paramour_section)
         self.assertIn(">Cato</a>", paramour_section)
         self.assertIn('title="Cato Vale (b. 5)"', paramour_section)
+        self.assertIn('title="103-112 | 9 years | Cato Vale (b. 5)"', paramour_section)
         self.assertIn("person-link", paramour_section)
         self.assertIn("Job History:\n- 100-105: smith", share)
         self.assertIn("Partner History:\n- 101-115: Bea Forge", share)
@@ -1846,28 +1847,74 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 {"start_year": 105, "end_year": 106, "label": "scribe"},
                 {"start_year": 106, "end_year": 107, "label": "Unemployed"},
                 {"start_year": 107, "end_year": 110, "label": "brewer"},
-            ]
+            ],
+            {"birthyear": 100, "deathyear": 110},
+            110,
         )
         html_text = "".join(items)
 
-        self.assertEqual(html_text.count('class="history-segment history-gap"'), 1)
+        self.assertEqual(html_text.count('class="history-bar"'), 3)
         self.assertNotIn("105-105", html_text)
-        self.assertIn("--history-gap-width: 6px", html_text)
-        self.assertNotIn('history-gap" style="flex-grow', html_text)
-        self.assertIn("flex-grow: 1", html_text)
-        self.assertIn("flex-grow: 3", html_text)
+        self.assertNotIn("Unemployed", html_text)
+        self.assertIn('title="100-105 | 5 years | smith"', html_text)
+        self.assertIn('title="105-106 | 1 year | scribe"', html_text)
+        self.assertIn('title="107-110 | 3 years | brewer"', html_text)
+        self.assertIn("history-gridline", html_text)
+        self.assertIn("history-axis-tick-up", html_text)
+        self.assertIn("history-axis-tick-edge-start", html_text)
+        self.assertIn("history-axis-tick-edge-end", html_text)
 
-    def test_history_timeline_css_wraps_overcrowded_rows(self) -> None:
-        self.assertIn("flex-wrap: wrap;", gdb.APP_CSS)
-        self.assertIn("align-content: flex-start;", gdb.APP_CSS)
+    def test_history_timeline_css_avoids_overflowing_lifespan_grid(self) -> None:
+        self.assertIn(".history-lifespan-grid", gdb.APP_CSS)
+        self.assertIn("overflow-x: hidden;", gdb.APP_CSS)
         self.assertIn(
-            "flex-basis: var(--history-segment-min-width, 92px);",
+            "grid-template-columns: minmax(92px, 150px) minmax(0, 1fr);",
             gdb.APP_CSS,
         )
+        self.assertIn("bottom: calc(4px + 1em);", gdb.APP_CSS)
         self.assertIn(
-            "min-width: min(100%, var(--history-segment-min-width, 92px));",
+            ".history-axis-tick-edge-end",
             gdb.APP_CSS,
         )
+
+    def test_gradio_year_labels_use_bce_for_negative_years(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, -8800)")
+        con.execute(
+            "update simulation_people set person_json = ? where person_id = 1",
+            (
+                json.dumps(
+                    {
+                        "first_name": "Ada",
+                        "last_name": "Forge",
+                        "birthyear": -8901,
+                    }
+                ),
+            ),
+        )
+        con.execute(
+            """
+            insert into simulation_events (world, sim_year, event_type, payload_json)
+            values (?, ?, ?, ?)
+            """,
+            ("test", -8880, "job_assigned", json.dumps({"person_id": 1, "job": "smith"})),
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertIn("8901 BCE - 8800 BCE", sheet)
+        self.assertIn("8880 BCE-8800 BCE", sheet)
+        self.assertIn('title="8880 BCE-8800 BCE | 80 years | smith"', sheet)
+        self.assertIn("born 8901 BCE, current year 8800 BCE", share)
+        self.assertIn("- 8880 BCE-8800 BCE: smith", share)
+        self.assertNotIn("-8901", sheet)
+        self.assertNotIn("-8880", sheet)
+        self.assertNotIn("-8901", share)
+        self.assertNotIn("-8880", share)
 
     def test_person_sheet_children_list_shows_all_children_with_years(self) -> None:
         con = _memory_save()
