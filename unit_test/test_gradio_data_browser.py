@@ -234,6 +234,84 @@ def _memory_place_save() -> sqlite3.Connection:
     return con
 
 
+def _memory_outlaw_place_save() -> sqlite3.Connection:
+    con = _memory_place_save()
+    con.execute(
+        """
+        create table simulation_outlaw_refuges (
+            refuge_id text primary key,
+            region_id text,
+            near_settlement_id text,
+            status text,
+            founded_year integer,
+            discovered_year integer,
+            abandoned_year integer,
+            band_size integer,
+            concealment_01 real,
+            support_01 real,
+            last_activity_year integer,
+            active_case_count integer,
+            details_json text
+        )
+        """
+    )
+    con.execute(
+        """
+        create table simulation_outlaw_cases (
+            case_key text primary key,
+            accused_person_id integer,
+            accused_name text,
+            offense_type text,
+            offense_kind text,
+            status text,
+            resolution text,
+            start_year integer,
+            last_seen_year integer,
+            expected_forget_year integer,
+            resolved_year integer,
+            severity_01 real,
+            knownness_01 real,
+            pursuit_pressure_01 real,
+            buyoff_power_01 real,
+            victim_person_id integer,
+            target_person_id integer,
+            region_id text,
+            settlement_id text,
+            refuge_id text,
+            details_json text
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_outlaw_refuges values (
+            'outlaw_refuge:r1:1', 'r1', 'r1:s1', 'active',
+            1001, 1003, null, 3, 0.64, 0.12, 1004, 1, '{}'
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_outlaw_cases values (
+            'property_crime:test', 1, 'Ada Forge', 'property_crime',
+            'storehouse_robbery', 'active', null, 1001, 1004, 1012,
+            null, 0.62, 0.71, 0.66, 0.05, null, 2, 'r1',
+            'r1:s1', 'outlaw_refuge:r1:1', '{}'
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_events (world, sim_year, event_type, payload_json)
+        values (
+            'test', 1004, 'outlaw_raid',
+            '{"person_id": 1, "outlaw_refuge_id": "outlaw_refuge:r1:1", "offense_type": "property_crime"}'
+        )
+        """
+    )
+    return con
+
+
 def _memory_keyed_place_save() -> sqlite3.Connection:
     con = _memory_save()
     for column_def in (
@@ -3205,6 +3283,98 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("showing 1 of 1 settlements", status)
         self.assertIn("Fordham", sheet)
         self.assertIn("miller", sheet)
+
+    def test_outlaw_refuges_appear_in_settlement_and_town_browsers(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_outlaw_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                settlement_table, status, settlement_ids = gdb.load_settlements_browser(
+                    "test", "outlaw_refuge", "All", 50
+                )
+                settlement_sheet = gdb.select_settlement_from_table(
+                    settlement_ids, "test", types.SimpleNamespace(index=0)
+                )
+                town_table, town_status, town_keys = gdb.load_towns_browser(
+                    "test", "outlaw_refuge", 50
+                )
+                town_sheet = gdb.select_town_from_table(
+                    town_keys, "test", types.SimpleNamespace(index=0)
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        self.assertEqual(settlement_table["headers"], gdb.SETTLEMENT_BROWSER_HEADERS)
+        self.assertEqual(settlement_ids, ["outlaw_refuge:r1:1"])
+        self.assertIn("settlements/refuges", status)
+        self.assertIn("Outlaw refuge near Fordham", settlement_table["value"][0][0])
+        self.assertIn("outlaw refuge", settlement_table["value"][0][1])
+        self.assertIn("Outlaw refuge near Fordham", settlement_sheet)
+        self.assertIn("storehouse robbery", settlement_sheet)
+        self.assertEqual(town_table["headers"], gdb.PLACE_TOWN_HEADERS)
+        self.assertEqual(town_keys, [gdb._encode_place_key("test", "test", "outlaw_refuge:r1:1")])
+        self.assertIn("showing 1 towns", town_status)
+        self.assertIn("Outlaw refuge near Fordham", town_sheet)
+
+    def test_outlaw_browser_loads_cases_refuges_and_person_selection(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_outlaw_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            original_render_person_outputs = gdb.render_person_outputs
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            gdb.render_person_outputs = lambda world, person_id: (
+                f"person {person_id}",
+                f"share {person_id}",
+            )
+            try:
+                case_table, case_status, case_keys = gdb.load_outlaw_cases_browser(
+                    "test", "Active", "Ada", 50
+                )
+                person_sheet, share = gdb.select_outlaw_case_from_table(
+                    case_keys, "test", types.SimpleNamespace(index=0)
+                )
+                refuge_table, refuge_status, refuge_keys = gdb.load_outlaw_refuges_browser(
+                    "test", "Active", "", 50
+                )
+                refuge_sheet = gdb.select_outlaw_refuge_from_table(
+                    refuge_keys, "test", types.SimpleNamespace(index=0)
+                )
+            finally:
+                gdb._db_path = original_db_path
+                gdb.render_person_outputs = original_render_person_outputs
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        self.assertEqual(case_table["headers"], gdb.OUTLAW_CASE_BROWSER_HEADERS)
+        self.assertIn("outlaw cases", case_status)
+        self.assertEqual(len(case_keys), 1)
+        self.assertEqual(case_table["value"][0][3], "Ada Forge #1")
+        self.assertEqual(person_sheet, "person 1")
+        self.assertEqual(share, "share 1")
+        self.assertEqual(refuge_table["headers"], gdb.OUTLAW_REFUGE_BROWSER_HEADERS)
+        self.assertIn("outlaw refuges", refuge_status)
+        self.assertEqual(refuge_keys, ["outlaw_refuge:r1:1"])
+        self.assertIn("Outlaw refuge near Fordham", refuge_sheet)
+        self.assertIn("Ada Forge", refuge_sheet)
 
     def test_place_browsers_read_keyed_place_schema_through_readable_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

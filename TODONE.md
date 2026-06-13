@@ -64,6 +64,46 @@
   5-minute command timeout before producing output; the same test modules passed
   when run in smaller batches.
 
+## Outlawry Follow-Up: Career Exclusion And Browser Discovery
+
+- Closed the first post-V1 outlaw issues found in live browsing:
+  - fugitive, wanted, and punished outlaws now block ordinary career assignment,
+    household/service placement, vice-work assignment, and job-seeker migration;
+  - stale saves or edge paths that leave an outlaw with a job are normalized
+    back to outlaw/unemployed labor state before the career tick can act;
+  - flight and capture/return resolution now clear job era/tier/assignment,
+    host, and employer state more completely.
+- Gradio now exposes outlaws directly:
+  - added an `Outlaws` tab with searchable case and refuge grids;
+  - selecting an outlaw case opens the accused person's sheet/share text;
+  - selecting a refuge opens a refuge detail sheet with cases and recent outlaw
+    events.
+- Outlaw refuges now appear in settlement/town browsing as settlement-like
+  refuge places while remaining non-hamlet simulation objects.
+- Added regression coverage in:
+  - `unit_test.test_simulation_outlaws` for stale outlaw job cleanup and career
+    exclusion after flight/capture;
+  - `unit_test.test_gradio_data_browser` for the Outlaws tab loaders/selectors
+    and refuge rows in settlement/town browsers.
+- Verified with:
+  - `python -m py_compile library/simulation_outlaws.py
+    library/simulation_careers.py utils/gradio_data_browser.py
+    unit_test/test_simulation_outlaws.py unit_test/test_gradio_data_browser.py`;
+  - `python -m unittest unit_test.test_simulation_outlaws
+    unit_test.test_gradio_data_browser` (passed with an existing ResourceWarning
+    about an unclosed SQLite connection in browser test support);
+  - `python utils/util_load_config.py --world default`;
+  - `python -m unittest unit_test.test_event_catalog
+    unit_test.test_event_ontology unit_test.test_event_history_report`;
+  - `python -m unittest unit_test.test_simulation_incidents`;
+  - `python -m unittest unit_test.test_save_checkpoint`;
+  - bundled workspace Python:
+    `from utils.gradio_data_browser import build_app; app=build_app('default')`
+    registered 87 Gradio functions.
+- The combined verification command covering those same test modules was
+  attempted first and timed out after 5 minutes; the modules passed when split
+  into smaller runs.
+
 ## Placename Length And Visible `-by` Tuning
 
 - Added settlement display-length budgeting in `library.placenames_generation`:

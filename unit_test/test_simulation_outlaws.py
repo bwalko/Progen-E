@@ -12,6 +12,7 @@ from pathlib import Path
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
 from library.simulation_context import SimulationContext
+from library.simulation_careers import simulation_careers_annual_tick
 from library.simulation_outlaws import (
     OUTLAW_STATUS_CLEARED,
     OUTLAW_STATUS_FUGITIVE,
@@ -19,6 +20,7 @@ from library.simulation_outlaws import (
     OUTLAW_STATUS_RETURNED,
     flee_to_refuge,
     kill_outlaw,
+    normalize_outlaw_labor_state,
     open_outlaw_case,
     resolve_outlaw_case,
     _maybe_buy_off,
@@ -169,6 +171,75 @@ class TestSimulationOutlaws(unittest.TestCase):
                     )
                 },
             )
+
+    def test_outlaws_do_not_keep_or_receive_normal_jobs(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            accused = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Male",
+            )
+            accused.person = replace(
+                accused.person,
+                job="mill worker",
+                job_assigned_year=1000,
+                job_market_type="settlement_market",
+                employment_status="employed",
+                housing_status="own_household",
+            )
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=accused,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.62,
+                knownness_01=0.70,
+                source_event_key="test:property:job-block",
+                target_person_id=accused.person_id,
+            )
+            self.assertIsNotNone(case)
+            refuge = flee_to_refuge(ctx, case.case_key, year=1001)
+            self.assertIsNotNone(refuge)
+            self.assertIsNone(accused.person.job)
+            self.assertEqual(accused.person.employment_status, "outlaw")
+
+            accused.person = replace(
+                accused.person,
+                current_settlement_id=settlement.settlement_id,
+                job="mill worker",
+                job_assigned_year=1002,
+                job_market_type="settlement_market",
+                employment_status="employed",
+                housing_status="own_household",
+                household_role="worker",
+            )
+            self.assertTrue(normalize_outlaw_labor_state(ctx, accused, 1002))
+            simulation_careers_annual_tick(ctx, 1002)
+            self.assertIsNone(accused.person.job)
+            self.assertIsNone(accused.person.current_settlement_id)
+            self.assertEqual(accused.person.employment_status, "outlaw")
+            self.assertEqual(accused.person.housing_status, "outlaw_refuge")
+            self.assertEqual(accused.person.job_market_type, "criminal")
+
+            resolve_outlaw_case(ctx, case.case_key, year=1003, resolution="captured")
+            accused.person = replace(
+                accused.person,
+                job="mill worker",
+                job_assigned_year=1004,
+                job_market_type="settlement_market",
+                employment_status="employed",
+                housing_status="own_household",
+                household_role="worker",
+            )
+            simulation_careers_annual_tick(ctx, 1004)
+            self.assertEqual(accused.person.outlaw_status, OUTLAW_STATUS_PUNISHED)
+            self.assertIsNone(accused.person.job)
+            self.assertEqual(accused.person.employment_status, "unemployed")
+            self.assertEqual(accused.person.job_market_type, "none")
 
     def test_buyoff_has_hard_limit_for_severe_public_murder(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

@@ -17,6 +17,9 @@ OUTLAW_STATUS_FUGITIVE = "fugitive"
 OUTLAW_STATUS_CLEARED = "cleared"
 OUTLAW_STATUS_PUNISHED = "punished"
 OUTLAW_STATUS_RETURNED = "returned"
+OUTLAW_CAREER_BLOCKING_STATUSES = frozenset(
+    {OUTLAW_STATUS_WANTED, OUTLAW_STATUS_FUGITIVE, OUTLAW_STATUS_PUNISHED}
+)
 
 OUTLAW_RNG_STREAM = 1_740_331
 PROPERTY_OUTLAW_MIN_SEVERITY = 0.36
@@ -74,6 +77,59 @@ def clamp01(value: float) -> float:
 
 def is_outlaw_absent(person: object) -> bool:
     return str(getattr(person, "outlaw_status", "") or "").strip().lower() == OUTLAW_STATUS_FUGITIVE
+
+
+def outlaw_blocks_normal_career(person: object) -> bool:
+    status = str(getattr(person, "outlaw_status", "") or "").strip().lower()
+    return status in OUTLAW_CAREER_BLOCKING_STATUSES
+
+
+def normalize_outlaw_labor_state(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+) -> bool:
+    """Keep active/punished outlaws out of ordinary employment state."""
+    status = str(getattr(rec.person, "outlaw_status", "") or "").strip().lower()
+    if status not in OUTLAW_CAREER_BLOCKING_STATUSES:
+        return False
+    last_job = rec.person.last_job or rec.person.job
+    updates: dict[str, Any] = {
+        "job": None,
+        "job_assigned_year": None,
+        "job_era": None,
+        "job_tier": None,
+        "last_job": last_job,
+        "host_person_id": None,
+        "employer_person_id": None,
+    }
+    if rec.person.job:
+        updates["job_lost_year"] = int(year)
+    if status == OUTLAW_STATUS_FUGITIVE:
+        updates.update(
+            {
+                "current_settlement_id": None,
+                "employment_status": "outlaw",
+                "job_market_type": "criminal",
+                "housing_status": "outlaw_refuge",
+                "household_role": "fugitive",
+            }
+        )
+    else:
+        updates.update(
+            {
+                "employment_status": "unemployed",
+                "job_market_type": "none",
+            }
+        )
+    new_person = replace(rec.person, **updates)
+    if new_person == rec.person:
+        return False
+    rec.person = new_person
+    if status == OUTLAW_STATUS_FUGITIVE:
+        ctx.invalidate_alive_census_cache()
+    ctx.invalidate_annual_indexes()
+    return True
 
 
 def active_outlaw_case_for_person(
@@ -386,6 +442,7 @@ def flee_to_refuge(
         except (LookupError, ValueError):
             pass
     refuge = _choose_refuge(ctx, case, int(year))
+    last_job = rec.person.last_job or rec.person.job
     rec.person = replace(
         rec.person,
         current_settlement_id=None,
@@ -393,6 +450,8 @@ def flee_to_refuge(
         job_assigned_year=None,
         job_era=None,
         job_tier=None,
+        last_job=last_job,
+        job_lost_year=int(year) if last_job else rec.person.job_lost_year,
         job_market_type="criminal",
         employment_status="outlaw",
         housing_status="outlaw_refuge",
@@ -515,7 +574,14 @@ def resolve_outlaw_case(
                 household_role="punished_returnee",
                 employment_status="unemployed",
                 job=None,
+                job_assigned_year=None,
+                job_era=None,
+                job_tier=None,
+                last_job=rec.person.last_job or rec.person.job,
+                job_lost_year=int(year) if rec.person.job else rec.person.job_lost_year,
                 job_market_type="none",
+                host_person_id=None,
+                employer_person_id=None,
             )
         elif resolution in {"returned", "forgotten"}:
             sid = _return_settlement(ctx, case, rec)
@@ -529,7 +595,14 @@ def resolve_outlaw_case(
                 household_role="returned_adult",
                 employment_status="unemployed",
                 job=None,
+                job_assigned_year=None,
+                job_era=None,
+                job_tier=None,
+                last_job=rec.person.last_job or rec.person.job,
+                job_lost_year=int(year) if rec.person.job else rec.person.job_lost_year,
                 job_market_type="none",
+                host_person_id=None,
+                employer_person_id=None,
             )
         elif resolution == "bought_off":
             rec.person = replace(

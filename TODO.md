@@ -17,6 +17,11 @@ The bounded Outlawry And Refuge V1 stages are complete; see `TODONE.md` for
 stage-by-stage evidence covering persistence/case opening, flight/refuge life,
 pursuit/buy-off/return, browser/report visibility, and tests.
 
+The first follow-up is also complete: fugitive/punished outlaws are blocked from
+ordinary career assignment, stale outlaw job state is normalized, outlaw refuges
+appear in settlement/town browsing as refuge places, and Gradio has a direct
+Outlaws browser; see `TODONE.md`.
+
 Future outlaw work should be opened only for a concrete next behavior such as
 prison systems, passive-person promotion into outlaw cases, richer refuge maps,
 law-code variation by polity, or measured tuning/reporting gaps.

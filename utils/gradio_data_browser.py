@@ -115,6 +115,38 @@ SETTLEMENT_BROWSER_HEADERS = [
     "Founded",
     "Top Jobs",
 ]
+OUTLAW_CASE_BROWSER_HEADERS = [
+    "Case",
+    "Status",
+    "Offense",
+    "Accused",
+    "Refuge",
+    "Region",
+    "Settlement",
+    "Started",
+    "Last Seen",
+    "Forget Year",
+    "Resolved",
+    "Severity",
+    "Knownness",
+    "Pursuit",
+    "Buyoff",
+    "Resolution",
+]
+OUTLAW_REFUGE_BROWSER_HEADERS = [
+    "Refuge",
+    "Status",
+    "Region",
+    "Near Settlement",
+    "Band Size",
+    "Active Cases",
+    "Founded",
+    "Discovered",
+    "Abandoned",
+    "Concealment",
+    "Support",
+    "Last Activity",
+]
 HISTORY_VIEW_CHOICES = [
     "Admin Truth",
     "Public Chronicle",
@@ -3320,6 +3352,14 @@ def _empty_polities_frame() -> gr.Dataframe:
     return gr.Dataframe(value=[], headers=POLITY_BROWSER_HEADERS)
 
 
+def _empty_outlaw_cases_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=OUTLAW_CASE_BROWSER_HEADERS)
+
+
+def _empty_outlaw_refuges_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=OUTLAW_REFUGE_BROWSER_HEADERS)
+
+
 def _polity_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> dict[str, object]:
     pid = int(row["polity_id"])
     territory = _count_one(
@@ -3529,6 +3569,143 @@ def _settlement_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.Ro
     }
 
 
+def _outlaw_relation(con: sqlite3.Connection, table: str) -> str:
+    readable = f"{table}_readable"
+    return readable if _has_relation(con, readable) else table
+
+
+def _outlaw_row_value(row: sqlite3.Row, key: str, default: object = "") -> object:
+    return row[key] if key in row.keys() else default
+
+
+def _outlaw_refuge_active_case_count(con: sqlite3.Connection, refuge_id: object) -> int:
+    rid = str(refuge_id or "").strip()
+    if not rid or not _has_table(con, "simulation_outlaw_cases"):
+        return 0
+    try:
+        return _count_one(
+            con,
+            "select count(*) from simulation_outlaw_cases where refuge_id = ? and status = 'active'",
+            (rid,),
+        )
+    except sqlite3.Error:
+        return 0
+
+
+def _outlaw_refuge_region_id(row: sqlite3.Row) -> str:
+    return str(
+        _outlaw_row_value(row, "region_id")
+        or _outlaw_row_value(row, "region_key")
+        or ""
+    ).strip()
+
+
+def _outlaw_refuge_near_settlement_id(row: sqlite3.Row) -> str:
+    return str(
+        _outlaw_row_value(row, "near_settlement_id")
+        or _outlaw_row_value(row, "settlement_id")
+        or _outlaw_row_value(row, "near_settlement_key")
+        or ""
+    ).strip()
+
+
+def _outlaw_refuge_display_name(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
+    refuge_id = str(_outlaw_row_value(row, "refuge_id") or "").strip()
+    near_sid = _outlaw_refuge_near_settlement_id(row)
+    region_id = _outlaw_refuge_region_id(row)
+    if near_sid:
+        return f"Outlaw refuge near {_settlement_name(con, world, near_sid)}"
+    region_name = _history_region_label(con, world, region_id) if region_id else ""
+    if region_name:
+        return f"Outlaw refuge in {region_name}"
+    return refuge_id or "Outlaw refuge"
+
+
+def _outlaw_refuge_summary_row(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row,
+) -> dict[str, object]:
+    refuge_id = str(_outlaw_row_value(row, "refuge_id") or "").strip()
+    region_id = _outlaw_refuge_region_id(row)
+    active_cases = _outlaw_row_value(row, "active_case_count", None)
+    if active_cases in (None, ""):
+        active_cases = _outlaw_refuge_active_case_count(con, refuge_id)
+    band_size = _outlaw_row_value(row, "band_size", "")
+    return {
+        "Name": _outlaw_refuge_display_name(con, world, row),
+        "Level": "outlaw refuge",
+        "Alive": band_size or active_cases or "",
+        "Region": _history_region_label(con, world, region_id) if region_id else "",
+        "Status": _outlaw_row_value(row, "status", ""),
+        "Food": "",
+        "Stability": "",
+        "Market": "",
+        "Prosperity": _fmt_number(_outlaw_row_value(row, "support_01", "")),
+        "Polity": "",
+        "Founded": _outlaw_row_value(row, "founded_year", ""),
+        "Top Jobs": f"outlaws ({active_cases})" if active_cases not in (None, "") else "outlaws",
+    }
+
+
+def _outlaw_refuge_search_columns(columns: set[str]) -> list[str]:
+    wanted = [
+        "refuge_id",
+        "region_id",
+        "settlement_id",
+        "near_settlement_id",
+        "status",
+        "details_json",
+    ]
+    return [column for column in wanted if column in columns]
+
+
+def _query_outlaw_refuges(
+    con: sqlite3.Connection,
+    *,
+    search: str = "",
+    status_filter: str = "All",
+    limit: int = 50,
+) -> tuple[list[sqlite3.Row], int]:
+    if not _has_table(con, "simulation_outlaw_refuges"):
+        return [], 0
+    relation = _outlaw_relation(con, "simulation_outlaw_refuges")
+    columns = set(_table_columns(con, relation))
+    clauses: list[str] = []
+    params: list[object] = []
+    selected_status = str(status_filter or "All").strip()
+    if selected_status == "Active" and "status" in columns:
+        clauses.append("status = 'active'")
+    elif selected_status == "Abandoned" and "status" in columns:
+        clauses.append("status != 'active'")
+    if search:
+        search_columns = _outlaw_refuge_search_columns(columns)
+        if search_columns:
+            clauses.append(
+                "("
+                + " or ".join(f"cast({_quote_identifier(column)} as text) like ?" for column in search_columns)
+                + ")"
+            )
+            params.extend([f"%{search}%"] * len(search_columns))
+    where_sql = f"where {' and '.join(clauses)}" if clauses else ""
+    rows = con.execute(
+        f"""
+        select *
+        from {_quote_identifier(relation)}
+        {where_sql}
+        order by status = 'active' desc, coalesce(founded_year, 0) desc, refuge_id
+        limit ?
+        """,
+        (*params, int(limit)),
+    ).fetchall()
+    total = _count_one(
+        con,
+        f"select count(*) from {_quote_identifier(relation)} {where_sql}",
+        params,
+    )
+    return rows, total
+
+
 def load_settlements_browser(
     world: str,
     search: str,
@@ -3576,11 +3753,21 @@ def load_settlements_browser(
         total = _count_one(con, f"select count(*) from {_quote_identifier(settlement_table)} where {where_sql}", params)
         values = [_settlement_summary_row(con, saved_world, row) for row in rows]
         settlement_ids = [str(row["settlement_id"]) for row in rows]
+        refuge_rows, refuge_total = _query_outlaw_refuges(
+            con,
+            search=search or "",
+            status_filter=status_filter,
+            limit=row_limit,
+        )
+        if refuge_rows:
+            values.extend(_outlaw_refuge_summary_row(con, saved_world, row) for row in refuge_rows)
+            settlement_ids.extend(str(row["refuge_id"]) for row in refuge_rows)
+        total += refuge_total
 
     filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
     saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
     status = (
-        f"{path.name}: showing {len(values)} of {total} settlements{filter_text}{saved_world_note}. "
+        f"{path.name}: showing {len(values)} of {total} settlements/refuges{filter_text}{saved_world_note}. "
         "Click any settlement row to open its sheet."
     )
     return _dataframe(values, SETTLEMENT_BROWSER_HEADERS), status, settlement_ids
@@ -3735,6 +3922,8 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
         return '<div class="place-sheet muted">Choose a world.</div>'
     if not sid:
         return '<div class="place-sheet muted">Browse settlements, then click a row to inspect it.</div>'
+    if sid.startswith("outlaw_refuge:"):
+        return render_outlaw_refuge_detail(world, sid)
     path = _db_path(world, "Save DB")
     if not path.exists():
         return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
@@ -3800,6 +3989,373 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
             '</div>'
             '</div>'
         )
+
+
+def _outlaw_case_search_columns(columns: set[str]) -> list[str]:
+    wanted = [
+        "case_key",
+        "accused_person_id",
+        "accused_name",
+        "offense_type",
+        "offense_kind",
+        "status",
+        "resolution",
+        "refuge_id",
+        "region_id",
+        "settlement_id",
+        "details_json",
+    ]
+    return [column for column in wanted if column in columns]
+
+
+def _query_outlaw_cases(
+    con: sqlite3.Connection,
+    *,
+    search: str = "",
+    status_filter: str = "Active",
+    limit: int = 50,
+) -> tuple[list[sqlite3.Row], int]:
+    if not _has_table(con, "simulation_outlaw_cases"):
+        return [], 0
+    relation = _outlaw_relation(con, "simulation_outlaw_cases")
+    columns = set(_table_columns(con, relation))
+    clauses: list[str] = []
+    params: list[object] = []
+    selected_status = str(status_filter or "Active").strip()
+    if selected_status == "Active" and "status" in columns:
+        clauses.append("status = 'active'")
+    elif selected_status == "Resolved" and "status" in columns:
+        clauses.append("status != 'active'")
+    if search:
+        search_columns = _outlaw_case_search_columns(columns)
+        if search_columns:
+            clauses.append(
+                "("
+                + " or ".join(f"cast({_quote_identifier(column)} as text) like ?" for column in search_columns)
+                + ")"
+            )
+            params.extend([f"%{search}%"] * len(search_columns))
+    where_sql = f"where {' and '.join(clauses)}" if clauses else ""
+    rows = con.execute(
+        f"""
+        select *
+        from {_quote_identifier(relation)}
+        {where_sql}
+        order by status = 'active' desc, coalesce(start_year, 0) desc, case_key
+        limit ?
+        """,
+        (*params, int(limit)),
+    ).fetchall()
+    total = _count_one(
+        con,
+        f"select count(*) from {_quote_identifier(relation)} {where_sql}",
+        params,
+    )
+    return rows, total
+
+
+def _outlaw_case_accused_label(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
+    accused_id = _outlaw_row_value(row, "accused_person_id", "")
+    name = str(_outlaw_row_value(row, "accused_name", "") or "").strip()
+    if not name and accused_id not in (None, ""):
+        name = _person_link_text(con, world, accused_id).split(" (", 1)[0]
+    if accused_id not in (None, ""):
+        return f"{name or 'Unknown'} #{accused_id}"
+    return name or "Unknown"
+
+
+def _outlaw_case_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> dict[str, object]:
+    offense_kind = str(_outlaw_row_value(row, "offense_kind", "") or "").replace("_", " ")
+    offense_type = str(_outlaw_row_value(row, "offense_type", "") or "").replace("_", " ")
+    offense = offense_kind or offense_type
+    if offense_kind and offense_type and offense_kind != offense_type:
+        offense = f"{offense_kind} ({offense_type})"
+    return {
+        "Case": _outlaw_row_value(row, "case_key", ""),
+        "Status": _outlaw_row_value(row, "status", ""),
+        "Offense": offense,
+        "Accused": _outlaw_case_accused_label(con, world, row),
+        "Refuge": _outlaw_row_value(row, "refuge_id", ""),
+        "Region": _history_region_label(con, world, _outlaw_row_value(row, "region_id", "")),
+        "Settlement": _settlement_name(con, world, _outlaw_row_value(row, "settlement_id", "")),
+        "Started": _outlaw_row_value(row, "start_year", ""),
+        "Last Seen": _outlaw_row_value(row, "last_seen_year", ""),
+        "Forget Year": _outlaw_row_value(row, "expected_forget_year", ""),
+        "Resolved": _outlaw_row_value(row, "resolved_year", ""),
+        "Severity": _fmt_number(_outlaw_row_value(row, "severity_01", "")),
+        "Knownness": _fmt_number(_outlaw_row_value(row, "knownness_01", "")),
+        "Pursuit": _fmt_number(_outlaw_row_value(row, "pursuit_pressure_01", "")),
+        "Buyoff": _fmt_number(_outlaw_row_value(row, "buyoff_power_01", "")),
+        "Resolution": _outlaw_row_value(row, "resolution", ""),
+    }
+
+
+def _encode_outlaw_case_key(row: sqlite3.Row) -> str:
+    return json.dumps(
+        {
+            "case_key": _outlaw_row_value(row, "case_key", ""),
+            "person_id": _outlaw_row_value(row, "accused_person_id", ""),
+        },
+        sort_keys=True,
+    )
+
+
+def _decode_outlaw_case_key(value: object) -> dict[str, object]:
+    try:
+        decoded = json.loads(str(value or ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def load_outlaw_cases_browser(
+    world: str,
+    status_filter: str,
+    search: str,
+    limit: object,
+) -> tuple[gr.Dataframe, str, list[str]]:
+    if not world:
+        return _empty_outlaw_cases_frame(), "Choose a world.", []
+    row_limit = _safe_int(limit, 50, 1, 250)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _empty_outlaw_cases_frame(), f"{path} is missing. Run a simulation first.", []
+    with _connect_readonly(path) as con:
+        if not _has_table(con, "simulation_outlaw_cases"):
+            return _empty_outlaw_cases_frame(), "No simulation_outlaw_cases table found.", []
+        saved_world = _resolve_saved_world(con, world)
+        rows, total = _query_outlaw_cases(
+            con,
+            search=search or "",
+            status_filter=status_filter,
+            limit=row_limit,
+        )
+        values = [_outlaw_case_summary_row(con, saved_world, row) for row in rows]
+        keys = [_encode_outlaw_case_key(row) for row in rows]
+    filter_text = f" | filters: {status_filter or 'Active'}"
+    if search:
+        filter_text += f", search={search!r}"
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} of {total} outlaw cases{filter_text}{saved_world_note}. "
+        "Click a row to open the accused person's sheet."
+    )
+    return _dataframe(values, OUTLAW_CASE_BROWSER_HEADERS), status, keys
+
+
+def select_outlaw_case_from_table(
+    keys: object,
+    world: str,
+    evt: gr.SelectData,
+) -> tuple[str, str]:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        encoded = keys[int(row_index)]  # type: ignore[index]
+        person_id = _decode_outlaw_case_key(encoded).get("person_id")
+        if person_id in (None, ""):
+            raise ValueError("missing person id")
+    except Exception:
+        return (
+            '<div class="person-sheet muted" role="status">Click an outlaw case row to open the accused person.</div>',
+            "Click an outlaw case row to generate share text.",
+        )
+    return render_person_outputs(world, person_id)
+
+
+def _outlaw_html_list(items: Iterable[str], empty: str = "None yet.") -> str:
+    clean = [str(item).strip() for item in items if str(item).strip()]
+    if not clean:
+        return f'<p class="place-muted">{html.escape(empty)}</p>'
+    return "<ul>" + "".join(f"<li>{item}</li>" for item in clean) + "</ul>"
+
+
+def _render_outlaw_refuge_sheet(con: sqlite3.Connection, world: str, refuge_id: object) -> str:
+    rid = str(refuge_id or "").strip()
+    if not rid:
+        return '<div class="place-sheet muted">Click an outlaw refuge row to inspect it.</div>'
+    if not _has_table(con, "simulation_outlaw_refuges"):
+        return '<div class="place-sheet muted">No outlaw refuges are recorded in this save.</div>'
+    relation = _outlaw_relation(con, "simulation_outlaw_refuges")
+    row = con.execute(
+        f"select * from {_quote_identifier(relation)} where refuge_id = ?",
+        (rid,),
+    ).fetchone()
+    if row is None:
+        return f'<div class="place-sheet muted">No outlaw refuge named {html.escape(rid)}.</div>'
+    region_id = _outlaw_refuge_region_id(row)
+    region_name = _history_region_label(con, world, region_id) if region_id else ""
+    near_sid = _outlaw_refuge_near_settlement_id(row)
+    near_name = _settlement_name(con, world, near_sid) if near_sid else ""
+    active_cases = _outlaw_row_value(row, "active_case_count", None)
+    if active_cases in (None, ""):
+        active_cases = _outlaw_refuge_active_case_count(con, rid)
+    cards = "".join(
+        [
+            _detail_card("Status", _outlaw_row_value(row, "status", "")),
+            _detail_card("Region", region_name or region_id or "Unknown"),
+            _detail_card("Near", near_name or near_sid or "Unrecorded"),
+            _detail_card("Band Size", _outlaw_row_value(row, "band_size", "")),
+            _detail_card("Active Cases", active_cases),
+            _detail_card("Founded", _format_year(_outlaw_row_value(row, "founded_year", ""), unknown_text="Unknown")),
+            _detail_card("Discovered", _format_year(_outlaw_row_value(row, "discovered_year", ""), unknown_text="Not yet")),
+            _detail_card("Abandoned", _format_year(_outlaw_row_value(row, "abandoned_year", ""), unknown_text="No")),
+            _detail_card("Concealment", _fmt_number(_outlaw_row_value(row, "concealment_01", ""))),
+            _detail_card("Support", _fmt_number(_outlaw_row_value(row, "support_01", ""))),
+            _detail_card("Last Activity", _format_year(_outlaw_row_value(row, "last_activity_year", ""), unknown_text="Unknown")),
+        ]
+    )
+    case_items: list[str] = []
+    if _has_table(con, "simulation_outlaw_cases"):
+        case_relation = _outlaw_relation(con, "simulation_outlaw_cases")
+        for case_row in con.execute(
+            f"""
+            select *
+            from {_quote_identifier(case_relation)}
+            where refuge_id = ?
+            order by status = 'active' desc, coalesce(start_year, 0) desc, case_key
+            limit 12
+            """,
+            (rid,),
+        ).fetchall():
+            accused = _short_person_html(con, world, _outlaw_row_value(case_row, "accused_person_id", ""))
+            offense = html.escape(
+                str(
+                    _outlaw_row_value(case_row, "offense_kind", "")
+                    or _outlaw_row_value(case_row, "offense_type", "")
+                    or "offense"
+                ).replace("_", " ")
+            )
+            status = html.escape(str(_outlaw_row_value(case_row, "status", "") or ""))
+            resolution = str(_outlaw_row_value(case_row, "resolution", "") or "").strip()
+            resolution_text = f", {html.escape(resolution)}" if resolution else ""
+            case_items.append(f"{accused}: {offense} ({status}{resolution_text})")
+    event_items: list[str] = []
+    if _has_table(con, "simulation_events"):
+        events_has_world = "world" in _table_columns(con, "simulation_events")
+        where_world = "world = ? and " if events_has_world else ""
+        params: list[object] = [world] if events_has_world else []
+        params.extend([rid, rid])
+        try:
+            event_rows = con.execute(
+                f"""
+                select id as event_id, sim_year, event_type, payload_json
+                from simulation_events
+                where {where_world}event_type like 'outlaw_%'
+                  and (
+                    json_extract(payload_json, '$.outlaw_refuge_id') = ?
+                    or json_extract(payload_json, '$.refuge_id') = ?
+                  )
+                order by sim_year desc, id desc
+                limit 8
+                """,
+                tuple(params),
+            ).fetchall()
+            for event in reversed(event_rows):
+                event_items.append(
+                    f"{html.escape(_format_year(event['sim_year']))}: "
+                    f"{_event_sentence_html(con, world, event, None)}"
+                )
+        except sqlite3.Error:
+            event_items = []
+    title = _outlaw_refuge_display_name(con, world, row)
+    subtitle_bits = [rid]
+    if region_name:
+        subtitle_bits.append(region_name)
+    if near_name:
+        subtitle_bits.append(f"near {near_name}")
+    return (
+        '<div class="place-sheet">'
+        f'<h2>{html.escape(title)}</h2>'
+        f'<div class="place-subtitle">{html.escape(" | ".join(subtitle_bits))}</div>'
+        f'<div class="place-grid">{cards}</div>'
+        '<div class="place-columns">'
+        f'<section><h3>Outlaw Cases</h3>{_outlaw_html_list(case_items)}</section>'
+        f'<section><h3>Recent Refuge Events</h3>{_outlaw_html_list(event_items)}</section>'
+        '</div>'
+        '</div>'
+    )
+
+
+def render_outlaw_refuge_detail(world: str, refuge_id: object) -> str:
+    rid = str(refuge_id or "").strip()
+    if not world:
+        return '<div class="place-sheet muted">Choose a world.</div>'
+    if not rid:
+        return '<div class="place-sheet muted">Click an outlaw refuge row to inspect it.</div>'
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        return _render_outlaw_refuge_sheet(con, saved_world, rid)
+
+
+def load_outlaw_refuges_browser(
+    world: str,
+    status_filter: str,
+    search: str,
+    limit: object,
+) -> tuple[gr.Dataframe, str, list[str]]:
+    if not world:
+        return _empty_outlaw_refuges_frame(), "Choose a world.", []
+    row_limit = _safe_int(limit, 50, 1, 250)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _empty_outlaw_refuges_frame(), f"{path} is missing. Run a simulation first.", []
+    with _connect_readonly(path) as con:
+        if not _has_table(con, "simulation_outlaw_refuges"):
+            return _empty_outlaw_refuges_frame(), "No simulation_outlaw_refuges table found.", []
+        saved_world = _resolve_saved_world(con, world)
+        rows, total = _query_outlaw_refuges(
+            con,
+            search=search or "",
+            status_filter=status_filter,
+            limit=row_limit,
+        )
+        values = []
+        keys = []
+        for row in rows:
+            refuge_id = str(row["refuge_id"])
+            region_id = _outlaw_refuge_region_id(row)
+            near_sid = _outlaw_refuge_near_settlement_id(row)
+            active_cases = _outlaw_row_value(row, "active_case_count", None)
+            if active_cases in (None, ""):
+                active_cases = _outlaw_refuge_active_case_count(con, refuge_id)
+            values.append(
+                {
+                    "Refuge": refuge_id,
+                    "Status": _outlaw_row_value(row, "status", ""),
+                    "Region": _history_region_label(con, saved_world, region_id) if region_id else "",
+                    "Near Settlement": _settlement_name(con, saved_world, near_sid) if near_sid else "",
+                    "Band Size": _outlaw_row_value(row, "band_size", ""),
+                    "Active Cases": active_cases,
+                    "Founded": _outlaw_row_value(row, "founded_year", ""),
+                    "Discovered": _outlaw_row_value(row, "discovered_year", ""),
+                    "Abandoned": _outlaw_row_value(row, "abandoned_year", ""),
+                    "Concealment": _fmt_number(_outlaw_row_value(row, "concealment_01", "")),
+                    "Support": _fmt_number(_outlaw_row_value(row, "support_01", "")),
+                    "Last Activity": _outlaw_row_value(row, "last_activity_year", ""),
+                }
+            )
+            keys.append(refuge_id)
+    filter_text = f" | filters: {status_filter or 'Active'}"
+    if search:
+        filter_text += f", search={search!r}"
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} of {total} outlaw refuges{filter_text}{saved_world_note}. "
+        "Click a row to inspect the refuge."
+    )
+    return _dataframe(values, OUTLAW_REFUGE_BROWSER_HEADERS), status, keys
+
+
+def select_outlaw_refuge_from_table(keys: object, world: str, evt: gr.SelectData) -> str:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        refuge_id = keys[int(row_index)]  # type: ignore[index]
+    except Exception:
+        return '<div class="place-sheet muted">Click an outlaw refuge row to inspect it.</div>'
+    return render_outlaw_refuge_detail(world, refuge_id)
 
 
 def select_settlement_from_table(settlement_ids: object, world: str, evt: gr.SelectData) -> str:
@@ -9131,6 +9687,16 @@ def _places_browser_data(
                     }
                 )
                 keys.append(_encode_place_key(world, saved_world, sid))
+            refuge_rows, refuge_total = _query_outlaw_refuges(
+                con,
+                search=search or "",
+                status_filter="All",
+                limit=row_limit,
+            )
+            for refuge_row in refuge_rows:
+                summary = _outlaw_refuge_summary_row(con, saved_world, refuge_row)
+                values.append({header: summary.get(header, "") for header in PLACE_TOWN_HEADERS})
+                keys.append(_encode_place_key(world, saved_world, refuge_row["refuge_id"]))
         elif selected == "Polities":
             if not _has_table(con, "simulation_polities"):
                 return [], headers, "No simulation_polities table found.", [], selected
@@ -9853,7 +10419,10 @@ def render_place_detail(world: str, view: str, key: object) -> str:
     with _connect_readonly(path) as con:
         saved_world = key_saved_world or _resolve_saved_world(con, path_world)
         if selected == "Towns":
-            html_out = _render_town_sheet(con, saved_world, item_id)
+            if str(item_id or "").startswith("outlaw_refuge:"):
+                html_out = _render_outlaw_refuge_sheet(con, saved_world, item_id)
+            else:
+                html_out = _render_town_sheet(con, saved_world, item_id)
         elif selected == "Polities":
             html_out = _render_polity_sheet(con, saved_world, item_id)
         else:
@@ -10555,6 +11124,63 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         label="Settlement Sheet",
                     )
 
+        with gr.Tab("Outlaws"):
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=6):
+                    with gr.Row():
+                        outlaw_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        outlaw_case_status_filter = gr.Radio(["Active", "All", "Resolved"], value="Active", label="Cases")
+                        outlaw_case_limit = gr.Number(value=75, label="Limit", precision=0)
+                    outlaw_case_search = gr.Textbox(
+                        label="Search Outlaw Cases",
+                        placeholder="Name, id, offense, refuge, region, status...",
+                    )
+                    outlaw_case_load = gr.Button("Browse Outlaws", variant="primary")
+                    outlaw_case_status = gr.Textbox(label="Status", interactive=False)
+                    outlaw_case_table = gr.Dataframe(
+                        label="Outlaw Cases",
+                        interactive=False,
+                        wrap=False,
+                        elem_id="outlaw-case-table",
+                    )
+                    outlaw_case_keys_state = gr.State([])
+                with gr.Column(scale=5):
+                    outlaw_person_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Browse outlaw cases, then click a row to open the accused person.</div>',
+                        label="Outlaw Person Sheet",
+                    )
+                    outlaw_share_text = gr.Textbox(
+                        value="Click an outlaw case row to generate share text.",
+                        label="Copyable Gmail Text",
+                        lines=14,
+                        max_lines=24,
+                        interactive=False,
+                        buttons=["copy"],
+                    )
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=6):
+                    with gr.Row():
+                        outlaw_refuge_status_filter = gr.Radio(["Active", "All", "Abandoned"], value="Active", label="Refuges")
+                        outlaw_refuge_limit = gr.Number(value=50, label="Limit", precision=0)
+                    outlaw_refuge_search = gr.Textbox(
+                        label="Search Refuges",
+                        placeholder="Refuge id, region, nearby settlement, status...",
+                    )
+                    outlaw_refuge_load = gr.Button("Browse Refuges")
+                    outlaw_refuge_status = gr.Textbox(label="Refuge Status", interactive=False)
+                    outlaw_refuge_table = gr.Dataframe(
+                        label="Outlaw Refuges",
+                        interactive=False,
+                        wrap=False,
+                        elem_id="outlaw-refuge-table",
+                    )
+                    outlaw_refuge_keys_state = gr.State([])
+                with gr.Column(scale=5):
+                    outlaw_refuge_sheet = gr.HTML(
+                        value='<div class="place-sheet muted">Browse refuges, then click a row to inspect it.</div>',
+                        label="Refuge Sheet",
+                    )
+
         with gr.Tab("Regions") as regions_tab:
             with gr.Row(elem_classes=["world-browser"]):
                 with gr.Column(scale=5):
@@ -10866,6 +11492,38 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             settlement_input.change(load_settlements_browser, settlement_browser_inputs, settlement_browser_outputs)
         settlement_search.submit(load_settlements_browser, settlement_browser_inputs, settlement_browser_outputs)
         settlement_table.select(select_settlement_from_table, [settlement_ids_state, settlement_world], settlement_sheet)
+        outlaw_case_inputs = [
+            outlaw_world,
+            outlaw_case_status_filter,
+            outlaw_case_search,
+            outlaw_case_limit,
+        ]
+        outlaw_case_outputs = [outlaw_case_table, outlaw_case_status, outlaw_case_keys_state]
+        outlaw_case_load.click(load_outlaw_cases_browser, outlaw_case_inputs, outlaw_case_outputs)
+        for outlaw_case_input in outlaw_case_inputs:
+            outlaw_case_input.change(load_outlaw_cases_browser, outlaw_case_inputs, outlaw_case_outputs)
+        outlaw_case_search.submit(load_outlaw_cases_browser, outlaw_case_inputs, outlaw_case_outputs)
+        outlaw_case_table.select(
+            select_outlaw_case_from_table,
+            [outlaw_case_keys_state, outlaw_world],
+            [outlaw_person_sheet, outlaw_share_text],
+        )
+        outlaw_refuge_inputs = [
+            outlaw_world,
+            outlaw_refuge_status_filter,
+            outlaw_refuge_search,
+            outlaw_refuge_limit,
+        ]
+        outlaw_refuge_outputs = [outlaw_refuge_table, outlaw_refuge_status, outlaw_refuge_keys_state]
+        outlaw_refuge_load.click(load_outlaw_refuges_browser, outlaw_refuge_inputs, outlaw_refuge_outputs)
+        for outlaw_refuge_input in outlaw_refuge_inputs:
+            outlaw_refuge_input.change(load_outlaw_refuges_browser, outlaw_refuge_inputs, outlaw_refuge_outputs)
+        outlaw_refuge_search.submit(load_outlaw_refuges_browser, outlaw_refuge_inputs, outlaw_refuge_outputs)
+        outlaw_refuge_table.select(
+            select_outlaw_refuge_from_table,
+            [outlaw_refuge_keys_state, outlaw_world],
+            outlaw_refuge_sheet,
+        )
         region_browser_inputs = [region_world, region_search, region_limit]
         region_browser_outputs = [region_table, region_status, region_ids_state]
         region_load.click(load_regions_browser_fresh, region_browser_inputs, region_browser_outputs)

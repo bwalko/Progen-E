@@ -27,7 +27,11 @@ from library.mind_body import attractiveness_01, ensure_full_mind_body, work_tra
 from library.personality_interpreter import interpret_genome_personality
 from library.geography import list_routes_from
 from library.random_traits import _as_int, _connect
-from library.simulation_outlaws import is_outlaw_absent
+from library.simulation_outlaws import (
+    is_outlaw_absent,
+    normalize_outlaw_labor_state,
+    outlaw_blocks_normal_career,
+)
 
 if TYPE_CHECKING:
     from library.person import Person
@@ -2420,6 +2424,9 @@ def assign_career_if_eligible(
     trait_values: dict[str, float] | None = None,
 ) -> CareerAssignment | None:
     """Assign or rehire an eligible person, returning details if changed."""
+    if outlaw_blocks_normal_career(rec.person):
+        normalize_outlaw_labor_state(ctx, rec, year)
+        return None
     if rec.person.job:
         return None
     historical_year = (
@@ -2826,6 +2833,9 @@ def _assign_special_household_job(
     employer_person_id: int | None = None,
     trait_values: dict[str, float] | None = None,
 ) -> bool:
+    if outlaw_blocks_normal_career(rec.person):
+        normalize_outlaw_labor_state(ctx, rec, year)
+        return False
     if rec.person.job:
         return False
     previous_job = rec.person.last_job
@@ -3077,6 +3087,9 @@ def _maybe_assign_domestic_service(
     trait_values: dict[str, float],
     care_indexes: object | None,
 ) -> bool:
+    if outlaw_blocks_normal_career(rec.person):
+        normalize_outlaw_labor_state(ctx, rec, year)
+        return False
     if rec.person.job or rec.person.partner_person_id is not None:
         return False
     if _household_dependent_minor_count(ctx, rec, year, indexes=care_indexes) > 0:
@@ -3133,6 +3146,9 @@ def _maybe_assign_vice_work(
     trait_values: dict[str, float],
     desperation: float,
 ) -> bool:
+    if outlaw_blocks_normal_career(rec.person):
+        normalize_outlaw_labor_state(ctx, rec, year)
+        return False
     if rec.person.job or _person_age(rec.person, year) < ADULT_HOUSING_MIN_AGE:
         return False
     housing = (rec.person.housing_status or "").strip().lower()
@@ -3186,6 +3202,9 @@ def _resolve_adult_housing_pressure(
     care_indexes: object | None,
     archetypes: JobArchetypeCatalog,
 ) -> None:
+    if outlaw_blocks_normal_career(rec.person):
+        normalize_outlaw_labor_state(ctx, rec, year)
+        return
     if _person_age(rec.person, year) < ADULT_HOUSING_MIN_AGE:
         return
     if rec.person.job:
@@ -3376,6 +3395,9 @@ def maybe_assign_or_rehire(
     era: str | None = None,
     trait_values: dict[str, float] | None = None,
 ) -> bool:
+    if outlaw_blocks_normal_career(rec.person):
+        normalize_outlaw_labor_state(ctx, rec, year)
+        return False
     if rec.person.job:
         return False
     historical_year = (
@@ -3575,6 +3597,9 @@ def maybe_migrate_job_seeker_household(
     pressure: float,
     career_facts: YearCareerFacts | None = None,
 ) -> bool:
+    if outlaw_blocks_normal_career(rec.person):
+        normalize_outlaw_labor_state(ctx, rec, year)
+        return False
     if rec.person.job or rec.person.employment_status != "unemployed":
         return False
     unemployment_years = _unemployment_years(rec.person, year)
@@ -3676,6 +3701,9 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
             )
             job_age_cache[key] = min_age
         if int(year) - int(rec.person.birthyear) < min_age:
+            continue
+        if outlaw_blocks_normal_career(rec.person):
+            normalize_outlaw_labor_state(ctx, rec, year)
             continue
         materialize_adult_profile(ctx, rec, year)
         potentially_eligible.append(rec)
