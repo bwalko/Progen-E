@@ -240,6 +240,7 @@ def _memory_outlaw_place_save() -> sqlite3.Connection:
         """
         create table simulation_outlaw_refuges (
             refuge_id text primary key,
+            display_name text,
             region_id text,
             near_settlement_id text,
             status text,
@@ -285,7 +286,7 @@ def _memory_outlaw_place_save() -> sqlite3.Connection:
     con.execute(
         """
         insert into simulation_outlaw_refuges values (
-            'outlaw_refuge:r1:1', 'r1', 'r1:s1', 'active',
+            'outlaw_refuge:r1:1', 'The Blackthorn Crag', 'r1', 'r1:s1', 'active',
             1001, 1003, null, 3, 0.64, 0.12, 1004, 1, '{}'
         )
         """
@@ -305,8 +306,61 @@ def _memory_outlaw_place_save() -> sqlite3.Connection:
         insert into simulation_events (world, sim_year, event_type, payload_json)
         values (
             'test', 1004, 'outlaw_raid',
-            '{"person_id": 1, "outlaw_refuge_id": "outlaw_refuge:r1:1", "offense_type": "property_crime"}'
+            '{"person_id": 1, "outlaw_refuge_id": "outlaw_refuge:r1:1", "outlaw_refuge_display_name": "The Blackthorn Crag", "near_settlement_id": "r1:s1", "region_id": "r1", "offense_type": "property_crime"}'
         )
+        """
+    )
+    con.execute(
+        """
+        create view simulation_outlaw_refuges_readable as
+        select
+            refuge_id,
+            display_name,
+            region_id,
+            near_settlement_id as settlement_id,
+            near_settlement_id,
+            status,
+            founded_year,
+            discovered_year,
+            abandoned_year,
+            band_size,
+            concealment_01,
+            support_01,
+            last_activity_year,
+            active_case_count,
+            details_json
+        from simulation_outlaw_refuges
+        """
+    )
+    con.execute(
+        """
+        create view simulation_outlaw_cases_readable as
+        select
+            c.case_key,
+            c.accused_person_id,
+            c.accused_name,
+            c.offense_type,
+            c.offense_kind,
+            c.status,
+            c.resolution,
+            c.start_year,
+            c.last_seen_year,
+            c.expected_forget_year,
+            c.resolved_year,
+            null as source_event_year,
+            c.severity_01,
+            c.knownness_01,
+            c.pursuit_pressure_01,
+            c.buyoff_power_01,
+            c.victim_person_id,
+            c.target_person_id,
+            c.region_id,
+            c.settlement_id,
+            c.refuge_id,
+            r.display_name as refuge_display_name,
+            c.details_json
+        from simulation_outlaw_cases c
+        left join simulation_outlaw_refuges r on r.refuge_id = c.refuge_id
         """
     )
     return con
@@ -3318,14 +3372,15 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(settlement_table["headers"], gdb.SETTLEMENT_BROWSER_HEADERS)
         self.assertEqual(settlement_ids, ["outlaw_refuge:r1:1"])
         self.assertIn("settlements/refuges", status)
-        self.assertIn("Outlaw refuge near Fordham", settlement_table["value"][0][0])
+        self.assertIn("The Blackthorn Crag", settlement_table["value"][0][0])
         self.assertIn("outlaw refuge", settlement_table["value"][0][1])
-        self.assertIn("Outlaw refuge near Fordham", settlement_sheet)
+        self.assertIn("The Blackthorn Crag", settlement_sheet)
         self.assertIn("storehouse robbery", settlement_sheet)
         self.assertEqual(town_table["headers"], gdb.PLACE_TOWN_HEADERS)
         self.assertEqual(town_keys, [gdb._encode_place_key("test", "test", "outlaw_refuge:r1:1")])
         self.assertIn("showing 1 towns", town_status)
-        self.assertIn("Outlaw refuge near Fordham", town_sheet)
+        self.assertIn("The Blackthorn Crag", town_sheet)
+        self.assertNotIn("outlaw_refuge:r1:1</h2>", settlement_sheet)
 
     def test_outlaw_browser_loads_cases_refuges_and_person_selection(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -3373,8 +3428,40 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(refuge_table["headers"], gdb.OUTLAW_REFUGE_BROWSER_HEADERS)
         self.assertIn("outlaw refuges", refuge_status)
         self.assertEqual(refuge_keys, ["outlaw_refuge:r1:1"])
-        self.assertIn("Outlaw refuge near Fordham", refuge_sheet)
+        self.assertEqual(refuge_table["value"][0][0], "The Blackthorn Crag")
+        self.assertIn("The Blackthorn Crag", refuge_sheet)
         self.assertIn("Ada Forge", refuge_sheet)
+
+    def test_person_outlawry_uses_refuge_display_names(self) -> None:
+        con = _memory_outlaw_place_save()
+        try:
+            _attach_empty_genome_config(con)
+            con.execute(
+                """
+                update simulation_people
+                set person_json = json_set(
+                    person_json,
+                    '$.outlaw_status', 'fugitive',
+                    '$.outlaw_refuge_id', 'outlaw_refuge:r1:1'
+                )
+                where person_id = 1
+                """
+            )
+            row = con.execute("select * from simulation_people where person_id = 1").fetchone()
+            person = gdb._person_from_row(row, {})
+            outlaw_rows = gdb._person_outlaw_case_rows(con, "test", 1)
+            outlaw_html = "".join(gdb._person_outlaw_case_items_html(con, "test", outlaw_rows, 1))
+            sheet = gdb._render_person_sheet(con, "test", row, person)
+            share = gdb._render_person_share_text(con, "test", row, person)
+        finally:
+            con.close()
+
+        for visible in (outlaw_html, sheet, share):
+            self.assertIn("The Blackthorn Crag", visible)
+            self.assertIn("Fordham", visible)
+            self.assertIn("River Country", visible)
+            self.assertNotIn("outlaw_refuge:r1:1", visible)
+            self.assertNotIn("r1:s1", visible)
 
     def test_place_browsers_read_keyed_place_schema_through_readable_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

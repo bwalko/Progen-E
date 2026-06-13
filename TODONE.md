@@ -104,6 +104,40 @@
   attempted first and timed out after 5 minutes; the modules passed when split
   into smaller runs.
 
+## Outlawry Follow-Up: Refuge Display Names
+
+- Closed the raw-ID leakage visible in Outlawry person summaries and refuge
+  browsing:
+  - `SimulationOutlawRefuge` now carries a persisted `display_name`;
+  - new refuges receive deterministic colorful names such as "The Blackthorn
+    Crag" instead of exposing `outlaw_refuge:<region>:<ordinal>` keys;
+  - outlaw event payloads include the refuge display name when available;
+  - Gradio case tables, refuge tables, settlement/town refuge rows, person
+    Outlawry details, current Outlaw Refuge cards, share text, and event prose
+    resolve refuge/place labels through readable names.
+- Bumped save schema to v21 and added `display_name` to
+  `simulation_outlaw_refuges`, `simulation_outlaw_refuges_readable`, and
+  `simulation_outlaw_cases_readable`.
+- Legacy-safe behavior remains:
+  - existing refuge rows without `display_name` get deterministic fallback names
+    from their refuge/region/place/year data;
+  - minimal browser fixtures without settlement/region tables still render
+    place tails without crashing.
+- Added regression coverage in:
+  - `unit_test.test_simulation_outlaws` for refuge names at flight, readable
+    views, and checkpoint hydration;
+  - `unit_test.test_gradio_data_browser` for named refuges in settlement/town
+    browsers, Outlaws tab tables/sheets, and person Outlawry/share text.
+- Verified with:
+  - `python -m py_compile library/simulation_outlaws.py library/world_save.py
+    utils/gradio_data_browser.py unit_test/test_simulation_outlaws.py
+    unit_test/test_gradio_data_browser.py`;
+  - `python -m unittest unit_test.test_simulation_outlaws
+    unit_test.test_gradio_data_browser` (passed with an existing ResourceWarning
+    about an unclosed SQLite connection in browser test support);
+  - `python -m unittest unit_test.test_save_checkpoint`;
+  - `python utils/util_load_config.py --world default`.
+
 ## Placename Length And Visible `-by` Tuning
 
 - Added settlement display-length budgeting in `library.placenames_generation`:

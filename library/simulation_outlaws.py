@@ -59,6 +59,7 @@ class SimulationOutlawRefuge:
 
     refuge_id: str
     region_id: str
+    display_name: str = ""
     near_settlement_id: str | None = None
     status: str = "active"
     founded_year: int | None = None
@@ -73,6 +74,108 @@ class SimulationOutlawRefuge:
 
 def clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+_REFUGE_ADJECTIVES = (
+    "Ashen",
+    "Blackthorn",
+    "Briar",
+    "Cinder",
+    "Duskwater",
+    "Flint",
+    "Gray",
+    "Hidden",
+    "Lanternless",
+    "Mossblack",
+    "Old",
+    "Red",
+    "Sable",
+    "Shadowed",
+    "Thorn",
+    "Whispering",
+)
+
+_REFUGE_NOUNS = (
+    "Brake",
+    "Camp",
+    "Crag",
+    "Cut",
+    "Den",
+    "Fold",
+    "Hollow",
+    "Ledge",
+    "Mire",
+    "Ravine",
+    "Shelter",
+    "Thicket",
+    "Tor",
+    "Vault",
+    "Wash",
+)
+
+_REFUGE_REGION_NOUNS = {
+    "bay": "Cove",
+    "bog": "Mire",
+    "coast": "Cove",
+    "forest": "Thicket",
+    "granite": "Crag",
+    "hill": "Tor",
+    "marsh": "Mire",
+    "mount": "Crag",
+    "range": "Ridge",
+    "river": "Ford",
+    "stone": "Ledge",
+    "wood": "Brake",
+}
+
+
+def _stable_index(parts: tuple[object, ...]) -> int:
+    value = 2_166_136_261
+    for part in parts:
+        for ch in str(part or ""):
+            value ^= ord(ch)
+            value = (value * 16_777_619) & 0xFFFFFFFF
+    return int(value)
+
+
+def _refuge_region_noun(region_id: object, seed: int) -> str:
+    tokens = [
+        token.strip().lower()
+        for token in str(region_id or "").replace("-", "_").split("_")
+        if token.strip()
+    ]
+    for token in tokens:
+        noun = _REFUGE_REGION_NOUNS.get(token)
+        if noun:
+            return noun
+    return _REFUGE_NOUNS[(seed // max(1, len(_REFUGE_ADJECTIVES))) % len(_REFUGE_NOUNS)]
+
+
+def outlaw_refuge_display_name(
+    refuge_id: object,
+    *,
+    region_id: object = "",
+    near_place_label: object = "",
+    year: object = "",
+    salt: object = "",
+) -> str:
+    """Deterministic readable name for a refuge when no saved name exists."""
+    explicit = str(refuge_id or "").strip()
+    seed = _stable_index((explicit, region_id, near_place_label, year, salt))
+    adjective = _REFUGE_ADJECTIVES[seed % len(_REFUGE_ADJECTIVES)]
+    noun = _refuge_region_noun(region_id, seed)
+    return f"The {adjective} {noun}"
+
+
+def _unique_refuge_display_name(name: str, used_names: set[str]) -> str:
+    base = (name or "").strip() or "The Hidden Camp"
+    taken = {n.strip().casefold() for n in used_names if n.strip()}
+    if base.casefold() not in taken:
+        return base
+    idx = 2
+    while f"{base} {idx}".casefold() in taken:
+        idx += 1
+    return f"{base} {idx}"
 
 
 def is_outlaw_absent(person: object) -> bool:
@@ -391,8 +494,18 @@ def _choose_refuge(
     ]
     if active:
         refuge = min(active, key=lambda r: (int(r.band_size), r.refuge_id))
+        display_name = str(refuge.display_name or "").strip()
+        if not display_name:
+            display_name = outlaw_refuge_display_name(
+                refuge.refuge_id,
+                region_id=refuge.region_id,
+                near_place_label=refuge.near_settlement_id or "",
+                year=refuge.founded_year or year,
+                salt=getattr(ctx, "placename_rng_salt", 0),
+            )
         refuge = replace(
             refuge,
+            display_name=display_name,
             band_size=int(refuge.band_size) + 1,
             last_activity_year=int(year),
         )
@@ -401,9 +514,23 @@ def _choose_refuge(
     ordinal = len(getattr(ctx, "outlaw_refuges", {}) or {}) + 1
     refuge_id = f"outlaw_refuge:{rid}:{ordinal}"
     rng = random.Random(int(year) * 97_031 + ordinal * 109 + int(getattr(ctx, "placename_rng_salt", 0)))
+    display_name = _unique_refuge_display_name(
+        outlaw_refuge_display_name(
+            refuge_id,
+            region_id=rid,
+            near_place_label=case.settlement_id or "",
+            year=year,
+            salt=getattr(ctx, "placename_rng_salt", 0),
+        ),
+        {
+            str(getattr(r, "display_name", "") or "")
+            for r in (getattr(ctx, "outlaw_refuges", {}) or {}).values()
+        },
+    )
     refuge = SimulationOutlawRefuge(
         refuge_id=refuge_id,
         region_id=rid,
+        display_name=display_name,
         near_settlement_id=case.settlement_id,
         status="active",
         founded_year=int(year),
@@ -480,6 +607,7 @@ def flee_to_refuge(
             **_case_event_payload(case, event_type="outlaw_flight"),
             "from_settlement_id": last_free,
             "outlaw_refuge_id": refuge.refuge_id,
+            "outlaw_refuge_display_name": refuge.display_name,
             "details": "fled from ordinary settlement residence",
         },
     )
@@ -490,6 +618,7 @@ def flee_to_refuge(
             "year": int(year),
             **_case_event_payload(case, event_type="outlaw_refuge_joined"),
             "outlaw_refuge_id": refuge.refuge_id,
+            "outlaw_refuge_display_name": refuge.display_name,
             "band_size": int(refuge.band_size),
             "near_settlement_id": refuge.near_settlement_id,
         },
@@ -681,6 +810,7 @@ def _record_raid(ctx: "SimulationContext", case: SimulationOutlawCase, refuge: S
             "year": int(year),
             **_case_event_payload(case, event_type="outlaw_raid"),
             "outlaw_refuge_id": refuge.refuge_id,
+            "outlaw_refuge_display_name": refuge.display_name,
             "near_settlement_id": refuge.near_settlement_id,
             "band_size": int(refuge.band_size),
             "raid_pressure_01": round(clamp01(case.severity_01 * 0.45 + case.pursuit_pressure_01 * 0.35), 5),
@@ -772,6 +902,7 @@ def simulation_outlaws_annual_tick(ctx: "SimulationContext", year: int) -> None:
                 "year": int(year),
                 **_case_event_payload(case, event_type="outlaw_pursuit"),
                 "outlaw_refuge_id": refuge.refuge_id,
+                "outlaw_refuge_display_name": refuge.display_name,
                 "band_size": int(refuge.band_size),
                 "discovery_chance_01": round(discovery_chance, 5),
             },

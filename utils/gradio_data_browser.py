@@ -27,6 +27,8 @@ import gradio as gr
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from library.simulation_outlaws import outlaw_refuge_display_name
+
 CONFIG_DIR = PROJECT_ROOT / "config"
 WORLDS_DIR = PROJECT_ROOT / "worlds"
 TEMP_DIR = PROJECT_ROOT / "temp"
@@ -3609,13 +3611,106 @@ def _outlaw_refuge_near_settlement_id(row: sqlite3.Row) -> str:
     ).strip()
 
 
+def _safe_settlement_name(con: sqlite3.Connection, world: str, settlement_id: object) -> str:
+    if not settlement_id:
+        return ""
+    try:
+        return _settlement_name(con, world, settlement_id)
+    except sqlite3.Error:
+        return str(settlement_id)
+
+
+def _safe_region_label(con: sqlite3.Connection, world: str, region_id: object) -> str:
+    if not region_id:
+        return ""
+    try:
+        return _history_region_label(con, world, region_id)
+    except sqlite3.Error:
+        return str(region_id)
+
+
 def _outlaw_refuge_display_name(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
+    refuge_id = str(_outlaw_row_value(row, "refuge_id") or "").strip()
+    explicit = str(_outlaw_row_value(row, "display_name") or "").strip()
+    if explicit:
+        return explicit
+    near_sid = _outlaw_refuge_near_settlement_id(row)
+    region_id = _outlaw_refuge_region_id(row)
+    near_label = _safe_settlement_name(con, world, near_sid) if near_sid else ""
+    return outlaw_refuge_display_name(
+        refuge_id,
+        region_id=region_id,
+        near_place_label=near_label,
+        year=_outlaw_row_value(row, "founded_year", ""),
+    )
+
+
+def _lookup_outlaw_refuge_display_name(
+    con: sqlite3.Connection,
+    world: str,
+    refuge_id: object,
+    *,
+    region_id: object = "",
+    near_settlement_id: object = "",
+) -> str:
+    rid = str(refuge_id or "").strip()
+    if not rid:
+        return ""
+    if _has_table(con, "simulation_outlaw_refuges"):
+        relation = _outlaw_relation(con, "simulation_outlaw_refuges")
+        try:
+            row = con.execute(
+                f"select * from {_quote_identifier(relation)} where refuge_id = ?",
+                (rid,),
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is not None:
+            return _outlaw_refuge_display_name(con, world, row)
+    near_sid = str(near_settlement_id or "").strip()
+    near_label = _safe_settlement_name(con, world, near_sid) if near_sid else ""
+    return outlaw_refuge_display_name(rid, region_id=region_id, near_place_label=near_label)
+
+
+def _outlaw_case_refuge_label(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
+    explicit = str(
+        _row_value(row, "refuge_display_name")
+        or _row_value(row, "display_name")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+    refuge_id = _row_value(row, "refuge_id")
+    if refuge_id in (None, ""):
+        return ""
+    return _lookup_outlaw_refuge_display_name(
+        con,
+        world,
+        refuge_id,
+        region_id=_row_value(row, "region_id"),
+        near_settlement_id=_row_value(row, "settlement_id"),
+    )
+
+
+def _person_current_outlaw_refuge_label(
+    con: sqlite3.Connection,
+    world: str,
+    person: dict[str, object],
+) -> str:
+    refuge_id = person.get("outlaw_refuge_id")
+    if refuge_id in (None, ""):
+        return "none"
+    return _lookup_outlaw_refuge_display_name(con, world, refuge_id)
+
+
+def _legacy_outlaw_refuge_place_name(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
+    """Kept only for stale tests or direct callers that want the old generic form."""
     refuge_id = str(_outlaw_row_value(row, "refuge_id") or "").strip()
     near_sid = _outlaw_refuge_near_settlement_id(row)
     region_id = _outlaw_refuge_region_id(row)
     if near_sid:
-        return f"Outlaw refuge near {_settlement_name(con, world, near_sid)}"
-    region_name = _history_region_label(con, world, region_id) if region_id else ""
+        return f"Outlaw refuge near {_safe_settlement_name(con, world, near_sid)}"
+    region_name = _safe_region_label(con, world, region_id) if region_id else ""
     if region_name:
         return f"Outlaw refuge in {region_name}"
     return refuge_id or "Outlaw refuge"
@@ -3636,7 +3731,7 @@ def _outlaw_refuge_summary_row(
         "Name": _outlaw_refuge_display_name(con, world, row),
         "Level": "outlaw refuge",
         "Alive": band_size or active_cases or "",
-        "Region": _history_region_label(con, world, region_id) if region_id else "",
+        "Region": _safe_region_label(con, world, region_id) if region_id else "",
         "Status": _outlaw_row_value(row, "status", ""),
         "Food": "",
         "Stability": "",
@@ -3651,6 +3746,7 @@ def _outlaw_refuge_summary_row(
 def _outlaw_refuge_search_columns(columns: set[str]) -> list[str]:
     wanted = [
         "refuge_id",
+        "display_name",
         "region_id",
         "settlement_id",
         "near_settlement_id",
@@ -4001,6 +4097,7 @@ def _outlaw_case_search_columns(columns: set[str]) -> list[str]:
         "status",
         "resolution",
         "refuge_id",
+        "refuge_display_name",
         "region_id",
         "settlement_id",
         "details_json",
@@ -4075,9 +4172,9 @@ def _outlaw_case_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.R
         "Status": _outlaw_row_value(row, "status", ""),
         "Offense": offense,
         "Accused": _outlaw_case_accused_label(con, world, row),
-        "Refuge": _outlaw_row_value(row, "refuge_id", ""),
-        "Region": _history_region_label(con, world, _outlaw_row_value(row, "region_id", "")),
-        "Settlement": _settlement_name(con, world, _outlaw_row_value(row, "settlement_id", "")),
+        "Refuge": _outlaw_case_refuge_label(con, world, row),
+        "Region": _safe_region_label(con, world, _outlaw_row_value(row, "region_id", "")),
+        "Settlement": _safe_settlement_name(con, world, _outlaw_row_value(row, "settlement_id", "")),
         "Started": _outlaw_row_value(row, "start_year", ""),
         "Last Seen": _outlaw_row_value(row, "last_seen_year", ""),
         "Forget Year": _outlaw_row_value(row, "expected_forget_year", ""),
@@ -4183,9 +4280,9 @@ def _render_outlaw_refuge_sheet(con: sqlite3.Connection, world: str, refuge_id: 
     if row is None:
         return f'<div class="place-sheet muted">No outlaw refuge named {html.escape(rid)}.</div>'
     region_id = _outlaw_refuge_region_id(row)
-    region_name = _history_region_label(con, world, region_id) if region_id else ""
+    region_name = _safe_region_label(con, world, region_id) if region_id else ""
     near_sid = _outlaw_refuge_near_settlement_id(row)
-    near_name = _settlement_name(con, world, near_sid) if near_sid else ""
+    near_name = _safe_settlement_name(con, world, near_sid) if near_sid else ""
     active_cases = _outlaw_row_value(row, "active_case_count", None)
     if active_cases in (None, ""):
         active_cases = _outlaw_refuge_active_case_count(con, rid)
@@ -4258,7 +4355,7 @@ def _render_outlaw_refuge_sheet(con: sqlite3.Connection, world: str, refuge_id: 
         except sqlite3.Error:
             event_items = []
     title = _outlaw_refuge_display_name(con, world, row)
-    subtitle_bits = [rid]
+    subtitle_bits: list[str] = []
     if region_name:
         subtitle_bits.append(region_name)
     if near_name:
@@ -4323,10 +4420,10 @@ def load_outlaw_refuges_browser(
                 active_cases = _outlaw_refuge_active_case_count(con, refuge_id)
             values.append(
                 {
-                    "Refuge": refuge_id,
+                    "Refuge": _outlaw_refuge_display_name(con, saved_world, row),
                     "Status": _outlaw_row_value(row, "status", ""),
-                    "Region": _history_region_label(con, saved_world, region_id) if region_id else "",
-                    "Near Settlement": _settlement_name(con, saved_world, near_sid) if near_sid else "",
+                    "Region": _safe_region_label(con, saved_world, region_id) if region_id else "",
+                    "Near Settlement": _safe_settlement_name(con, saved_world, near_sid) if near_sid else "",
                     "Band Size": _outlaw_row_value(row, "band_size", ""),
                     "Active Cases": active_cases,
                     "Founded": _outlaw_row_value(row, "founded_year", ""),
@@ -5031,13 +5128,15 @@ def _event_place_text(con: sqlite3.Connection, world: str, payload: dict[str, ob
     settlement_id = payload.get("settlement_id")
     settlement_table = _place_read_relation(con, "simulation_settlements")
     if settlement_id and _has_relation(con, settlement_table):
-        settlement = _settlement_name(con, world, settlement_id)
+        settlement = _safe_settlement_name(con, world, settlement_id)
         if settlement:
             return settlement
     if settlement_id:
         return str(settlement_id)
     region = str(payload.get("region_id") or "").strip()
-    return _event_label_text(region, "an unrecorded place")
+    if region:
+        return _safe_region_label(con, world, region)
+    return "an unrecorded place"
 
 
 def _event_person_list(
@@ -5212,10 +5311,27 @@ def _knowledge_culture_sentence_html(
     return sentence + "." + details
 
 
-def _outlaw_refuge_label(payload: dict[str, object]) -> str:
+def _outlaw_refuge_label(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+) -> str:
+    explicit = str(
+        payload.get("outlaw_refuge_display_name")
+        or payload.get("refuge_display_name")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
     refuge = str(payload.get("outlaw_refuge_id") or payload.get("refuge_id") or "").strip()
     if refuge:
-        return refuge.replace("outlaw_refuge:", "refuge:")
+        return _lookup_outlaw_refuge_display_name(
+            con,
+            world,
+            refuge,
+            region_id=payload.get("region_id"),
+            near_settlement_id=payload.get("near_settlement_id") or payload.get("settlement_id"),
+        )
     return "unknown refuge"
 
 
@@ -5236,7 +5352,7 @@ def _outlaw_event_sentence(
         payload.get("incident_kind") or payload.get("offense_type") or "offense"
     ).replace("_", " ")
     place = _event_place_text(con, world, payload)
-    refuge = _outlaw_refuge_label(payload)
+    refuge = _outlaw_refuge_label(con, world, payload)
     pressure = _event_float(payload, "pursuit_pressure_01")
     pressure_tail = f"; pursuit pressure {pressure:.2f}" if pressure is not None else ""
     if event_type == "outlaw_case_opened":
@@ -5287,7 +5403,7 @@ def _outlaw_event_sentence_html(
         str(payload.get("incident_kind") or payload.get("offense_type") or "offense").replace("_", " ")
     )
     place = html.escape(_event_place_text(con, world, payload))
-    refuge = html.escape(_outlaw_refuge_label(payload))
+    refuge = html.escape(_outlaw_refuge_label(con, world, payload))
     pressure = _event_float(payload, "pursuit_pressure_01")
     pressure_tail = f"; pursuit pressure {pressure:.2f}" if pressure is not None else ""
     if event_type == "outlaw_case_opened":
@@ -6400,13 +6516,27 @@ def _year_span_text(start_year: object, end_year: object = None) -> str:
     return _format_year_span(start_year, end_year)
 
 
-def _place_tail(row: sqlite3.Row | dict[str, object]) -> str:
+def _place_tail(
+    row: sqlite3.Row | dict[str, object],
+    con: sqlite3.Connection | None = None,
+    world: str = "",
+) -> str:
     getter = row.get if isinstance(row, dict) else lambda key, default=None: _row_value(row, key, default)
-    parts = [
-        str(getter("settlement_id") or "").strip(),
-        str(getter("region_id") or "").strip(),
-    ]
-    shown = [part for part in parts if part]
+    settlement_id = str(getter("settlement_id") or "").strip()
+    region_id = str(getter("region_id") or "").strip()
+    shown: list[str] = []
+    if settlement_id:
+        shown.append(
+            _safe_settlement_name(con, world, settlement_id)
+            if con is not None
+            else settlement_id
+        )
+    if region_id:
+        shown.append(
+            _safe_region_label(con, world, region_id)
+            if con is not None
+            else region_id
+        )
     return f"; place: {', '.join(shown)}" if shown else ""
 
 
@@ -6459,7 +6589,7 @@ def _person_obligation_items_html(
             ("source", str(_row_value(row, "source_event_type") or "").replace("_", " ")),
         )
         if detail:
-            detail += _place_tail(row)
+            detail += _place_tail(row, con, world)
         items.append(
             '<div class="relation consequence-row consequence-obligation">'
             f'<strong>{html.escape(_year_span_text(_row_value(row, "start_year"), _row_value(row, "expected_end_year")))} · '
@@ -6473,6 +6603,8 @@ def _person_obligation_items_html(
 
 
 def _person_reputation_mark_items_html(
+    con: sqlite3.Connection,
+    world: str,
     rows: list[sqlite3.Row],
     focus_person_id: object,
 ) -> list[str]:
@@ -6489,7 +6621,7 @@ def _person_reputation_mark_items_html(
             ("source", str(_row_value(row, "source_event_type") or "").replace("_", " ")),
         )
         if detail:
-            detail += _place_tail(row)
+            detail += _place_tail(row, con, world)
         items.append(
             '<div class="relation consequence-row consequence-reputation">'
             f'<strong>{html.escape(_year_span_text(_row_value(row, "mark_year")))} · '
@@ -6538,7 +6670,7 @@ def _person_legal_fallout_items_html(
             ("source", str(_row_value(row, "source_event_type") or "").replace("_", " ")),
         )
         if detail:
-            detail += _place_tail(row)
+            detail += _place_tail(row, con, world)
         items.append(
             '<div class="relation consequence-row consequence-legal">'
             f'<strong>{html.escape(_year_span_text(_row_value(row, "start_year"), _row_value(row, "expected_resolution_year")))} · '
@@ -6589,10 +6721,10 @@ def _person_outlaw_case_items_html(
             ("knownness", _fmt_number(_row_value(row, "knownness_01"))),
             ("pursuit", _fmt_number(_row_value(row, "pursuit_pressure_01"))),
             ("buy-off", _fmt_number(_row_value(row, "buyoff_power_01"))),
-            ("refuge", _row_value(row, "refuge_id")),
+            ("refuge", _outlaw_case_refuge_label(con, world, row)),
         )
         if detail:
-            detail += _place_tail(row)
+            detail += _place_tail(row, con, world)
         offense = str(
             _row_value(row, "offense_kind") or _row_value(row, "offense_type") or "outlaw case"
         ).replace("_", " ")
@@ -6646,7 +6778,7 @@ def _person_knowledge_effect_items_html(
             ("domain", domain),
         )
         if detail:
-            detail += _place_tail(row)
+            detail += _place_tail(row, con, world)
         detail_html = (
             '<details class="event-card-details">'
             '<summary>Details</summary>'
@@ -6756,7 +6888,7 @@ def _person_outlaw_case_lines(
             _row_value(row, "offense_kind") or _row_value(row, "offense_type") or "outlaw case"
         ).replace("_", " ")
         resolution = _row_value(row, "resolution") or "unresolved"
-        refuge = _row_value(row, "refuge_id") or "none"
+        refuge = _outlaw_case_refuge_label(con, world, row) or "none"
         lines.append(
             f"- {_year_span_text(_row_value(row, 'start_year'), _row_value(row, 'resolved_year'))}: "
             f"{offense}; role {_person_outlaw_case_role(row, focus_person_id)}; "
@@ -7417,7 +7549,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         con, world, obligation_rows, row["person_id"]
     )
     reputation_items = _person_reputation_mark_items_html(
-        reputation_mark_rows, row["person_id"]
+        con, world, reputation_mark_rows, row["person_id"]
     )
     legal_fallout_items = _person_legal_fallout_items_html(
         con, world, legal_fallout_rows, row["person_id"]
@@ -7553,7 +7685,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         ),
         _render_detail_card(
             "Outlaw Refuge",
-            str(person.get("outlaw_refuge_id") or "none").replace("_", " "),
+            _person_current_outlaw_refuge_label(con, world, person),
         ),
         _render_detail_card("Patronage Ties", len(patronage_rows)),
     ]
@@ -7780,6 +7912,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
         else f", current year {_format_year(current_year)}"
     )
 
+    outlaw_refuge_label = _person_current_outlaw_refuge_label(con, world, person)
     return "\n".join(
         [
             _person_name(person),
@@ -7802,7 +7935,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             f"Housing: {str(person.get('housing_status') or 'unknown').replace('_', ' ')}; household role: {str(person.get('household_role') or 'none').replace('_', ' ')}.",
             f"Service attachment: employer {_person_link_text(con, world, person.get('employer_person_id')) if person.get('employer_person_id') else 'none'}; host {_person_link_text(con, world, person.get('host_person_id')) if person.get('host_person_id') else 'none'}.",
             f"Standing: class {str(person.get('social_class_band') or 'unknown').replace('_', ' ')}, social standing {_format_01_score(person.get('social_standing_01'))}, societal impact {_format_01_score(person.get('societal_impact_01'))}, perceived worth {_format_01_score(person.get('perceived_worth_01'))}.",
-            f"Outlawry: status {str(person.get('outlaw_status') or 'none').replace('_', ' ')}, refuge {str(person.get('outlaw_refuge_id') or 'none').replace('_', ' ')}.",
+            f"Outlawry: status {str(person.get('outlaw_status') or 'none').replace('_', ' ')}, refuge {outlaw_refuge_label}.",
             f"Character tags: {tags_text}",
             "",
             *archive_score_lines,

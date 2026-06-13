@@ -22,6 +22,11 @@ ordinary career assignment, stale outlaw job state is normalized, outlaw refuges
 appear in settlement/town browsing as refuge places, and Gradio has a direct
 Outlaws browser; see `TODONE.md`.
 
+The second follow-up is complete: outlaw refuges now persist colorful display
+names, readable/browser/person surfaces prefer those names over raw refuge IDs,
+and legacy rows without saved names receive deterministic display labels; see
+`TODONE.md`.
+
 Future outlaw work should be opened only for a concrete next behavior such as
 prison systems, passive-person promotion into outlaw cases, richer refuge maps,
 law-code variation by polity, or measured tuning/reporting gaps.

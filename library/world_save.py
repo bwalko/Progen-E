@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 20
+SAVE_SCHEMA_VERSION = 21
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -374,6 +374,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
         17,
         18,
         19,
+        20,
         SAVE_SCHEMA_VERSION,
     ):
         raise RuntimeError(
@@ -903,6 +904,7 @@ def _ensure_outlaw_tables(conn: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS simulation_outlaw_refuges (
             refuge_id TEXT PRIMARY KEY,
+            display_name TEXT,
             region_key INTEGER,
             near_settlement_key INTEGER,
             status TEXT NOT NULL DEFAULT 'active',
@@ -923,6 +925,9 @@ def _ensure_outlaw_tables(conn: sqlite3.Connection) -> None:
         ON simulation_outlaw_refuges (status);
         """
     )
+    cols = set(_table_columns(conn, "simulation_outlaw_refuges"))
+    if "display_name" not in cols:
+        conn.execute("ALTER TABLE simulation_outlaw_refuges ADD COLUMN display_name TEXT")
 
 
 def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> None:
@@ -938,13 +943,14 @@ def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> No
         conn.execute(
             """
             INSERT INTO simulation_outlaw_refuges (
-                refuge_id, region_key, near_settlement_key, status, founded_year,
+                refuge_id, display_name, region_key, near_settlement_key, status, founded_year,
                 discovered_year, abandoned_year, band_size, concealment_01,
                 support_01, last_activity_year, details_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(refuge_id)
             DO UPDATE SET
+                display_name = excluded.display_name,
                 region_key = excluded.region_key,
                 near_settlement_key = excluded.near_settlement_key,
                 status = excluded.status,
@@ -960,6 +966,7 @@ def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> No
             """,
             (
                 refuge_id,
+                str(getattr(refuge, "display_name", "") or "").strip() or None,
                 _lookup_or_insert_region_key(conn, region_id),
                 _lookup_or_insert_settlement_key(conn, near_sid, region_id),
                 str(getattr(refuge, "status", "active") or "active").strip() or "active",
@@ -6173,6 +6180,7 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
             rl.region_id,
             sl.settlement_id,
             c.refuge_id,
+            r.display_name AS refuge_display_name,
             r.status AS refuge_status,
             c.source_event_id,
             e.sim_year AS source_event_year,
@@ -6193,6 +6201,7 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         CREATE VIEW IF NOT EXISTS simulation_outlaw_refuges_readable AS
         SELECT
             r.refuge_id,
+            r.display_name,
             rl.region_id,
             sl.settlement_id AS near_settlement_id,
             r.status,
@@ -8695,7 +8704,11 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                     ),
                 )
 
-        from library.simulation_outlaws import SimulationOutlawCase, SimulationOutlawRefuge
+        from library.simulation_outlaws import (
+            SimulationOutlawCase,
+            SimulationOutlawRefuge,
+            outlaw_refuge_display_name,
+        )
 
         outlaw_refuges: dict[str, SimulationOutlawRefuge] = {}
         if _table_exists(conn, "simulation_outlaw_refuges"):
@@ -8727,6 +8740,25 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                     region_id=region_ids_by_key.get(int(rkey), "unknown")
                     if rkey is not None
                     else "unknown",
+                    display_name=(
+                        str(r["display_name"] or "").strip()
+                        if "display_name" in r.keys()
+                        else ""
+                    )
+                    or outlaw_refuge_display_name(
+                        str(r["refuge_id"] or ""),
+                        region_id=(
+                            region_ids_by_key.get(int(rkey), "unknown")
+                            if rkey is not None
+                            else "unknown"
+                        ),
+                        near_place_label=(
+                            settlement_ids_by_key.get(int(skey))
+                            if skey is not None
+                            else ""
+                        ),
+                        year=(r["founded_year"] if r["founded_year"] is not None else ""),
+                    ),
                     near_settlement_id=(
                         settlement_ids_by_key.get(int(skey))
                         if skey is not None

@@ -153,6 +153,8 @@ class TestSimulationOutlaws(unittest.TestCase):
             refuge = flee_to_refuge(ctx, case.case_key, year=1001)
 
             self.assertIsNotNone(refuge)
+            self.assertTrue(refuge.display_name)
+            self.assertNotIn("outlaw_refuge", refuge.display_name)
             self.assertNotIn(refuge.refuge_id, ctx.settlements_by_id)
             self.assertEqual(accused.person.outlaw_status, OUTLAW_STATUS_FUGITIVE)
             self.assertIsNone(accused.person.current_settlement_id)
@@ -398,7 +400,7 @@ class TestSimulationOutlaws(unittest.TestCase):
                 con.row_factory = sqlite3.Row
                 row = con.execute(
                     """
-                    SELECT case_key, accused_person_id, refuge_id, status
+                    SELECT case_key, accused_person_id, refuge_id, refuge_display_name, status
                     FROM simulation_outlaw_cases_readable
                     WHERE case_key = ?
                     """,
@@ -406,16 +408,18 @@ class TestSimulationOutlaws(unittest.TestCase):
                 ).fetchone()
                 self.assertIsNotNone(row)
                 self.assertEqual(row["refuge_id"], refuge.refuge_id)
+                self.assertEqual(row["refuge_display_name"], refuge.display_name)
                 self.assertEqual(row["status"], "active")
                 refuge_row = con.execute(
                     """
-                    SELECT refuge_id, active_case_count
+                    SELECT refuge_id, display_name, active_case_count
                     FROM simulation_outlaw_refuges_readable
                     WHERE refuge_id = ?
                     """,
                     (refuge.refuge_id,),
                 ).fetchone()
                 self.assertIsNotNone(refuge_row)
+                self.assertEqual(refuge_row["display_name"], refuge.display_name)
                 self.assertEqual(int(refuge_row["active_case_count"]), 1)
 
             loaded = SimulationContext.create(
@@ -433,6 +437,10 @@ class TestSimulationOutlaws(unittest.TestCase):
             self.assertIsNone(loaded_accused.person.current_settlement_id)
             self.assertIn(case.case_key, loaded.outlaw_cases)
             self.assertIn(refuge.refuge_id, loaded.outlaw_refuges)
+            self.assertEqual(
+                loaded.outlaw_refuges[refuge.refuge_id].display_name,
+                refuge.display_name,
+            )
 
 
 if __name__ == "__main__":
