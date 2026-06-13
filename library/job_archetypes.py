@@ -293,6 +293,94 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             0.0,
             0.50,
         )
+    if has("banker", "shipowner", "landholder"):
+        role = "finance" if "banker" in jk else ("trade" if "shipowner" in jk else "estate")
+        return JobArchetypeParams(
+            "settlement_market",
+            role,
+            "market" if role != "estate" else "estate",
+            "elite",
+            "cognitive" if role != "estate" else "mixed",
+            "supervisory",
+            "elite",
+            0.82,
+            0.56,
+            0.72,
+            0.68,
+            0.0,
+            False,
+            None,
+            0.44,
+            True,
+            0.0,
+            1.7,
+        )
+    if has("merchant", "caravan master", "moneylender"):
+        role = "finance" if "moneylender" in jk else "trade"
+        return JobArchetypeParams(
+            "settlement_market",
+            role,
+            "market",
+            "elite" if "moneylender" not in jk else "skilled",
+            "cognitive",
+            "self_directed",
+            "notable",
+            0.72,
+            0.56,
+            0.62,
+            0.64,
+            0.0,
+            False,
+            None,
+            0.44,
+            True,
+            0.0,
+            1.5,
+        )
+    if has("scholar", "physician", "priest"):
+        role = "care" if "physician" in jk else ("ritual" if "priest" in jk else "knowledge")
+        return JobArchetypeParams(
+            "settlement_market",
+            role,
+            "settlement",
+            "elite" if role != "ritual" else "skilled",
+            "cognitive" if role != "ritual" else "social",
+            "self_directed",
+            "professional",
+            0.58 if role != "care" else 0.64,
+            0.82 if role == "care" else 0.72,
+            0.66,
+            0.74,
+            0.38 if role == "care" else 0.0,
+            False,
+            None,
+            0.50,
+            True,
+            0.0,
+            1.25,
+        )
+    if has("courtier", "steward", "treasurer"):
+        role = "finance" if "treasurer" in jk else ("prestige" if "courtier" in jk else "stewardship")
+        return JobArchetypeParams(
+            "office",
+            role,
+            "office",
+            "elite" if role != "stewardship" else "skilled",
+            "cognitive" if role != "prestige" else "social",
+            "supervisory",
+            "upper" if role != "stewardship" else "professional",
+            0.70,
+            0.56,
+            0.68,
+            0.66,
+            0.0,
+            False,
+            None,
+            0.46,
+            True,
+            0.0,
+            1.45,
+        )
     if has("judge", "magistrate", "officer", "mayor", "ruler", "guild master"):
         return JobArchetypeParams(
             "office",

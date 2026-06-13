@@ -32,6 +32,7 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/job_economics.csv` | ~450 rows + header | Per-era **base** (`*`) plus **deviation** multiplier rows for non-typical jobs (from `genome_jobs` + tier heuristics) |
 | `config/job_market.csv` | Small + header, human-editable | Per-job market semantics: family, essential/luxury/urban demand, saturation, scarcity resilience, and settlement effect deltas |
 | `config/job_archetypes.csv` | Small + header, human-editable | Social/job-market semantics over normalized titles: household care, domestic service, vice/criminal/office pools, class/status, care intensity, adult-only gates, and board/cash compensation |
+| `config/status_echelons.csv` | Small + header, human-editable | Prestige/status bands derived from standing, household prosperity, class, and job market type; drives elite job access, patronage power, service demand, scandal severity, and elite investment |
 | `config/ethnic_proto_placewords.csv` | Proto/toponym stems by ethnicity and feature | One row per ethnic + feature type + concept |
 | `config/government_eras.csv` | Small + header | Historical-year bands per `world` → allowed polity type ids + default succession style |
 | `config/government_polity_types.csv` | Small + header | One row per `polity_type_id` (era, jurisdiction grain, head title, **min_population_to_form** = minimum **real-world** count to *bootstrap*/*promote* to that tier — multiplied by `world_start.population_scale` before comparison against alive in region; **max_population_before_split** = vassal split threshold, also scaled) |
@@ -388,6 +389,26 @@ multiple weapon frontiers.
 | `cash_wage_multiplier` | float >=0 | Multiplier for non-settlement cash wage/survival income. |
 
 Keep literal assignable job names neutral. Trait color belongs in `genome_jobs` descriptors, event prose, status effects, and archetype scores, not in the title string itself.
+
+---
+
+## `config/status_echelons.csv`
+
+**Purpose:** Human-editable status ladder for upper-echelon mobility. `library.status_echelons.StatusEchelonCatalog` derives a person's current echelon from saved `social_standing_01`, household prosperity, class band, and job market type. Career mobility, patronage, elite household investment, incident exposure, and browser summaries use this layer; it does not replace formal government titles.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `echelon_key` | string | Stable key such as `laboring`, `professional`, `notable`, `elite`, or `ruling`. |
+| `display_name` | string | Browser-facing label. |
+| `min_social_standing_01` | float 0..1 | Minimum standing before prosperity/class/job adjustments. |
+| `min_household_prosperity` | float >=0 | Minimum household savings expected for the echelon. |
+| `class_bands` | semicolon list | Class bands that slightly reinforce this echelon during derivation. |
+| `job_market_types` | semicolon list | Job market types that slightly reinforce this echelon during derivation. |
+| `prestige_access_multiplier` | float | Multiplier for access to scarce prestige promotions. |
+| `patronage_power_01` | float 0..1 | Ability to sponsor clients into better roles. |
+| `service_hiring_multiplier` | float | Expected demand for household service and retainers. |
+| `scandal_fall_severity_01` | float 0..1 | How painful public failures are at this echelon. |
+| `investment_share_01` | float 0..1 | Share of surplus that can become patronage, trade, charity, or settlement investment. |
 
 ---
 

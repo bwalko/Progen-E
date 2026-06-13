@@ -20,3 +20,17 @@ raider,exact,criminal,criminal,informal,ordinary,manual,informal,marginal,0.22,0
 judge,contains,office,authority,office,elite,cognitive,supervisory,upper,0.68,0.74,0.78,0.76,0.00,0,,0.42,1,0.00,1.45
 magistrate,contains,office,authority,office,elite,cognitive,supervisory,upper,0.66,0.72,0.76,0.74,0.00,0,,0.42,1,0.00,1.42
 guild master,contains,office,authority,office,elite,cognitive,supervisory,upper,0.76,0.60,0.70,0.72,0.00,0,,0.44,1,0.00,1.60
+merchant,exact,settlement_market,trade,market,elite,cognitive,self_directed,notable,0.72,0.60,0.66,0.68,0.00,0,,0.46,1,0.00,1.55
+caravan master,exact,settlement_market,trade,route,elite,mixed,supervisory,notable,0.74,0.62,0.68,0.70,0.00,0,,0.44,1,0.00,1.58
+shipowner,exact,settlement_market,trade,port,elite,cognitive,supervisory,elite,0.82,0.62,0.74,0.72,0.00,0,,0.44,1,0.00,1.70
+banker,exact,settlement_market,finance,market,elite,cognitive,self_directed,elite,0.84,0.54,0.70,0.66,0.00,0,,0.42,1,0.00,1.75
+moneylender,exact,settlement_market,finance,market,skilled,cognitive,self_directed,notable,0.70,0.38,0.50,0.44,0.00,0,,0.42,1,0.00,1.45
+courtier,exact,office,prestige,court,elite,social,supervisory,upper,0.64,0.42,0.72,0.62,0.00,0,,0.48,1,0.00,1.38
+steward,exact,office,stewardship,estate,skilled,cognitive,supervisory,professional,0.58,0.58,0.60,0.66,0.00,0,,0.50,1,0.00,1.28
+estate steward,exact,office,stewardship,estate,elite,cognitive,supervisory,notable,0.72,0.62,0.68,0.70,0.00,0,,0.50,1,0.00,1.55
+treasurer,exact,office,finance,office,elite,cognitive,supervisory,upper,0.78,0.58,0.70,0.68,0.00,0,,0.44,1,0.00,1.62
+guild treasurer,exact,office,finance,guild,elite,cognitive,supervisory,upper,0.76,0.58,0.68,0.68,0.00,0,,0.44,1,0.00,1.58
+scholar,exact,settlement_market,knowledge,school,elite,cognitive,self_directed,professional,0.56,0.78,0.66,0.72,0.00,0,,0.44,1,0.00,1.25
+physician,exact,settlement_market,care,settlement,elite,cognitive,self_directed,professional,0.64,0.86,0.70,0.78,0.38,0,,0.58,1,0.00,1.35
+priest,exact,settlement_market,ritual,temple,skilled,social,self_directed,professional,0.54,0.70,0.64,0.68,0.12,0,,0.50,1,0.00,1.15
+landholder,exact,settlement_market,estate,estate,elite,mixed,supervisory,elite,0.80,0.46,0.72,0.66,0.00,0,,0.46,1,0.00,1.65

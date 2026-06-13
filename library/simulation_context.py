@@ -158,6 +158,22 @@ class PassivePromotionLogEntry:
     synthesized: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SimulationPatronageTie:
+    """Runtime patron/client tie persisted by ``world_save``."""
+
+    patron_person_id: int
+    client_person_id: int
+    tie_kind: str = "patronage"
+    strength_01: float = 0.0
+    status: str = "active"
+    start_year: int | None = None
+    end_year: int | None = None
+    settlement_id: str | None = None
+    polity_id: int | None = None
+    updated_year: int | None = None
+
+
 @dataclass
 class SimulationContext:
     """Reusable simulation context with preloaded config and runtime state.
@@ -178,6 +194,7 @@ class SimulationContext:
     passive_people: dict[int, PassivePersonRecord] = field(default_factory=dict)
     passive_cohorts: list[PassiveCohort] = field(default_factory=list)
     passive_promotion_log: list[PassivePromotionLogEntry] = field(default_factory=list)
+    patronage_ties: dict[tuple[int, int, str], SimulationPatronageTie] = field(default_factory=dict)
     current_people_ids: set[int] = field(default_factory=set)
     couples: list[tuple[int, int]] = field(default_factory=list)
     paramours: list[tuple[int, int]] = field(default_factory=list)

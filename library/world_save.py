@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 18
+SAVE_SCHEMA_VERSION = 19
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -82,6 +82,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_cohorts",
     "simulation_promotion_log",
     "simulation_household_service_contracts",
+    "simulation_patronage_ties",
     "simulation_couples",
     "simulation_paramours",
     "simulation_events",
@@ -755,6 +756,90 @@ def _sync_household_service_contracts(
                 round(float(cash or 0.0), 5),
                 start_year,
                 year,
+            ),
+        )
+
+
+def _ensure_patronage_ties_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_patronage_ties (
+            tie_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patron_person_id INTEGER NOT NULL,
+            client_person_id INTEGER NOT NULL,
+            tie_kind TEXT NOT NULL DEFAULT 'patronage',
+            strength_01 REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            start_year INTEGER,
+            end_year INTEGER,
+            settlement_id TEXT,
+            polity_id INTEGER,
+            updated_year INTEGER,
+            UNIQUE(patron_person_id, client_person_id, tie_kind, start_year)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sim_patronage_patron
+        ON simulation_patronage_ties (patron_person_id);
+        CREATE INDEX IF NOT EXISTS idx_sim_patronage_client
+        ON simulation_patronage_ties (client_person_id);
+        CREATE INDEX IF NOT EXISTS idx_sim_patronage_status
+        ON simulation_patronage_ties (status);
+        CREATE INDEX IF NOT EXISTS idx_sim_patronage_settlement
+        ON simulation_patronage_ties (settlement_id);
+        """
+    )
+
+
+def _sync_patronage_ties(conn: sqlite3.Connection, ctx: "SimulationContext") -> None:
+    year = int(ctx.current_year if ctx.current_year is not None else ctx.simulation_start_year)
+    ties = getattr(ctx, "patronage_ties", {}) or {}
+    for tie in ties.values():
+        patron_id = int(getattr(tie, "patron_person_id", 0) or 0)
+        client_id = int(getattr(tie, "client_person_id", 0) or 0)
+        if patron_id <= 0 or client_id <= 0 or patron_id == client_id:
+            continue
+        tie_kind = str(getattr(tie, "tie_kind", "patronage") or "patronage").strip() or "patronage"
+        start_year = getattr(tie, "start_year", None)
+        if start_year is None:
+            start_year = year
+        conn.execute(
+            """
+            INSERT INTO simulation_patronage_ties (
+                patron_person_id, client_person_id, tie_kind, strength_01,
+                status, start_year, end_year, settlement_id, polity_id, updated_year
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(patron_person_id, client_person_id, tie_kind, start_year)
+            DO UPDATE SET
+                strength_01 = excluded.strength_01,
+                status = excluded.status,
+                end_year = excluded.end_year,
+                settlement_id = excluded.settlement_id,
+                polity_id = excluded.polity_id,
+                updated_year = excluded.updated_year
+            """,
+            (
+                patron_id,
+                client_id,
+                tie_kind,
+                round(max(0.0, min(1.0, float(getattr(tie, "strength_01", 0.0) or 0.0))), 5),
+                str(getattr(tie, "status", "active") or "active").strip() or "active",
+                int(start_year),
+                (
+                    int(getattr(tie, "end_year"))
+                    if getattr(tie, "end_year", None) is not None
+                    else None
+                ),
+                (
+                    str(getattr(tie, "settlement_id"))
+                    if getattr(tie, "settlement_id", None)
+                    else None
+                ),
+                (
+                    int(getattr(tie, "polity_id"))
+                    if getattr(tie, "polity_id", None) is not None
+                    else None
+                ),
+                int(getattr(tie, "updated_year", None) or year),
             ),
         )
 
@@ -5174,6 +5259,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _ensure_simulation_innovation_tables(conn)
     _ensure_simulation_people_table(conn)
     _ensure_household_service_contracts_table(conn)
+    _ensure_patronage_ties_table(conn)
     from library.person_archive_scores import ensure_person_archive_score_schema
     from library.person_almanack import ensure_person_almanack_schema
 
@@ -6150,6 +6236,7 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_people_light")
         conn.execute("DELETE FROM simulation_cohorts")
         conn.execute("DELETE FROM simulation_promotion_log")
+        conn.execute("DELETE FROM simulation_patronage_ties")
         conn.execute("DELETE FROM simulation_settlements")
         conn.execute("DELETE FROM simulation_regions")
         conn.execute("DELETE FROM simulation_couples")
@@ -7677,6 +7764,9 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         _sync_household_service_contracts(conn, ctx)
         t0 = _profile_accumulate("checkpoint.snapshot_service_contracts", t0)
 
+        _sync_patronage_ties(conn, ctx)
+        t0 = _profile_accumulate("checkpoint.snapshot_patronage_ties", t0)
+
         passive_column_names = (
             "person_id",
             "name",
@@ -8200,6 +8290,48 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             if convention and a in id_to and b in id_to:
                 surname_conventions_by_pair[tuple(sorted((a, b)))] = convention
 
+        from library.simulation_context import SimulationPatronageTie
+
+        patronage_ties: dict[tuple[int, int, str], SimulationPatronageTie] = {}
+        if _table_exists(conn, "simulation_patronage_ties"):
+            for r in conn.execute(
+                """
+                SELECT patron_person_id, client_person_id, tie_kind, strength_01,
+                       status, start_year, end_year, settlement_id, polity_id,
+                       updated_year
+                FROM simulation_patronage_ties
+                WHERE status = 'active'
+                ORDER BY patron_person_id, client_person_id, tie_kind, start_year
+                """
+            ).fetchall():
+                patron_id = int(r["patron_person_id"])
+                client_id = int(r["client_person_id"])
+                if patron_id not in id_to or client_id not in id_to:
+                    continue
+                kind = str(r["tie_kind"] or "patronage").strip() or "patronage"
+                patronage_ties[(patron_id, client_id, kind)] = SimulationPatronageTie(
+                    patron_person_id=patron_id,
+                    client_person_id=client_id,
+                    tie_kind=kind,
+                    strength_01=float(r["strength_01"] or 0.0),
+                    status=str(r["status"] or "active"),
+                    start_year=(
+                        int(r["start_year"]) if r["start_year"] is not None else None
+                    ),
+                    end_year=(
+                        int(r["end_year"]) if r["end_year"] is not None else None
+                    ),
+                    settlement_id=(
+                        str(r["settlement_id"]) if r["settlement_id"] is not None else None
+                    ),
+                    polity_id=(
+                        int(r["polity_id"]) if r["polity_id"] is not None else None
+                    ),
+                    updated_year=(
+                        int(r["updated_year"]) if r["updated_year"] is not None else None
+                    ),
+                )
+
         meta_row = conn.execute(
             "SELECT meta_value FROM simulation_meta WHERE meta_key = ?",
             ("next_person_id",),
@@ -8314,6 +8446,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
     ctx.couples = couples
     ctx.paramours = paramours
     ctx.surname_conventions_by_pair = surname_conventions_by_pair
+    ctx.patronage_ties = patronage_ties
     for a_id, b_id in couples:
         ra = id_to.get(a_id)
         rb = id_to.get(b_id)

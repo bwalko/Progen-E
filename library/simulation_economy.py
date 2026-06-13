@@ -12,6 +12,7 @@ from library.job_economics import JobEconomicsCatalog, JobEconomicsParams, JobTi
 from library.job_archetypes import JobArchetypeCatalog
 from library.job_market import JobMarketCatalog, JobMarketParams
 from library.settlements import SettlementState
+from library.status_echelons import StatusEchelonCatalog
 from library.simulation_careers import (
     _household_ids_for_job_move,
     resolve_job_era,
@@ -43,6 +44,13 @@ HOUSEHOLD_BASE_EXPENSE_PER_PERSON = 0.045
 HOUSEHOLD_DEPENDENT_EXPENSE = 0.028
 HOUSEHOLD_UNEMPLOYED_ADULT_EXPENSE = 0.034
 HOUSEHOLD_LOW_STATUS_JOB_EXPENSE = 0.012
+ELITE_INVESTMENT_MIN_PROSPERITY = 1.5
+ELITE_INVESTMENT_MIN_STANDING = 0.60
+ELITE_INVESTMENT_MAX_SETTLEMENT_BUMP = 0.055
+ELITE_INVESTMENT_MAX_MARKET_BUMP = 0.022
+ELITE_INVESTMENT_MAX_STABILITY_BUMP = 0.018
+ELITE_INVESTMENT_HOUSEHOLD_COST_SHARE = 0.35
+ELITE_SCANDAL_BASE_PROB = 0.012
 
 # Above this caregiver-duty value, an informal (non-officeholding) leader is
 # excluded from the treasury leader pool. Officeholders (treasury seats) bypass
@@ -214,6 +222,7 @@ def _update_household_prosperity(
         if not alive_members:
             continue
         income = 0.0
+        expenses = 0.0
         unemployed_adults = 0
         low_status_workers = 0
         dependents = 0
@@ -244,7 +253,7 @@ def _update_household_prosperity(
                     low_status_workers += 1
             else:
                 unemployed_adults += 1
-        expenses = (
+        expenses += (
             len(alive_members) * HOUSEHOLD_BASE_EXPENSE_PER_PERSON
             + dependents * HOUSEHOLD_DEPENDENT_EXPENSE
             + unemployed_adults * HOUSEHOLD_UNEMPLOYED_ADULT_EXPENSE
@@ -280,6 +289,212 @@ def _update_household_prosperity(
                     "dependent_minors": dependents,
                 },
             )
+
+
+def _household_anchor_record(
+    ctx: "SimulationContext", members: list["SimulationPersonRecord"], hkey: frozenset[int]
+) -> "SimulationPersonRecord" | None:
+    purseholder = household_purseholder_id(ctx, hkey)
+    if purseholder is not None and purseholder in ctx.id_to_record:
+        return ctx.id_to_record[purseholder]
+    if not members:
+        return None
+    return max(
+        members,
+        key=lambda r: (
+            float(r.person.social_standing_01 or 0.0),
+            float(r.person.household_prosperity or 0.0),
+            -int(r.person_id),
+        ),
+    )
+
+
+def _elite_investment_kind(anchor: "SimulationPersonRecord", rng: random.Random) -> str:
+    job = (anchor.person.job or "").strip().lower()
+    if any(token in job for token in ("merchant", "caravan", "ship", "banker")):
+        return "trade_venture"
+    if any(token in job for token in ("court", "treasurer", "steward", "judge", "magistrate")):
+        return "patronage"
+    generosity = _trait_value(anchor, "generosity")
+    civics = _trait_value(anchor, "civics")
+    if generosity >= 25.0 or civics >= 25.0:
+        return "charitable_prestige"
+    if rng.random() < 0.35:
+        return "public_works"
+    return "estate_improvement"
+
+
+def _apply_elite_household_investments(
+    ctx: "SimulationContext",
+    year: int,
+    *,
+    care_indexes: object | None = None,
+    status_catalog: StatusEchelonCatalog | None = None,
+) -> tuple[int, int]:
+    status_catalog = status_catalog or StatusEchelonCatalog.load(ctx.db_path)
+    seen: set[frozenset[int]] = set()
+    investment_count = 0
+    scandal_count = 0
+    for rec in ctx.iter_current_people(sorted_by_id=True):
+        if rec.person_id not in ctx.current_people_ids:
+            continue
+        if ctx._person_is_dependent_minor(rec, year):
+            continue
+        hkey = frozenset(_household_ids_for_job_move(ctx, rec, year, indexes=care_indexes))
+        if not hkey or hkey in seen:
+            continue
+        seen.add(hkey)
+        members = [
+            ctx.id_to_record[pid]
+            for pid in sorted(hkey)
+            if pid in ctx.current_people_ids and pid in ctx.id_to_record
+        ]
+        if not members:
+            continue
+        anchor = _household_anchor_record(ctx, members, hkey)
+        if anchor is None:
+            continue
+        sid = (
+            anchor.person.current_settlement_id
+            or anchor.person.birthplace_settlement_id
+            or ""
+        ).strip()
+        st = ctx.settlements_by_id.get(sid)
+        if st is None or (st.status or "").strip().lower() != "active":
+            continue
+        prosperity = max(float(m.person.household_prosperity or 0.0) for m in members)
+        standing = max(float(m.person.social_standing_01 or 0.0) for m in members)
+        if prosperity < ELITE_INVESTMENT_MIN_PROSPERITY and standing < ELITE_INVESTMENT_MIN_STANDING:
+            continue
+        echelon = status_catalog.echelon_for_person(anchor.person)
+        if float(echelon.investment_share_01) <= 0.0:
+            continue
+        surplus = max(0.0, prosperity - float(echelon.min_household_prosperity))
+        if surplus <= 0.0:
+            continue
+        rng = random.Random(
+            int(year) * 1_000_003
+            + int(anchor.person_id) * 313
+            + int(ctx.placename_rng_salt)
+            + 91_337
+        )
+        investment = min(
+            0.18,
+            surplus
+            * float(echelon.investment_share_01)
+            * (0.62 + _clamp(standing, 0.0, 1.0) * 0.38),
+        )
+        if investment < 0.006:
+            continue
+        kind = _elite_investment_kind(anchor, rng)
+        pool_bump = min(
+            ELITE_INVESTMENT_MAX_SETTLEMENT_BUMP,
+            investment * (0.45 if kind in {"trade_venture", "estate_improvement"} else 0.30),
+        )
+        market_bump = min(
+            ELITE_INVESTMENT_MAX_MARKET_BUMP,
+            investment * (0.18 if kind == "trade_venture" else 0.08),
+        )
+        stability_bump = min(
+            ELITE_INVESTMENT_MAX_STABILITY_BUMP,
+            investment * (0.16 if kind in {"charitable_prestige", "public_works"} else 0.06),
+        )
+        cost = min(prosperity * 0.18, investment * ELITE_INVESTMENT_HOUSEHOLD_COST_SHARE)
+        after_household = _clamp(
+            prosperity - cost,
+            HOUSEHOLD_PROSPERITY_MIN,
+            HOUSEHOLD_PROSPERITY_MAX,
+        )
+        for member in members:
+            member.person = replace(member.person, household_prosperity=round(after_household, 5))
+        before_pool = float(getattr(st, "prosperity_pool", 1.0) or 0.0)
+        before_market = float(getattr(st, "market_pull", 0.0) or 0.0)
+        before_stability = float(getattr(st, "stability", 0.5) or 0.5)
+        ctx.settlements_by_id[sid] = replace(
+            st,
+            prosperity_pool=_clamp(before_pool + pool_bump, PROSPERITY_POOL_MIN, PROSPERITY_POOL_MAX),
+            market_pull=_clamp(before_market + market_bump, 0.0, 1.0),
+            stability=_clamp(before_stability + stability_bump, 0.0, 1.0),
+        )
+        rid = (st.region_id or "").strip()
+        if rid:
+            ctx.region_prosperity_pool[rid] = _clamp(
+                float(ctx.region_prosperity_pool.get(rid, 1.0)) + min(0.025, investment * 0.05),
+                REGION_POOL_MIN,
+                REGION_POOL_MAX,
+            )
+        standing_bump = min(0.012, investment * 0.045)
+        if standing_bump > 0.0:
+            anchor.person = replace(
+                anchor.person,
+                social_standing_01=round(
+                    _clamp(float(anchor.person.social_standing_01 or 0.0) + standing_bump, 0.0, 1.0),
+                    4,
+                ),
+            )
+        ctx._record_simulation_event(
+            int(year),
+            "elite_household_investment",
+            {
+                "year": int(year),
+                "person_id": int(anchor.person_id),
+                "patron_person_id": int(anchor.person_id),
+                "household_member_ids": sorted(int(pid) for pid in hkey),
+                "settlement_id": sid,
+                "region_id": rid,
+                "investment_kind": kind,
+                "echelon": echelon.echelon_key,
+                "investment_value": round(investment, 5),
+                "household_prosperity_before": round(prosperity, 5),
+                "household_prosperity_after": round(after_household, 5),
+                "prosperity_pool_delta": round(pool_bump, 5),
+                "market_pull_delta": round(market_bump, 5),
+                "stability_delta": round(stability_bump, 5),
+                "standing_delta": round(standing_bump, 5),
+            },
+        )
+        investment_count += 1
+
+        scandal_risk = (
+            ELITE_SCANDAL_BASE_PROB
+            + float(echelon.scandal_fall_severity_01) * 0.018
+            + max(0.0, investment - 0.08) * 0.08
+        )
+        if rng.random() < scandal_risk:
+            before_standing = float(anchor.person.social_standing_01 or 0.0)
+            fall = min(0.08, 0.025 + float(echelon.scandal_fall_severity_01) * 0.045)
+            anchor.person = replace(
+                anchor.person,
+                social_standing_01=round(_clamp(before_standing - fall, 0.0, 1.0), 4),
+            )
+            ctx._record_simulation_event(
+                int(year),
+                "elite_scandal",
+                {
+                    "year": int(year),
+                    "person_id": int(anchor.person_id),
+                    "settlement_id": sid,
+                    "echelon": echelon.echelon_key,
+                    "investment_kind": kind,
+                    "previous_social_standing_01": round(before_standing, 5),
+                    "new_social_standing_01": anchor.person.social_standing_01,
+                    "scandal_risk": round(scandal_risk, 5),
+                },
+            )
+            ctx._record_simulation_event(
+                int(year),
+                "status_fall",
+                {
+                    "year": int(year),
+                    "person_id": int(anchor.person_id),
+                    "settlement_id": sid,
+                    "fall_reason": "elite_scandal",
+                    "previous_social_standing_01": round(before_standing, 5),
+                    "new_social_standing_01": anchor.person.social_standing_01,
+                },
+            )
+            scandal_count += 1
+    return investment_count, scandal_count
 
 
 def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
@@ -518,6 +733,22 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
     _update_household_prosperity(ctx, y, care_indexes=care_indexes)
     if prof:
         simulation_timing.accumulate("economy.household_prosperity", tpc() - t0)
+        t0 = tpc()
+
+    elite_investments, elite_scandals = _apply_elite_household_investments(
+        ctx,
+        y,
+        care_indexes=care_indexes,
+        status_catalog=StatusEchelonCatalog.load(ctx.db_path),
+    )
+    if prof:
+        simulation_timing.accumulate("economy.elite_investment", tpc() - t0)
+        simulation_timing.record_gauge(
+            y, "economy", "elite_household_investments", elite_investments
+        )
+        simulation_timing.record_gauge(
+            y, "economy", "elite_scandals", elite_scandals
+        )
         t0 = tpc()
 
     # --- Leader spending from treasury ---

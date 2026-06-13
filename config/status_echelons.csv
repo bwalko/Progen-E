@@ -1,0 +1,8 @@
+echelon_key,display_name,min_social_standing_01,min_household_prosperity,class_bands,job_market_types,prestige_access_multiplier,patronage_power_01,service_hiring_multiplier,scandal_fall_severity_01,investment_share_01
+marginal,Marginal,0.00,0.00,marginal,vice;criminal;none,0.35,0.02,0.00,0.18,0.00
+laboring,Laboring,0.16,0.00,servant;commoner;household,settlement_market;domestic_service;household_care,0.65,0.04,0.05,0.20,0.00
+comfortable,Comfortable,0.32,0.35,commoner;professional,settlement_market,0.90,0.08,0.20,0.24,0.01
+professional,Professional,0.48,0.80,professional;upper,settlement_market;office,1.10,0.18,0.45,0.30,0.02
+notable,Notable,0.60,1.50,notable;upper,settlement_market;office,1.35,0.34,0.75,0.42,0.035
+elite,Elite,0.74,3.00,elite;upper,settlement_market;office,1.70,0.58,1.15,0.58,0.055
+ruling,Ruling,0.86,4.50,ruling;elite;upper,office,2.05,0.78,1.45,0.72,0.070

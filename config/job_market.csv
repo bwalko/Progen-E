@@ -22,5 +22,14 @@ analyst,knowledge,0.24,0.62,0.78,0.22,steep,0.00,0.00,0.00,0.00,0.86
 software engineer,knowledge,0.22,0.68,0.82,0.18,steep,0.00,0.00,0.00,0.02,0.88
 priest,ritual,0.34,0.52,0.44,0.50,medium,0.00,0.12,0.05,0.00,0.58
 courtier,prestige,0.12,0.78,0.80,0.18,steep,0.00,-0.02,0.00,0.00,0.82
+guild master,prestige,0.24,0.68,0.72,0.34,steep,0.00,0.08,0.00,0.18,0.92
+estate steward,admin,0.42,0.44,0.48,0.58,medium,0.06,0.08,0.00,0.12,0.76
+steward,admin,0.48,0.34,0.36,0.66,medium,0.05,0.08,0.00,0.10,0.68
+treasurer,admin,0.30,0.58,0.68,0.36,steep,0.00,0.08,0.00,0.02,0.94
+guild treasurer,admin,0.30,0.54,0.62,0.40,steep,0.00,0.07,0.00,0.02,0.90
+banker,trade,0.18,0.76,0.82,0.22,steep,0.00,0.02,0.00,0.04,0.96
+moneylender,trade,0.20,0.62,0.54,0.36,medium,0.00,-0.04,0.00,0.02,0.82
+shipowner,trade,0.24,0.76,0.78,0.28,steep,0.00,0.04,0.00,0.06,0.94
+landholder,prestige,0.36,0.56,0.38,0.64,medium,0.08,0.04,0.00,0.08,0.74
 gambler,criminal,0.03,0.36,0.42,0.56,flat,-0.03,-0.32,0.00,0.00,0.04
 raider,criminal,0.05,0.30,0.22,0.72,flat,-0.08,-0.42,0.00,0.00,0.02

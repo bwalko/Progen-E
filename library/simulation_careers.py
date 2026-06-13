@@ -22,6 +22,7 @@ from library.job_economics import (
 )
 from library.job_archetypes import JobArchetypeCatalog, JobArchetypeParams
 from library.job_market import JobMarketCatalog, JobMarketParams
+from library.status_echelons import StatusEchelonCatalog
 from library.mind_body import attractiveness_01, ensure_full_mind_body, work_trait_values
 from library.personality_interpreter import interpret_genome_personality
 from library.geography import list_routes_from
@@ -106,6 +107,13 @@ SERVICE_HOUSEHOLD_PROSPERITY_THRESHOLD = 2.15
 SERVICE_HIGH_STANDING_THRESHOLD = 0.68
 STREET_PRECARITY_PRESSURE_THRESHOLD = 0.62
 VICE_DESPERATION_THRESHOLD = 0.58
+PRESTIGE_MOBILITY_MIN_AGE = 22
+PRESTIGE_PATRONAGE_SCORE_THRESHOLD = 0.62
+PRESTIGE_HIGH_CONFIDENCE_SCORE = 0.88
+PRESTIGE_MAX_PROMOTIONS_PER_SETTLEMENT = 4
+PRESTIGE_MIN_SETTLEMENT_POPULATION = 8
+PRESTIGE_FALL_STANDING_THRESHOLD = 0.62
+PRESTIGE_BANKRUPTCY_PROSPERITY_THRESHOLD = 0.16
 
 # Sex-restricted jobs: tokens may end with `` [M]`` (male-only) or `` [F]`` (female-only).
 # Cross-gender exception: opposite ``gender_mind``, low ``mating drive`` genome, physical gate.
@@ -154,6 +162,105 @@ class CareerFitness:
     high_deviation_traits: tuple[str, ...]
     weighted_near_perfect_count: float
     weighted_high_deviation_count: float
+
+
+@dataclass(frozen=True)
+class PrestigeTarget:
+    job: str
+    source_tokens: tuple[str, ...]
+    min_score: float
+    min_population: int = PRESTIGE_MIN_SETTLEMENT_POPULATION
+    min_market_pull: float = 0.0
+    min_household_prosperity: float = 0.0
+    event_type: str = "elite_job_promoted"
+
+
+PRESTIGE_TARGETS: tuple[PrestigeTarget, ...] = (
+    PrestigeTarget(
+        "merchant",
+        ("trader", "peddler", "market", "scribe", "accountant", "clerk"),
+        0.70,
+        min_population=12,
+        min_market_pull=0.05,
+    ),
+    PrestigeTarget(
+        "caravan master",
+        ("caravan", "trader", "merchant", "sailor", "ferry", "route", "dock"),
+        0.74,
+        min_population=14,
+        min_market_pull=0.08,
+    ),
+    PrestigeTarget(
+        "shipowner",
+        ("sailor", "ferry", "dock", "ship", "merchant", "caravan master"),
+        0.80,
+        min_population=24,
+        min_market_pull=0.18,
+        min_household_prosperity=1.8,
+    ),
+    PrestigeTarget(
+        "guild master",
+        ("smith", "mason", "carpenter", "artisan", "guild", "workshop", "master"),
+        0.80,
+        min_population=30,
+        min_market_pull=0.10,
+        event_type="guild_admission",
+    ),
+    PrestigeTarget(
+        "treasurer",
+        ("accountant", "scribe", "clerk", "tax", "steward", "record"),
+        0.76,
+        min_population=18,
+        min_market_pull=0.08,
+    ),
+    PrestigeTarget(
+        "estate steward",
+        ("steward", "farmer", "household head", "administrator", "manager"),
+        0.74,
+        min_population=14,
+        min_household_prosperity=0.9,
+    ),
+    PrestigeTarget(
+        "landholder",
+        ("farmer", "herder", "estate steward", "household head", "village elder"),
+        0.82,
+        min_population=16,
+        min_household_prosperity=2.2,
+    ),
+    PrestigeTarget(
+        "scholar",
+        ("scribe", "teacher", "engineer", "architect", "philosopher", "inventor"),
+        0.76,
+        min_population=16,
+    ),
+    PrestigeTarget(
+        "physician",
+        ("healer", "midwife", "surgeon", "physician assistant", "care"),
+        0.74,
+        min_population=10,
+    ),
+    PrestigeTarget(
+        "priest",
+        ("temple", "priest", "monk", "nun", "oracle", "prophet", "ritual"),
+        0.72,
+        min_population=10,
+    ),
+    PrestigeTarget(
+        "courtier",
+        ("diplomat", "envoy", "official", "retainer", "court", "performer"),
+        0.76,
+        min_population=24,
+        min_market_pull=0.10,
+    ),
+    PrestigeTarget(
+        "banker",
+        ("merchant", "treasurer", "accountant", "moneylender", "guild treasurer"),
+        0.84,
+        min_population=36,
+        min_market_pull=0.18,
+        min_household_prosperity=2.0,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -861,6 +968,503 @@ def _apply_job_archetype_state(
             else person.job_prosperity_01
         ),
     )
+
+
+def _holds_formal_government_office(ctx: "SimulationContext", person_id: int) -> bool:
+    for seat in getattr(ctx, "gov_office_seats", {}).values():
+        if getattr(seat, "holder_person_id", None) == int(person_id):
+            return True
+    return False
+
+
+def _patronage_strength_for_client(ctx: "SimulationContext", person_id: int) -> float:
+    strength = 0.0
+    for tie in getattr(ctx, "patronage_ties", {}).values():
+        if int(getattr(tie, "client_person_id", 0) or 0) != int(person_id):
+            continue
+        if str(getattr(tie, "status", "active") or "active").strip().lower() != "active":
+            continue
+        strength = max(strength, float(getattr(tie, "strength_01", 0.0) or 0.0))
+    return _clamp(strength, 0.0, 1.0)
+
+
+def _residence_settlement_state(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord"
+):
+    sid = _residence_settlement_id(rec)
+    if not sid:
+        return None
+    return ctx.settlements_by_id.get(sid)
+
+
+def _prestige_local_opportunity(ctx: "SimulationContext", rec: "SimulationPersonRecord") -> float:
+    st = _residence_settlement_state(ctx, rec)
+    if st is None:
+        return 0.0
+    pop = max(0, int(getattr(st, "resident_count", 0) or 0))
+    prosperity = _clamp(float(getattr(st, "prosperity_pool", 0.0) or 0.0) / 2.5, 0.0, 1.0)
+    market = _clamp(float(getattr(st, "market_pull", 0.0) or 0.0), 0.0, 1.0)
+    stability = _clamp(float(getattr(st, "stability", 0.5) or 0.5), 0.0, 1.0)
+    scale = _clamp(pop / 80.0, 0.0, 1.0)
+    network_bonus = 0.06 if getattr(st, "trade_network_id", None) else 0.0
+    return _clamp(
+        scale * 0.30 + prosperity * 0.30 + market * 0.24 + stability * 0.10 + network_bonus,
+        0.0,
+        1.0,
+    )
+
+
+def _prestige_target_match(
+    target: PrestigeTarget,
+    rec: "SimulationPersonRecord",
+    archetypes: JobArchetypeCatalog,
+) -> float:
+    job_key = normalize_job_catalog_key(rec.person.job or "")
+    if not job_key:
+        return 0.0
+    if job_key == normalize_job_catalog_key(target.job):
+        return 0.0
+    score = 0.0
+    if any(token in job_key for token in target.source_tokens):
+        score += 0.34
+    archetype = archetypes.lookup(rec.person.job)
+    role = (getattr(archetype, "role_family", "") or "").strip().lower()
+    if role and any(token in role for token in target.source_tokens):
+        score += 0.14
+    if not score and target.job in {"merchant", "scholar", "physician", "priest"}:
+        score = 0.08
+    return _clamp(score, 0.0, 1.0)
+
+
+def _prestige_candidate_score(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    *,
+    fitness: CareerFitness,
+    pressure: float,
+    trait_values: dict[str, float],
+    patronage_strength: float,
+    status_catalog: StatusEchelonCatalog,
+) -> float:
+    echelon = status_catalog.echelon_for_person(rec.person)
+    standing = _clamp(float(rec.person.social_standing_01 or 0.0), 0.0, 1.0)
+    household = _clamp(float(rec.person.household_prosperity or 0.0) / 5.0, 0.0, 1.0)
+    job_success = _clamp(float(rec.person.job_prosperity_01 or 0.0), 0.0, 1.0)
+    local = _prestige_local_opportunity(ctx, rec)
+    trait_push = _clamp(
+        _trait_positive_strength(trait_values, "ambition") * 0.26
+        + _trait_positive_strength(trait_values, "persuasion") * 0.18
+        + _trait_ideal_strength(trait_values, "discipline") * 0.20
+        + _trait_ideal_strength(trait_values, "focus") * 0.16
+        + _trait_ideal_strength(trait_values, "honesty") * 0.10
+        + _trait_ideal_strength(trait_values, "civics") * 0.10,
+        0.0,
+        1.0,
+    )
+    score = (
+        float(fitness.score) * 0.30
+        + standing * 0.16
+        + household * 0.13
+        + job_success * 0.10
+        + local * 0.13
+        + patronage_strength * 0.11
+        + trait_push * 0.15
+    )
+    score *= _clamp(float(echelon.prestige_access_multiplier), 0.35, 2.1)
+    score -= _clamp(float(pressure), 0.0, 2.0) * 0.05
+    return _clamp(score, 0.0, 1.0)
+
+
+def _patron_power(
+    status_catalog: StatusEchelonCatalog, rec: "SimulationPersonRecord"
+) -> float:
+    echelon = status_catalog.echelon_for_person(rec.person)
+    standing = _clamp(float(rec.person.social_standing_01 or 0.0), 0.0, 1.0)
+    prosperity = _clamp(float(rec.person.household_prosperity or 0.0) / 5.0, 0.0, 1.0)
+    office = 0.12 if (rec.person.job_market_type or "").strip().lower() == "office" else 0.0
+    return _clamp(float(echelon.patronage_power_01) + standing * 0.20 + prosperity * 0.18 + office, 0.0, 1.0)
+
+
+def _patrons_by_settlement(
+    ctx: "SimulationContext", status_catalog: StatusEchelonCatalog
+) -> dict[str, list["SimulationPersonRecord"]]:
+    patrons: dict[str, list[SimulationPersonRecord]] = {}
+    for rec in ctx.iter_current_people(sorted_by_id=True):
+        if rec.person_id not in ctx.current_people_ids:
+            continue
+        sid = _residence_settlement_id(rec)
+        if not sid:
+            continue
+        if _patron_power(status_catalog, rec) < 0.34:
+            continue
+        patrons.setdefault(sid, []).append(rec)
+    for bucket in patrons.values():
+        bucket.sort(
+            key=lambda r: (
+                -_patron_power(status_catalog, r),
+                -float(r.person.social_standing_01 or 0.0),
+                int(r.person_id),
+            )
+        )
+    return patrons
+
+
+def _best_patron_for_candidate(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    *,
+    status_catalog: StatusEchelonCatalog,
+    patrons_by_sid: dict[str, list["SimulationPersonRecord"]],
+    trait_values: dict[str, float],
+) -> tuple["SimulationPersonRecord", float] | None:
+    sid = _residence_settlement_id(rec)
+    if not sid:
+        return None
+    candidates = patrons_by_sid.get(sid, ())
+    if not candidates:
+        return None
+    persuasion = _trait_positive_strength(trait_values, "persuasion")
+    loyalty = _trait_ideal_strength(trait_values, "loyalty")
+    honesty = _trait_ideal_strength(trait_values, "honesty")
+    best: tuple[float, SimulationPersonRecord] | None = None
+    for patron in candidates:
+        if patron.person_id == rec.person_id:
+            continue
+        power = _patron_power(status_catalog, patron)
+        if power < 0.34:
+            continue
+        score = _clamp(power * 0.72 + persuasion * 0.12 + loyalty * 0.08 + honesty * 0.08, 0.0, 1.0)
+        cand = (score, patron)
+        if best is None or (cand[0], -int(cand[1].person_id)) > (best[0], -int(best[1].person_id)):
+            best = cand
+    if best is None:
+        return None
+    return best[1], best[0]
+
+
+def _grant_patronage_tie(
+    ctx: "SimulationContext",
+    *,
+    patron: "SimulationPersonRecord",
+    client: "SimulationPersonRecord",
+    year: int,
+    strength: float,
+    target_job: str | None,
+) -> None:
+    from library.simulation_context import SimulationPatronageTie
+
+    sid = _residence_settlement_id(client)
+    key = (int(patron.person_id), int(client.person_id), "elite_advancement")
+    existing = getattr(ctx, "patronage_ties", {}).get(key)
+    old_strength = float(getattr(existing, "strength_01", 0.0) or 0.0) if existing else 0.0
+    new_strength = _clamp(max(old_strength, float(strength)), 0.0, 1.0)
+    ctx.patronage_ties[key] = SimulationPatronageTie(
+        patron_person_id=int(patron.person_id),
+        client_person_id=int(client.person_id),
+        tie_kind="elite_advancement",
+        strength_01=round(new_strength, 5),
+        status="active",
+        start_year=(
+            int(getattr(existing, "start_year"))
+            if existing is not None and getattr(existing, "start_year", None) is not None
+            else int(year)
+        ),
+        settlement_id=sid,
+        updated_year=int(year),
+    )
+    if existing is not None and old_strength >= new_strength:
+        return
+    ctx._record_simulation_event(
+        int(year),
+        "patronage_granted",
+        {
+            "year": int(year),
+            "patron_person_id": int(patron.person_id),
+            "client_person_id": int(client.person_id),
+            "settlement_id": sid,
+            "tie_kind": "elite_advancement",
+            "strength_01": round(new_strength, 5),
+            "target_job": target_job,
+            "details": (
+                f"{patron.person.full_name} extended patronage to "
+                f"{client.person.full_name}."
+            ),
+        },
+    )
+
+
+def _select_prestige_target(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    *,
+    score: float,
+    patronage_strength: float,
+    archetypes: JobArchetypeCatalog,
+) -> PrestigeTarget | None:
+    st = _residence_settlement_state(ctx, rec)
+    if st is None:
+        return None
+    pop = int(getattr(st, "resident_count", 0) or 0)
+    market = float(getattr(st, "market_pull", 0.0) or 0.0)
+    household = float(rec.person.household_prosperity or 0.0)
+    matches: list[tuple[float, PrestigeTarget]] = []
+    for target in PRESTIGE_TARGETS:
+        if pop < int(target.min_population):
+            continue
+        if market < float(target.min_market_pull):
+            continue
+        if household + patronage_strength * 2.0 < float(target.min_household_prosperity):
+            continue
+        if score < float(target.min_score):
+            continue
+        match = _prestige_target_match(target, rec, archetypes)
+        if match <= 0.0:
+            continue
+        matches.append((match + score - target.min_score, target))
+    if not matches:
+        return None
+    matches.sort(key=lambda item: (-item[0], item[1].job))
+    return matches[0][1]
+
+
+def _promote_to_prestige_job(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    *,
+    year: int,
+    target: PrestigeTarget,
+    score: float,
+    patron: "SimulationPersonRecord" | None,
+    archetypes: JobArchetypeCatalog,
+) -> bool:
+    if _holds_formal_government_office(ctx, int(rec.person_id)):
+        return False
+    previous_job = rec.person.job
+    previous_standing = float(rec.person.social_standing_01 or 0.0)
+    archetype = archetypes.lookup(target.job)
+    rec.person = replace(
+        rec.person,
+        job=target.job,
+        job_assigned_year=int(year),
+        job_tier="premium",
+        employment_status="employed",
+        unemployment_started_year=None,
+        last_job=previous_job,
+        status_tendency="high",
+    )
+    rec.person = _apply_job_archetype_state(
+        rec.person,
+        job=target.job,
+        archetype=archetype,
+        housing_status=_default_housing_status(ctx, rec, year),
+        household_role=archetype.role_family if archetype.job_market_type == "office" else rec.person.household_role,
+        job_prosperity_01=max(float(rec.person.job_prosperity_01 or 0.0), float(archetype.personal_prosperity_01)),
+    )
+    new_standing = max(
+        _social_standing_from_archetype(archetype),
+        previous_standing + 0.045,
+        min(0.94, float(score) * 0.92),
+    )
+    rec.person = replace(
+        rec.person,
+        social_standing_01=round(_clamp(new_standing, 0.0, 1.0), 4),
+        social_class_band=archetype.class_band,
+    )
+    sid = _residence_settlement_id(rec)
+    event_payload = {
+        "year": int(year),
+        "person_id": int(rec.person_id),
+        "previous_job": previous_job,
+        "new_job": target.job,
+        "settlement_id": sid,
+        "score": round(float(score), 5),
+        "previous_social_standing_01": round(previous_standing, 5),
+        "new_social_standing_01": rec.person.social_standing_01,
+        "social_class_band": rec.person.social_class_band,
+        "patron_person_id": int(patron.person_id) if patron is not None else None,
+    }
+    ctx._record_simulation_event(int(year), target.event_type, event_payload)
+    ctx._record_simulation_event(
+        int(year),
+        "status_rise",
+        {
+            **event_payload,
+            "event_reason": "prestige_mobility",
+            "details": f"{rec.person.full_name} rose into {target.job}.",
+        },
+    )
+    return True
+
+
+def _prestige_mobility_pass(
+    ctx: "SimulationContext",
+    year: int,
+    eligible: list[tuple["SimulationPersonRecord", CareerFitness, float, dict[str, float]]],
+) -> tuple[int, int, int]:
+    status_catalog = StatusEchelonCatalog.load(ctx.db_path)
+    archetypes = JobArchetypeCatalog.load(ctx.db_path)
+    patrons_by_sid = _patrons_by_settlement(ctx, status_catalog)
+    considered: list[
+        tuple[
+            float,
+            "SimulationPersonRecord",
+            CareerFitness,
+            float,
+            dict[str, float],
+            float,
+        ]
+    ] = []
+    for rec, fitness, pressure, traits in eligible:
+        if rec.person_id not in ctx.current_people_ids:
+            continue
+        if int(year) - int(rec.person.birthyear) < PRESTIGE_MOBILITY_MIN_AGE:
+            continue
+        if not rec.person.job or (rec.person.employment_status or "").strip().lower() != "employed":
+            continue
+        market_type = (rec.person.job_market_type or "settlement_market").strip().lower()
+        if market_type in {"household_care", "vice", "criminal"}:
+            continue
+        patronage = _patronage_strength_for_client(ctx, int(rec.person_id))
+        score = _prestige_candidate_score(
+            ctx,
+            rec,
+            fitness=fitness,
+            pressure=pressure,
+            trait_values=traits,
+            patronage_strength=patronage,
+            status_catalog=status_catalog,
+        )
+        if score >= PRESTIGE_PATRONAGE_SCORE_THRESHOLD:
+            considered.append((score, rec, fitness, pressure, traits, patronage))
+    considered.sort(key=lambda item: (-item[0], int(item[1].person_id)))
+
+    promotions_by_sid: dict[str, int] = {}
+    promotions = 0
+    patronages = 0
+    falls = 0
+    for score, rec, _fitness, _pressure, traits, patronage in considered:
+        sid = _residence_settlement_id(rec)
+        if not sid:
+            continue
+        st = ctx.settlements_by_id.get(sid)
+        pop = int(getattr(st, "resident_count", 0) or 0) if st is not None else 0
+        cap = min(
+            PRESTIGE_MAX_PROMOTIONS_PER_SETTLEMENT,
+            max(1, 1 + pop // 80),
+        )
+        if promotions_by_sid.get(sid, 0) >= cap:
+            continue
+        patron_pair = _best_patron_for_candidate(
+            ctx,
+            rec,
+            status_catalog=status_catalog,
+            patrons_by_sid=patrons_by_sid,
+            trait_values=traits,
+        )
+        patron = patron_pair[0] if patron_pair is not None else None
+        patron_strength = patron_pair[1] if patron_pair is not None else 0.0
+        if patron is not None and score >= PRESTIGE_PATRONAGE_SCORE_THRESHOLD:
+            before = _patronage_strength_for_client(ctx, int(rec.person_id))
+            _grant_patronage_tie(
+                ctx,
+                patron=patron,
+                client=rec,
+                year=year,
+                strength=patron_strength,
+                target_job=None,
+            )
+            if _patronage_strength_for_client(ctx, int(rec.person_id)) > before:
+                patronages += 1
+            patronage = max(patronage, patron_strength)
+            score = _prestige_candidate_score(
+                ctx,
+                rec,
+                fitness=_fitness,
+                pressure=_pressure,
+                trait_values=traits,
+                patronage_strength=patronage,
+                status_catalog=status_catalog,
+            )
+        target = _select_prestige_target(
+            ctx,
+            rec,
+            score=score,
+            patronage_strength=patronage,
+            archetypes=archetypes,
+        )
+        if target is None:
+            continue
+        rng = random.Random(
+            int(year) * 1_000_003
+            + int(rec.person_id) * 97
+            + int(ctx.placename_rng_salt)
+            + 42_013
+        )
+        probability = _clamp(0.08 + (score - target.min_score) * 0.75, 0.0, 0.46)
+        if score < PRESTIGE_HIGH_CONFIDENCE_SCORE and rng.random() > probability:
+            continue
+        if patron is not None:
+            _grant_patronage_tie(
+                ctx,
+                patron=patron,
+                client=rec,
+                year=year,
+                strength=max(patron_strength, patronage),
+                target_job=target.job,
+            )
+        if _promote_to_prestige_job(
+            ctx,
+            rec,
+            year=year,
+            target=target,
+            score=score,
+            patron=patron,
+            archetypes=archetypes,
+        ):
+            promotions += 1
+            promotions_by_sid[sid] = promotions_by_sid.get(sid, 0) + 1
+
+    for rec, _fitness, pressure, _traits in eligible:
+        standing = float(rec.person.social_standing_01 or 0.0)
+        prosperity = float(rec.person.household_prosperity or 0.0)
+        if standing < PRESTIGE_FALL_STANDING_THRESHOLD:
+            continue
+        if prosperity >= PRESTIGE_BANKRUPTCY_PROSPERITY_THRESHOLD and pressure < 1.05:
+            continue
+        severity = _clamp((PRESTIGE_BANKRUPTCY_PROSPERITY_THRESHOLD - prosperity) * 0.12 + pressure * 0.015, 0.015, 0.08)
+        rec.person = replace(
+            rec.person,
+            social_standing_01=round(_clamp(standing - severity, 0.0, 1.0), 4),
+        )
+        event_type = "bankruptcy" if prosperity < PRESTIGE_BANKRUPTCY_PROSPERITY_THRESHOLD else "status_fall"
+        ctx._record_simulation_event(
+            int(year),
+            event_type,
+            {
+                "year": int(year),
+                "person_id": int(rec.person_id),
+                "settlement_id": _residence_settlement_id(rec),
+                "previous_social_standing_01": round(standing, 5),
+                "new_social_standing_01": rec.person.social_standing_01,
+                "household_prosperity": round(prosperity, 5),
+                "resource_pressure": round(float(pressure), 5),
+            },
+        )
+        if event_type != "status_fall":
+            ctx._record_simulation_event(
+                int(year),
+                "status_fall",
+                {
+                    "year": int(year),
+                    "person_id": int(rec.person_id),
+                    "settlement_id": _residence_settlement_id(rec),
+                    "fall_reason": event_type,
+                    "previous_social_standing_01": round(standing, 5),
+                    "new_social_standing_01": rec.person.social_standing_01,
+                },
+            )
+        falls += 1
+    return promotions, patronages, falls
 
 
 def _household_dependent_minor_count(
@@ -3171,6 +3775,24 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
             year, "careers", "assign_rehire_skipped_job_lost", assign_skipped_job_lost
         )
         simulation_timing.record_gauge(year, "careers", "assignments", assigned_count)
+        t0 = tpc()
+
+    prestige_promotions, patronage_ties, prestige_falls = _prestige_mobility_pass(
+        ctx,
+        year,
+        eligible,
+    )
+    if prof:
+        simulation_timing.accumulate("careers.prestige_mobility", tpc() - t0)
+        simulation_timing.record_gauge(
+            year, "careers", "prestige_promotions", prestige_promotions
+        )
+        simulation_timing.record_gauge(
+            year, "careers", "patronage_ties", patronage_ties
+        )
+        simulation_timing.record_gauge(
+            year, "careers", "prestige_falls", prestige_falls
+        )
         t0 = tpc()
 
     migrated_count = 0

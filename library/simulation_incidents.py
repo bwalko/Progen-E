@@ -1057,6 +1057,11 @@ def _property_crime_kind(
         tags = ("theft", "survival", "scarcity")
     if float(target.person.job_prosperity_01 or 0.0) >= 0.55:
         tags = (*tags, "valuable_target")
+    if (
+        float(target.person.household_prosperity or 0.0) >= 3.0
+        or float(target.person.social_standing_01 or 0.0) >= 0.65
+    ):
+        tags = (*tags, "valuable_target")
     if target.person.job:
         tags = (*tags, "market")
     return _catalog_incident_kind(
@@ -2809,6 +2814,8 @@ def _maybe_property_crime_in_settlement(
     target_weights = [
         1.0
         + float(rec.person.job_prosperity_01 or 0.35) * 0.75
+        + min(1.0, float(rec.person.household_prosperity or 0.0) / 5.0) * 0.65
+        + float(rec.person.social_standing_01 or 0.0) * 0.45
         + _ideal_strength(rec, "perception") * 0.15
         for rec in target_pool
     ]

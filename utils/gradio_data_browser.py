@@ -3527,6 +3527,98 @@ def _lookup_settlement(con: sqlite3.Connection, world: str, settlement_id: objec
     ).fetchone()
 
 
+def _settlement_prestige_metrics(
+    con: sqlite3.Connection, world: str, settlement_id: str
+) -> dict[str, int]:
+    metrics = {
+        "elite_residents": 0,
+        "prestige_jobs": 0,
+        "domestic_service": 0,
+        "patronage_ties": 0,
+        "elite_investments": 0,
+    }
+    if _has_table(con, "simulation_people"):
+        residence_sql = _person_residence_sql(con)
+        people_where, people_params = _alive_where(con, world)
+        cols = set(_table_columns(con, "simulation_people"))
+        standing_sql = (
+            "coalesce(social_standing_01, 0)"
+            if "social_standing_01" in cols
+            else (
+                "coalesce(cast(json_extract(person_json, '$.social_standing_01') as real), 0)"
+                if "person_json" in cols
+                else "0"
+            )
+        )
+        class_sql = (
+            "lower(coalesce(social_class_band, ''))"
+            if "social_class_band" in cols
+            else (
+                "lower(coalesce(json_extract(person_json, '$.social_class_band'), ''))"
+                if "person_json" in cols
+                else "''"
+            )
+        )
+        market_sql = (
+            "lower(coalesce(job_market_type, ''))"
+            if "job_market_type" in cols
+            else (
+                "lower(coalesce(json_extract(person_json, '$.job_market_type'), ''))"
+                if "person_json" in cols
+                else "''"
+            )
+        )
+        row = con.execute(
+            f"""
+            select
+                sum(case
+                    when {standing_sql} >= 0.60
+                      or {class_sql} in ('notable', 'upper', 'elite', 'ruling')
+                    then 1 else 0 end) as elite_residents,
+                sum(case
+                    when {market_sql} = 'office'
+                      or {standing_sql} >= 0.60
+                    then 1 else 0 end) as prestige_jobs,
+                sum(case
+                    when {market_sql} = 'domestic_service'
+                    then 1 else 0 end) as domestic_service
+            from simulation_people
+            where {people_where}
+              and {residence_sql} = ?
+            """,
+            (*people_params, settlement_id),
+        ).fetchone()
+        if row is not None:
+            metrics["elite_residents"] = int(row["elite_residents"] or 0)
+            metrics["prestige_jobs"] = int(row["prestige_jobs"] or 0)
+            metrics["domestic_service"] = int(row["domestic_service"] or 0)
+    if _has_table(con, "simulation_patronage_ties"):
+        row = con.execute(
+            """
+            select count(*) as c
+            from simulation_patronage_ties
+            where status = 'active' and settlement_id = ?
+            """,
+            (settlement_id,),
+        ).fetchone()
+        metrics["patronage_ties"] = int(row["c"] or 0) if row is not None else 0
+    if _has_relation(con, "simulation_events_readable"):
+        try:
+            row = con.execute(
+                """
+                select count(*) as c
+                from simulation_events_readable
+                where event_type = 'elite_household_investment'
+                  and settlement_id = ?
+                """,
+                (settlement_id,),
+            ).fetchone()
+            metrics["elite_investments"] = int(row["c"] or 0) if row is not None else 0
+        except sqlite3.OperationalError:
+            pass
+    return metrics
+
+
 def render_settlement_outputs(world: str, settlement_id: object) -> str:
     sid = str(settlement_id or "").strip()
     if not world:
@@ -3563,6 +3655,7 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
             for person_row in rows:
                 person = _person_from_row(person_row, trait_slots)
                 residents.append(_notable_person_label(person))
+        prestige_metrics = _settlement_prestige_metrics(con, saved_world, sid)
         cards = "".join(
             [
                 _detail_card("Alive", alive),
@@ -3575,6 +3668,11 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
                 _detail_card("Stability", _fmt_number(row["stability"])),
                 _detail_card("Market Pull", _fmt_number(row["market_pull"])),
                 _detail_card("Prosperity", _fmt_number(row["prosperity_pool"])),
+                _detail_card("Elite Residents", prestige_metrics["elite_residents"]),
+                _detail_card("Prestige Jobs", prestige_metrics["prestige_jobs"]),
+                _detail_card("Patronage Ties", prestige_metrics["patronage_ties"]),
+                _detail_card("Domestic Service", prestige_metrics["domestic_service"]),
+                _detail_card("Elite Investments", prestige_metrics["elite_investments"]),
                 _detail_card("Founded", row["founded_sim_year"] or "Unknown"),
             ]
         )
@@ -4510,6 +4608,47 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
             bits.append(f"previously {previous}")
         return "; ".join(bits) + "."
 
+    if event_type in {"elite_job_promoted", "guild_admission", "status_rise"}:
+        new_job = payload.get("new_job") or payload.get("target_job")
+        previous = payload.get("previous_job")
+        old_standing = _event_float(payload, "previous_social_standing_01")
+        new_standing = _event_float(payload, "new_social_standing_01")
+        bits = [f"{person} rose in status"]
+        if new_job:
+            bits.append(f"new role {new_job}")
+        if previous:
+            bits.append(f"previously {previous}")
+        if old_standing is not None and new_standing is not None:
+            bits.append(f"standing {old_standing:.2f} -> {new_standing:.2f}")
+        return "; ".join(bits) + "."
+
+    if event_type == "patronage_granted":
+        patron = _short_person_for_event(con, world, payload.get("patron_person_id"), focus_person_id)
+        client = _short_person_for_event(con, world, payload.get("client_person_id") or payload.get("person_id"), focus_person_id)
+        strength = _event_float(payload, "strength_01")
+        tail = f" with strength {strength:.2f}" if strength is not None else ""
+        return f"{patron} extended patronage to {client}{tail}."
+
+    if event_type in {"status_fall", "bankruptcy", "elite_scandal"}:
+        old_standing = _event_float(payload, "previous_social_standing_01")
+        new_standing = _event_float(payload, "new_social_standing_01")
+        reason = payload.get("fall_reason") or event_type
+        bits = [f"{person}'s standing fell", f"reason {str(reason).replace('_', ' ')}"]
+        if old_standing is not None and new_standing is not None:
+            bits.append(f"standing {old_standing:.2f} -> {new_standing:.2f}")
+        return "; ".join(bits) + "."
+
+    if event_type == "elite_household_investment":
+        kind = str(payload.get("investment_kind") or "investment").replace("_", " ")
+        value = _event_float(payload, "investment_value")
+        pool_delta = _event_float(payload, "prosperity_pool_delta")
+        bits = [f"{person}'s household made a {kind}"]
+        if value is not None:
+            bits.append(f"value {value:.2f}")
+        if pool_delta is not None:
+            bits.append(f"settlement prosperity +{pool_delta:.2f}")
+        return "; ".join(bits) + "."
+
     if event_type == "job_lost":
         old_job = payload.get("old_job") or "their job"
         reason = str(payload.get("reason") or "unknown reason").replace("_", " ")
@@ -4689,6 +4828,50 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         previous = payload.get("previous_job")
         if previous:
             bits.append(f"previously {html.escape(str(previous))}")
+        return "; ".join(bits) + "."
+
+    if event_type in {"elite_job_promoted", "guild_admission", "status_rise"}:
+        new_job = payload.get("new_job") or payload.get("target_job")
+        previous = payload.get("previous_job")
+        old_standing = _event_float(payload, "previous_social_standing_01")
+        new_standing = _event_float(payload, "new_social_standing_01")
+        bits = [f"{person} rose in status"]
+        if new_job:
+            bits.append(f"new role {html.escape(str(new_job))}")
+        if previous:
+            bits.append(f"previously {html.escape(str(previous))}")
+        if old_standing is not None and new_standing is not None:
+            bits.append(f"standing {old_standing:.2f} -> {new_standing:.2f}")
+        return "; ".join(bits) + "."
+
+    if event_type == "patronage_granted":
+        patron = _short_person_html_for_event(con, world, payload.get("patron_person_id"), focus_person_id)
+        client = _short_person_html_for_event(con, world, payload.get("client_person_id") or payload.get("person_id"), focus_person_id)
+        strength = _event_float(payload, "strength_01")
+        tail = f" with strength {strength:.2f}" if strength is not None else ""
+        return f"{patron} extended patronage to {client}{tail}."
+
+    if event_type in {"status_fall", "bankruptcy", "elite_scandal"}:
+        old_standing = _event_float(payload, "previous_social_standing_01")
+        new_standing = _event_float(payload, "new_social_standing_01")
+        reason = payload.get("fall_reason") or event_type
+        bits = [
+            f"{person}'s standing fell",
+            f"reason {html.escape(str(reason).replace('_', ' '))}",
+        ]
+        if old_standing is not None and new_standing is not None:
+            bits.append(f"standing {old_standing:.2f} -> {new_standing:.2f}")
+        return "; ".join(bits) + "."
+
+    if event_type == "elite_household_investment":
+        kind = html.escape(str(payload.get("investment_kind") or "investment").replace("_", " "))
+        value = _event_float(payload, "investment_value")
+        pool_delta = _event_float(payload, "prosperity_pool_delta")
+        bits = [f"{person}'s household made a {kind}"]
+        if value is not None:
+            bits.append(f"value {value:.2f}")
+        if pool_delta is not None:
+            bits.append(f"settlement prosperity +{pool_delta:.2f}")
         return "; ".join(bits) + "."
 
     if event_type == "job_lost":
@@ -6001,6 +6184,128 @@ def _archive_score_share_lines(
     return lines
 
 
+def _status_echelon_label(world: str, person: dict[str, object]) -> str:
+    try:
+        from library.status_echelons import StatusEchelonCatalog
+
+        catalog = StatusEchelonCatalog.load(_db_path(world, "Config DB"))
+        echelon = catalog.echelon_for_values(
+            social_standing_01=(
+                float(person.get("social_standing_01"))
+                if person.get("social_standing_01") is not None
+                else None
+            ),
+            household_prosperity=(
+                float(person.get("household_prosperity"))
+                if person.get("household_prosperity") is not None
+                else None
+            ),
+            social_class_band=str(person.get("social_class_band") or ""),
+            job_market_type=str(person.get("job_market_type") or ""),
+        )
+        return echelon.display_name
+    except Exception:
+        standing = float(person.get("social_standing_01") or 0.0)
+        if standing >= 0.74:
+            return "Elite"
+        if standing >= 0.60:
+            return "Notable"
+        if standing >= 0.48:
+            return "Professional"
+        if standing >= 0.32:
+            return "Comfortable"
+        if standing >= 0.16:
+            return "Laboring"
+        return "Marginal"
+
+
+def _person_patronage_rows(
+    con: sqlite3.Connection, person_id: int
+) -> list[sqlite3.Row]:
+    if not _has_table(con, "simulation_patronage_ties"):
+        return []
+    return con.execute(
+        """
+        select patron_person_id, client_person_id, tie_kind, strength_01,
+               status, start_year, end_year, settlement_id
+        from simulation_patronage_ties
+        where patron_person_id = ? or client_person_id = ?
+        order by
+            case status when 'active' then 0 else 1 end,
+            coalesce(start_year, 0) desc,
+            patron_person_id,
+            client_person_id
+        limit 12
+        """,
+        (int(person_id), int(person_id)),
+    ).fetchall()
+
+
+def _person_patronage_items_html(
+    con: sqlite3.Connection, world: str, rows: list[sqlite3.Row], person_id: int
+) -> str:
+    if not rows:
+        return '<div class="relation muted">No patronage ties recorded</div>'
+    items: list[str] = []
+    for row in rows:
+        patron_id = int(row["patron_person_id"])
+        client_id = int(row["client_person_id"])
+        if patron_id == int(person_id):
+            other = _person_link_html(con, world, client_id)
+            role = "Patron of"
+        else:
+            other = _person_link_html(con, world, patron_id)
+            role = "Client of"
+        years = ""
+        if row["start_year"] is not None:
+            years = f" since {html.escape(str(row['start_year']))}"
+        strength = _format_01_score(row["strength_01"])
+        kind = str(row["tie_kind"] or "patronage").replace("_", " ")
+        status = str(row["status"] or "active").replace("_", " ")
+        items.append(
+            '<div class="relation">'
+            f'<strong>{html.escape(role)}</strong> {other}<br>'
+            f'<span class="muted">{html.escape(kind)} · {html.escape(status)} · strength {strength}{years}</span>'
+            '</div>'
+        )
+    return "".join(items)
+
+
+_STATUS_EVENT_TYPES = {
+    "status_rise",
+    "elite_job_promoted",
+    "guild_admission",
+    "patronage_granted",
+    "status_fall",
+    "bankruptcy",
+    "elite_household_investment",
+    "elite_scandal",
+}
+
+
+def _person_status_mobility_items_html(
+    con: sqlite3.Connection,
+    world: str,
+    events: list[sqlite3.Row],
+    person_id: int,
+) -> str:
+    items: list[str] = []
+    for event in events:
+        if str(event["event_type"] or "") not in _STATUS_EVENT_TYPES:
+            continue
+        sentence = _event_sentence_html(con, world, event, person_id)
+        items.append(
+            '<div class="relation event-card">'
+            f'<strong class="event-card-title">{html.escape(str(event["sim_year"]))} · '
+            f'{html.escape(str(event["event_type"]).replace("_", " ").title())}</strong><br>'
+            f'<span class="event-card-body">{sentence}</span>'
+            '</div>'
+        )
+    if not items:
+        return '<div class="relation muted">No status movement recorded</div>'
+    return "".join(items[:12])
+
+
 def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, person: dict[str, object]) -> str:
     current_year = _current_year(con, world)
     name = html.escape(_person_name(person))
@@ -6085,6 +6390,13 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         )
     if not event_items:
         event_items = ['<div class="relation muted">No matching events found</div>']
+    patronage_rows = _person_patronage_rows(con, int(row["person_id"]))
+    patronage_items = _person_patronage_items_html(
+        con, world, patronage_rows, int(row["person_id"])
+    )
+    status_mobility_items = _person_status_mobility_items_html(
+        con, world, events, int(row["person_id"])
+    )
 
     labels = _genome_labels(con)
     trait_order = _genome_trait_order(con)
@@ -6164,9 +6476,11 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
             "Class",
             str(person.get("social_class_band") or "unknown").replace("_", " "),
         ),
+        _render_detail_card("Status Echelon", _status_echelon_label(world, person)),
         _render_detail_card("Standing", _format_01_score(person.get("social_standing_01"))),
         _render_detail_card("Societal Impact", _format_01_score(person.get("societal_impact_01"))),
         _render_detail_card("Perceived Worth", _format_01_score(person.get("perceived_worth_01"))),
+        _render_detail_card("Patronage Ties", len(patronage_rows)),
     ]
     identity_cards = [
         _render_detail_card("Record ID", row["person_id"]),
@@ -6202,6 +6516,16 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
       <section aria-labelledby="person-{row['person_id']}-work-standing">
         <h3 id="person-{row['person_id']}-work-standing" class="section-title">Work And Standing</h3>
         <div class="detail-grid">{''.join(work_cards)}</div>
+        <div class="consequence-groups">
+          <div>
+            <h4 class="subsection-title">Patronage</h4>
+            <div class="relation-list">{patronage_items}</div>
+          </div>
+          <div>
+            <h4 class="subsection-title">Status Movement</h4>
+            <div class="relation-list">{status_mobility_items}</div>
+          </div>
+        </div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-consequences" class="consequence-section">
         <h3 id="person-{row['person_id']}-consequences" class="section-title">Consequences</h3>
@@ -8853,6 +9177,7 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
     for p in _top_people_for_where(con, world, f"{residence_sql} = ?", (sid,), limit=8):
         person = _person_from_row(p, _trait_slots_for_world(world))
         residents.append(_notable_person_label(person))
+    prestige_metrics = _settlement_prestige_metrics(con, world, sid)
     cards = "".join(
         [
             _detail_card("Alive", alive),
@@ -8863,6 +9188,11 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
             _detail_card("Stability", _fmt_number(row["stability"])),
             _detail_card("Market Pull", _fmt_number(row["market_pull"])),
             _detail_card("Prosperity", _fmt_number(row["prosperity_pool"])),
+            _detail_card("Elite Residents", prestige_metrics["elite_residents"]),
+            _detail_card("Prestige Jobs", prestige_metrics["prestige_jobs"]),
+            _detail_card("Patronage Ties", prestige_metrics["patronage_ties"]),
+            _detail_card("Domestic Service", prestige_metrics["domestic_service"]),
+            _detail_card("Elite Investments", prestige_metrics["elite_investments"]),
             _detail_card("Polity", _polity_names_for_settlement(con, sid, rid) or "None"),
             _detail_card("Founded", row["founded_sim_year"] or "Unknown"),
         ]
