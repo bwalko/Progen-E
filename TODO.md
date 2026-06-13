@@ -11,6 +11,16 @@
   explicit TODO before extending the current geography/job/knowledge-driven
   trade-network model into commodity production, cargo, prices, or supply chains.
 
+## Completed Context: Outlawry And Refuge V1
+
+The bounded Outlawry And Refuge V1 stages are complete; see `TODONE.md` for
+stage-by-stage evidence covering persistence/case opening, flight/refuge life,
+pursuit/buy-off/return, browser/report visibility, and tests.
+
+Future outlaw work should be opened only for a concrete next behavior such as
+prison systems, passive-person promotion into outlaw cases, richer refuge maps,
+law-code variation by polity, or measured tuning/reporting gaps.
+
 ## Completed Context: Genome-Driven Events, Lost Records, And Chronicle Prose
 
 The event-system foundation is complete across Workstreams 1-8. `TODONE.md`

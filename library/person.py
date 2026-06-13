@@ -52,6 +52,11 @@ class Person:
     status_tendency: str | None = None
     leader_quality: str | None = None
     leader_tendency: str | None = None
+    outlaw_status: str | None = None
+    outlaw_case_key: str | None = None
+    outlaw_refuge_id: str | None = None
+    outlaw_since_year: int | None = None
+    last_free_settlement_id: str | None = None
     employment_status: str | None = None
     job_lost_year: int | None = None
     unemployment_started_year: int | None = None

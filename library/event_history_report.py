@@ -18,6 +18,16 @@ INCIDENT_EVENT_TYPES: frozenset[str] = frozenset(
         "affair_scandal",
         "public_virtue",
         "knowledge_culture",
+        "outlaw_case_opened",
+        "outlaw_flight",
+        "outlaw_refuge_joined",
+        "outlaw_raid",
+        "outlaw_pursuit",
+        "outlaw_captured",
+        "outlaw_killed",
+        "outlaw_bought_off",
+        "outlaw_returned",
+        "outlaw_forgotten",
     }
 )
 
@@ -329,6 +339,16 @@ _CONSEQUENCE_COUNT_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         ("adjudication_type", "outcome"),
     ),
     (
+        "Outlaw Cases",
+        "simulation_outlaw_cases_readable",
+        ("offense_type", "status", "resolution"),
+    ),
+    (
+        "Outlaw Refuges",
+        "simulation_outlaw_refuges_readable",
+        ("region_id", "status"),
+    ),
+    (
         "Domain Diffusion",
         "simulation_domain_diffusion_readable",
         ("domain", "route_type"),
@@ -394,6 +414,18 @@ _CONSEQUENCE_METRIC_SPECS: tuple[
         "simulation_legal_adjudications_readable",
         ("adjudication_type", "outcome"),
         ("severity",),
+    ),
+    (
+        "Outlaw Cases",
+        "simulation_outlaw_cases_readable",
+        ("offense_type", "status"),
+        ("severity_01", "knownness_01", "pursuit_pressure_01", "buyoff_power_01"),
+    ),
+    (
+        "Outlaw Refuges",
+        "simulation_outlaw_refuges_readable",
+        ("region_id", "status"),
+        ("band_size", "concealment_01", "support_01", "active_case_count"),
     ),
     (
         "Domain Diffusion",

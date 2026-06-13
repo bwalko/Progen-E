@@ -111,3 +111,13 @@ private_life,apprenticeship_breakthrough,private_life,apprenticeship breakthroug
 private_life,mental_collapse,private_life,mental collapse,collapse;stress;household,household_crisis,household_memory,private_known,1.00,Private breakdown under stress without moral determinism.
 private_life,hermitage,private_life,hermitage,hermitage;withdrawal;religious_pull,migration,household_memory,rumored,1.00,Withdrawal from ordinary society into isolation.
 private_life,adoption_fostering,private_life,adoption or fostering,adoption;fostering;lineage,lineage_memory,lineage_memory,private_known,1.00,Child raised under another household or guardian.
+outlaw_case_opened,outlaw_case_opened,violent_crime,outlaw case opened,wanted;legal;public_order,legal_fallout,outlaw_record,rumored,1.00,Serious known wrongdoing opens a wanted case.
+outlaw_flight,outlaw_flight,violent_crime,outlaw flight,flight;legal;exile,exile_or_execution,outlaw_record,rumored,1.00,Wanted person flees ordinary settlement life.
+outlaw_refuge_joined,outlaw_refuge_joined,violent_crime,outlaw refuge joined,refuge;hideout;band,exile_or_execution,outlaw_record,rumored,1.00,Fugitive joins or founds a non-settlement refuge.
+outlaw_raid,outlaw_raid,property_survival_crime,outlaw raid,raid;survival;refuge,property_loss,outlaw_record,rumored,1.00,Refuge survives through theft or raiding.
+outlaw_pursuit,outlaw_pursuit,political_crime,outlaw pursuit,pursuit;justice;authority,legal_fallout,outlaw_record,public_known,1.00,Authorities discover or move against an outlaw refuge.
+outlaw_captured,outlaw_captured,political_crime,outlaw captured,capture;punishment;justice,legal_fallout,outlaw_record,public_known,1.00,Fugitive is captured and punished.
+outlaw_killed,outlaw_killed,violent_crime,outlaw killed,pursuit;death;justice,death,outlaw_record,public_known,1.00,Fugitive dies during pursuit or punishment.
+outlaw_bought_off,outlaw_bought_off,political_crime,outlaw case bought off,bribery;patronage;status,legal_fallout,outlaw_record,rumored,1.00,Wealth status or patronage softens a wanted case.
+outlaw_returned,outlaw_returned,violent_crime,outlaw returned,return;stigma;exile,legal_fallout,outlaw_record,rumored,1.00,Former fugitive returns after resolution.
+outlaw_forgotten,outlaw_forgotten,violent_crime,outlaw case forgotten,forgetting;fading;return,legal_fallout,outlaw_record,rumored,1.00,Wanted pressure fades enough for return.

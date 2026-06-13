@@ -29,6 +29,11 @@ from library.event_scoring import (
 )
 from library.geography import get_region, list_routes_from
 from library.incident_rates import IncidentRateParams, incident_rate_for_year
+from library.simulation_outlaws import (
+    is_outlaw_absent,
+    outlaw_case_from_murder,
+    outlaw_case_from_property_crime,
+)
 
 if TYPE_CHECKING:
     from library.simulation_context import (
@@ -180,6 +185,8 @@ class IncidentScoringFacts:
 
 
 def _residence_settlement_id(rec: "SimulationPersonRecord") -> str:
+    if is_outlaw_absent(rec.person):
+        return ""
     return str(
         rec.person.current_settlement_id or rec.person.birthplace_settlement_id or ""
     ).strip()
@@ -194,6 +201,8 @@ def _residence_region_id(ctx: "SimulationContext", rec: "SimulationPersonRecord"
 
 
 def _adult_alive(rec: "SimulationPersonRecord", year: int) -> bool:
+    if is_outlaw_absent(rec.person):
+        return False
     if rec.person.deathyear is not None and int(rec.person.deathyear) <= int(year):
         return False
     return int(year) - int(rec.person.birthyear) >= INCIDENT_ADULT_MIN_AGE
@@ -1636,7 +1645,7 @@ def _faction_memory_row(
 
 
 def _apply_murder_consequences(
-    year: int, incident: MurderIncident
+    ctx: "SimulationContext", year: int, incident: MurderIncident
 ) -> dict[str, object]:
     memory_type = (
         "blood_feud"
@@ -1646,7 +1655,7 @@ def _apply_murder_consequences(
         else "violent_grievance"
     )
     strength = 0.45 + float(incident.historical_importance) * 0.45
-    return {
+    consequences: dict[str, object] = {
         "faction_memory": [
             _faction_memory_row(
                 memory_type=memory_type,
@@ -1663,6 +1672,10 @@ def _apply_murder_consequences(
             )
         ]
     }
+    outlaw_case = outlaw_case_from_murder(ctx, int(year), incident)
+    if outlaw_case is not None:
+        consequences["outlaw_case"] = outlaw_case
+    return consequences
 
 
 def _relationship_update_at_year(
@@ -1726,7 +1739,7 @@ def _apply_property_crime_consequences(
         prosperity_delta=-float(incident.loss_value) * 0.25,
         stability_delta=-(0.006 + float(incident.loss_value) * 0.06),
     )
-    return {
+    consequences: dict[str, object] = {
         "property_loss": {
             "target": _apply_household_prosperity_delta(
                 ctx,
@@ -1760,6 +1773,10 @@ def _apply_property_crime_consequences(
             )
         ],
     }
+    outlaw_case = outlaw_case_from_property_crime(ctx, int(year), incident)
+    if outlaw_case is not None:
+        consequences["outlaw_case"] = outlaw_case
+    return consequences
 
 
 def _apply_affair_scandal_consequences(
@@ -2869,7 +2886,7 @@ def _maybe_property_crime_in_settlement(
 def _record_murder_incident(
     ctx: "SimulationContext", year: int, incident: MurderIncident
 ) -> None:
-    consequences = _apply_murder_consequences(int(year), incident)
+    consequences = _apply_murder_consequences(ctx, int(year), incident)
     ctx._record_simulation_event(
         int(year),
         "murder",

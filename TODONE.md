@@ -1,5 +1,69 @@
 # TODONE
 
+## Outlawry And Refuge V1
+
+- Completed staged implementation of outlaws as simulation state, not a job
+  title:
+  - `library.simulation_outlaws` adds runtime `SimulationOutlawCase` and
+    `SimulationOutlawRefuge` dataclasses plus helpers for wanted-case creation,
+    flight, refuge selection, raids, pursuit, buy-off, capture, death, and
+    return/forgetting.
+  - `Person` now carries current outlaw state:
+    `outlaw_status`, `outlaw_case_key`, `outlaw_refuge_id`,
+    `outlaw_since_year`, and `last_free_settlement_id`.
+- Completed Stage 1, persistence and case opening:
+  - bumped save schema to v20;
+  - added `simulation_outlaw_cases` and `simulation_outlaw_refuges` plus
+    readable views;
+  - wired schema ensure, clear/reset, full and meta-only checkpoint sync, and
+    resume hydration;
+  - murder and serious property-crime consequences now open wanted cases with
+    severity, knownness, pursuit pressure, and buy-off power.
+- Completed Stage 2, flight and refuge life:
+  - wanted people can flee to non-settlement `outlaw_refuge` records;
+  - flight dissolves official partnerships, ends paramour contact, clears normal
+    settlement residence, work, household-care, and service attachment state;
+  - fugitive outlaws are excluded from normal current-settlement grouping and
+    the shared career/household-care residence helper;
+  - refuges can generate survival-crime `outlaw_raid` events.
+- Completed Stage 3, pursuit, buy-off, and return:
+  - annual outlaw processing runs after incidents and before innovation and
+    government;
+  - status, prosperity, office, and patronage contribute to buy-off power, with
+    hard limits for severe public murder;
+  - discovery/pursuit can capture, kill, or leave a fugitive escaped;
+  - long-fading cases can resolve as forgotten/returned, while capture returns
+    the person punished and stigmatized.
+- Completed Stage 4, visibility and polish:
+  - added event catalog and ontology rows for `outlaw_case_opened`,
+    `outlaw_flight`, `outlaw_refuge_joined`, `outlaw_raid`,
+    `outlaw_pursuit`, `outlaw_captured`, `outlaw_killed`,
+    `outlaw_bought_off`, `outlaw_returned`, and `outlaw_forgotten`;
+  - event-history reporting now includes outlaw cases/refuges and metrics;
+  - Gradio person sheets and share text include Outlawry summaries without
+    autoloading heavy grids;
+  - readable event sentences cover the new outlaw events.
+- Added focused deterministic coverage in `unit_test.test_simulation_outlaws`
+  for case creation, buy-off limits, flight/refuge selection, relationship
+  cutoff, death/capture/return resolution, and checkpoint/readable-view
+  round-trip.
+- Verified with:
+  - `python -m py_compile library\person.py library\simulation_context.py
+    library\simulation_incidents.py library\simulation_careers.py
+    library\simulation_outlaws.py library\world_save.py
+    library\event_history_report.py utils\gradio_data_browser.py`;
+  - `python -m unittest unit_test.test_simulation_outlaws`;
+  - `python -m unittest unit_test.test_simulation_incidents`;
+  - `python -m unittest unit_test.test_event_catalog
+    unit_test.test_event_ontology unit_test.test_event_history_report`;
+  - `python -m unittest unit_test.test_event_prose`;
+  - `python -m unittest unit_test.test_save_checkpoint`;
+  - `python -m unittest unit_test.test_gradio_data_browser` (passed with an
+    existing ResourceWarning about an unclosed SQLite connection).
+- The full combined target command was also attempted, but it exceeded the
+  5-minute command timeout before producing output; the same test modules passed
+  when run in smaller batches.
+
 ## Placename Length And Visible `-by` Tuning
 
 - Added settlement display-length budgeting in `library.placenames_generation`:

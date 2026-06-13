@@ -48,6 +48,11 @@ from library.settlements import (
     roll_abandon_this_year,
 )
 from library.simulation_store import SimulationFileStore
+from library.simulation_outlaws import (
+    SimulationOutlawCase,
+    SimulationOutlawRefuge,
+    is_outlaw_absent,
+)
 from library.world_bootstrap import delete_save_database
 from library.world_bootstrap import ensure_world_directories
 from library.world_bootstrap import history_sim_reset_world_from_env
@@ -195,6 +200,8 @@ class SimulationContext:
     passive_cohorts: list[PassiveCohort] = field(default_factory=list)
     passive_promotion_log: list[PassivePromotionLogEntry] = field(default_factory=list)
     patronage_ties: dict[tuple[int, int, str], SimulationPatronageTie] = field(default_factory=dict)
+    outlaw_cases: dict[str, SimulationOutlawCase] = field(default_factory=dict)
+    outlaw_refuges: dict[str, SimulationOutlawRefuge] = field(default_factory=dict)
     current_people_ids: set[int] = field(default_factory=set)
     couples: list[tuple[int, int]] = field(default_factory=list)
     paramours: list[tuple[int, int]] = field(default_factory=list)
@@ -1473,6 +1480,8 @@ class SimulationContext:
             status_tendency=None,
             leader_quality=None,
             leader_tendency=None,
+            outlaw_status=None,
+            outlaw_refuge_id=None,
             employment_status=None,
             job_lost_year=None,
             unemployment_started_year=None,
@@ -1595,6 +1604,8 @@ class SimulationContext:
                             "status_tendency",
                             "leader_quality",
                             "leader_tendency",
+                            "outlaw_status",
+                            "outlaw_refuge_id",
                             "employment_status",
                             "job_lost_year",
                             "unemployment_started_year",
@@ -1618,6 +1629,8 @@ class SimulationContext:
         ]
 
     def _residence_settlement_id(self, rec: SimulationPersonRecord) -> str:
+        if is_outlaw_absent(rec.person):
+            return ""
         return (
             (rec.person.current_settlement_id or rec.person.birthplace_settlement_id or "")
             .strip()
@@ -2315,6 +2328,13 @@ class SimulationContext:
         simulation_incidents_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.incidents", tpc() - t0)
+        from library.simulation_outlaws import simulation_outlaws_annual_tick
+
+        if prof:
+            t0 = tpc()
+        simulation_outlaws_annual_tick(self, year)
+        if prof:
+            simulation_timing.accumulate("summary.outlaws", tpc() - t0)
         from library.simulation_innovation import simulation_innovation_annual_tick
 
         if prof:

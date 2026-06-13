@@ -35,6 +35,8 @@ class TestEventOntology(unittest.TestCase):
                 "household_scandal",
                 "political_crime",
                 "religious_cultural_conflict",
+                "status_mobility",
+                "economy",
                 "public_virtue",
                 "knowledge_culture",
                 "private_life",

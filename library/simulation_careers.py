@@ -27,6 +27,7 @@ from library.mind_body import attractiveness_01, ensure_full_mind_body, work_tra
 from library.personality_interpreter import interpret_genome_personality
 from library.geography import list_routes_from
 from library.random_traits import _as_int, _connect
+from library.simulation_outlaws import is_outlaw_absent
 
 if TYPE_CHECKING:
     from library.person import Person
@@ -3448,6 +3449,8 @@ def maybe_assign_or_rehire(
 
 
 def _residence_settlement_id(rec: "SimulationPersonRecord") -> str:
+    if is_outlaw_absent(rec.person):
+        return ""
     return (
         rec.person.current_settlement_id
         or rec.person.birthplace_settlement_id

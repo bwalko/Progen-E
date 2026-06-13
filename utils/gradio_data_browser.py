@@ -2678,6 +2678,11 @@ _PERSON_COLUMN_KEYS = (
     "status_tendency",
     "leader_quality",
     "leader_tendency",
+    "outlaw_status",
+    "outlaw_case_key",
+    "outlaw_refuge_id",
+    "outlaw_since_year",
+    "last_free_settlement_id",
     "employment_status",
     "job_lost_year",
     "unemployment_started_year",
@@ -4651,6 +4656,115 @@ def _knowledge_culture_sentence_html(
     return sentence + "." + details
 
 
+def _outlaw_refuge_label(payload: dict[str, object]) -> str:
+    refuge = str(payload.get("outlaw_refuge_id") or payload.get("refuge_id") or "").strip()
+    if refuge:
+        return refuge.replace("outlaw_refuge:", "refuge:")
+    return "unknown refuge"
+
+
+def _outlaw_event_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    event_type: str,
+    focus_person_id: object,
+) -> str:
+    accused = _short_person_for_event(
+        con,
+        world,
+        payload.get("accused_person_id") or payload.get("person_id"),
+        focus_person_id,
+    )
+    offense = str(
+        payload.get("incident_kind") or payload.get("offense_type") or "offense"
+    ).replace("_", " ")
+    place = _event_place_text(con, world, payload)
+    refuge = _outlaw_refuge_label(payload)
+    pressure = _event_float(payload, "pursuit_pressure_01")
+    pressure_tail = f"; pursuit pressure {pressure:.2f}" if pressure is not None else ""
+    if event_type == "outlaw_case_opened":
+        return f"{accused} became wanted for {offense} at {place}{pressure_tail}."
+    if event_type == "outlaw_flight":
+        return f"{accused} fled ordinary settlement life for {refuge}{pressure_tail}."
+    if event_type == "outlaw_refuge_joined":
+        band = payload.get("band_size")
+        band_tail = f"; band size {band}" if band not in (None, "") else ""
+        return f"{accused} joined {refuge} near {place}{band_tail}."
+    if event_type == "outlaw_raid":
+        band = payload.get("band_size")
+        band_tail = f"; band size {band}" if band not in (None, "") else ""
+        return f"Outlaws from {refuge} raided near {place}{band_tail}."
+    if event_type == "outlaw_pursuit":
+        band = payload.get("band_size")
+        band_tail = f"; band size {band}" if band not in (None, "") else ""
+        return f"Forces pursued {accused} at {refuge}{band_tail}."
+    if event_type == "outlaw_captured":
+        return f"{accused} was captured and punished for {offense}."
+    if event_type == "outlaw_killed":
+        return f"{accused} was killed during outlaw pursuit."
+    if event_type == "outlaw_bought_off":
+        buyoff = _event_float(payload, "buyoff_power_01")
+        buyoff_tail = f"; buy-off power {buyoff:.2f}" if buyoff is not None else ""
+        return f"{accused}'s wanted case was bought off or softened{buyoff_tail}."
+    if event_type == "outlaw_returned":
+        return f"{accused} returned from outlawry with the case resolved."
+    if event_type == "outlaw_forgotten":
+        return f"{accused}'s wanted case faded enough for return."
+    return f"{event_type.replace('_', ' ')}: {accused}."
+
+
+def _outlaw_event_sentence_html(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    event_type: str,
+    focus_person_id: object,
+) -> str:
+    accused = _short_person_html_for_event(
+        con,
+        world,
+        payload.get("accused_person_id") or payload.get("person_id"),
+        focus_person_id,
+    )
+    offense = html.escape(
+        str(payload.get("incident_kind") or payload.get("offense_type") or "offense").replace("_", " ")
+    )
+    place = html.escape(_event_place_text(con, world, payload))
+    refuge = html.escape(_outlaw_refuge_label(payload))
+    pressure = _event_float(payload, "pursuit_pressure_01")
+    pressure_tail = f"; pursuit pressure {pressure:.2f}" if pressure is not None else ""
+    if event_type == "outlaw_case_opened":
+        return f"{accused} became wanted for {offense} at {place}{pressure_tail}."
+    if event_type == "outlaw_flight":
+        return f"{accused} fled ordinary settlement life for {refuge}{pressure_tail}."
+    if event_type == "outlaw_refuge_joined":
+        band = payload.get("band_size")
+        band_tail = f"; band size {html.escape(str(band))}" if band not in (None, "") else ""
+        return f"{accused} joined {refuge} near {place}{band_tail}."
+    if event_type == "outlaw_raid":
+        band = payload.get("band_size")
+        band_tail = f"; band size {html.escape(str(band))}" if band not in (None, "") else ""
+        return f"Outlaws from {refuge} raided near {place}{band_tail}."
+    if event_type == "outlaw_pursuit":
+        band = payload.get("band_size")
+        band_tail = f"; band size {html.escape(str(band))}" if band not in (None, "") else ""
+        return f"Forces pursued {accused} at {refuge}{band_tail}."
+    if event_type == "outlaw_captured":
+        return f"{accused} was captured and punished for {offense}."
+    if event_type == "outlaw_killed":
+        return f"{accused} was killed during outlaw pursuit."
+    if event_type == "outlaw_bought_off":
+        buyoff = _event_float(payload, "buyoff_power_01")
+        buyoff_tail = f"; buy-off power {buyoff:.2f}" if buyoff is not None else ""
+        return f"{accused}'s wanted case was bought off or softened{buyoff_tail}."
+    if event_type == "outlaw_returned":
+        return f"{accused} returned from outlawry with the case resolved."
+    if event_type == "outlaw_forgotten":
+        return f"{accused}'s wanted case faded enough for return."
+    return f"{html.escape(event_type.replace('_', ' '))}: {accused}."
+
+
 def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, focus_person_id: object) -> str:
     payload = _load_json_object(event["payload_json"])
     event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
@@ -4781,6 +4895,9 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
 
     if event_type == "knowledge_culture":
         return _knowledge_culture_sentence(con, world, payload, focus_person_id)
+
+    if event_type.startswith("outlaw_"):
+        return _outlaw_event_sentence(con, world, payload, event_type, focus_person_id)
 
     if event_type in {"settlement_moved", "job_seeker_migration"}:
         if event_type == "settlement_moved":
@@ -5013,6 +5130,9 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
 
     if event_type == "knowledge_culture":
         return _knowledge_culture_sentence_html(con, world, payload, focus_person_id)
+
+    if event_type.startswith("outlaw_"):
+        return _outlaw_event_sentence_html(con, world, payload, event_type, focus_person_id)
 
     if event_type in {"settlement_moved", "job_seeker_migration"}:
         if event_type == "settlement_moved":
@@ -5650,6 +5770,30 @@ def _person_legal_fallout_rows(
         return []
 
 
+def _person_outlaw_case_rows(
+    con: sqlite3.Connection, world: str, person_id: object
+) -> list[sqlite3.Row]:
+    if not _has_relation(con, "simulation_outlaw_cases_readable"):
+        return []
+    try:
+        return con.execute(
+            """
+            SELECT *
+            FROM simulation_outlaw_cases_readable
+            WHERE accused_person_id = ?
+               OR victim_person_id = ?
+               OR target_person_id = ?
+            ORDER BY
+              COALESCE(start_year, source_event_year, 0),
+              case_key
+            LIMIT 30
+            """,
+            (person_id, person_id, person_id),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+
+
 def _person_knowledge_effect_rows(
     events: list[sqlite3.Row], person_id: object
 ) -> list[dict[str, object]]:
@@ -5723,12 +5867,14 @@ def _person_consequence_summary_cards(
     obligations: list[sqlite3.Row],
     reputation_marks: list[sqlite3.Row],
     legal_fallout: list[sqlite3.Row],
+    outlaw_cases: list[sqlite3.Row],
     knowledge_effects: list[dict[str, object]],
 ) -> list[str]:
     return [
         _render_detail_card("Obligations", len(obligations)),
         _render_detail_card("Reputation Marks", len(reputation_marks)),
         _render_detail_card("Legal Fallout", len(legal_fallout)),
+        _render_detail_card("Outlawry", len(outlaw_cases)),
         _render_detail_card("Knowledge Effects", len(knowledge_effects)),
     ]
 
@@ -5842,6 +5988,63 @@ def _person_legal_fallout_items_html(
             f'<strong>{html.escape(_year_span_text(_row_value(row, "start_year"), _row_value(row, "expected_resolution_year")))} · '
             f'Legal Fallout: {html.escape(str(_row_value(row, "fallout_type") or "unknown").replace("_", " "))}</strong><br>'
             f'{"; ".join(people_bits)}'
+            f'<br><span class="muted">{html.escape(detail)}</span>'
+            '</div>'
+        )
+    return items
+
+
+def _person_outlaw_case_role(row: sqlite3.Row, focus_person_id: object) -> str:
+    if _same_person_id(_row_value(row, "accused_person_id"), focus_person_id):
+        return "accused"
+    if _same_person_id(_row_value(row, "victim_person_id"), focus_person_id):
+        return "victim"
+    if _same_person_id(_row_value(row, "target_person_id"), focus_person_id):
+        return "target"
+    return "related"
+
+
+def _person_outlaw_case_items_html(
+    con: sqlite3.Connection,
+    world: str,
+    rows: list[sqlite3.Row],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ['<div class="relation muted">No recorded outlawry</div>']
+    items: list[str] = []
+    for row in rows:
+        accused = _short_person_html_for_event(
+            con, world, _row_value(row, "accused_person_id"), focus_person_id
+        )
+        victim_id = _row_value(row, "victim_person_id")
+        target_id = _row_value(row, "target_person_id")
+        affected = victim_id if victim_id not in (None, "") else target_id
+        affected_html = (
+            _short_person_html_for_event(con, world, affected, focus_person_id)
+            if affected not in (None, "")
+            else '<span class="muted">none</span>'
+        )
+        detail = _detail_bits(
+            ("role", _person_outlaw_case_role(row, focus_person_id)),
+            ("status", _row_value(row, "status")),
+            ("resolution", _row_value(row, "resolution")),
+            ("severity", _fmt_number(_row_value(row, "severity_01"))),
+            ("knownness", _fmt_number(_row_value(row, "knownness_01"))),
+            ("pursuit", _fmt_number(_row_value(row, "pursuit_pressure_01"))),
+            ("buy-off", _fmt_number(_row_value(row, "buyoff_power_01"))),
+            ("refuge", _row_value(row, "refuge_id")),
+        )
+        if detail:
+            detail += _place_tail(row)
+        offense = str(
+            _row_value(row, "offense_kind") or _row_value(row, "offense_type") or "outlaw case"
+        ).replace("_", " ")
+        items.append(
+            '<div class="relation consequence-row consequence-outlaw">'
+            f'<strong>{html.escape(_year_span_text(_row_value(row, "start_year"), _row_value(row, "resolved_year")))} · '
+            f'Outlawry: {html.escape(offense)}</strong><br>'
+            f'accused: {accused}; affected: {affected_html}'
             f'<br><span class="muted">{html.escape(detail)}</span>'
             '</div>'
         )
@@ -5972,6 +6175,41 @@ def _person_legal_fallout_lines(
             f"principal {principal}; opposing {opposing}; related {related}; "
             f"status {str(_row_value(row, 'status') or 'active')}; "
             f"severity {_fmt_number(_row_value(row, 'severity'))}."
+        )
+    return lines
+
+
+def _person_outlaw_case_lines(
+    con: sqlite3.Connection,
+    world: str,
+    rows: list[sqlite3.Row],
+    focus_person_id: object,
+) -> list[str]:
+    if not rows:
+        return ["- No recorded outlawry."]
+    lines: list[str] = []
+    for row in rows:
+        accused = _person_link_text(con, world, _row_value(row, "accused_person_id"))
+        affected_id = _row_value(row, "victim_person_id") or _row_value(row, "target_person_id")
+        affected = (
+            _person_link_text(con, world, affected_id)
+            if affected_id not in (None, "")
+            else "none"
+        )
+        offense = str(
+            _row_value(row, "offense_kind") or _row_value(row, "offense_type") or "outlaw case"
+        ).replace("_", " ")
+        resolution = _row_value(row, "resolution") or "unresolved"
+        refuge = _row_value(row, "refuge_id") or "none"
+        lines.append(
+            f"- {_year_span_text(_row_value(row, 'start_year'), _row_value(row, 'resolved_year'))}: "
+            f"{offense}; role {_person_outlaw_case_role(row, focus_person_id)}; "
+            f"accused {accused}; affected {affected}; "
+            f"status {str(_row_value(row, 'status') or 'active')}; resolution {resolution}; "
+            f"severity {_fmt_number(_row_value(row, 'severity_01'))}; "
+            f"knownness {_fmt_number(_row_value(row, 'knownness_01'))}; "
+            f"pursuit {_fmt_number(_row_value(row, 'pursuit_pressure_01'))}; "
+            f"buy-off {_fmt_number(_row_value(row, 'buyoff_power_01'))}; refuge {refuge}."
         )
     return lines
 
@@ -6605,6 +6843,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     obligation_rows = _person_obligation_rows(con, world, row["person_id"])
     reputation_mark_rows = _person_reputation_mark_rows(con, world, row["person_id"])
     legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
+    outlaw_case_rows = _person_outlaw_case_rows(con, world, row["person_id"])
     knowledge_effect_rows = _person_knowledge_effect_rows(events, row["person_id"])
     archive_score = _person_archive_score_row(con, row["person_id"])
     archive_reason_rows = _person_archive_reason_rows(con, row["person_id"])
@@ -6615,6 +6854,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         obligation_rows,
         reputation_mark_rows,
         legal_fallout_rows,
+        outlaw_case_rows,
         knowledge_effect_rows,
     )
     obligation_items = _person_obligation_items_html(
@@ -6625,6 +6865,9 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     )
     legal_fallout_items = _person_legal_fallout_items_html(
         con, world, legal_fallout_rows, row["person_id"]
+    )
+    outlaw_case_items = _person_outlaw_case_items_html(
+        con, world, outlaw_case_rows, row["person_id"]
     )
     knowledge_effect_items = _person_knowledge_effect_items_html(
         con, world, knowledge_effect_rows, row["person_id"]
@@ -6748,6 +6991,14 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         _render_detail_card("Standing", _format_01_score(person.get("social_standing_01"))),
         _render_detail_card("Societal Impact", _format_01_score(person.get("societal_impact_01"))),
         _render_detail_card("Perceived Worth", _format_01_score(person.get("perceived_worth_01"))),
+        _render_detail_card(
+            "Outlaw Status",
+            str(person.get("outlaw_status") or "none").replace("_", " "),
+        ),
+        _render_detail_card(
+            "Outlaw Refuge",
+            str(person.get("outlaw_refuge_id") or "none").replace("_", " "),
+        ),
         _render_detail_card("Patronage Ties", len(patronage_rows)),
     ]
     identity_cards = [
@@ -6810,6 +7061,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
           <div>
             <h4 class="subsection-title">Legal Fallout</h4>
             <div class="relation-list">{''.join(legal_fallout_items)}</div>
+          </div>
+          <div>
+            <h4 class="subsection-title">Outlawry</h4>
+            <div class="relation-list">{''.join(outlaw_case_items)}</div>
           </div>
           <div>
             <h4 class="subsection-title">Knowledge Effects</h4>
@@ -6921,6 +7176,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     obligation_rows = _person_obligation_rows(con, world, row["person_id"])
     reputation_mark_rows = _person_reputation_mark_rows(con, world, row["person_id"])
     legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
+    outlaw_case_rows = _person_outlaw_case_rows(con, world, row["person_id"])
     knowledge_effect_rows = _person_knowledge_effect_rows(events, row["person_id"])
     archive_score = _person_archive_score_row(con, row["person_id"])
     archive_reason_rows = _person_archive_reason_rows(con, row["person_id"])
@@ -6931,6 +7187,9 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     reputation_mark_lines = _person_reputation_mark_lines(reputation_mark_rows)
     legal_fallout_lines = _person_legal_fallout_lines(
         con, world, legal_fallout_rows, row["person_id"]
+    )
+    outlaw_case_lines = _person_outlaw_case_lines(
+        con, world, outlaw_case_rows, row["person_id"]
     )
     knowledge_effect_lines = _person_knowledge_effect_lines(
         con, world, knowledge_effect_rows, row["person_id"]
@@ -6987,6 +7246,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             f"Housing: {str(person.get('housing_status') or 'unknown').replace('_', ' ')}; household role: {str(person.get('household_role') or 'none').replace('_', ' ')}.",
             f"Service attachment: employer {_person_link_text(con, world, person.get('employer_person_id')) if person.get('employer_person_id') else 'none'}; host {_person_link_text(con, world, person.get('host_person_id')) if person.get('host_person_id') else 'none'}.",
             f"Standing: class {str(person.get('social_class_band') or 'unknown').replace('_', ' ')}, social standing {_format_01_score(person.get('social_standing_01'))}, societal impact {_format_01_score(person.get('societal_impact_01'))}, perceived worth {_format_01_score(person.get('perceived_worth_01'))}.",
+            f"Outlawry: status {str(person.get('outlaw_status') or 'none').replace('_', ' ')}, refuge {str(person.get('outlaw_refuge_id') or 'none').replace('_', ' ')}.",
             f"Character tags: {tags_text}",
             "",
             *archive_score_lines,
@@ -7004,6 +7264,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             f"- Obligations: {len(obligation_rows)}",
             f"- Reputation marks: {len(reputation_mark_rows)}",
             f"- Legal fallout: {len(legal_fallout_rows)}",
+            f"- Outlawry: {len(outlaw_case_rows)}",
             f"- Knowledge effects: {len(knowledge_effect_rows)}",
             "",
             "Active Obligations:",
@@ -7014,6 +7275,9 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             "",
             "Legal Fallout:",
             *legal_fallout_lines,
+            "",
+            "Outlawry:",
+            *outlaw_case_lines,
             "",
             "Knowledge Effects:",
             *knowledge_effect_lines,
