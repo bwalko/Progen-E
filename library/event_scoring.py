@@ -171,6 +171,14 @@ def infer_role_tags(
         tags.add("spouse")
     if getattr(person, "unemployment_started_year", None) is not None:
         tags.add("unemployed")
+    housing_status = str(getattr(person, "housing_status", "") or "").strip().lower()
+    if housing_status == "street":
+        tags.add("street_precarious")
+    elif housing_status in {"kin_board", "charity_board"}:
+        tags.add("boarded_adult")
+    market_type = str(getattr(person, "job_market_type", "") or "").strip().lower()
+    if market_type:
+        tags.add(f"job_market_{market_type}")
     if person_id is not None:
         if person_id in _id_set(parent_ids):
             tags.add("parent")
@@ -407,11 +415,16 @@ PROPERTY_CRIME_SPEC = EventPropensitySpec(
     ),
     role_weights={
         "unemployed": 0.04,
+        "street_precarious": 0.09,
+        "job_market_vice": 0.04,
+        "job_market_criminal": 0.08,
         "trader": 0.02,
     },
     pressure_weights={
         "scarcity": 0.06,
         "debt": 0.07,
+        "street_precarity": 0.10,
+        "survival_need": 0.08,
         "crowding": 0.03,
         "status_fall": 0.04,
     },
@@ -419,6 +432,8 @@ PROPERTY_CRIME_SPEC = EventPropensitySpec(
         "market_day": 0.04,
         "storehouse_access": 0.05,
         "shared_household": 0.03,
+        "street": 0.07,
+        "begging": 0.04,
     },
     composite_weights={
         "rank hunger": 0.04,

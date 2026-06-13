@@ -20,6 +20,7 @@ from library.job_economics import (
     JobEconomicsParams,
     normalize_job_catalog_key,
 )
+from library.job_archetypes import JobArchetypeCatalog, JobArchetypeParams
 from library.job_market import JobMarketCatalog, JobMarketParams
 from library.mind_body import attractiveness_01, ensure_full_mind_body, work_trait_values
 from library.personality_interpreter import interpret_genome_personality
@@ -99,6 +100,13 @@ PRIMARY_CHILDCARE_OUT_OF_HOME_LOSS_FLOOR = 0.72
 
 JOB_SEEKER_MIGRATION_MAX_PROB = 0.35
 
+ADULT_HOUSING_MIN_AGE = 18
+HOUSEHOLD_CARE_MIN_DUTY = 0.35
+SERVICE_HOUSEHOLD_PROSPERITY_THRESHOLD = 2.15
+SERVICE_HIGH_STANDING_THRESHOLD = 0.68
+STREET_PRECARITY_PRESSURE_THRESHOLD = 0.62
+VICE_DESPERATION_THRESHOLD = 0.58
+
 # Sex-restricted jobs: tokens may end with `` [M]`` (male-only) or `` [F]`` (female-only).
 # Cross-gender exception: opposite ``gender_mind``, low ``mating drive`` genome, physical gate.
 CROSS_GENDER_MATING_DRIVE_THRESHOLD = 35.0
@@ -128,6 +136,13 @@ class CareerAssignment:
     job_market_demand_score: float = 0.0
     job_prosperity_score: float = 0.0
     job_family: str = "labor"
+    job_market_type: str = "settlement_market"
+    role_family: str = "labor"
+    social_class_band: str = "commoner"
+    social_standing_01: float = 0.35
+    societal_impact_01: float = 0.42
+    perceived_worth_01: float = 0.38
+    care_intensity_01: float = 0.0
     saturation_score: float = 1.0
     desperation_score: float = 0.0
 
@@ -149,6 +164,7 @@ class CareerJobEntry:
     job_key: str
     economics: JobEconomicsParams
     market: JobMarketParams
+    archetype: JobArchetypeParams
     home_compatible: bool
 
 
@@ -210,6 +226,9 @@ class YearJobMarketSnapshots:
             for other in records:
                 if (other.person.employment_status or "").strip().lower() != "employed":
                     continue
+                market_type = (other.person.job_market_type or "settlement_market").strip().lower()
+                if market_type not in {"settlement_market", "office"}:
+                    continue
                 job = (other.person.job or "").strip()
                 if not job:
                     continue
@@ -255,6 +274,9 @@ class YearJobMarketSnapshots:
             return
         job = (rec.person.job or "").strip()
         if not job or (rec.person.employment_status or "").strip().lower() != "employed":
+            return
+        market_type = (rec.person.job_market_type or "settlement_market").strip().lower()
+        if market_type not in {"settlement_market", "office"}:
             return
         snap = self.by_settlement.get(sid)
         if snap is None:
@@ -752,6 +774,213 @@ def _job_home_childcare_compatible(job_title: str | None, job_family: str | None
     return any(part in jk for part in home_parts)
 
 
+def _person_age(person: "Person", year: int) -> int:
+    return int(year) - int(person.birthyear)
+
+
+def _trait_ideal_strength(trait_values: dict[str, float], key: str, default: float = 0.5) -> float:
+    raw = trait_values.get(key)
+    if raw is None:
+        return float(default)
+    try:
+        return _clamp(1.0 - abs(float(raw)) / 100.0, 0.0, 1.0)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _trait_positive_strength(trait_values: dict[str, float], key: str) -> float:
+    raw = trait_values.get(key)
+    if raw is None:
+        return 0.0
+    try:
+        return _clamp(float(raw) / 100.0, 0.0, 1.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _class_band_from_archetype(archetype: JobArchetypeParams) -> str:
+    return (archetype.class_band or "commoner").strip().lower() or "commoner"
+
+
+def _social_standing_from_archetype(archetype: JobArchetypeParams) -> float:
+    return round(
+        _clamp(
+            0.55 * float(archetype.public_prestige_01)
+            + 0.45 * float(archetype.perceived_worth_01),
+            0.0,
+            1.0,
+        ),
+        4,
+    )
+
+
+def _default_housing_status(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+) -> str:
+    current = (rec.person.housing_status or "").strip().lower()
+    if current:
+        return current
+    if rec.person.employer_person_id is not None:
+        return "employer_household"
+    if rec.person.partner_person_id is not None:
+        return "own_household"
+    if _living_parent_records_same_settlement(ctx, rec):
+        return "family_home"
+    if _household_dependent_minor_count(ctx, rec, year) > 0:
+        return "own_household"
+    return "own_household"
+
+
+def _apply_job_archetype_state(
+    person: "Person",
+    *,
+    job: str,
+    archetype: JobArchetypeParams,
+    housing_status: str | None = None,
+    household_role: str | None = None,
+    host_person_id: int | None = None,
+    employer_person_id: int | None = None,
+    status_tendency: str | None = None,
+    job_prosperity_01: float | None = None,
+) -> "Person":
+    return replace(
+        person,
+        job_market_type=archetype.job_market_type,
+        housing_status=housing_status or person.housing_status,
+        household_role=household_role,
+        host_person_id=host_person_id,
+        employer_person_id=employer_person_id,
+        social_class_band=_class_band_from_archetype(archetype),
+        social_standing_01=_social_standing_from_archetype(archetype),
+        societal_impact_01=round(float(archetype.societal_impact_01), 4),
+        perceived_worth_01=round(float(archetype.perceived_worth_01), 4),
+        status_tendency=status_tendency if status_tendency is not None else person.status_tendency,
+        job_prosperity_01=(
+            round(float(job_prosperity_01), 5)
+            if job_prosperity_01 is not None
+            else person.job_prosperity_01
+        ),
+    )
+
+
+def _household_dependent_minor_count(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int, indexes: object | None = None
+) -> int:
+    if indexes is not None:
+        counts = getattr(indexes, "dependent_minor_count_by_adult", {})
+        cached = counts.get(int(rec.person_id))
+        if cached is not None:
+            return int(cached)
+    try:
+        from library.simulation_household_care import dependent_minors_in_implicit_household
+
+        return int(dependent_minors_in_implicit_household(ctx, rec, year, indexes=indexes))
+    except Exception:
+        return 0
+
+
+def _living_parent_records_same_settlement(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord"
+) -> tuple["SimulationPersonRecord", ...]:
+    sid = _residence_settlement_id(rec)
+    if not sid:
+        return ()
+    out: list[SimulationPersonRecord] = []
+    for pid in (rec.father_id, rec.mother_id):
+        if pid is None or int(pid) not in ctx.current_people_ids:
+            continue
+        parent = ctx.id_to_record.get(int(pid))
+        if parent is not None and _residence_settlement_id(parent) == sid:
+            out.append(parent)
+    return tuple(out)
+
+
+def _adult_child_support_score(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    parents: tuple["SimulationPersonRecord", ...],
+    *,
+    pressure: float,
+    trait_values: dict[str, float],
+    care_contribution: float,
+) -> float:
+    if not parents:
+        return 0.0
+    parent_traits = [work_trait_values(parent.person) for parent in parents]
+    parent_care_values: list[float] = []
+    parent_frugality_values: list[float] = []
+    for traits in parent_traits:
+        for key in ("nurturance", "empathy", "generosity", "loyalty"):
+            parent_care_values.append(_trait_ideal_strength(traits, key))
+        parent_frugality_values.append(_trait_positive_strength(traits, "frugality"))
+    parent_care = (
+        sum(parent_care_values) / len(parent_care_values)
+        if parent_care_values
+        else 0.5
+    )
+    parent_frugality = (
+        sum(parent_frugality_values) / len(parent_frugality_values)
+        if parent_frugality_values
+        else 0.0
+    )
+    household_prosperity = _clamp(
+        float(rec.person.household_prosperity or 0.0) / 2.5,
+        0.0,
+        1.0,
+    )
+    manipulation = _clamp(
+        _trait_positive_strength(trait_values, "persuasion") * 0.48
+        + (1.0 - _trait_ideal_strength(trait_values, "honesty")) * 0.28
+        + (1.0 - _trait_ideal_strength(trait_values, "empathy")) * 0.18,
+        0.0,
+        1.0,
+    )
+    contribution = _clamp(
+        care_contribution
+        + float(rec.person.job_prosperity_01 or 0.0) * 0.7
+        + (0.25 if rec.person.job else 0.0),
+        0.0,
+        1.0,
+    )
+    score = (
+        parent_care * 0.34
+        + household_prosperity * 0.22
+        + manipulation * 0.22
+        + contribution * 0.22
+        - _clamp(float(pressure), 0.0, 2.0) * 0.10
+        - parent_frugality * 0.09
+    )
+    return _clamp(score, 0.0, 1.0)
+
+
+def _record_housing_event(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+    event_type: str,
+    *,
+    housing_status: str,
+    pressure: float,
+    support_score: float | None = None,
+    details: str | None = None,
+) -> None:
+    ctx._record_simulation_event(
+        int(year),
+        event_type,
+        {
+            "year": int(year),
+            "person_id": int(rec.person_id),
+            "housing_status": housing_status,
+            "resource_pressure": round(float(pressure), 4),
+            "support_score": (
+                round(float(support_score), 4) if support_score is not None else None
+            ),
+            "details": details
+            or f"{rec.person.full_name} entered {housing_status.replace('_', ' ')}.",
+        },
+    )
+
+
 def _cross_gender_job_exception(
     person: "Person",
     restriction: str | None,
@@ -826,6 +1055,7 @@ def _career_job_options_for_era(
     path = Path(db_path_s)
     economics_catalog = JobEconomicsCatalog.load(path)
     market_catalog = JobMarketCatalog.load(path)
+    archetype_catalog = JobArchetypeCatalog.load(path)
     premium_col = ERA_PREMIUM_COLUMNS.get(era_key)
 
     def build_entries(
@@ -837,6 +1067,7 @@ def _career_job_options_for_era(
             if not title:
                 continue
             market = market_catalog.lookup(title)
+            archetype = archetype_catalog.lookup(title)
             out.append(
                 CareerJobEntry(
                     title=title,
@@ -845,9 +1076,11 @@ def _career_job_options_for_era(
                     job_key=normalize_job_catalog_key(title),
                     economics=economics_catalog.lookup(title, era_key, tier=tier),
                     market=market,
+                    archetype=archetype,
                     home_compatible=_job_home_childcare_compatible(
                         title, market.job_family
-                    ),
+                    )
+                    or archetype.home_compatible,
                 )
             )
         return tuple(out)
@@ -1418,6 +1651,10 @@ def choose_career_assignment(
             tier_entries = (common_entries,)
         for entries in tier_entries:
             for entry in entries:
+                if entry.archetype.adult_only and (
+                    int(year) - int(person.birthyear) < ADULT_HOUSING_MIN_AGE
+                ):
+                    continue
                 if primary_care_pull > 0.0 and not entry.home_compatible:
                     continue
                 saturation_key = (
@@ -1540,6 +1777,21 @@ def choose_career_assignment(
         job_market_demand_score=market_demand,
         job_prosperity_score=round(prosperity_score, 4),
         job_family=entry.market.job_family,
+        job_market_type=entry.archetype.job_market_type,
+        role_family=entry.archetype.role_family,
+        social_class_band=entry.archetype.class_band,
+        social_standing_01=round(
+            _clamp(
+                0.55 * float(entry.archetype.public_prestige_01)
+                + 0.45 * float(entry.archetype.perceived_worth_01),
+                0.0,
+                1.0,
+            ),
+            4,
+        ),
+        societal_impact_01=round(float(entry.archetype.societal_impact_01), 4),
+        perceived_worth_01=round(float(entry.archetype.perceived_worth_01), 4),
+        care_intensity_01=round(float(entry.archetype.care_intensity_01), 4),
         saturation_score=round(saturation, 4),
         desperation_score=desperation,
     )
@@ -1664,6 +1916,14 @@ def assign_career_if_eligible(
         genome_composite_names=comp_labels,
         genome_trait_phrases=trait_phrases,
     )
+    archetype = JobArchetypeCatalog.load(ctx.db_path).lookup(assignment.job)
+    rec.person = _apply_job_archetype_state(
+        rec.person,
+        job=assignment.job,
+        archetype=archetype,
+        housing_status=_default_housing_status(ctx, rec, year),
+        household_role=assignment.role_family if assignment.job_market_type != "settlement_market" else None,
+    )
     ctx._record_simulation_event(
         int(year),
         "job_assigned",
@@ -1689,6 +1949,13 @@ def assign_career_if_eligible(
             "job_market_demand_score": assignment.job_market_demand_score,
             "job_prosperity_score": assignment.job_prosperity_score,
             "job_family": assignment.job_family,
+            "job_market_type": assignment.job_market_type,
+            "role_family": assignment.role_family,
+            "social_class_band": assignment.social_class_band,
+            "social_standing_01": assignment.social_standing_01,
+            "societal_impact_01": assignment.societal_impact_01,
+            "perceived_worth_01": assignment.perceived_worth_01,
+            "care_intensity_01": assignment.care_intensity_01,
             "job_saturation_score": assignment.saturation_score,
             "society_need": assignment.society_need,
             "selfish_desperate": assignment.selfish_desperate,
@@ -1750,6 +2017,14 @@ def mark_unemployed(
     rec.person = replace(
         rec.person,
         employment_status="unemployed",
+        job_market_type="none",
+        household_role=None,
+        host_person_id=None,
+        employer_person_id=None,
+        social_class_band=None if not rec.person.job else rec.person.social_class_band,
+        social_standing_01=None if not rec.person.job else rec.person.social_standing_01,
+        societal_impact_01=None if not rec.person.job else rec.person.societal_impact_01,
+        perceived_worth_01=None if not rec.person.job else rec.person.perceived_worth_01,
         unemployment_started_year=int(year),
         last_job=last_job,
         career_fitness_score=fitness.score,
@@ -1803,6 +2078,14 @@ def lose_job(
         job=None,
         job_era=None,
         job_tier=None,
+        job_market_type="none",
+        household_role=None,
+        host_person_id=None,
+        employer_person_id=None,
+        social_class_band=None,
+        social_standing_01=None,
+        societal_impact_01=None,
+        perceived_worth_01=None,
         status_tendency=None,
         leader_quality=None,
         leader_tendency=None,
@@ -1915,6 +2198,558 @@ def _childcare_duty_factor_safe(
     from library.simulation_household_care import childcare_duty_factor
 
     return float(childcare_duty_factor(ctx, rec, year, indexes=ctx.annual_care_indexes(year)))
+
+
+def _assign_special_household_job(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+    *,
+    job: str,
+    archetype: JobArchetypeParams,
+    reason: str,
+    pressure: float,
+    fitness: CareerFitness | None,
+    housing_status: str,
+    household_role: str,
+    host_person_id: int | None = None,
+    employer_person_id: int | None = None,
+    trait_values: dict[str, float] | None = None,
+) -> bool:
+    if rec.person.job:
+        return False
+    previous_job = rec.person.last_job
+    was_unemployed = rec.person.employment_status == "unemployed"
+    unemployment_started = rec.person.unemployment_started_year
+    unemployment_years = _unemployment_years(rec.person, year)
+    traits = trait_values if trait_values is not None else work_trait_values(rec.person)
+    comp_labels = tuple(rec.person.genome_composite_names or ())
+    if not comp_labels:
+        comp_labels = significant_composite_names_for_traits(
+            traits,
+            _genome_composite_rows(str(Path(ctx.db_path).resolve())),
+        )
+    trait_phrases = tuple(rec.person.genome_trait_phrases or ())
+    if not trait_phrases:
+        trait_notes = interpret_genome_personality(rec.person, db_path=ctx.db_path)
+        trait_phrases = tuple(n.phrase for n in trait_notes if n.phrase)
+    era = resolve_job_era(ctx.get_historical_year(year))
+    fitness_score = fitness.score if fitness is not None else career_fitness_score(rec.person)
+    rec.person = replace(
+        rec.person,
+        job=job,
+        job_assigned_year=int(year),
+        job_era=era,
+        job_tier="common",
+        employment_status="employed",
+        unemployment_started_year=None,
+        career_fitness_score=fitness_score,
+        genome_composite_names=comp_labels,
+        genome_trait_phrases=trait_phrases,
+    )
+    rec.person = _apply_job_archetype_state(
+        rec.person,
+        job=job,
+        archetype=archetype,
+        housing_status=housing_status,
+        household_role=household_role,
+        host_person_id=host_person_id,
+        employer_person_id=employer_person_id,
+        status_tendency=(
+            "low"
+            if archetype.job_market_type in {"vice", "criminal"}
+            else rec.person.status_tendency
+        ),
+        job_prosperity_01=archetype.personal_prosperity_01,
+    )
+    ctx._record_simulation_event(
+        int(year),
+        "job_assigned",
+        {
+            "year": int(year),
+            "person_id": rec.person_id,
+            "job": job,
+            "job_tier": "common",
+            "job_era": era,
+            "descriptor": reason.replace("_", " "),
+            "previous_job": previous_job,
+            "rehire": bool(was_unemployed),
+            "career_fitness_score": round(float(fitness_score), 4),
+            "job_market_type": archetype.job_market_type,
+            "role_family": archetype.role_family,
+            "household_role": household_role,
+            "housing_status": housing_status,
+            "host_person_id": host_person_id,
+            "employer_person_id": employer_person_id,
+            "social_class_band": archetype.class_band,
+            "social_standing_01": _social_standing_from_archetype(archetype),
+            "societal_impact_01": round(float(archetype.societal_impact_01), 4),
+            "perceived_worth_01": round(float(archetype.perceived_worth_01), 4),
+            "care_intensity_01": round(float(archetype.care_intensity_01), 4),
+            "job_prosperity_score": round(float(archetype.personal_prosperity_01), 4),
+            "placement_reason": reason,
+            "resource_pressure": pressure,
+            "non_graphic": archetype.job_market_type == "vice",
+            "genome_composite_names": list(comp_labels),
+            "genome_trait_phrases": list(trait_phrases),
+        },
+    )
+    if was_unemployed:
+        ctx._record_simulation_event(
+            int(year),
+            "unemployment_ended",
+            {
+                "year": int(year),
+                "person_id": rec.person_id,
+                "new_job": job,
+                "previous_job": previous_job,
+                "unemployment_started_year": unemployment_started,
+                "unemployment_years": unemployment_years,
+                "resource_pressure": pressure,
+                "placement_reason": reason,
+            },
+        )
+    if archetype.job_market_type == "domestic_service":
+        ctx._record_simulation_event(
+            int(year),
+            "household_service_started",
+            {
+                "year": int(year),
+                "person_id": rec.person_id,
+                "worker_person_id": rec.person_id,
+                "employer_person_id": employer_person_id,
+                "service_kind": archetype.domestic_service_kind or household_role,
+                "board_included": housing_status == "employer_household",
+                "cash_wage_01": round(float(archetype.personal_prosperity_01), 4),
+                "details": f"{rec.person.full_name} entered household service as {job}.",
+            },
+        )
+    if archetype.job_market_type == "vice":
+        ctx._record_simulation_event(
+            int(year),
+            "street_vice_scandal",
+            {
+                "year": int(year),
+                "person_id": rec.person_id,
+                "incident_kind": "street_vice_scandal",
+                "job": job,
+                "housing_status": housing_status,
+                "resource_pressure": round(float(pressure), 4),
+                "non_graphic": True,
+                "details": (
+                    f"{rec.person.full_name}'s survival work became a local scandal."
+                ),
+            },
+        )
+    return True
+
+
+def _service_demand_anchors(
+    ctx: "SimulationContext",
+    year: int,
+    care_indexes: object | None,
+) -> list[dict[str, object]]:
+    existing_by_employer: dict[int, int] = {}
+    for rec in ctx.iter_current_people(sorted_by_id=True):
+        if (rec.person.job_market_type or "").strip().lower() != "domestic_service":
+            continue
+        employer = rec.person.employer_person_id
+        if employer is not None:
+            existing_by_employer[int(employer)] = existing_by_employer.get(int(employer), 0) + 1
+
+    seen: set[frozenset[int]] = set()
+    demands: list[dict[str, object]] = []
+    for rec in ctx.iter_current_people(sorted_by_id=True):
+        if ctx._person_is_dependent_minor(rec, year):
+            continue
+        hids = tuple(
+            getattr(care_indexes, "household_ids_by_adult", {}).get(
+                int(rec.person_id),
+                (int(rec.person_id),),
+            )
+            if care_indexes is not None
+            else _household_ids_for_job_move(ctx, rec, year, indexes=None, use_shared_index=False)
+        )
+        hkey = frozenset(int(x) for x in hids)
+        if not hkey or hkey in seen:
+            continue
+        seen.add(hkey)
+        minors = (
+            getattr(care_indexes, "minor_ids_by_household", {}).get(hkey, frozenset())
+            if care_indexes is not None
+            else frozenset()
+        )
+        adults = [
+            ctx.id_to_record[pid]
+            for pid in sorted(hkey)
+            if pid in ctx.id_to_record and pid in ctx.current_people_ids
+        ]
+        if not adults:
+            continue
+        prosperity = max(float(a.person.household_prosperity or 0.0) for a in adults)
+        standing = max(float(a.person.social_standing_01 or 0.0) for a in adults)
+        if prosperity < SERVICE_HOUSEHOLD_PROSPERITY_THRESHOLD and standing < SERVICE_HIGH_STANDING_THRESHOLD:
+            continue
+        anchor = None
+        for a in adults:
+            if a.person.household_purseholder_person_id in hkey:
+                anchor = int(a.person.household_purseholder_person_id)
+                break
+        if anchor is None:
+            anchor = int(max(adults, key=lambda a: float(a.person.household_prosperity or 0.0)).person_id)
+        desired = 1
+        if prosperity >= 4.0 or standing >= 0.82:
+            desired = 2
+        current = existing_by_employer.get(anchor, 0)
+        if current >= desired:
+            continue
+        sid = _residence_settlement_id(ctx.id_to_record.get(anchor, rec))
+        service_kind = "nanny" if minors else "servant"
+        demands.append(
+            {
+                "employer_person_id": anchor,
+                "settlement_id": sid,
+                "service_kind": service_kind,
+                "prosperity": prosperity,
+                "standing": standing,
+                "slots": desired - current,
+            }
+        )
+    demands.sort(
+        key=lambda d: (
+            -float(d.get("prosperity") or 0.0),
+            -float(d.get("standing") or 0.0),
+            int(d.get("employer_person_id") or 0),
+        )
+    )
+    return demands
+
+
+def _domestic_service_candidate_score(
+    person: "Person", archetype: JobArchetypeParams, trait_values: dict[str, float]
+) -> float:
+    gender = (person.gender or "").strip().lower()
+    gender_mind = (person.gender_mind or "").strip().lower()
+    score = 0.35
+    if gender == "female":
+        score += 0.24 * archetype.female_mindset_affinity_01
+    if gender_mind == "feminine":
+        score += 0.22 * archetype.female_mindset_affinity_01
+    score += _trait_ideal_strength(trait_values, "empathy") * 0.12
+    score += _trait_ideal_strength(trait_values, "nurturance") * 0.15
+    score += _trait_ideal_strength(trait_values, "patience") * 0.08
+    return _clamp(score, 0.0, 1.0)
+
+
+def _take_service_demand(
+    demands: list[dict[str, object]], settlement_id: str
+) -> dict[str, object] | None:
+    for demand in demands:
+        if str(demand.get("settlement_id") or "") != settlement_id:
+            continue
+        slots = int(demand.get("slots") or 0)
+        if slots <= 0:
+            continue
+        demand["slots"] = slots - 1
+        return demand
+    return None
+
+
+def _maybe_assign_domestic_service(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+    *,
+    demands: list[dict[str, object]],
+    archetypes: JobArchetypeCatalog,
+    pressure: float,
+    fitness: CareerFitness,
+    trait_values: dict[str, float],
+    care_indexes: object | None,
+) -> bool:
+    if rec.person.job or rec.person.partner_person_id is not None:
+        return False
+    if _household_dependent_minor_count(ctx, rec, year, indexes=care_indexes) > 0:
+        return False
+    sid = _residence_settlement_id(rec)
+    demand = _take_service_demand(demands, sid)
+    if demand is None:
+        return False
+    kind = str(demand.get("service_kind") or "servant")
+    job = "nanny" if kind == "nanny" else "servant"
+    archetype = archetypes.lookup(job)
+    score = _domestic_service_candidate_score(rec.person, archetype, trait_values)
+    if score < 0.38 and pressure < 0.9:
+        demand["slots"] = int(demand.get("slots") or 0) + 1
+        return False
+    return _assign_special_household_job(
+        ctx,
+        rec,
+        year,
+        job=job,
+        archetype=archetype,
+        reason="domestic_service_placement",
+        pressure=pressure,
+        fitness=fitness,
+        housing_status="employer_household",
+        household_role=archetype.domestic_service_kind or kind,
+        host_person_id=int(demand["employer_person_id"]),
+        employer_person_id=int(demand["employer_person_id"]),
+        trait_values=trait_values,
+    )
+
+
+def _vice_job_choice(
+    person: "Person", trait_values: dict[str, float], rng: random.Random
+) -> str:
+    attractiveness = float(person.attractiveness_01 or 0.0)
+    persuasion = _trait_positive_strength(trait_values, "persuasion")
+    ambition = _trait_positive_strength(trait_values, "ambition")
+    if attractiveness > 0.68 and (persuasion + ambition) > 0.55 and rng.random() < 0.45:
+        return "courtesan"
+    if rng.random() < 0.35:
+        return "brothel worker"
+    return "prostitute"
+
+
+def _maybe_assign_vice_work(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+    *,
+    archetypes: JobArchetypeCatalog,
+    pressure: float,
+    fitness: CareerFitness,
+    trait_values: dict[str, float],
+    desperation: float,
+) -> bool:
+    if rec.person.job or _person_age(rec.person, year) < ADULT_HOUSING_MIN_AGE:
+        return False
+    housing = (rec.person.housing_status or "").strip().lower()
+    if housing != "street" and pressure < 1.05:
+        return False
+    if desperation < VICE_DESPERATION_THRESHOLD:
+        return False
+    rng = random.Random(
+        _event_seed(
+            year=year,
+            person_id=rec.person_id,
+            salt=int(ctx.placename_rng_salt),
+            stream=104_729,
+        )
+    )
+    access = (
+        0.16
+        + desperation * 0.36
+        + float(rec.person.attractiveness_01 or 0.0) * 0.12
+        + _trait_positive_strength(trait_values, "mating drive") * 0.10
+        + _trait_positive_strength(trait_values, "persuasion") * 0.08
+        + _trait_positive_strength(trait_values, "ambition") * 0.06
+        - _trait_ideal_strength(trait_values, "temperance") * 0.07
+    )
+    if rng.random() >= _clamp(access, 0.0, 0.72):
+        return False
+    job = _vice_job_choice(rec.person, trait_values, rng)
+    return _assign_special_household_job(
+        ctx,
+        rec,
+        year,
+        job=job,
+        archetype=archetypes.lookup(job),
+        reason="street_precarity_vice_work",
+        pressure=pressure,
+        fitness=fitness,
+        housing_status=housing or "street",
+        household_role="survival_worker",
+        trait_values=trait_values,
+    )
+
+
+def _resolve_adult_housing_pressure(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+    *,
+    pressure: float,
+    fitness: CareerFitness,
+    trait_values: dict[str, float],
+    care_indexes: object | None,
+    archetypes: JobArchetypeCatalog,
+) -> None:
+    if _person_age(rec.person, year) < ADULT_HOUSING_MIN_AGE:
+        return
+    if rec.person.job:
+        if not rec.person.housing_status:
+            rec.person = replace(
+                rec.person,
+                housing_status=_default_housing_status(ctx, rec, year),
+            )
+        return
+    own_minor_count = _household_dependent_minor_count(
+        ctx, rec, year, indexes=care_indexes
+    )
+    if rec.person.partner_person_id is not None:
+        rec.person = replace(
+            rec.person,
+            housing_status=rec.person.housing_status or "own_household",
+            household_role=rec.person.household_role or "household_adult",
+        )
+        return
+    if own_minor_count > 0 and not _living_parent_records_same_settlement(ctx, rec):
+        rec.person = replace(
+            rec.person,
+            housing_status=rec.person.housing_status or "own_household",
+            household_role=rec.person.household_role or "caregiver",
+        )
+        return
+    parents = _living_parent_records_same_settlement(ctx, rec)
+    care_contribution = (
+        0.35
+        if own_minor_count > 0
+        else 0.0
+    )
+    support_score = _adult_child_support_score(
+        ctx,
+        rec,
+        parents,
+        pressure=pressure,
+        trait_values=trait_values,
+        care_contribution=care_contribution,
+    )
+    if parents and support_score >= 0.42:
+        rec.person = replace(
+            rec.person,
+            housing_status="family_home",
+            household_role="adult_child",
+            host_person_id=int(parents[0].person_id),
+        )
+        return
+    if care_contribution > 0.0 and support_score >= 0.34:
+        rec.person = replace(
+            rec.person,
+            housing_status="family_home" if parents else "kin_board",
+            household_role="family_childcare_helper",
+            host_person_id=int(parents[0].person_id) if parents else None,
+        )
+        return
+    desperation = career_desperation_score(
+        resource_pressure=pressure,
+        unemployment_years=_unemployment_years(rec.person, year),
+        household_prosperity=rec.person.household_prosperity,
+    )
+    if _maybe_assign_vice_work(
+        ctx,
+        rec,
+        year,
+        archetypes=archetypes,
+        pressure=pressure,
+        fitness=fitness,
+        trait_values=trait_values,
+        desperation=desperation,
+    ):
+        return
+    if pressure < STREET_PRECARITY_PRESSURE_THRESHOLD and support_score >= 0.25:
+        status = "kin_board" if parents else "charity_board"
+        rec.person = replace(
+            rec.person,
+            housing_status=status,
+            household_role="boarded_adult",
+            host_person_id=int(parents[0].person_id) if parents else None,
+        )
+        return
+    if (rec.person.housing_status or "").strip().lower() != "street":
+        rec.person = replace(
+            rec.person,
+            housing_status="street",
+            household_role="street_adult",
+            host_person_id=None,
+            employer_person_id=None,
+        )
+        _record_housing_event(
+            ctx,
+            rec,
+            year,
+            "vagrancy",
+            housing_status="street",
+            pressure=pressure,
+            support_score=support_score,
+            details=f"{rec.person.full_name} lost stable household support.",
+        )
+    if _unemployment_years(rec.person, year) >= 1 or pressure >= 1.0:
+        _record_housing_event(
+            ctx,
+            rec,
+            year,
+            "begging",
+            housing_status="street",
+            pressure=pressure,
+            support_score=support_score,
+            details=f"{rec.person.full_name} relied on begging while without stable shelter.",
+        )
+
+
+def _household_labor_pre_assignment_pass(
+    ctx: "SimulationContext",
+    year: int,
+    eligible: list[tuple["SimulationPersonRecord", CareerFitness, float, dict[str, float]]],
+    *,
+    career_facts: YearCareerFacts,
+) -> int:
+    archetypes = JobArchetypeCatalog.load(ctx.db_path)
+    care_indexes = career_facts.care_indexes
+    assigned = 0
+    for rec, fitness, pressure, traits in eligible:
+        if rec.person.job:
+            continue
+        duty = career_facts.duty_for(ctx, rec, year)
+        if (
+            duty >= HOUSEHOLD_CARE_MIN_DUTY
+            and _primary_childcare_pull(rec.person, duty) > 0.0
+        ):
+            if _assign_special_household_job(
+                ctx,
+                rec,
+                year,
+                job="child rearer",
+                archetype=archetypes.lookup("child rearer"),
+                reason="primary_child_rearing",
+                pressure=pressure,
+                fitness=fitness,
+                housing_status=_default_housing_status(ctx, rec, year),
+                household_role="primary_child_rearer",
+                trait_values=traits,
+            ):
+                assigned += 1
+
+    demands = _service_demand_anchors(ctx, year, care_indexes)
+    for rec, fitness, pressure, traits in eligible:
+        if rec.person.job:
+            continue
+        if _maybe_assign_domestic_service(
+            ctx,
+            rec,
+            year,
+            demands=demands,
+            archetypes=archetypes,
+            pressure=pressure,
+            fitness=fitness,
+            trait_values=traits,
+            care_indexes=care_indexes,
+        ):
+            assigned += 1
+
+    for rec, fitness, pressure, traits in eligible:
+        _resolve_adult_housing_pressure(
+            ctx,
+            rec,
+            year,
+            pressure=pressure,
+            fitness=fitness,
+            trait_values=traits,
+            care_indexes=care_indexes,
+            archetypes=archetypes,
+        )
+    return assigned
 
 
 def maybe_assign_or_rehire(
@@ -2276,6 +3111,22 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
     if prof:
         simulation_timing.accumulate("careers.job_loss", tpc() - t0)
         simulation_timing.record_gauge(year, "careers", "job_losses", lost_count)
+        t0 = tpc()
+
+    household_labor_assigned = _household_labor_pre_assignment_pass(
+        ctx,
+        year,
+        eligible,
+        career_facts=career_facts,
+    )
+    if prof:
+        simulation_timing.accumulate("careers.household_labor", tpc() - t0)
+        simulation_timing.record_gauge(
+            year,
+            "careers",
+            "household_labor_assignments",
+            household_labor_assigned,
+        )
         t0 = tpc()
 
     market_snapshots = YearJobMarketSnapshots.build(ctx)

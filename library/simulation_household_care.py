@@ -259,6 +259,37 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
             hkey = frozenset({int(mid)})
             household_settlement_id.setdefault(hkey, msid)
         minor_ids_by_household_mut.setdefault(hkey, set()).add(int(mid))
+
+    for service_rec in ctx.iter_current_people(sorted_by_id=True):
+        if int(service_rec.person_id) in minor_id_set:
+            continue
+        if (service_rec.person.job_market_type or "").strip().lower() != "domestic_service":
+            continue
+        employer_id = service_rec.person.employer_person_id
+        if employer_id is None or int(employer_id) not in alive_ids:
+            continue
+        employer_rec = ctx.id_to_record.get(int(employer_id))
+        if employer_rec is None:
+            continue
+        if _residence_sid(employer_rec) != _residence_sid(service_rec):
+            continue
+        employer_hids = household_ids_by_adult.get(int(employer_id))
+        if not employer_hids:
+            continue
+        old_hkey = frozenset(int(x) for x in employer_hids)
+        if int(service_rec.person_id) in old_hkey:
+            continue
+        new_hkey = frozenset(set(old_hkey) | {int(service_rec.person_id)})
+        minors = set(minor_ids_by_household_mut.pop(old_hkey, set()))
+        minor_ids_by_household_mut.setdefault(new_hkey, set()).update(minors)
+        sid = household_settlement_id.pop(old_hkey, _residence_sid(employer_rec))
+        household_settlement_id.setdefault(new_hkey, sid)
+        new_hids = tuple(sorted(new_hkey))
+        for adult_id in new_hkey:
+            if int(adult_id) in minor_id_set:
+                continue
+            household_ids_by_adult[int(adult_id)] = new_hids
+            dependent_minor_count_by_adult[int(adult_id)] = len(minors)
     if prof:
         simulation_timing.accumulate("household_care.index.households", tpc() - t0)
         t0 = tpc()
@@ -432,6 +463,14 @@ def effective_caregiver_supply(ctx: SimulationContext, rec: SimulationPersonReco
         return 0.0
     base = caregiver_capacity(rec.person, year)
     job = (rec.person.job or "").strip()
+    market_type = (rec.person.job_market_type or "").strip().lower()
+    if market_type == "household_care":
+        return base * (0.95 + 0.05 * min(1.0, base / 4.0))
+    if market_type == "domestic_service":
+        jk = job.lower()
+        if any(token in jk for token in ("nanny", "child watcher", "care aide", "household manager")):
+            return base * 0.88
+        return base * 0.45
     if job:
         base *= CARE_CAPACITY_EMPLOYED_MULTIPLIER
     return base

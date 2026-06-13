@@ -694,6 +694,8 @@ def _incident_pressure_tags(
         or household_prosperity < 0.55
     ):
         tags.add("debt")
+    if (rec.person.housing_status or "").strip().lower() == "street":
+        tags.update({"street_precarity", "survival_need", "status_fall"})
     status = str(rec.person.status_tendency or "").strip().lower()
     if status in {"low", "very low", "fallen"} or (
         rec.person.unemployment_started_year is not None and job_prosperity < 0.35
@@ -747,6 +749,8 @@ def _incident_opportunity_tags(
         tags.add("faction_network")
     if any(token in job for token in ("merchant", "trader", "market", "sailor", "ship")):
         tags.add("market_day")
+    if (rec.person.housing_status or "").strip().lower() == "street":
+        tags.update({"street", "begging", "public_witness"})
     if any(
         token in job
         for token in ("farmer", "herder", "merchant", "trader", "store", "granary")
@@ -996,6 +1000,8 @@ def _maybe_murder_in_settlement(
 def _property_crime_motive(
     perpetrator: "SimulationPersonRecord", pressure: float
 ) -> str:
+    if (perpetrator.person.housing_status or "").strip().lower() == "street":
+        return "survival"
     if pressure >= 1.25:
         return "scarcity"
     if perpetrator.person.unemployment_started_year is not None:
@@ -1045,7 +1051,9 @@ def _property_crime_kind(
             rng=rng,
         )
     tags = ("theft",)
-    if motive in {"scarcity", "debt_or_hardship"}:
+    if motive == "survival":
+        tags = ("theft", "survival", "street", "scarcity")
+    elif motive in {"scarcity", "debt_or_hardship"}:
         tags = ("theft", "survival", "scarcity")
     if float(target.person.job_prosperity_01 or 0.0) >= 0.55:
         tags = (*tags, "valuable_target")

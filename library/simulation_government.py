@@ -298,11 +298,39 @@ def assign_holder(
     )
     rec = ctx.id_to_record.get(person_id)
     if rec is not None:
+        try:
+            from library.job_archetypes import JobArchetypeCatalog
+
+            archetype = JobArchetypeCatalog.load(ctx.db_path).lookup(display_job)
+            social_standing = min(
+                1.0,
+                max(
+                    0.0,
+                    0.55 * float(archetype.public_prestige_01)
+                    + 0.45 * float(archetype.perceived_worth_01),
+                ),
+            )
+        except Exception:
+            archetype = None
+            social_standing = 0.72
         rec.person = replace(
             rec.person,
             job=display_job,
             job_assigned_year=year,
             employment_status="employed",
+            job_market_type="office",
+            social_class_band=(
+                getattr(archetype, "class_band", None) if archetype is not None else "upper"
+            ),
+            social_standing_01=round(float(social_standing), 4),
+            societal_impact_01=round(
+                float(getattr(archetype, "societal_impact_01", 0.72)),
+                4,
+            ),
+            perceived_worth_01=round(
+                float(getattr(archetype, "perceived_worth_01", 0.74)),
+                4,
+            ),
         )
 
 

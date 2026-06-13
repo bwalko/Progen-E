@@ -24,6 +24,11 @@ property_crime,market_extortion,property_crime,market extortion,extortion;market
 property_crime,hoarding_theft,property_crime,hoarding theft,hoarding;theft;scarcity,property_loss,property_crime_record,rumored,1.00,Secret taking during scarcity.
 property_survival_crime,debt_evasion,property_survival_crime,debt evasion,debt;evasion;status_pressure,obligation_default,property_crime_record,rumored,1.00,Ontology row for unpaid obligations and hidden flight from debt.
 property_survival_crime,scarcity_hoarding,property_survival_crime,scarcity hoarding,hoarding;scarcity;stored_goods,food_pressure,property_crime_record,rumored,1.00,Ontology row for hiding goods during shortage.
+property_crime,street_theft,property_crime,street theft,theft;survival;street;scarcity,property_loss,property_crime_record,rumored,0.95,Survival theft tied to street precarity.
+vagrancy,vagrancy,street_precarity,vagrancy,street;unemployed;status_fall,housing_crisis,street_record,rumored,1.00,Adult without stable household support.
+begging,begging,street_precarity,begging,street;survival;public_witness,housing_crisis,street_record,public_known,1.00,Public survival appeal during street precarity.
+household_scandal,abandonment_to_street,household_scandal,abandonment to street,abandonment;street;dependent;scarcity,household_crisis,household_memory,rumored,0.80,Household support ends and a dependent adult is pushed into street precarity.
+street_vice_scandal,street_vice_scandal,street_precarity,street vice scandal,street;vice;survival;scandal,reputation_loss,scandal_record,rumored,1.00,Non-graphic local scandal around survival vice work.
 affair_scandal,affair_exposed,household_scandal,affair exposed,rumor;household,relationship_fallout,scandal_record,rumored,1.00,Baseline household scandal.
 affair_scandal,affair_witnessed,household_scandal,affair witnessed,witnessed;household,relationship_fallout,scandal_record,rumored,1.00,Secret relationship seen by witnesses.
 affair_scandal,confessed_affair,household_scandal,confessed affair,confession;household,relationship_fallout,scandal_record,rumored,1.00,Open confession exposes paramour tie.

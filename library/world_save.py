@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 17
+SAVE_SCHEMA_VERSION = 18
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -81,6 +81,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_people_light",
     "simulation_cohorts",
     "simulation_promotion_log",
+    "simulation_household_service_contracts",
     "simulation_couples",
     "simulation_paramours",
     "simulation_events",
@@ -129,6 +130,15 @@ _PERSON_CHECKPOINT_COLUMNS: tuple[str, ...] = (
     "job_assigned_year",
     "job_era",
     "job_tier",
+    "job_market_type",
+    "housing_status",
+    "household_role",
+    "host_person_id",
+    "employer_person_id",
+    "social_class_band",
+    "social_standing_01",
+    "societal_impact_01",
+    "perceived_worth_01",
     "status_tendency",
     "leader_quality",
     "leader_tendency",
@@ -155,6 +165,18 @@ _PERSON_CHECKPOINT_COLUMNS: tuple[str, ...] = (
     "father_name",
     "mother_name",
 )
+
+_ADDITIVE_PERSON_CHECKPOINT_COLUMNS: dict[str, str] = {
+    "job_market_type": "TEXT",
+    "housing_status": "TEXT",
+    "household_role": "TEXT",
+    "host_person_id": "INTEGER",
+    "employer_person_id": "INTEGER",
+    "social_class_band": "TEXT",
+    "social_standing_01": "REAL",
+    "societal_impact_01": "REAL",
+    "perceived_worth_01": "REAL",
+}
 
 _PERSON_EXTENSION_KEYS: tuple[str, ...] = (
     "genome_composite_names",
@@ -336,6 +358,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
         14,
         15,
         16,
+        17,
         SAVE_SCHEMA_VERSION,
     ):
         raise RuntimeError(
@@ -567,6 +590,15 @@ def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
             job_assigned_year INTEGER,
             job_era TEXT,
             job_tier TEXT,
+            job_market_type TEXT,
+            housing_status TEXT,
+            household_role TEXT,
+            host_person_id INTEGER,
+            employer_person_id INTEGER,
+            social_class_band TEXT,
+            social_standing_01 REAL,
+            societal_impact_01 REAL,
+            perceived_worth_01 REAL,
             status_tendency TEXT,
             leader_quality TEXT,
             leader_tendency TEXT,
@@ -605,6 +637,12 @@ def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
         """
     )
     cols = set(_table_columns(conn, "simulation_people"))
+    for column, definition in _ADDITIVE_PERSON_CHECKPOINT_COLUMNS.items():
+        if column not in cols:
+            conn.execute(
+                f"ALTER TABLE simulation_people ADD COLUMN {_quote_identifier(column)} {definition}"
+            )
+            cols.add(column)
     missing = [c for c in _PERSON_CHECKPOINT_COLUMNS if c not in cols]
     if missing:
         if {
@@ -620,6 +658,104 @@ def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
         raise RuntimeError(
             "simulation_people uses a pre-v3 schema. Delete or rebuild save.sqlite "
             "before opening it with the compact people checkpoint schema."
+        )
+
+
+def _ensure_household_service_contracts_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_household_service_contracts (
+            contract_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            worker_person_id INTEGER NOT NULL,
+            employer_person_id INTEGER,
+            service_kind TEXT NOT NULL DEFAULT '',
+            board_included INTEGER NOT NULL DEFAULT 0,
+            cash_wage_01 REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            start_year INTEGER,
+            end_year INTEGER,
+            updated_year INTEGER,
+            UNIQUE(worker_person_id, employer_person_id, service_kind, start_year)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sim_household_service_worker
+        ON simulation_household_service_contracts (worker_person_id);
+        CREATE INDEX IF NOT EXISTS idx_sim_household_service_employer
+        ON simulation_household_service_contracts (employer_person_id);
+        CREATE INDEX IF NOT EXISTS idx_sim_household_service_status
+        ON simulation_household_service_contracts (status);
+        """
+    )
+
+
+def _sync_household_service_contracts(
+    conn: sqlite3.Connection, ctx: "SimulationContext"
+) -> None:
+    year = int(ctx.current_year if ctx.current_year is not None else ctx.simulation_start_year)
+    conn.execute(
+        """
+        UPDATE simulation_household_service_contracts
+        SET status = 'ended',
+            end_year = COALESCE(end_year, ?),
+            updated_year = ?
+        WHERE status = 'active'
+        """,
+        (year, year),
+    )
+    try:
+        from library.job_archetypes import JobArchetypeCatalog
+
+        archetypes = JobArchetypeCatalog.load(ctx.db_path)
+    except Exception:
+        archetypes = None
+
+    for rec in ctx.iter_current_people(sorted_by_id=True):
+        p = rec.person
+        if (p.job_market_type or "").strip().lower() != "domestic_service":
+            continue
+        employer_id = p.employer_person_id
+        if employer_id is None:
+            continue
+        job = (p.job or "").strip()
+        if not job:
+            continue
+        archetype = archetypes.lookup(job) if archetypes is not None else None
+        service_kind = (
+            getattr(archetype, "domestic_service_kind", None)
+            or (p.household_role or "").strip()
+            or job.lower().replace(" ", "_")
+        )
+        board = bool(
+            (p.housing_status or "").strip().lower() == "employer_household"
+            or float(getattr(archetype, "board_compensation_01", 0.0) or 0.0) > 0.0
+        )
+        cash = p.job_prosperity_01
+        if cash is None:
+            cash = getattr(archetype, "personal_prosperity_01", 0.12) if archetype else 0.12
+        start_year = int(p.job_assigned_year if p.job_assigned_year is not None else year)
+        conn.execute(
+            """
+            INSERT INTO simulation_household_service_contracts (
+                worker_person_id, employer_person_id, service_kind,
+                board_included, cash_wage_01, status, start_year, end_year, updated_year
+            )
+            VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?)
+            ON CONFLICT(worker_person_id, employer_person_id, service_kind, start_year)
+            DO UPDATE SET
+                board_included = excluded.board_included,
+                cash_wage_01 = excluded.cash_wage_01,
+                status = 'active',
+                end_year = NULL,
+                updated_year = excluded.updated_year
+            """,
+            (
+                int(rec.person_id),
+                int(employer_id),
+                str(service_kind),
+                1 if board else 0,
+                round(float(cash or 0.0), 5),
+                start_year,
+                year,
+            ),
         )
 
 
@@ -3440,9 +3576,13 @@ _PRIVATE_RECORD_EVENT_TYPES: frozenset[str] = frozenset(
         "unemployment_started",
         "unemployment_ended",
         "job_seeker_migration",
+        "household_service_started",
         "household_childcare_shortfall",
         "household_prosperity_crisis",
         "partner_residence_reconciled",
+        "vagrancy",
+        "begging",
+        "street_vice_scandal",
     }
 )
 
@@ -5033,6 +5173,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _ensure_simulation_institution_tables(conn)
     _ensure_simulation_innovation_tables(conn)
     _ensure_simulation_people_table(conn)
+    _ensure_household_service_contracts_table(conn)
     from library.person_archive_scores import ensure_person_archive_score_schema
     from library.person_almanack import ensure_person_almanack_schema
 
@@ -7114,6 +7255,51 @@ def _person_from_dict(d: dict) -> Person:
         ),
         job_era=str(d["job_era"]) if d.get("job_era") is not None else None,
         job_tier=str(d["job_tier"]) if d.get("job_tier") is not None else None,
+        job_market_type=(
+            str(d["job_market_type"])
+            if d.get("job_market_type") is not None
+            else None
+        ),
+        housing_status=(
+            str(d["housing_status"])
+            if d.get("housing_status") is not None
+            else None
+        ),
+        household_role=(
+            str(d["household_role"])
+            if d.get("household_role") is not None
+            else None
+        ),
+        host_person_id=(
+            int(d["host_person_id"])
+            if d.get("host_person_id") is not None
+            else None
+        ),
+        employer_person_id=(
+            int(d["employer_person_id"])
+            if d.get("employer_person_id") is not None
+            else None
+        ),
+        social_class_band=(
+            str(d["social_class_band"])
+            if d.get("social_class_band") is not None
+            else None
+        ),
+        social_standing_01=(
+            float(d["social_standing_01"])
+            if d.get("social_standing_01") is not None
+            else None
+        ),
+        societal_impact_01=(
+            float(d["societal_impact_01"])
+            if d.get("societal_impact_01") is not None
+            else None
+        ),
+        perceived_worth_01=(
+            float(d["perceived_worth_01"])
+            if d.get("perceived_worth_01") is not None
+            else None
+        ),
         status_tendency=(
             str(d["status_tendency"])
             if d.get("status_tendency") is not None
@@ -7487,6 +7673,9 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 values,
             )
         t0 = _profile_accumulate("checkpoint.snapshot_people", t0)
+
+        _sync_household_service_contracts(conn, ctx)
+        t0 = _profile_accumulate("checkpoint.snapshot_service_contracts", t0)
 
         passive_column_names = (
             "person_id",

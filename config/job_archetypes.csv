@@ -1,0 +1,22 @@
+job_key_pattern,match_type,job_market_type,role_family,workplace,skill_level,manuality,supervision_level,class_band,personal_prosperity_01,societal_impact_01,public_prestige_01,perceived_worth_01,care_intensity_01,home_compatible,domestic_service_kind,female_mindset_affinity_01,adult_only,board_compensation_01,cash_wage_multiplier
+*,default,settlement_market,labor,settlement,ordinary,mixed,peer,commoner,0.32,0.42,0.32,0.38,0.00,0,,0.50,0,0.00,1.00
+child rearer,exact,household_care,care,home,skilled,mixed,self_directed,household,0.04,0.92,0.24,0.34,1.00,1,,0.82,0,0.00,0.00
+parent,exact,household_care,care,home,skilled,mixed,self_directed,household,0.04,0.90,0.26,0.36,0.92,1,,0.76,0,0.00,0.00
+nanny,exact,domestic_service,care,employer_household,skilled,mixed,supervised,servant,0.16,0.82,0.28,0.42,0.90,1,nanny,0.88,1,0.72,0.35
+maid,exact,domestic_service,domestic,employer_household,ordinary,manual,supervised,servant,0.13,0.46,0.20,0.32,0.18,1,maid,0.70,1,0.68,0.28
+servant,exact,domestic_service,domestic,employer_household,ordinary,mixed,supervised,servant,0.14,0.48,0.22,0.34,0.22,1,servant,0.68,1,0.68,0.28
+household manager,exact,domestic_service,domestic,employer_household,skilled,mixed,supervisory,servant,0.22,0.60,0.36,0.48,0.32,1,household_manager,0.62,1,0.65,0.52
+child watcher,contains,domestic_service,care,employer_household,ordinary,mixed,supervised,servant,0.14,0.76,0.24,0.38,0.82,1,nanny,0.86,1,0.70,0.30
+care aide,exact,domestic_service,care,employer_household,ordinary,mixed,supervised,servant,0.15,0.74,0.24,0.39,0.78,1,nanny,0.84,1,0.66,0.34
+midwife,exact,settlement_market,care,settlement,skilled,mixed,self_directed,commoner,0.38,0.84,0.48,0.62,0.72,1,,0.74,1,0.00,1.10
+healer,exact,settlement_market,care,settlement,skilled,mixed,self_directed,commoner,0.36,0.78,0.44,0.58,0.58,1,,0.62,1,0.00,1.05
+prostitute,exact,vice,vice,street_or_house,ordinary,social,informal,marginal,0.18,0.14,0.10,0.16,0.00,0,,0.72,1,0.05,0.55
+courtesan,exact,vice,vice,patron_household,skilled,social,informal,marginal,0.30,0.18,0.22,0.24,0.00,0,,0.70,1,0.12,0.82
+brothel worker,exact,vice,vice,street_or_house,ordinary,social,informal,marginal,0.16,0.12,0.08,0.14,0.00,0,,0.74,1,0.05,0.50
+thief,exact,criminal,criminal,informal,ordinary,mixed,informal,marginal,0.18,0.04,0.04,0.06,0.00,0,,0.45,1,0.00,0.50
+fraudster,exact,criminal,criminal,informal,skilled,social,informal,marginal,0.22,0.04,0.05,0.08,0.00,0,,0.42,1,0.00,0.60
+bandit,exact,criminal,criminal,informal,ordinary,manual,informal,marginal,0.20,0.03,0.04,0.06,0.00,0,,0.38,1,0.00,0.52
+raider,exact,criminal,criminal,informal,ordinary,manual,informal,marginal,0.22,0.04,0.06,0.08,0.00,0,,0.35,1,0.00,0.58
+judge,contains,office,authority,office,elite,cognitive,supervisory,upper,0.68,0.74,0.78,0.76,0.00,0,,0.42,1,0.00,1.45
+magistrate,contains,office,authority,office,elite,cognitive,supervisory,upper,0.66,0.72,0.76,0.74,0.00,0,,0.42,1,0.00,1.42
+guild master,contains,office,authority,office,elite,cognitive,supervisory,upper,0.76,0.60,0.70,0.72,0.00,0,,0.44,1,0.00,1.60

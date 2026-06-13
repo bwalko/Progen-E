@@ -31,6 +31,7 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/genome_jobs.csv` | One row per (`trait`, `deviation_band`) | Career/status/leadership tendencies and era-specific job examples derived from genome traits |
 | `config/job_economics.csv` | ~450 rows + header | Per-era **base** (`*`) plus **deviation** multiplier rows for non-typical jobs (from `genome_jobs` + tier heuristics) |
 | `config/job_market.csv` | Small + header, human-editable | Per-job market semantics: family, essential/luxury/urban demand, saturation, scarcity resilience, and settlement effect deltas |
+| `config/job_archetypes.csv` | Small + header, human-editable | Social/job-market semantics over normalized titles: household care, domestic service, vice/criminal/office pools, class/status, care intensity, adult-only gates, and board/cash compensation |
 | `config/ethnic_proto_placewords.csv` | Proto/toponym stems by ethnicity and feature | One row per ethnic + feature type + concept |
 | `config/government_eras.csv` | Small + header | Historical-year bands per `world` → allowed polity type ids + default succession style |
 | `config/government_polity_types.csv` | Small + header | One row per `polity_type_id` (era, jurisdiction grain, head title, **min_population_to_form** = minimum **real-world** count to *bootstrap*/*promote* to that tier — multiplied by `world_start.population_scale` before comparison against alive in region; **max_population_before_split** = vassal split threshold, also scaled) |
@@ -356,6 +357,37 @@ multiple weapon frontiers.
 | `taxability` | float `0.00..1.00` | How visible/taxable the job's income is for treasury intake. |
 
 `job_market.csv` is intentionally semantic rather than exhaustive. Add explicit rows for titles that need hand tuning; otherwise the loader infers reasonable defaults from title keywords.
+
+---
+
+## `config/job_archetypes.csv`
+
+**Purpose:** Human-editable social semantics for normalized job titles. `library.job_archetypes.JobArchetypeCatalog` reads explicit rows when present and falls back to keyword inference for old fixture DBs. This layer tells careers, household care, economy, incidents, save/schema, and the browser whether a title is ordinary settlement labor, unpaid household care, domestic service, officeholding, vice, criminal work, or no market job.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `job_key_pattern` | string | Normalized title pattern; `*` is the default row. |
+| `match_type` | `default` / `exact` / `contains` / `prefix` / `suffix` | Exact rows win before pattern rows; pattern rows are read in CSV order. |
+| `job_market_type` | enum | Current values: `settlement_market`, `household_care`, `domestic_service`, `criminal`, `vice`, `office`, `none`. |
+| `role_family` | string | Broad social role such as `care`, `domestic`, `authority`, `vice`, or `labor`. |
+| `workplace` | string | Coarse work setting (`home`, `settlement`, `employer_household`, `office`, etc.). |
+| `skill_level` | string | Coarse skill/status cue (`ordinary`, `skilled`, `elite`). |
+| `manuality` | string | `manual`, `cognitive`, `social`, or `mixed`; currently descriptive. |
+| `supervision_level` | string | `self_directed`, `peer`, `supervised`, `supervisory`, or `informal`; currently descriptive. |
+| `class_band` | string | Saved to `Person.social_class_band` for browser/person detail and downstream status logic. |
+| `personal_prosperity_01` | float 0..1 | Baseline personal survival/wage value outside normal settlement wage allocation. Household care should stay low. |
+| `societal_impact_01` | float 0..1 | Saved to `Person.societal_impact_01`; child rearing should be high despite low cash wage. |
+| `public_prestige_01` | float 0..1 | Prestige component for `social_standing_01`. |
+| `perceived_worth_01` | float 0..1 | Social valuation component for `social_standing_01`. |
+| `care_intensity_01` | float 0..1 | Household-care contribution signal; high for child rearers and nannies. |
+| `home_compatible` | integer/bool | Allows assignment under primary childcare pressure and affects care compatibility. |
+| `domestic_service_kind` | string or empty | `nanny`, `maid`, `servant`, `household_manager`, etc.; persisted in service contracts. |
+| `female_mindset_affinity_01` | float 0..1 | Domestic-service candidate skew toward female/feminine mindsets without making the role exclusive. |
+| `adult_only` | integer/bool | Blocks assignment under adult age for vice, domestic service, office, and other adult roles. |
+| `board_compensation_01` | float 0..1 | Board/lodging share for household service contracts. |
+| `cash_wage_multiplier` | float >=0 | Multiplier for non-settlement cash wage/survival income. |
+
+Keep literal assignable job names neutral. Trait color belongs in `genome_jobs` descriptors, event prose, status effects, and archetype scores, not in the title string itself.
 
 ---
 

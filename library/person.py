@@ -40,6 +40,15 @@ class Person:
     job_assigned_year: int | None = None
     job_era: str | None = None
     job_tier: str | None = None
+    job_market_type: str | None = None
+    housing_status: str | None = None
+    household_role: str | None = None
+    host_person_id: int | None = None
+    employer_person_id: int | None = None
+    social_class_band: str | None = None
+    social_standing_01: float | None = None
+    societal_impact_01: float | None = None
+    perceived_worth_01: float | None = None
     status_tendency: str | None = None
     leader_quality: str | None = None
     leader_tendency: str | None = None

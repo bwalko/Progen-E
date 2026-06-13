@@ -2561,6 +2561,15 @@ _PERSON_COLUMN_KEYS = (
     "job_assigned_year",
     "job_era",
     "job_tier",
+    "job_market_type",
+    "housing_status",
+    "household_role",
+    "host_person_id",
+    "employer_person_id",
+    "social_class_band",
+    "social_standing_01",
+    "societal_impact_01",
+    "perceived_worth_01",
     "status_tendency",
     "leader_quality",
     "leader_tendency",
@@ -6120,6 +6129,45 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
 
     phrases = list(person.get("genome_trait_phrases") or [])
     composites = list(person.get("genome_composite_names") or [])
+    host_html = (
+        _person_link_html(con, world, person.get("host_person_id"))
+        if person.get("host_person_id")
+        else '<span class="muted">None</span>'
+    )
+    employer_html = (
+        _person_link_html(con, world, person.get("employer_person_id"))
+        if person.get("employer_person_id")
+        else '<span class="muted">None</span>'
+    )
+    work_cards = [
+        _render_detail_card(
+            "Work",
+            _display_job_label(person.get("job"))
+            or person.get("employment_status")
+            or "None",
+        ),
+        _render_detail_card(
+            "Work Market",
+            str(person.get("job_market_type") or "none").replace("_", " "),
+        ),
+        _render_detail_card(
+            "Housing",
+            str(person.get("housing_status") or "unknown").replace("_", " "),
+        ),
+        _render_detail_card(
+            "Household Care",
+            str(person.get("household_role") or "none").replace("_", " "),
+        ),
+        _render_detail_card_html("Host", host_html),
+        _render_detail_card_html("Service Attachment", employer_html),
+        _render_detail_card(
+            "Class",
+            str(person.get("social_class_band") or "unknown").replace("_", " "),
+        ),
+        _render_detail_card("Standing", _format_01_score(person.get("social_standing_01"))),
+        _render_detail_card("Societal Impact", _format_01_score(person.get("societal_impact_01"))),
+        _render_detail_card("Perceived Worth", _format_01_score(person.get("perceived_worth_01"))),
+    ]
     identity_cards = [
         _render_detail_card("Record ID", row["person_id"]),
         _render_detail_card("Life", f"{life}, age {age}"),
@@ -6135,7 +6183,6 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         _render_detail_card("Appearance", f"{person.get('skin_tone', '?')} skin, {person.get('hair', '?')} hair, {person.get('eyes', '?')} eyes"),
         _render_detail_card("Build", f"{float(person.get('maturity_height_cm') or 0):.0f} cm, {float(person.get('maturity_weight_kg') or 0):.0f} kg"),
         _render_detail_card("Attractiveness", _format_01_score(person.get("attractiveness_01"))),
-        _render_detail_card("Work", _display_job_label(person.get("job")) or person.get("employment_status") or "None"),
     ]
     pill_html = "".join(f'<span class="pill">{html.escape(str(item))}</span>' for item in [*phrases, *composites])
     if not pill_html:
@@ -6151,6 +6198,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
       <section aria-labelledby="person-{row['person_id']}-identity">
         <h3 id="person-{row['person_id']}-identity" class="section-title">Identity</h3>
         <div class="detail-grid">{''.join(identity_cards)}</div>
+      </section>
+      <section aria-labelledby="person-{row['person_id']}-work-standing">
+        <h3 id="person-{row['person_id']}-work-standing" class="section-title">Work And Standing</h3>
+        <div class="detail-grid">{''.join(work_cards)}</div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-consequences" class="consequence-section">
         <h3 id="person-{row['person_id']}-consequences" class="section-title">Consequences</h3>
@@ -6331,6 +6382,10 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
                 f"{float(person.get('maturity_weight_kg') or 0):.0f} kg."
             ),
             f"Work: {_display_job_label(person.get('job')) or person.get('employment_status') or 'none'}.",
+            f"Work market: {str(person.get('job_market_type') or 'none').replace('_', ' ')}.",
+            f"Housing: {str(person.get('housing_status') or 'unknown').replace('_', ' ')}; household role: {str(person.get('household_role') or 'none').replace('_', ' ')}.",
+            f"Service attachment: employer {_person_link_text(con, world, person.get('employer_person_id')) if person.get('employer_person_id') else 'none'}; host {_person_link_text(con, world, person.get('host_person_id')) if person.get('host_person_id') else 'none'}.",
+            f"Standing: class {str(person.get('social_class_band') or 'unknown').replace('_', ' ')}, social standing {_format_01_score(person.get('social_standing_01'))}, societal impact {_format_01_score(person.get('societal_impact_01'))}, perceived worth {_format_01_score(person.get('perceived_worth_01'))}.",
             f"Character tags: {tags_text}",
             "",
             *archive_score_lines,

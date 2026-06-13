@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from library import simulation_timing
 from library.job_economics import JobEconomicsCatalog, JobEconomicsParams, JobTier
+from library.job_archetypes import JobArchetypeCatalog
 from library.job_market import JobMarketCatalog, JobMarketParams
 from library.settlements import SettlementState
 from library.simulation_careers import (
@@ -222,7 +223,22 @@ def _update_household_prosperity(
                 continue
             es = (hr.person.employment_status or "").strip().lower()
             if es == "employed" and (hr.person.job or "").strip():
-                income += float(hr.person.job_prosperity_01 or 0.0) * HOUSEHOLD_JOB_INCOME_SCALE
+                market_type = (hr.person.job_market_type or "settlement_market").strip().lower()
+                if market_type == "household_care":
+                    pass
+                elif market_type == "domestic_service":
+                    wage = float(hr.person.job_prosperity_01 or 0.0)
+                    if hr.person.employer_person_id in hkey:
+                        income += wage * HOUSEHOLD_JOB_INCOME_SCALE * 0.15
+                        expenses += 0.018 + wage * 0.055
+                    else:
+                        income += wage * HOUSEHOLD_JOB_INCOME_SCALE
+                    low_status_workers += 1
+                elif market_type in {"vice", "criminal"}:
+                    income += float(hr.person.job_prosperity_01 or 0.0) * HOUSEHOLD_JOB_INCOME_SCALE * 0.55
+                    low_status_workers += 1
+                else:
+                    income += float(hr.person.job_prosperity_01 or 0.0) * HOUSEHOLD_JOB_INCOME_SCALE
                 st = (hr.person.status_tendency or "").strip().lower()
                 if st.startswith("low"):
                     low_status_workers += 1
@@ -273,6 +289,7 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
     if prof:
         t0 = tpc()
     catalog = JobEconomicsCatalog.load(ctx.db_path)
+    archetype_catalog = JobArchetypeCatalog.load(ctx.db_path)
     market_catalog = JobMarketCatalog.load(ctx.db_path)
     y = int(year)
     hist = ctx.get_historical_year(y)
@@ -338,8 +355,24 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
     # --- Unemployed / no job: baseline wage prosperity for conception hooks ---
     for rec in ctx.iter_current_people(sorted_by_id=True):
         es = (rec.person.employment_status or "").strip().lower()
-        if es != "employed" or not (rec.person.job or "").strip():
+        job = (rec.person.job or "").strip()
+        if es != "employed" or not job:
             rec.person = replace(rec.person, job_prosperity_01=0.08)
+            continue
+        market_type = (rec.person.job_market_type or "settlement_market").strip().lower()
+        if market_type in {"household_care", "domestic_service", "vice", "criminal"}:
+            archetype = archetype_catalog.lookup(job)
+            cash_score = float(archetype.personal_prosperity_01) * max(
+                0.0, float(archetype.cash_wage_multiplier)
+            )
+            if market_type == "household_care":
+                cash_score = min(cash_score, 0.04)
+            if market_type == "domestic_service":
+                cash_score += float(archetype.board_compensation_01) * 0.06
+            rec.person = replace(
+                rec.person,
+                job_prosperity_01=round(_clamp01(cash_score), 5),
+            )
     if prof:
         simulation_timing.accumulate("economy.unemployed_baseline", tpc() - t0)
         t0 = tpc()
@@ -350,6 +383,9 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
         if (rec.person.employment_status or "").strip().lower() != "employed":
             continue
         if not (rec.person.job or "").strip():
+            continue
+        market_type = (rec.person.job_market_type or "settlement_market").strip().lower()
+        if market_type not in {"settlement_market", "office"}:
             continue
         sid = (
             (rec.person.current_settlement_id or rec.person.birthplace_settlement_id or "")
