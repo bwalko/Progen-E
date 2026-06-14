@@ -1,3 +1,1 @@
-# Test
-
-This file was created by ChatGPT as a GitHub connector write test.
+I am an Ensa test.
