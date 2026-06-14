@@ -60,6 +60,16 @@ class ConsequenceMetricSummary:
 
 
 @dataclass(frozen=True)
+class OutlawOutcomeSummary:
+    scope: str
+    metric: str
+    count: int
+    denominator: int | None = None
+    rate: float | None = None
+    average_years: float | None = None
+
+
+@dataclass(frozen=True)
 class EventHistoryReport:
     total_events: int
     total_records: int
@@ -70,6 +80,7 @@ class EventHistoryReport:
     metric_summaries: tuple[MetricSummary, ...]
     consequence_counts: tuple[CountRow, ...]
     consequence_metric_summaries: tuple[ConsequenceMetricSummary, ...]
+    outlaw_outcome_summary: tuple[OutlawOutcomeSummary, ...]
     public_samples: tuple[EventRecordProse, ...]
 
 
@@ -97,6 +108,7 @@ def build_event_history_report(
         metric_summaries=tuple(_metric_summaries(conn)),
         consequence_counts=tuple(_consequence_counts(conn)),
         consequence_metric_summaries=tuple(_consequence_metric_summaries(conn)),
+        outlaw_outcome_summary=tuple(_outlaw_outcome_summary(conn)),
         public_samples=tuple(
             load_public_chronicle_prose(
                 conn,
@@ -139,6 +151,10 @@ def write_event_history_report(report: EventHistoryReport, output_dir: Path) -> 
     _write_consequence_metric_summaries(
         output_dir / "event_consequence_metrics.tsv",
         report.consequence_metric_summaries,
+    )
+    _write_outlaw_outcome_summary(
+        output_dir / "outlaw_outcome_summary.tsv",
+        report.outlaw_outcome_summary,
     )
     _write_public_samples(output_dir / "public_chronicle_samples.tsv", report.public_samples)
     (output_dir / "summary.txt").write_text(format_event_history_summary(report), encoding="utf-8")
@@ -198,6 +214,20 @@ def format_event_history_summary(report: EventHistoryReport) -> str:
                 f"n={metric.count} avg={metric.average:.4f} "
                 f"min={metric.minimum:.4f} max={metric.maximum:.4f}"
             )
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("Outlaw Outcome Summary")
+    if report.outlaw_outcome_summary:
+        for row in report.outlaw_outcome_summary:
+            text = f"- {row.scope} / {row.metric}: count={row.count}"
+            if row.denominator is not None:
+                text += f" denominator={row.denominator}"
+            if row.rate is not None:
+                text += f" rate={row.rate:.4f}"
+            if row.average_years is not None:
+                text += f" avg_years={row.average_years:.2f}"
+            lines.append(text)
     else:
         lines.append("- none")
     lines.append("")
@@ -538,6 +568,224 @@ def _consequence_metric_summaries(
     return out
 
 
+_OUTLAW_SOURCE_EVENT_TYPES: tuple[str, ...] = ("murder", "property_crime")
+_OUTLAW_LIFECYCLE_EVENT_TYPES: tuple[str, ...] = (
+    "outlaw_case_opened",
+    "outlaw_flight",
+    "outlaw_refuge_joined",
+    "outlaw_raid",
+    "outlaw_pursuit",
+    "outlaw_captured",
+    "outlaw_killed",
+    "outlaw_bought_off",
+    "outlaw_returned",
+    "outlaw_forgotten",
+)
+
+
+def _outlaw_outcome_summary(conn: sqlite3.Connection) -> list[OutlawOutcomeSummary]:
+    source_total = sum(_event_count(conn, event_type) for event_type in _OUTLAW_SOURCE_EVENT_TYPES)
+    out = [_outlaw_summary_row("all", "source_crimes", source_total)]
+    if not _relation_exists(conn, "simulation_outlaw_cases_readable"):
+        opened_events = _event_count(conn, "outlaw_case_opened")
+        out.append(_outlaw_summary_row("all", "opened_cases", opened_events, source_total))
+        for event_type in _OUTLAW_LIFECYCLE_EVENT_TYPES:
+            out.append(
+                _outlaw_summary_row(
+                    "all",
+                    f"{event_type}_events",
+                    _event_count(conn, event_type),
+                    opened_events,
+                )
+            )
+        return out
+
+    case_total = _count(conn, "simulation_outlaw_cases_readable")
+    out.append(_outlaw_summary_row("all", "opened_cases", case_total, source_total))
+    out.append(
+        _outlaw_summary_row(
+            "all",
+            "active_cases",
+            _outlaw_case_count(conn, "status = 'active'"),
+            case_total,
+        )
+    )
+    out.append(
+        _outlaw_summary_row(
+            "all",
+            "resolved_cases",
+            _outlaw_case_count(conn, "status = 'resolved'"),
+            case_total,
+        )
+    )
+    for event_type in _OUTLAW_LIFECYCLE_EVENT_TYPES:
+        out.append(
+            _outlaw_summary_row(
+                "all",
+                f"{event_type}_events",
+                _event_count(conn, event_type),
+                case_total,
+            )
+        )
+    for row in conn.execute(
+        """
+        SELECT COALESCE(resolution, '') AS resolution, COUNT(*) AS n
+        FROM simulation_outlaw_cases_readable
+        WHERE status = 'resolved' OR COALESCE(resolution, '') <> ''
+        GROUP BY COALESCE(resolution, '')
+        ORDER BY resolution
+        """
+    ):
+        out.append(
+            _outlaw_summary_row(
+                "all",
+                f"resolution:{_summary_key(row['resolution'])}",
+                int(row["n"]),
+                case_total,
+            )
+        )
+    for offense_type in _OUTLAW_SOURCE_EVENT_TYPES:
+        offense_cases = _outlaw_case_count(
+            conn,
+            "offense_type = ?",
+            (offense_type,),
+        )
+        out.append(
+            _outlaw_summary_row(
+                f"offense:{offense_type}",
+                "opened_cases",
+                offense_cases,
+                _event_count(conn, offense_type),
+            )
+        )
+    _append_average_years(
+        out,
+        conn,
+        scope="all",
+        metric="years_to_resolution",
+        relation="simulation_outlaw_cases_readable",
+        expression="resolved_year - start_year",
+        where="resolved_year IS NOT NULL AND start_year IS NOT NULL",
+    )
+    _append_average_years(
+        out,
+        conn,
+        scope="all",
+        metric="expected_years_to_forget",
+        relation="simulation_outlaw_cases_readable",
+        expression="expected_forget_year - start_year",
+        where="expected_forget_year IS NOT NULL AND start_year IS NOT NULL",
+    )
+    if _relation_exists(conn, "simulation_outlaw_refuges_readable"):
+        out.append(
+            _outlaw_summary_row(
+                "all",
+                "active_refuges",
+                _count_where(conn, "simulation_outlaw_refuges_readable", "status = 'active'"),
+                case_total,
+            )
+        )
+    if _relation_exists(conn, "simulation_outlaw_custodies_readable"):
+        out.append(
+            _outlaw_summary_row(
+                "all",
+                "active_custodies",
+                _count_where(conn, "simulation_outlaw_custodies_readable", "status = 'active'"),
+                case_total,
+            )
+        )
+        _append_average_years(
+            out,
+            conn,
+            scope="all",
+            metric="custody_years",
+            relation="simulation_outlaw_custodies_readable",
+            expression="expected_release_year - start_year",
+            where="expected_release_year IS NOT NULL AND start_year IS NOT NULL",
+        )
+    return out
+
+
+def _outlaw_summary_row(
+    scope: str,
+    metric: str,
+    count: int,
+    denominator: int | None = None,
+    average_years: float | None = None,
+) -> OutlawOutcomeSummary:
+    denom = int(denominator) if denominator is not None else None
+    rate = (int(count) / denom) if denom and denom > 0 else None
+    return OutlawOutcomeSummary(
+        scope=scope,
+        metric=metric,
+        count=int(count),
+        denominator=denom,
+        rate=rate,
+        average_years=average_years,
+    )
+
+
+def _append_average_years(
+    rows: list[OutlawOutcomeSummary],
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    metric: str,
+    relation: str,
+    expression: str,
+    where: str,
+) -> None:
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS n, AVG({expression}) AS avg_years
+        FROM {relation}
+        WHERE {where} AND ({expression}) >= 0
+        """
+    ).fetchone()
+    count = int(row["n"] if row is not None else 0)
+    if count <= 0:
+        rows.append(_outlaw_summary_row(scope, metric, 0))
+        return
+    rows.append(
+        _outlaw_summary_row(
+            scope,
+            metric,
+            count,
+            average_years=float(row["avg_years"]),
+        )
+    )
+
+
+def _outlaw_case_count(
+    conn: sqlite3.Connection,
+    where: str,
+    params: Sequence[object] = (),
+) -> int:
+    return _count_where(conn, "simulation_outlaw_cases_readable", where, params)
+
+
+def _event_count(conn: sqlite3.Connection, event_type: str) -> int:
+    return _count_where(
+        conn,
+        "simulation_events_readable",
+        "event_type = ?",
+        (event_type,),
+    )
+
+
+def _count_where(
+    conn: sqlite3.Connection,
+    relation: str,
+    where: str,
+    params: Sequence[object] = (),
+) -> int:
+    row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM {relation} WHERE {where}",
+        tuple(params),
+    ).fetchone()
+    return int(row["n"] if row is not None else 0)
+
+
 def _write_counts(path: Path, headers: Sequence[str], rows: Sequence[CountRow]) -> None:
     lines = ["\t".join(headers)]
     for row in rows:
@@ -593,6 +841,26 @@ def _write_consequence_metric_summaries(
                     f"{row.minimum:.6f}",
                     f"{row.maximum:.6f}",
                     f"{row.average:.6f}",
+                ]
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_outlaw_outcome_summary(
+    path: Path, rows: Sequence[OutlawOutcomeSummary]
+) -> None:
+    lines = ["scope\tmetric\tcount\tdenominator\trate\taverage_years"]
+    for row in rows:
+        lines.append(
+            "\t".join(
+                [
+                    _tsv_text(row.scope),
+                    _tsv_text(row.metric),
+                    str(row.count),
+                    "" if row.denominator is None else str(row.denominator),
+                    "" if row.rate is None else f"{row.rate:.6f}",
+                    "" if row.average_years is None else f"{row.average_years:.6f}",
                 ]
             )
         )

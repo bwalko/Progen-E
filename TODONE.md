@@ -286,6 +286,47 @@
   this laptop and exceeded the 2-minute timeout before output; the touched
   behaviors passed when run as focused tests.
 
+## Outlawry Follow-Up: Measured Outcome Reporting
+
+- Closed the measured tuning/reporting TODO by adding an explicit report before
+  changing any rates:
+  - the current default save report showed 21 `property_crime` events and 5
+    `murder` events, but 0 outlaw case/opening lifecycle events;
+  - that made the concrete gap reporting visibility, not a defensible rate
+    tuning target from this older/no-outlaw save.
+- `library.event_history_report` now builds an `OutlawOutcomeSummary`:
+  - source-crime count and opened-case conversion rate;
+  - lifecycle event rows for case opened, flight, refuge join, raid, pursuit,
+    capture, killed, bought off, returned, and forgotten;
+  - active/resolved case counts and resolution breakdowns when outlaw case
+    readable views exist;
+  - per-offense opened-case rates for murder and property crime;
+  - average years to resolution, expected forgetting horizon, active refuges,
+    active custodies, and custody duration when those readable views exist.
+- `write_event_history_report(...)` now writes
+  `outlaw_outcome_summary.tsv`, and `format_event_history_summary(...)` includes
+  an "Outlaw Outcome Summary" block.
+- Added focused regression coverage in `unit_test.test_event_history_report`:
+  - a synthetic two-crime/two-case lifecycle proves conversion, flight,
+    capture, refuge, custody, and duration summary rows;
+  - report writing now asserts the new TSV artifact exists and includes source
+    crime rows.
+- Verified on the lower-powered PC with:
+  - `python -m py_compile library\event_history_report.py
+    unit_test\test_event_history_report.py`;
+  - `python -m unittest
+    unit_test.test_event_history_report.TestEventHistoryReport.test_outlaw_outcome_summary_tracks_conversion_and_lifecycle`;
+  - `python -m unittest
+    unit_test.test_event_history_report.TestEventHistoryReport.test_outlaw_outcome_summary_tracks_conversion_and_lifecycle
+    unit_test.test_event_history_report.TestEventHistoryReport.test_write_report_outputs_tsv_artifacts`;
+  - `python -m unittest unit_test.test_event_history_report`;
+  - `python utils\util_event_history_report.py --world default --sample-limit 0
+    --output-dir temp\event_history_report\outlaw_after`, which reported
+    `source_crimes: count=26` and `opened_cases: count=0 denominator=26
+    rate=0.0000`;
+  - `git diff --check` (passed with existing LF-to-CRLF working-copy
+    warnings).
+
 ## Placename Length And Visible `-by` Tuning
 
 - Added settlement display-length budgeting in `library.placenames_generation`:

@@ -44,17 +44,14 @@ punishment, buy-off tolerance, pursuit pressure, forgetting/return pressure,
 and deterministic tests cover strict versus lenient legal handling; see
 `TODONE.md`.
 
-### Candidate Next Outlaw TODOs
+The seventh follow-up is complete: event-history reports now include an Outlaw
+Outcome Summary for source-crime conversion, lifecycle event rates,
+resolutions, active refuges/custodies, and lifecycle durations; see
+`TODONE.md`.
 
-Open and implement one item at a time, with a fresh completion pass in
-`TODONE.md` when finished.
-
-- [ ] **Measured tuning and reporting gaps**: Add reports or tune rates only
-  after a short seeded sample or existing save shows a concrete imbalance, such
-  as too many/few cases, raids, captures, deaths, buy-offs, or returns.
-  - Completion boundary: the measured gap is documented, the tuning/reporting
-    change is implemented, and a focused rerun or report demonstrates the new
-    behavior.
+No open outlaw TODOs remain. Add a fresh concrete outlaw TODO only when a new
+seeded sample, save report, browser pass, or user-facing symptom exposes a
+specific measured gap worth tuning or surfacing.
 
 ## Completed Context: Genome-Driven Events, Lost Records, And Chronicle Prose
 

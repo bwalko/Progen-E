@@ -450,6 +450,194 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertIn("Consequence Counts", summary)
             self.assertIn("Faction Memory / feud_memory / active / negative: 1", summary)
 
+    def test_outlaw_outcome_summary_tracks_conversion_and_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            save = root / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                _insert_person(conn, 1, "Ada", "Forge")
+                _insert_person(conn, 2, "Bryn", "Ash")
+                _insert_person(conn, 3, "Cor", "Vale")
+                property_id, murder_id, *_outlaw_event_ids = append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1001,
+                            "property_crime",
+                            {
+                                "perpetrator_person_id": 1,
+                                "target_person_id": 2,
+                                "incident_kind": "storehouse_robbery",
+                                "loss_value": 0.30,
+                                "historical_importance": 0.40,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1002,
+                            "murder",
+                            {
+                                "killer_person_id": 3,
+                                "victim_person_id": 2,
+                                "incident_kind": "ambush_killing",
+                                "historical_importance": 0.70,
+                                "settlement_id": "aeria_north:settlement:1",
+                                "region_id": "aeria_north",
+                            },
+                        ),
+                        (
+                            1001,
+                            "outlaw_case_opened",
+                            {"case_key": "property_crime:test"},
+                        ),
+                        (
+                            1002,
+                            "outlaw_case_opened",
+                            {"case_key": "murder:test"},
+                        ),
+                        (
+                            1002,
+                            "outlaw_flight",
+                            {"case_key": "property_crime:test"},
+                        ),
+                        (
+                            1003,
+                            "outlaw_pursuit",
+                            {"case_key": "murder:test"},
+                        ),
+                        (
+                            1004,
+                            "outlaw_captured",
+                            {"case_key": "murder:test"},
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                region_key = conn.execute(
+                    """
+                    SELECT region_key FROM simulation_region_lookup
+                    WHERE region_id = 'aeria_north'
+                    """
+                ).fetchone()["region_key"]
+                settlement_key = conn.execute(
+                    """
+                    SELECT settlement_key FROM simulation_settlement_lookup
+                    WHERE settlement_id = 'aeria_north:settlement:1'
+                    """
+                ).fetchone()["settlement_key"]
+                ts = "2026-01-01T00:00:00+00:00"
+                conn.execute(
+                    """
+                    INSERT INTO simulation_outlaw_refuges (
+                        refuge_id, display_name, region_key, near_settlement_key,
+                        status, founded_year, discovered_year, abandoned_year,
+                        band_size, concealment_01, support_01, last_activity_year,
+                        details_json, created_at, updated_at
+                    )
+                    VALUES (
+                        'outlaw_refuge:aeria_north:1', 'The Thorn Brake',
+                        ?, ?, 'active', 1002, 1003, NULL, 1, 0.60, 0.10,
+                        1004, '{}', ?, ?
+                    )
+                    """,
+                    (region_key, settlement_key, ts, ts),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_outlaw_cases (
+                        case_key, accused_person_id, offense_type, offense_kind,
+                        status, source_event_id, source_event_key,
+                        victim_person_id, target_person_id, severity_01,
+                        knownness_01, pursuit_pressure_01, buyoff_power_01,
+                        start_year, last_seen_year, expected_forget_year,
+                        resolved_year, resolution, region_key, settlement_key,
+                        refuge_id, custody_id, details_json, created_at, updated_at
+                    )
+                    VALUES (
+                        'property_crime:test', 1, 'property_crime',
+                        'storehouse_robbery', 'active', ?, 'source:property',
+                        NULL, 2, 0.62, 0.71, 0.66, 0.05, 1001, 1004, 1011,
+                        NULL, NULL, ?, ?, 'outlaw_refuge:aeria_north:1',
+                        NULL, '{}', ?, ?
+                    )
+                    """,
+                    (property_id, region_key, settlement_key, ts, ts),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_outlaw_cases (
+                        case_key, accused_person_id, offense_type, offense_kind,
+                        status, source_event_id, source_event_key,
+                        victim_person_id, target_person_id, severity_01,
+                        knownness_01, pursuit_pressure_01, buyoff_power_01,
+                        start_year, last_seen_year, expected_forget_year,
+                        resolved_year, resolution, region_key, settlement_key,
+                        refuge_id, custody_id, details_json, created_at, updated_at
+                    )
+                    VALUES (
+                        'murder:test', 3, 'murder', 'ambush_killing',
+                        'resolved', ?, 'source:murder', 2, NULL, 0.91, 0.80,
+                        0.84, 0.02, 1002, 1004, 1020, 1004, 'captured',
+                        ?, ?, NULL, 'outlaw_custody:murder:test', '{}', ?, ?
+                    )
+                    """,
+                    (murder_id, region_key, settlement_key, ts, ts),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_outlaw_custodies (
+                        custody_id, case_key, person_id, custody_type, status,
+                        site_settlement_key, region_key, start_year,
+                        expected_release_year, release_year, severity_01,
+                        details_json, created_at, updated_at
+                    )
+                    VALUES (
+                        'outlaw_custody:murder:test', 'murder:test', 3,
+                        'imprisonment', 'active', ?, ?, 1004, 1012, NULL,
+                        0.91, '{}', ?, ?
+                    )
+                    """,
+                    (settlement_key, region_key, ts, ts),
+                )
+                conn.commit()
+
+                report = build_event_history_report(conn, save_path=save, sample_limit=0)
+
+            rows = {
+                (row.scope, row.metric): row
+                for row in report.outlaw_outcome_summary
+            }
+            self.assertEqual(rows[("all", "source_crimes")].count, 2)
+            self.assertEqual(rows[("all", "opened_cases")].count, 2)
+            self.assertEqual(rows[("all", "opened_cases")].denominator, 2)
+            self.assertAlmostEqual(rows[("all", "opened_cases")].rate or 0.0, 1.0)
+            self.assertEqual(rows[("all", "outlaw_flight_events")].count, 1)
+            self.assertAlmostEqual(
+                rows[("all", "outlaw_flight_events")].rate or 0.0,
+                0.5,
+            )
+            self.assertEqual(rows[("all", "resolution:captured")].count, 1)
+            self.assertEqual(rows[("all", "active_refuges")].count, 1)
+            self.assertEqual(rows[("all", "active_custodies")].count, 1)
+            self.assertAlmostEqual(
+                rows[("all", "years_to_resolution")].average_years or 0.0,
+                2.0,
+            )
+            self.assertAlmostEqual(
+                rows[("all", "custody_years")].average_years or 0.0,
+                8.0,
+            )
+            summary = format_event_history_summary(report)
+            self.assertIn("Outlaw Outcome Summary", summary)
+            self.assertIn(
+                "all / opened_cases: count=2 denominator=2 rate=1.0000",
+                summary,
+            )
+
     def test_write_report_outputs_tsv_artifacts(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
@@ -493,6 +681,7 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertTrue((out / "event_metric_summaries.tsv").exists())
             self.assertTrue((out / "event_consequence_counts.tsv").exists())
             self.assertTrue((out / "event_consequence_metrics.tsv").exists())
+            self.assertTrue((out / "outlaw_outcome_summary.tsv").exists())
             self.assertTrue((out / "public_chronicle_samples.tsv").exists())
             self.assertIn(
                 "murder",
@@ -505,6 +694,10 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertIn(
                 "murder\t1",
                 (out / "tracked_incident_counts.tsv").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "all\tsource_crimes\t1",
+                (out / "outlaw_outcome_summary.tsv").read_text(encoding="utf-8"),
             )
 
 
