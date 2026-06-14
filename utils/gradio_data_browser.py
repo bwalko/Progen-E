@@ -123,6 +123,7 @@ OUTLAW_CASE_BROWSER_HEADERS = [
     "Offense",
     "Accused",
     "Refuge",
+    "Custody",
     "Region",
     "Settlement",
     "Started",
@@ -2720,6 +2721,12 @@ _PERSON_COLUMN_KEYS = (
     "outlaw_refuge_id",
     "outlaw_since_year",
     "last_free_settlement_id",
+    "outlaw_custody_id",
+    "outlaw_custody_status",
+    "outlaw_custody_start_year",
+    "outlaw_custody_expected_release_year",
+    "outlaw_custody_release_year",
+    "outlaw_custody_site_settlement_id",
     "employment_status",
     "job_lost_year",
     "unemployment_started_year",
@@ -3706,6 +3713,27 @@ def _person_current_outlaw_refuge_label(
     return _lookup_outlaw_refuge_display_name(con, world, refuge_id)
 
 
+def _person_current_outlaw_custody_label(
+    con: sqlite3.Connection,
+    world: str,
+    person: dict[str, object],
+) -> str:
+    custody_id = str(person.get("outlaw_custody_id") or "").strip()
+    status = str(person.get("outlaw_custody_status") or "").strip()
+    site_id = str(person.get("outlaw_custody_site_settlement_id") or "").strip()
+    expected = person.get("outlaw_custody_expected_release_year")
+    if not custody_id and not status and not site_id:
+        return "none"
+    bits: list[str] = []
+    if status:
+        bits.append(status.replace("_", " "))
+    if site_id:
+        bits.append(f"at {_safe_settlement_name(con, world, site_id)}")
+    if expected not in (None, ""):
+        bits.append(f"expected release {_format_year(expected)}")
+    return "; ".join(bits) or custody_id or "custody"
+
+
 def _legacy_outlaw_refuge_place_name(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
     """Kept only for stale tests or direct callers that want the old generic form."""
     refuge_id = str(_outlaw_row_value(row, "refuge_id") or "").strip()
@@ -4170,12 +4198,20 @@ def _outlaw_case_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.R
     offense = offense_kind or offense_type
     if offense_kind and offense_type and offense_kind != offense_type:
         offense = f"{offense_kind} ({offense_type})"
+    custody_status = str(_outlaw_row_value(row, "custody_status", "") or "").strip()
+    custody_site = str(_outlaw_row_value(row, "custody_site_settlement_id", "") or "").strip()
+    custody = ""
+    if custody_status:
+        custody = custody_status.replace("_", " ")
+        if custody_site:
+            custody += f" at {_safe_settlement_name(con, world, custody_site)}"
     return {
         "Case": _outlaw_row_value(row, "case_key", ""),
         "Status": _outlaw_row_value(row, "status", ""),
         "Offense": offense,
         "Accused": _outlaw_case_accused_label(con, world, row),
         "Refuge": _outlaw_case_refuge_label(con, world, row),
+        "Custody": custody,
         "Region": _safe_region_label(con, world, _outlaw_row_value(row, "region_id", "")),
         "Settlement": _safe_settlement_name(con, world, _outlaw_row_value(row, "settlement_id", "")),
         "Started": _outlaw_row_value(row, "start_year", ""),
@@ -4328,7 +4364,9 @@ def _render_outlaw_refuge_sheet(con: sqlite3.Connection, world: str, refuge_id: 
             status = html.escape(str(_outlaw_row_value(case_row, "status", "") or ""))
             resolution = str(_outlaw_row_value(case_row, "resolution", "") or "").strip()
             resolution_text = f", {html.escape(resolution)}" if resolution else ""
-            case_items.append(f"{accused}: {offense} ({status}{resolution_text})")
+            custody = str(_outlaw_row_value(case_row, "custody_status", "") or "").strip()
+            custody_text = f", custody {html.escape(custody)}" if custody else ""
+            case_items.append(f"{accused}: {offense} ({status}{resolution_text}{custody_text})")
     event_items: list[str] = []
     if _has_table(con, "simulation_events"):
         events_has_world = "world" in _table_columns(con, "simulation_events")
@@ -5375,7 +5413,9 @@ def _outlaw_event_sentence(
         band_tail = f"; band size {band}" if band not in (None, "") else ""
         return f"Forces pursued {accused} at {refuge}{band_tail}."
     if event_type == "outlaw_captured":
-        return f"{accused} was captured and punished for {offense}."
+        expected = payload.get("custody_expected_release_year")
+        expected_tail = f"; expected release {_format_year(expected)}" if expected not in (None, "") else ""
+        return f"{accused} was captured into custody for {offense}{expected_tail}."
     if event_type == "outlaw_killed":
         return f"{accused} was killed during outlaw pursuit."
     if event_type == "outlaw_bought_off":
@@ -5426,7 +5466,9 @@ def _outlaw_event_sentence_html(
         band_tail = f"; band size {html.escape(str(band))}" if band not in (None, "") else ""
         return f"Forces pursued {accused} at {refuge}{band_tail}."
     if event_type == "outlaw_captured":
-        return f"{accused} was captured and punished for {offense}."
+        expected = payload.get("custody_expected_release_year")
+        expected_tail = f"; expected release {html.escape(_format_year(expected))}" if expected not in (None, "") else ""
+        return f"{accused} was captured into custody for {offense}{expected_tail}."
     if event_type == "outlaw_killed":
         return f"{accused} was killed during outlaw pursuit."
     if event_type == "outlaw_bought_off":
@@ -6720,6 +6762,15 @@ def _person_outlaw_case_items_html(
             ("role", _person_outlaw_case_role(row, focus_person_id)),
             ("status", _row_value(row, "status")),
             ("resolution", _row_value(row, "resolution")),
+            ("custody", _row_value(row, "custody_status")),
+            ("custody type", str(_row_value(row, "custody_type") or "").replace("_", " ")),
+            (
+                "custody site",
+                _safe_settlement_name(con, world, _row_value(row, "custody_site_settlement_id"))
+                if _row_value(row, "custody_site_settlement_id") not in (None, "")
+                else "",
+            ),
+            ("expected release", _format_year(_row_value(row, "custody_expected_release_year")) if _row_value(row, "custody_expected_release_year") not in (None, "") else ""),
             ("severity", _fmt_number(_row_value(row, "severity_01"))),
             ("knownness", _fmt_number(_row_value(row, "knownness_01"))),
             ("pursuit", _fmt_number(_row_value(row, "pursuit_pressure_01"))),
@@ -6892,6 +6943,23 @@ def _person_outlaw_case_lines(
         ).replace("_", " ")
         resolution = _row_value(row, "resolution") or "unresolved"
         refuge = _outlaw_case_refuge_label(con, world, row) or "none"
+        custody_bits = _detail_bits(
+            ("custody", _row_value(row, "custody_status")),
+            ("custody type", str(_row_value(row, "custody_type") or "").replace("_", " ")),
+            (
+                "custody site",
+                _safe_settlement_name(con, world, _row_value(row, "custody_site_settlement_id"))
+                if _row_value(row, "custody_site_settlement_id") not in (None, "")
+                else "",
+            ),
+            (
+                "expected release",
+                _format_year(_row_value(row, "custody_expected_release_year"))
+                if _row_value(row, "custody_expected_release_year") not in (None, "")
+                else "",
+            ),
+        )
+        custody_tail = f"; {custody_bits}" if custody_bits else ""
         lines.append(
             f"- {_year_span_text(_row_value(row, 'start_year'), _row_value(row, 'resolved_year'))}: "
             f"{offense}; role {_person_outlaw_case_role(row, focus_person_id)}; "
@@ -6900,7 +6968,7 @@ def _person_outlaw_case_lines(
             f"severity {_fmt_number(_row_value(row, 'severity_01'))}; "
             f"knownness {_fmt_number(_row_value(row, 'knownness_01'))}; "
             f"pursuit {_fmt_number(_row_value(row, 'pursuit_pressure_01'))}; "
-            f"buy-off {_fmt_number(_row_value(row, 'buyoff_power_01'))}; refuge {refuge}."
+            f"buy-off {_fmt_number(_row_value(row, 'buyoff_power_01'))}; refuge {refuge}{custody_tail}."
         )
     return lines
 
@@ -7690,6 +7758,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
             "Outlaw Refuge",
             _person_current_outlaw_refuge_label(con, world, person),
         ),
+        _render_detail_card(
+            "Outlaw Custody",
+            _person_current_outlaw_custody_label(con, world, person),
+        ),
         _render_detail_card("Patronage Ties", len(patronage_rows)),
     ]
     identity_cards = [
@@ -7916,6 +7988,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     )
 
     outlaw_refuge_label = _person_current_outlaw_refuge_label(con, world, person)
+    outlaw_custody_label = _person_current_outlaw_custody_label(con, world, person)
     return "\n".join(
         [
             _person_name(person),
@@ -7939,6 +8012,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             f"Service attachment: employer {_person_link_text(con, world, person.get('employer_person_id')) if person.get('employer_person_id') else 'none'}; host {_person_link_text(con, world, person.get('host_person_id')) if person.get('host_person_id') else 'none'}.",
             f"Standing: class {str(person.get('social_class_band') or 'unknown').replace('_', ' ')}, social standing {_format_01_score(person.get('social_standing_01'))}, societal impact {_format_01_score(person.get('societal_impact_01'))}, perceived worth {_format_01_score(person.get('perceived_worth_01'))}.",
             f"Outlawry: status {str(person.get('outlaw_status') or 'none').replace('_', ' ')}, refuge {outlaw_refuge_label}.",
+            f"Custody: {outlaw_custody_label}.",
             f"Character tags: {tags_text}",
             "",
             *archive_score_lines,

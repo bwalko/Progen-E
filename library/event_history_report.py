@@ -349,6 +349,11 @@ _CONSEQUENCE_COUNT_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         ("region_id", "status"),
     ),
     (
+        "Outlaw Custodies",
+        "simulation_outlaw_custodies_readable",
+        ("custody_type", "status"),
+    ),
+    (
         "Domain Diffusion",
         "simulation_domain_diffusion_readable",
         ("domain", "route_type"),
@@ -426,6 +431,12 @@ _CONSEQUENCE_METRIC_SPECS: tuple[
         "simulation_outlaw_refuges_readable",
         ("region_id", "status"),
         ("band_size", "concealment_01", "support_01", "active_case_count"),
+    ),
+    (
+        "Outlaw Custodies",
+        "simulation_outlaw_custodies_readable",
+        ("custody_type", "status"),
+        ("severity_01",),
     ),
     (
         "Domain Diffusion",

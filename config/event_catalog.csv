@@ -116,7 +116,7 @@ outlaw_flight,outlaw_flight,violent_crime,outlaw flight,flight;legal;exile,exile
 outlaw_refuge_joined,outlaw_refuge_joined,violent_crime,outlaw refuge joined,refuge;hideout;band,exile_or_execution,outlaw_record,rumored,1.00,Fugitive joins or founds a non-settlement refuge.
 outlaw_raid,outlaw_raid,property_survival_crime,outlaw raid,raid;survival;refuge,property_loss,outlaw_record,rumored,1.00,Refuge survives through theft or raiding.
 outlaw_pursuit,outlaw_pursuit,political_crime,outlaw pursuit,pursuit;justice;authority,legal_fallout,outlaw_record,public_known,1.00,Authorities discover or move against an outlaw refuge.
-outlaw_captured,outlaw_captured,political_crime,outlaw captured,capture;punishment;justice,legal_fallout,outlaw_record,public_known,1.00,Fugitive is captured and punished.
+outlaw_captured,outlaw_captured,political_crime,outlaw captured,capture;punishment;justice;custody,legal_fallout,outlaw_record,public_known,1.00,Fugitive is captured into custody or imprisonment.
 outlaw_killed,outlaw_killed,violent_crime,outlaw killed,pursuit;death;justice,death,outlaw_record,public_known,1.00,Fugitive dies during pursuit or punishment.
 outlaw_bought_off,outlaw_bought_off,political_crime,outlaw case bought off,bribery;patronage;status,legal_fallout,outlaw_record,rumored,1.00,Wealth status or patronage softens a wanted case.
 outlaw_returned,outlaw_returned,violent_crime,outlaw returned,return;stigma;exile,legal_fallout,outlaw_record,rumored,1.00,Former fugitive returns after resolution.

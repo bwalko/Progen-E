@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 21
+SAVE_SCHEMA_VERSION = 22
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -85,6 +85,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_patronage_ties",
     "simulation_outlaw_cases",
     "simulation_outlaw_refuges",
+    "simulation_outlaw_custodies",
     "simulation_couples",
     "simulation_paramours",
     "simulation_events",
@@ -150,6 +151,12 @@ _PERSON_CHECKPOINT_COLUMNS: tuple[str, ...] = (
     "outlaw_refuge_id",
     "outlaw_since_year",
     "last_free_settlement_id",
+    "outlaw_custody_id",
+    "outlaw_custody_status",
+    "outlaw_custody_start_year",
+    "outlaw_custody_expected_release_year",
+    "outlaw_custody_release_year",
+    "outlaw_custody_site_settlement_id",
     "employment_status",
     "job_lost_year",
     "unemployment_started_year",
@@ -189,6 +196,12 @@ _ADDITIVE_PERSON_CHECKPOINT_COLUMNS: dict[str, str] = {
     "outlaw_refuge_id": "TEXT",
     "outlaw_since_year": "INTEGER",
     "last_free_settlement_id": "TEXT",
+    "outlaw_custody_id": "TEXT",
+    "outlaw_custody_status": "TEXT",
+    "outlaw_custody_start_year": "INTEGER",
+    "outlaw_custody_expected_release_year": "INTEGER",
+    "outlaw_custody_release_year": "INTEGER",
+    "outlaw_custody_site_settlement_id": "TEXT",
 }
 
 _PERSON_EXTENSION_KEYS: tuple[str, ...] = (
@@ -623,6 +636,12 @@ def _ensure_simulation_people_table(conn: sqlite3.Connection) -> None:
             outlaw_refuge_id TEXT,
             outlaw_since_year INTEGER,
             last_free_settlement_id TEXT,
+            outlaw_custody_id TEXT,
+            outlaw_custody_status TEXT,
+            outlaw_custody_start_year INTEGER,
+            outlaw_custody_expected_release_year INTEGER,
+            outlaw_custody_release_year INTEGER,
+            outlaw_custody_site_settlement_id TEXT,
             employment_status TEXT,
             job_lost_year INTEGER,
             unemployment_started_year INTEGER,
@@ -889,6 +908,7 @@ def _ensure_outlaw_tables(conn: sqlite3.Connection) -> None:
             region_key INTEGER,
             settlement_key INTEGER,
             refuge_id TEXT,
+            custody_id TEXT,
             details_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -899,6 +919,8 @@ def _ensure_outlaw_tables(conn: sqlite3.Connection) -> None:
         ON simulation_outlaw_cases (status);
         CREATE INDEX IF NOT EXISTS idx_sim_outlaw_cases_refuge
         ON simulation_outlaw_cases (refuge_id);
+        CREATE INDEX IF NOT EXISTS idx_sim_outlaw_cases_custody
+        ON simulation_outlaw_cases (custody_id);
         CREATE INDEX IF NOT EXISTS idx_sim_outlaw_cases_place
         ON simulation_outlaw_cases (region_key, settlement_key);
 
@@ -923,8 +945,36 @@ def _ensure_outlaw_tables(conn: sqlite3.Connection) -> None:
         ON simulation_outlaw_refuges (region_key);
         CREATE INDEX IF NOT EXISTS idx_sim_outlaw_refuges_status
         ON simulation_outlaw_refuges (status);
+
+        CREATE TABLE IF NOT EXISTS simulation_outlaw_custodies (
+            custody_id TEXT PRIMARY KEY,
+            case_key TEXT NOT NULL,
+            person_id INTEGER NOT NULL,
+            custody_type TEXT NOT NULL DEFAULT 'imprisonment',
+            status TEXT NOT NULL DEFAULT 'active',
+            site_settlement_key INTEGER,
+            region_key INTEGER,
+            start_year INTEGER,
+            expected_release_year INTEGER,
+            release_year INTEGER,
+            severity_01 REAL NOT NULL DEFAULT 0,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_sim_outlaw_custodies_case
+        ON simulation_outlaw_custodies (case_key);
+        CREATE INDEX IF NOT EXISTS idx_sim_outlaw_custodies_person
+        ON simulation_outlaw_custodies (person_id);
+        CREATE INDEX IF NOT EXISTS idx_sim_outlaw_custodies_status
+        ON simulation_outlaw_custodies (status);
+        CREATE INDEX IF NOT EXISTS idx_sim_outlaw_custodies_place
+        ON simulation_outlaw_custodies (region_key, site_settlement_key);
         """
     )
+    case_cols = set(_table_columns(conn, "simulation_outlaw_cases"))
+    if "custody_id" not in case_cols:
+        conn.execute("ALTER TABLE simulation_outlaw_cases ADD COLUMN custody_id TEXT")
     cols = set(_table_columns(conn, "simulation_outlaw_refuges"))
     if "display_name" not in cols:
         conn.execute("ALTER TABLE simulation_outlaw_refuges ADD COLUMN display_name TEXT")
@@ -933,6 +983,7 @@ def _ensure_outlaw_tables(conn: sqlite3.Connection) -> None:
 def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> None:
     cases = getattr(ctx, "outlaw_cases", {}) or {}
     refuges = getattr(ctx, "outlaw_refuges", {}) or {}
+    custodies = getattr(ctx, "outlaw_custodies", {}) or {}
     now = datetime.now(timezone.utc).isoformat()
     for refuge in refuges.values():
         refuge_id = str(getattr(refuge, "refuge_id", "") or "").strip()
@@ -998,6 +1049,66 @@ def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> No
                 now,
             ),
         )
+    for custody in custodies.values():
+        custody_id = str(getattr(custody, "custody_id", "") or "").strip()
+        case_key = str(getattr(custody, "case_key", "") or "").strip()
+        if not custody_id or not case_key:
+            continue
+        region_id = str(getattr(custody, "region_id", "") or "").strip()
+        site_sid = str(getattr(custody, "site_settlement_id", "") or "").strip()
+        conn.execute(
+            """
+            INSERT INTO simulation_outlaw_custodies (
+                custody_id, case_key, person_id, custody_type, status,
+                site_settlement_key, region_key, start_year, expected_release_year,
+                release_year, severity_01, details_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(custody_id)
+            DO UPDATE SET
+                case_key = excluded.case_key,
+                person_id = excluded.person_id,
+                custody_type = excluded.custody_type,
+                status = excluded.status,
+                site_settlement_key = excluded.site_settlement_key,
+                region_key = excluded.region_key,
+                start_year = excluded.start_year,
+                expected_release_year = excluded.expected_release_year,
+                release_year = excluded.release_year,
+                severity_01 = excluded.severity_01,
+                details_json = excluded.details_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                custody_id,
+                case_key,
+                int(getattr(custody, "person_id", 0) or 0),
+                str(getattr(custody, "custody_type", "imprisonment") or "imprisonment").strip()
+                or "imprisonment",
+                str(getattr(custody, "status", "active") or "active").strip() or "active",
+                _lookup_or_insert_settlement_key(conn, site_sid, region_id),
+                _lookup_or_insert_region_key(conn, region_id),
+                (
+                    int(getattr(custody, "start_year"))
+                    if getattr(custody, "start_year", None) is not None
+                    else None
+                ),
+                (
+                    int(getattr(custody, "expected_release_year"))
+                    if getattr(custody, "expected_release_year", None) is not None
+                    else None
+                ),
+                (
+                    int(getattr(custody, "release_year"))
+                    if getattr(custody, "release_year", None) is not None
+                    else None
+                ),
+                round(max(0.0, min(1.0, float(getattr(custody, "severity_01", 0.0) or 0.0))), 5),
+                json.dumps(getattr(custody, "details", {}) or {}, sort_keys=True),
+                now,
+                now,
+            ),
+        )
     for case in cases.values():
         case_key = str(getattr(case, "case_key", "") or "").strip()
         if not case_key:
@@ -1011,10 +1122,10 @@ def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> No
                 source_event_id, source_event_key, victim_person_id, target_person_id,
                 severity_01, knownness_01, pursuit_pressure_01, buyoff_power_01,
                 start_year, last_seen_year, expected_forget_year, resolved_year,
-                resolution, region_key, settlement_key, refuge_id, details_json,
+                resolution, region_key, settlement_key, refuge_id, custody_id, details_json,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(case_key)
             DO UPDATE SET
                 accused_person_id = excluded.accused_person_id,
@@ -1037,6 +1148,7 @@ def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> No
                 region_key = excluded.region_key,
                 settlement_key = excluded.settlement_key,
                 refuge_id = excluded.refuge_id,
+                custody_id = excluded.custody_id,
                 details_json = excluded.details_json,
                 updated_at = excluded.updated_at
             """,
@@ -1096,6 +1208,11 @@ def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> No
                 (
                     str(getattr(case, "refuge_id"))
                     if getattr(case, "refuge_id", None)
+                    else None
+                ),
+                (
+                    str(getattr(case, "custody_id"))
+                    if getattr(case, "custody_id", None)
                     else None
                 ),
                 json.dumps(getattr(case, "details", {}) or {}, sort_keys=True),
@@ -5874,6 +5991,7 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
     conn.execute("DROP VIEW IF EXISTS simulation_innovation_era_state_readable")
     conn.execute("DROP VIEW IF EXISTS simulation_outlaw_cases_readable")
     conn.execute("DROP VIEW IF EXISTS simulation_outlaw_refuges_readable")
+    conn.execute("DROP VIEW IF EXISTS simulation_outlaw_custodies_readable")
     conn.executescript(
         """
         CREATE VIEW IF NOT EXISTS simulation_regions_readable AS
@@ -6182,6 +6300,14 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
             c.refuge_id,
             r.display_name AS refuge_display_name,
             r.status AS refuge_status,
+            c.custody_id,
+            cu.custody_type,
+            cu.status AS custody_status,
+            csl.settlement_id AS custody_site_settlement_id,
+            crl.region_id AS custody_region_id,
+            cu.start_year AS custody_start_year,
+            cu.expected_release_year AS custody_expected_release_year,
+            cu.release_year AS custody_release_year,
             c.source_event_id,
             e.sim_year AS source_event_year,
             e.event_type AS source_event_type,
@@ -6196,6 +6322,9 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         LEFT JOIN simulation_region_lookup rl ON rl.region_key = c.region_key
         LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = c.settlement_key
         LEFT JOIN simulation_outlaw_refuges r ON r.refuge_id = c.refuge_id
+        LEFT JOIN simulation_outlaw_custodies cu ON cu.custody_id = c.custody_id
+        LEFT JOIN simulation_region_lookup crl ON crl.region_key = cu.region_key
+        LEFT JOIN simulation_settlement_lookup csl ON csl.settlement_key = cu.site_settlement_key
         LEFT JOIN simulation_events e ON e.id = c.source_event_id;
 
         CREATE VIEW IF NOT EXISTS simulation_outlaw_refuges_readable AS
@@ -6223,6 +6352,35 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         FROM simulation_outlaw_refuges r
         LEFT JOIN simulation_region_lookup rl ON rl.region_key = r.region_key
         LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = r.near_settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_outlaw_custodies_readable AS
+        SELECT
+            cu.custody_id,
+            cu.case_key,
+            cu.person_id,
+            trim(coalesce(ap.first_name, '') || ' ' || coalesce(ap.last_name, '')) AS person_name,
+            cu.custody_type,
+            cu.status,
+            sl.settlement_id AS site_settlement_id,
+            rl.region_id,
+            cu.start_year,
+            cu.expected_release_year,
+            cu.release_year,
+            cu.severity_01,
+            c.offense_type,
+            c.offense_kind,
+            c.resolution,
+            c.refuge_id,
+            r.display_name AS refuge_display_name,
+            cu.details_json,
+            cu.created_at,
+            cu.updated_at
+        FROM simulation_outlaw_custodies cu
+        LEFT JOIN simulation_people ap ON ap.person_id = cu.person_id
+        LEFT JOIN simulation_outlaw_cases c ON c.case_key = cu.case_key
+        LEFT JOIN simulation_outlaw_refuges r ON r.refuge_id = c.refuge_id
+        LEFT JOIN simulation_region_lookup rl ON rl.region_key = cu.region_key
+        LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = cu.site_settlement_key;
 
         CREATE VIEW IF NOT EXISTS simulation_faction_memory_readable AS
         SELECT
@@ -6576,6 +6734,7 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_patronage_ties")
         conn.execute("DELETE FROM simulation_outlaw_cases")
         conn.execute("DELETE FROM simulation_outlaw_refuges")
+        conn.execute("DELETE FROM simulation_outlaw_custodies")
         conn.execute("DELETE FROM simulation_settlements")
         conn.execute("DELETE FROM simulation_regions")
         conn.execute("DELETE FROM simulation_couples")
@@ -7767,6 +7926,36 @@ def _person_from_dict(d: dict) -> Person:
             if d.get("last_free_settlement_id") is not None
             else None
         ),
+        outlaw_custody_id=(
+            str(d["outlaw_custody_id"])
+            if d.get("outlaw_custody_id") is not None
+            else None
+        ),
+        outlaw_custody_status=(
+            str(d["outlaw_custody_status"])
+            if d.get("outlaw_custody_status") is not None
+            else None
+        ),
+        outlaw_custody_start_year=(
+            int(d["outlaw_custody_start_year"])
+            if d.get("outlaw_custody_start_year") is not None
+            else None
+        ),
+        outlaw_custody_expected_release_year=(
+            int(d["outlaw_custody_expected_release_year"])
+            if d.get("outlaw_custody_expected_release_year") is not None
+            else None
+        ),
+        outlaw_custody_release_year=(
+            int(d["outlaw_custody_release_year"])
+            if d.get("outlaw_custody_release_year") is not None
+            else None
+        ),
+        outlaw_custody_site_settlement_id=(
+            str(d["outlaw_custody_site_settlement_id"])
+            if d.get("outlaw_custody_site_settlement_id") is not None
+            else None
+        ),
         employment_status=(
             str(d["employment_status"])
             if d.get("employment_status") is not None
@@ -8706,6 +8895,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
 
         from library.simulation_outlaws import (
             SimulationOutlawCase,
+            SimulationOutlawCustody,
             SimulationOutlawRefuge,
             outlaw_refuge_display_name,
         )
@@ -8791,6 +8981,62 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                 if refuge.refuge_id:
                     outlaw_refuges[refuge.refuge_id] = refuge
 
+        outlaw_custodies: dict[str, SimulationOutlawCustody] = {}
+        if _table_exists(conn, "simulation_outlaw_custodies"):
+            for r in conn.execute(
+                """
+                SELECT *
+                FROM simulation_outlaw_custodies
+                WHERE status = 'active' OR release_year IS NULL OR release_year >= ?
+                ORDER BY start_year, custody_id
+                """,
+                (int(reference_year) - int(retention),),
+            ).fetchall():
+                person_id = int(r["person_id"] or 0)
+                if person_id not in id_to:
+                    continue
+                details: dict[str, object] = {}
+                raw_details = r["details_json"] if "details_json" in r.keys() else None
+                if raw_details:
+                    try:
+                        parsed = json.loads(str(raw_details))
+                        if isinstance(parsed, dict):
+                            details = parsed
+                    except json.JSONDecodeError:
+                        details = {}
+                rkey = r["region_key"] if r["region_key"] is not None else None
+                skey = r["site_settlement_key"] if r["site_settlement_key"] is not None else None
+                custody = SimulationOutlawCustody(
+                    custody_id=str(r["custody_id"] or ""),
+                    case_key=str(r["case_key"] or ""),
+                    person_id=person_id,
+                    custody_type=str(r["custody_type"] or "imprisonment"),
+                    status=str(r["status"] or "active"),
+                    site_settlement_id=(
+                        settlement_ids_by_key.get(int(skey))
+                        if skey is not None
+                        else None
+                    ),
+                    region_id=(
+                        region_ids_by_key.get(int(rkey)) if rkey is not None else None
+                    ),
+                    start_year=(
+                        int(r["start_year"]) if r["start_year"] is not None else None
+                    ),
+                    expected_release_year=(
+                        int(r["expected_release_year"])
+                        if r["expected_release_year"] is not None
+                        else None
+                    ),
+                    release_year=(
+                        int(r["release_year"]) if r["release_year"] is not None else None
+                    ),
+                    severity_01=float(r["severity_01"] or 0.0),
+                    details=details,
+                )
+                if custody.custody_id:
+                    outlaw_custodies[custody.custody_id] = custody
+
         outlaw_cases: dict[str, SimulationOutlawCase] = {}
         if _table_exists(conn, "simulation_outlaw_cases"):
             for r in conn.execute(
@@ -8875,6 +9121,11 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                     ),
                     refuge_id=(
                         str(r["refuge_id"]) if r["refuge_id"] is not None else None
+                    ),
+                    custody_id=(
+                        str(r["custody_id"])
+                        if "custody_id" in r.keys() and r["custody_id"] is not None
+                        else None
                     ),
                     details=details,
                 )
@@ -8998,6 +9249,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
     ctx.patronage_ties = patronage_ties
     ctx.outlaw_refuges = outlaw_refuges
     ctx.outlaw_cases = outlaw_cases
+    ctx.outlaw_custodies = outlaw_custodies
     for a_id, b_id in couples:
         ra = id_to.get(a_id)
         rb = id_to.get(b_id)

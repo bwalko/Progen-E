@@ -57,6 +57,12 @@ class Person:
     outlaw_refuge_id: str | None = None
     outlaw_since_year: int | None = None
     last_free_settlement_id: str | None = None
+    outlaw_custody_id: str | None = None
+    outlaw_custody_status: str | None = None
+    outlaw_custody_start_year: int | None = None
+    outlaw_custody_expected_release_year: int | None = None
+    outlaw_custody_release_year: int | None = None
+    outlaw_custody_site_settlement_id: str | None = None
     employment_status: str | None = None
     job_lost_year: int | None = None
     unemployment_started_year: int | None = None

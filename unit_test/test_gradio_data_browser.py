@@ -279,6 +279,25 @@ def _memory_outlaw_place_save() -> sqlite3.Connection:
             region_id text,
             settlement_id text,
             refuge_id text,
+            custody_id text,
+            details_json text
+        )
+        """
+    )
+    con.execute(
+        """
+        create table simulation_outlaw_custodies (
+            custody_id text primary key,
+            case_key text,
+            person_id integer,
+            custody_type text,
+            status text,
+            site_settlement_id text,
+            region_id text,
+            start_year integer,
+            expected_release_year integer,
+            release_year integer,
+            severity_01 real,
             details_json text
         )
         """
@@ -297,7 +316,7 @@ def _memory_outlaw_place_save() -> sqlite3.Connection:
             'property_crime:test', 1, 'Ada Forge', 'property_crime',
             'storehouse_robbery', 'active', null, 1001, 1004, 1012,
             null, 0.62, 0.71, 0.66, 0.05, null, 2, 'r1',
-            'r1:s1', 'outlaw_refuge:r1:1', '{}'
+            'r1:s1', 'outlaw_refuge:r1:1', null, '{}'
         )
         """
     )
@@ -358,8 +377,43 @@ def _memory_outlaw_place_save() -> sqlite3.Connection:
             c.settlement_id,
             c.refuge_id,
             r.display_name as refuge_display_name,
+            c.custody_id,
+            cu.custody_type,
+            cu.status as custody_status,
+            cu.site_settlement_id as custody_site_settlement_id,
+            cu.region_id as custody_region_id,
+            cu.start_year as custody_start_year,
+            cu.expected_release_year as custody_expected_release_year,
+            cu.release_year as custody_release_year,
             c.details_json
         from simulation_outlaw_cases c
+        left join simulation_outlaw_refuges r on r.refuge_id = c.refuge_id
+        left join simulation_outlaw_custodies cu on cu.custody_id = c.custody_id
+        """
+    )
+    con.execute(
+        """
+        create view simulation_outlaw_custodies_readable as
+        select
+            cu.custody_id,
+            cu.case_key,
+            cu.person_id,
+            cu.custody_type,
+            cu.status,
+            cu.site_settlement_id,
+            cu.region_id,
+            cu.start_year,
+            cu.expected_release_year,
+            cu.release_year,
+            cu.severity_01,
+            c.offense_type,
+            c.offense_kind,
+            c.resolution,
+            c.refuge_id,
+            r.display_name as refuge_display_name,
+            cu.details_json
+        from simulation_outlaw_custodies cu
+        left join simulation_outlaw_cases c on c.case_key = cu.case_key
         left join simulation_outlaw_refuges r on r.refuge_id = c.refuge_id
         """
     )
@@ -3462,6 +3516,103 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             self.assertIn("River Country", visible)
             self.assertNotIn("outlaw_refuge:r1:1", visible)
             self.assertNotIn("r1:s1", visible)
+
+    def test_person_outlaw_custody_surfaces_in_person_views(self) -> None:
+        con = _memory_outlaw_place_save()
+        try:
+            _attach_empty_genome_config(con)
+            custody_id = "outlaw_custody:property_crime:test"
+            con.execute(
+                """
+                update simulation_outlaw_cases
+                set status = 'resolved',
+                    resolution = 'captured',
+                    resolved_year = 1005,
+                    custody_id = ?
+                where case_key = 'property_crime:test'
+                """,
+                (custody_id,),
+            )
+            con.execute(
+                """
+                insert into simulation_outlaw_custodies values (
+                    ?, 'property_crime:test', 1, 'imprisonment', 'active',
+                    'r1:s1', 'r1', 1005, 1014, null, 0.62, '{}'
+                )
+                """,
+                (custody_id,),
+            )
+            con.execute(
+                """
+                update simulation_people
+                set person_json = json_set(
+                    person_json,
+                    '$.outlaw_status', 'imprisoned',
+                    '$.outlaw_refuge_id', 'outlaw_refuge:r1:1',
+                    '$.outlaw_custody_id', ?,
+                    '$.outlaw_custody_status', 'active',
+                    '$.outlaw_custody_site_settlement_id', 'r1:s1',
+                    '$.outlaw_custody_expected_release_year', 1014,
+                    '$.employment_status', 'imprisoned',
+                    '$.housing_status', 'custody'
+                )
+                where person_id = 1
+                """,
+                (custody_id,),
+            )
+            con.execute(
+                """
+                insert into simulation_events (world, sim_year, event_type, payload_json)
+                values (?, ?, ?, ?)
+                """,
+                (
+                    "test",
+                    1005,
+                    "outlaw_captured",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "accused_person_id": 1,
+                            "offense_type": "property_crime",
+                            "custody_id": custody_id,
+                            "custody_status": "active",
+                            "custody_site_settlement_id": "r1:s1",
+                            "custody_expected_release_year": 1014,
+                            "settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+            )
+            row = con.execute("select * from simulation_people where person_id = 1").fetchone()
+            person = gdb._person_from_row(row, {})
+            outlaw_rows = gdb._person_outlaw_case_rows(con, "test", 1)
+            outlaw_html = "".join(gdb._person_outlaw_case_items_html(con, "test", outlaw_rows, 1))
+            events = gdb._person_event_rows(con, "test", 1)
+            captured_event = [event for event in events if event["event_type"] == "outlaw_captured"][0]
+            captured_line = gdb._event_sentence(con, "test", captured_event, 1)
+            captured_html = gdb._event_sentence_html(con, "test", captured_event, 1)
+            sheet = gdb._render_person_sheet(con, "test", row, person)
+            share = gdb._render_person_share_text(con, "test", row, person)
+        finally:
+            con.close()
+
+        for visible in (outlaw_html, sheet, share):
+            self.assertIn("active", visible)
+            self.assertIn("Fordham", visible)
+            self.assertIn("expected release", visible)
+            self.assertIn("1014", visible)
+            self.assertNotIn(custody_id, visible)
+            self.assertNotIn("r1:s1", visible)
+        for visible in (captured_line, captured_html):
+            self.assertIn("expected release", visible)
+            self.assertIn("1014", visible)
+            self.assertNotIn(custody_id, visible)
+            self.assertNotIn("r1:s1", visible)
+        self.assertIn("Outlaw Custody", sheet)
+        self.assertIn("Custody: active; at Fordham; expected release", share)
+        self.assertIn("1014.", share)
+        self.assertIn("captured into custody", captured_line)
 
     def test_place_browsers_read_keyed_place_schema_through_readable_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

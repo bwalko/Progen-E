@@ -17,12 +17,88 @@ OUTLAW_STATUS_FUGITIVE = "fugitive"
 OUTLAW_STATUS_CLEARED = "cleared"
 OUTLAW_STATUS_PUNISHED = "punished"
 OUTLAW_STATUS_RETURNED = "returned"
+OUTLAW_STATUS_IMPRISONED = "imprisoned"
 OUTLAW_CAREER_BLOCKING_STATUSES = frozenset(
-    {OUTLAW_STATUS_WANTED, OUTLAW_STATUS_FUGITIVE, OUTLAW_STATUS_PUNISHED}
+    {OUTLAW_STATUS_WANTED, OUTLAW_STATUS_FUGITIVE, OUTLAW_STATUS_PUNISHED, OUTLAW_STATUS_IMPRISONED}
 )
 
 OUTLAW_RNG_STREAM = 1_740_331
 PROPERTY_OUTLAW_MIN_SEVERITY = 0.36
+PASSIVE_OUTLAW_PROMOTION_REASON = "outlaw_case_accused"
+
+
+@dataclass(frozen=True)
+class OutlawLawProfile:
+    """Polity-level legal posture that tunes outlaw handling."""
+
+    profile_id: str
+    label: str
+    severity_multiplier: float = 1.0
+    pursuit_pressure_add: float = 0.0
+    buyoff_relief_multiplier: float = 1.0
+    buyoff_threshold_multiplier: float = 1.0
+    buyoff_chance_multiplier: float = 1.0
+    punishment_duration_multiplier: float = 1.0
+    forget_year_multiplier: float = 1.0
+    return_chance_add: float = 0.0
+    flee_chance_add: float = 0.0
+    discovery_chance_add: float = 0.0
+    capture_chance_add: float = 0.0
+    death_chance_add: float = 0.0
+
+
+OUTLAW_LAW_PROFILES: dict[str, OutlawLawProfile] = {
+    "customary": OutlawLawProfile(
+        profile_id="customary",
+        label="customary compromise",
+    ),
+    "strict_justice": OutlawLawProfile(
+        profile_id="strict_justice",
+        label="strict justice",
+        severity_multiplier=1.12,
+        pursuit_pressure_add=0.12,
+        buyoff_relief_multiplier=0.65,
+        buyoff_threshold_multiplier=1.35,
+        buyoff_chance_multiplier=0.55,
+        punishment_duration_multiplier=1.28,
+        forget_year_multiplier=1.24,
+        return_chance_add=-0.10,
+        flee_chance_add=0.08,
+        discovery_chance_add=0.05,
+        capture_chance_add=0.06,
+        death_chance_add=0.02,
+    ),
+    "lenient_compromise": OutlawLawProfile(
+        profile_id="lenient_compromise",
+        label="lenient compromise",
+        severity_multiplier=0.88,
+        pursuit_pressure_add=-0.09,
+        buyoff_relief_multiplier=1.20,
+        buyoff_threshold_multiplier=0.75,
+        buyoff_chance_multiplier=1.45,
+        punishment_duration_multiplier=0.72,
+        forget_year_multiplier=0.74,
+        return_chance_add=0.12,
+        flee_chance_add=-0.05,
+        discovery_chance_add=-0.03,
+        capture_chance_add=-0.03,
+        death_chance_add=-0.02,
+    ),
+}
+_DEFAULT_OUTLAW_LAW_PROFILE = OUTLAW_LAW_PROFILES["customary"]
+
+OUTLAW_POLITY_TYPE_LAW_PROFILES: dict[str, str] = {
+    "empire": "strict_justice",
+    "kingdom": "strict_justice",
+    "duchy": "strict_justice",
+    "march": "strict_justice",
+    "county": "customary",
+    "city_state": "lenient_compromise",
+    "republic": "lenient_compromise",
+    "commune": "lenient_compromise",
+    "tribe": "lenient_compromise",
+    "band": "lenient_compromise",
+}
 
 
 @dataclass(frozen=True)
@@ -50,6 +126,7 @@ class SimulationOutlawCase:
     region_id: str | None = None
     settlement_id: str | None = None
     refuge_id: str | None = None
+    custody_id: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -69,6 +146,24 @@ class SimulationOutlawRefuge:
     concealment_01: float = 0.5
     support_01: float = 0.0
     last_activity_year: int | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SimulationOutlawCustody:
+    """Durable custody/imprisonment state created by nonlethal capture."""
+
+    custody_id: str
+    case_key: str
+    person_id: int
+    custody_type: str = "imprisonment"
+    status: str = "active"
+    site_settlement_id: str | None = None
+    region_id: str | None = None
+    start_year: int | None = None
+    expected_release_year: int | None = None
+    release_year: int | None = None
+    severity_01: float = 0.0
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -218,6 +313,15 @@ def normalize_outlaw_labor_state(
                 "household_role": "fugitive",
             }
         )
+    elif status == OUTLAW_STATUS_IMPRISONED:
+        updates.update(
+            {
+                "employment_status": "imprisoned",
+                "job_market_type": "custody",
+                "housing_status": "custody",
+                "household_role": "prisoner",
+            }
+        )
     else:
         updates.update(
             {
@@ -280,6 +384,105 @@ def _office_power(ctx: "SimulationContext", person_id: int) -> float:
     return 0.0
 
 
+def _normalized_law_profile_key(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _known_law_profile_key(value: object) -> str | None:
+    key = _normalized_law_profile_key(value)
+    return key if key in OUTLAW_LAW_PROFILES else None
+
+
+def _outlaw_law_profile_from_case(case: SimulationOutlawCase) -> OutlawLawProfile:
+    key = _known_law_profile_key((case.details or {}).get("law_profile"))
+    if key is None:
+        return _DEFAULT_OUTLAW_LAW_PROFILE
+    return OUTLAW_LAW_PROFILES[key]
+
+
+def _outlaw_law_details(
+    profile: OutlawLawProfile,
+    *,
+    source: str,
+    polity: object | None = None,
+) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "law_profile": profile.profile_id,
+        "law_profile_label": profile.label,
+        "law_profile_source": source,
+    }
+    if polity is not None:
+        details["law_polity_id"] = getattr(polity, "polity_id", None)
+        details["law_polity_type_id"] = str(
+            getattr(polity, "polity_type_id", "") or ""
+        ).strip()
+    return details
+
+
+def _outlaw_law_profile_for_polity(polity: object) -> tuple[OutlawLawProfile, dict[str, Any]]:
+    notes = getattr(polity, "notes", None) or {}
+    profile_key = None
+    if isinstance(notes, dict):
+        profile_key = _known_law_profile_key(
+            notes.get("outlaw_law_profile")
+            or notes.get("law_code_profile")
+            or notes.get("law_profile")
+        )
+    source = "polity_note"
+    if profile_key is None:
+        polity_type_id = _normalized_law_profile_key(getattr(polity, "polity_type_id", ""))
+        profile_key = OUTLAW_POLITY_TYPE_LAW_PROFILES.get(polity_type_id, "customary")
+        source = "polity_type"
+    profile = OUTLAW_LAW_PROFILES.get(profile_key, _DEFAULT_OUTLAW_LAW_PROFILE)
+    return profile, _outlaw_law_details(profile, source=source, polity=polity)
+
+
+def _outlaw_law_context(
+    ctx: "SimulationContext",
+    *,
+    settlement_id: str | None,
+    region_id: str | None,
+) -> tuple[OutlawLawProfile, dict[str, Any]]:
+    default_details = _outlaw_law_details(_DEFAULT_OUTLAW_LAW_PROFILE, source="default")
+    try:
+        from library.polity import (
+            polities_in_region,
+            polity_for_region,
+            polity_for_settlement,
+        )
+    except ImportError:
+        return _DEFAULT_OUTLAW_LAW_PROFILE, default_details
+
+    polity = None
+    source_scope = "default"
+    sid = str(settlement_id or "").strip()
+    rid = str(region_id or "").strip()
+    if sid:
+        polity = polity_for_settlement(ctx, sid)
+        if polity is not None:
+            source_scope = "settlement_polity"
+    if polity is None and rid:
+        polity = polity_for_region(ctx, rid)
+        if polity is not None:
+            source_scope = "region_polity"
+    if polity is None and rid:
+        candidates = polities_in_region(ctx, rid)
+        if candidates:
+            polity = sorted(
+                candidates,
+                key=lambda p: (
+                    str(getattr(p, "polity_type_id", "") or ""),
+                    int(getattr(p, "polity_id", 0) or 0),
+                ),
+            )[0]
+            source_scope = "region_member_polity"
+    if polity is None:
+        return _DEFAULT_OUTLAW_LAW_PROFILE, default_details
+    profile, details = _outlaw_law_profile_for_polity(polity)
+    details["law_profile_source"] = f"{source_scope}:{details['law_profile_source']}"
+    return profile, details
+
+
 def _buyoff_power(ctx: "SimulationContext", rec: "SimulationPersonRecord", offense_type: str) -> float:
     prosperity = clamp01(float(rec.person.household_prosperity or 0.0) / 4.0)
     standing = clamp01(float(rec.person.social_standing_01 or 0.0))
@@ -301,12 +504,21 @@ def _outlaw_case_key(
 
 
 def _forget_year(
-    *, year: int, offense_type: str, severity: float, knownness: float, buyoff_power: float
+    *,
+    year: int,
+    offense_type: str,
+    severity: float,
+    knownness: float,
+    buyoff_power: float,
+    law_profile: OutlawLawProfile | None = None,
 ) -> int:
     base = 4 + int(round(severity * 16.0 + knownness * 8.0 - buyoff_power * 5.0))
     if str(offense_type or "").strip() == "murder":
         base += 8
-    return int(year) + max(3, base)
+    duration = max(3, base)
+    if law_profile is not None:
+        duration = max(3, int(round(duration * law_profile.forget_year_multiplier)))
+    return int(year) + duration
 
 
 def _case_event_payload(case: SimulationOutlawCase, *, event_type: str, resolution: str | None = None) -> dict[str, Any]:
@@ -325,14 +537,340 @@ def _case_event_payload(case: SimulationOutlawCase, *, event_type: str, resoluti
         "settlement_id": case.settlement_id,
         "region_id": case.region_id,
         "refuge_id": case.refuge_id,
+        "custody_id": case.custody_id,
     }
     if case.victim_person_id is not None:
         payload["victim_person_id"] = int(case.victim_person_id)
     if case.target_person_id is not None:
         payload["target_person_id"] = int(case.target_person_id)
+    for key in (
+        "law_profile",
+        "law_profile_label",
+        "law_profile_source",
+        "law_polity_id",
+        "law_polity_type_id",
+    ):
+        value = (case.details or {}).get(key)
+        if value is not None:
+            payload[key] = value
     if resolution:
         payload["resolution"] = resolution
     return payload
+
+
+def _custody_id_for_case(case: SimulationOutlawCase) -> str:
+    return f"outlaw_custody:{case.case_key}"
+
+
+def _custody_duration_years(case: SimulationOutlawCase) -> int:
+    duration = 2 + int(round(float(case.severity_01) * 8.0 + float(case.knownness_01) * 4.0))
+    if str(case.offense_type or "").strip() == "murder":
+        duration += 6
+    duration = int(
+        round(duration * _outlaw_law_profile_from_case(case).punishment_duration_multiplier)
+    )
+    return max(1, min(30, duration))
+
+
+def _open_outlaw_custody(
+    ctx: "SimulationContext",
+    case: SimulationOutlawCase,
+    rec: "SimulationPersonRecord",
+    *,
+    year: int,
+    site_settlement_id: str | None,
+) -> SimulationOutlawCustody:
+    custody_id = str(case.custody_id or _custody_id_for_case(case)).strip()
+    region_id = (
+        case.region_id
+        or getattr(rec.person, "birthplace_region_id", None)
+        or ""
+    )
+    expected_release_year = int(year) + _custody_duration_years(case)
+    existing = (getattr(ctx, "outlaw_custodies", {}) or {}).get(custody_id)
+    details = {
+        "resolution": "captured",
+        "offense_type": case.offense_type,
+        "offense_kind": case.offense_kind,
+        "refuge_id": case.refuge_id,
+    }
+    for key in (
+        "law_profile",
+        "law_profile_label",
+        "law_profile_source",
+        "law_polity_id",
+        "law_polity_type_id",
+    ):
+        value = (case.details or {}).get(key)
+        if value is not None:
+            details[key] = value
+    if existing is not None:
+        details = {**existing.details, **details}
+    custody = SimulationOutlawCustody(
+        custody_id=custody_id,
+        case_key=case.case_key,
+        person_id=int(case.accused_person_id),
+        custody_type="imprisonment",
+        status="active",
+        site_settlement_id=site_settlement_id,
+        region_id=str(region_id or "").strip() or None,
+        start_year=existing.start_year if existing is not None else int(year),
+        expected_release_year=(
+            existing.expected_release_year
+            if existing is not None and existing.expected_release_year is not None
+            else expected_release_year
+        ),
+        release_year=None,
+        severity_01=clamp01(float(case.severity_01 or 0.0)),
+        details=details,
+    )
+    ctx.outlaw_custodies[custody.custody_id] = custody
+    return custody
+
+
+def _custody_event_payload(custody: SimulationOutlawCustody | None) -> dict[str, Any]:
+    if custody is None:
+        return {}
+    return {
+        "custody_id": custody.custody_id,
+        "custody_type": custody.custody_type,
+        "custody_status": custody.status,
+        "custody_site_settlement_id": custody.site_settlement_id,
+        "custody_region_id": custody.region_id,
+        "custody_start_year": custody.start_year,
+        "custody_expected_release_year": custody.expected_release_year,
+        "custody_release_year": custody.release_year,
+    }
+
+
+def _passive_person_settlement_id(person: object) -> str:
+    return str(
+        getattr(person, "current_settlement_id", None)
+        or getattr(person, "birthplace_settlement_id", None)
+        or ""
+    ).strip()
+
+
+def _passive_person_region_id(person: object) -> str:
+    region_id = str(getattr(person, "birthplace_region_id", None) or "").strip()
+    if region_id:
+        return region_id
+    settlement_id = _passive_person_settlement_id(person)
+    if ":" in settlement_id:
+        return settlement_id.split(":", 1)[0].strip()
+    return ""
+
+
+def _passive_person_matches_outlaw_scope(
+    person: object,
+    *,
+    year: int,
+    settlement_id: str,
+    region_id: str,
+) -> bool:
+    deathyear = getattr(person, "deathyear", None)
+    if deathyear is not None and int(deathyear) <= int(year):
+        return False
+    if settlement_id and _passive_person_settlement_id(person) != settlement_id:
+        return False
+    if region_id and _passive_person_region_id(person) != region_id:
+        return False
+    return True
+
+
+def _law_adjusted_property_severity(
+    ctx: "SimulationContext",
+    *,
+    severity_01: float,
+    settlement_id: str | None,
+    region_id: str | None,
+) -> float:
+    law_profile, _ = _outlaw_law_context(
+        ctx,
+        settlement_id=settlement_id,
+        region_id=region_id,
+    )
+    return clamp01(clamp01(severity_01) * law_profile.severity_multiplier)
+
+
+def promote_passive_outlaw_accused(
+    ctx: "SimulationContext",
+    *,
+    year: int,
+    passive_person_id: int | None = None,
+    settlement_id: str | None = None,
+    region_id: str | None = None,
+    source: dict[str, Any] | None = None,
+    min_age: int = 16,
+) -> "SimulationPersonRecord" | None:
+    """Materialize a passive/cohort person so they can enter an outlaw case."""
+
+    source_payload = {
+        **(source or {}),
+        "outlaw_role": "accused",
+    }
+    sid = str(settlement_id or "").strip()
+    rid = str(region_id or "").strip()
+    if passive_person_id is not None:
+        try:
+            pid = int(passive_person_id)
+        except (TypeError, ValueError):
+            return None
+        existing = getattr(ctx, "id_to_record", {}).get(pid)
+        if existing is not None:
+            if int(existing.person_id) not in getattr(ctx, "current_people_ids", set()):
+                return None
+            existing_sid, existing_rid = _person_residence(ctx, existing)
+            if sid and existing_sid != sid:
+                return None
+            if rid and existing_rid != rid:
+                return None
+            return existing
+        prec = getattr(ctx, "passive_people", {}).get(pid)
+        if prec is None:
+            return None
+        if not _passive_person_matches_outlaw_scope(
+            prec.person,
+            year=int(year),
+            settlement_id=sid,
+            region_id=rid,
+        ):
+            return None
+        return ctx.promote_passive_person(
+            pid,
+            year=int(year),
+            reason=PASSIVE_OUTLAW_PROMOTION_REASON,
+            source={
+                **source_payload,
+                "selector": "passive_person_id",
+                "requested_person_id": pid,
+                "requested_settlement_id": sid or None,
+                "requested_region_id": rid or None,
+            },
+        )
+
+    if not sid and not rid:
+        return None
+    from library.passive_population import (
+        promote_passive_candidate_for_office,
+        promote_passive_candidate_for_settlement_context,
+    )
+
+    if sid:
+        return promote_passive_candidate_for_settlement_context(
+            ctx,
+            year=int(year),
+            settlement_id=sid,
+            min_age=int(min_age),
+            reason=PASSIVE_OUTLAW_PROMOTION_REASON,
+            source={
+                **source_payload,
+                "selector": "settlement_cohort",
+                "requested_settlement_id": sid,
+                "requested_region_id": rid or None,
+            },
+        )
+    return promote_passive_candidate_for_office(
+        ctx,
+        year=int(year),
+        region_id=rid,
+        min_age=int(min_age),
+        reason=PASSIVE_OUTLAW_PROMOTION_REASON,
+        source={
+            **source_payload,
+            "selector": "region_cohort",
+            "requested_region_id": rid,
+        },
+    )
+
+
+def open_outlaw_case_from_passive(
+    ctx: "SimulationContext",
+    *,
+    year: int,
+    offense_type: str,
+    offense_kind: str,
+    severity_01: float,
+    knownness_01: float,
+    source_event_key: str,
+    passive_person_id: int | None = None,
+    settlement_id: str | None = None,
+    region_id: str | None = None,
+    victim_person_id: int | None = None,
+    target_person_id: int | None = None,
+    details: dict[str, Any] | None = None,
+    min_age: int = 16,
+) -> SimulationOutlawCase | None:
+    """Promote a passive/cohort accused person, then open a normal outlaw case."""
+
+    if str(offense_type or "").strip() == "property_crime":
+        threshold_sid = str(settlement_id or "").strip()
+        threshold_rid = str(region_id or "").strip()
+        if passive_person_id is not None:
+            try:
+                pid = int(passive_person_id)
+            except (TypeError, ValueError):
+                pid = 0
+            existing = getattr(ctx, "id_to_record", {}).get(pid)
+            if existing is not None:
+                existing_sid, existing_rid = _person_residence(ctx, existing)
+                threshold_sid = threshold_sid or str(existing_sid or "")
+                threshold_rid = threshold_rid or str(existing_rid or "")
+            else:
+                prec = getattr(ctx, "passive_people", {}).get(pid)
+                if prec is not None:
+                    threshold_sid = threshold_sid or _passive_person_settlement_id(prec.person)
+                    threshold_rid = threshold_rid or _passive_person_region_id(prec.person)
+        adjusted_severity = _law_adjusted_property_severity(
+            ctx,
+            severity_01=severity_01,
+            settlement_id=threshold_sid or None,
+            region_id=threshold_rid or None,
+        )
+        if adjusted_severity < PROPERTY_OUTLAW_MIN_SEVERITY:
+            return None
+    source = {
+        "outlaw_case_source_event_key": str(source_event_key or "").strip(),
+        "offense_type": str(offense_type or "").strip(),
+        "offense_kind": str(offense_kind or "").strip(),
+    }
+    accused = promote_passive_outlaw_accused(
+        ctx,
+        year=int(year),
+        passive_person_id=passive_person_id,
+        settlement_id=settlement_id,
+        region_id=region_id,
+        source=source,
+        min_age=int(min_age),
+    )
+    if accused is None:
+        return None
+    selector = (
+        "passive_person_id"
+        if passive_person_id is not None
+        else "settlement_cohort"
+        if str(settlement_id or "").strip()
+        else "region_cohort"
+    )
+    return open_outlaw_case(
+        ctx,
+        year=int(year),
+        accused=accused,
+        offense_type=offense_type,
+        offense_kind=offense_kind,
+        severity_01=severity_01,
+        knownness_01=knownness_01,
+        source_event_key=source_event_key,
+        victim_person_id=victim_person_id,
+        target_person_id=target_person_id,
+        details={
+            **(details or {}),
+            "source_role": "passive_outlaw_case",
+            "promoted_from_passive": True,
+            "passive_promotion_reason": PASSIVE_OUTLAW_PROMOTION_REASON,
+            "passive_selector": selector,
+        },
+    )
 
 
 def open_outlaw_case(
@@ -351,14 +889,49 @@ def open_outlaw_case(
 ) -> SimulationOutlawCase | None:
     """Open or strengthen a wanted case for a detailed offender."""
 
-    severity = clamp01(severity_01)
+    base_severity = clamp01(severity_01)
     knownness = clamp01(knownness_01)
-    if str(offense_type or "").strip() == "property_crime" and severity < PROPERTY_OUTLAW_MIN_SEVERITY:
-        return None
     sid, rid = _person_residence(ctx, accused)
+    law_profile, law_details = _outlaw_law_context(ctx, settlement_id=sid, region_id=rid)
+    severity = clamp01(base_severity * law_profile.severity_multiplier)
+    if (
+        str(offense_type or "").strip() == "property_crime"
+        and severity < PROPERTY_OUTLAW_MIN_SEVERITY
+    ):
+        return None
     buyoff = _buyoff_power(ctx, accused, offense_type)
-    buyoff_relief = buyoff * (0.28 if offense_type == "murder" else 0.55)
-    pressure = clamp01(0.14 + severity * 0.58 + knownness * 0.32 - buyoff_relief)
+    base_buyoff_relief = buyoff * (0.28 if offense_type == "murder" else 0.55)
+    buyoff_relief = base_buyoff_relief * law_profile.buyoff_relief_multiplier
+    base_pressure = clamp01(0.14 + base_severity * 0.58 + knownness * 0.32 - base_buyoff_relief)
+    pressure = clamp01(
+        0.14
+        + severity * 0.58
+        + knownness * 0.32
+        - buyoff_relief
+        + law_profile.pursuit_pressure_add
+    )
+    expected_forget_year = _forget_year(
+        year=int(year),
+        offense_type=offense_type,
+        severity=severity,
+        knownness=knownness,
+        buyoff_power=buyoff,
+        law_profile=law_profile,
+    )
+    case_details = {
+        **(details or {}),
+        **law_details,
+        "base_severity_01": round(base_severity, 5),
+        "base_pursuit_pressure_01": round(base_pressure, 5),
+        "base_expected_forget_year": _forget_year(
+            year=int(year),
+            offense_type=offense_type,
+            severity=base_severity,
+            knownness=knownness,
+            buyoff_power=buyoff,
+            law_profile=_DEFAULT_OUTLAW_LAW_PROFILE,
+        ),
+    }
     case_key = _outlaw_case_key(
         offense_type=offense_type,
         accused_person_id=int(accused.person_id),
@@ -373,8 +946,12 @@ def open_outlaw_case(
             knownness_01=max(existing.knownness_01, knownness),
             pursuit_pressure_01=max(existing.pursuit_pressure_01, pressure),
             buyoff_power_01=max(existing.buyoff_power_01, buyoff),
+            expected_forget_year=max(
+                existing.expected_forget_year or expected_forget_year,
+                expected_forget_year,
+            ),
             last_seen_year=int(year),
-            details={**existing.details, **(details or {})},
+            details={**existing.details, **case_details},
         )
         ctx.outlaw_cases[case_key] = case
         return case
@@ -394,16 +971,10 @@ def open_outlaw_case(
         buyoff_power_01=buyoff,
         start_year=int(year),
         last_seen_year=int(year),
-        expected_forget_year=_forget_year(
-            year=int(year),
-            offense_type=offense_type,
-            severity=severity,
-            knownness=knownness,
-            buyoff_power=buyoff,
-        ),
+        expected_forget_year=expected_forget_year,
         region_id=rid,
         settlement_id=sid,
-        details=dict(details or {}),
+        details=case_details,
     )
     ctx.outlaw_cases[case_key] = case
     accused.person = replace(
@@ -683,32 +1254,55 @@ def resolve_outlaw_case(
         return None
     rec = ctx.id_to_record.get(int(case.accused_person_id))
     old_refuge_id = case.refuge_id
+    custody: SimulationOutlawCustody | None = None
     case = replace(
         case,
         status="resolved",
         resolved_year=int(year),
         resolution=str(resolution or "").strip() or "resolved",
     )
-    ctx.outlaw_cases[case.case_key] = case
     if rec is not None and int(rec.person_id) in ctx.current_people_ids:
         if resolution in {"captured", "punished"}:
             sid = _return_settlement(ctx, case, rec)
+            custody = _open_outlaw_custody(
+                ctx,
+                case,
+                rec,
+                year=int(year),
+                site_settlement_id=sid,
+            )
+            case = replace(
+                case,
+                custody_id=custody.custody_id,
+                details={
+                    **(case.details or {}),
+                    "custody_id": custody.custody_id,
+                    "custody_type": custody.custody_type,
+                    "custody_expected_release_year": custody.expected_release_year,
+                },
+            )
             rec.person = replace(
                 rec.person,
                 current_settlement_id=sid,
-                outlaw_status=OUTLAW_STATUS_PUNISHED,
+                outlaw_status=OUTLAW_STATUS_IMPRISONED,
                 outlaw_case_key=case.case_key,
                 outlaw_refuge_id=None,
-                housing_status="street",
-                household_role="punished_returnee",
-                employment_status="unemployed",
+                outlaw_custody_id=custody.custody_id,
+                outlaw_custody_status=custody.status,
+                outlaw_custody_start_year=custody.start_year,
+                outlaw_custody_expected_release_year=custody.expected_release_year,
+                outlaw_custody_release_year=custody.release_year,
+                outlaw_custody_site_settlement_id=custody.site_settlement_id,
+                housing_status="custody",
+                household_role="prisoner",
+                employment_status="imprisoned",
                 job=None,
                 job_assigned_year=None,
                 job_era=None,
                 job_tier=None,
                 last_job=rec.person.last_job or rec.person.job,
                 job_lost_year=int(year) if rec.person.job else rec.person.job_lost_year,
-                job_market_type="none",
+                job_market_type="custody",
                 host_person_id=None,
                 employer_person_id=None,
             )
@@ -720,6 +1314,12 @@ def resolve_outlaw_case(
                 outlaw_status=OUTLAW_STATUS_RETURNED,
                 outlaw_case_key=case.case_key,
                 outlaw_refuge_id=None,
+                outlaw_custody_id=None,
+                outlaw_custody_status=None,
+                outlaw_custody_start_year=None,
+                outlaw_custody_expected_release_year=None,
+                outlaw_custody_release_year=None,
+                outlaw_custody_site_settlement_id=None,
                 housing_status="own_household" if sid else None,
                 household_role="returned_adult",
                 employment_status="unemployed",
@@ -739,7 +1339,14 @@ def resolve_outlaw_case(
                 outlaw_status=OUTLAW_STATUS_CLEARED,
                 outlaw_case_key=case.case_key,
                 outlaw_refuge_id=None,
+                outlaw_custody_id=None,
+                outlaw_custody_status=None,
+                outlaw_custody_start_year=None,
+                outlaw_custody_expected_release_year=None,
+                outlaw_custody_release_year=None,
+                outlaw_custody_site_settlement_id=None,
             )
+    ctx.outlaw_cases[case.case_key] = case
     _mark_refuge_if_empty(ctx, old_refuge_id, int(year))
     ctx.invalidate_alive_census_cache()
     ctx.invalidate_annual_indexes()
@@ -756,6 +1363,7 @@ def resolve_outlaw_case(
         {
             "year": int(year),
             **_case_event_payload(case, event_type=event_type, resolution=resolution),
+            **_custody_event_payload(custody),
         },
     )
     return case
@@ -792,10 +1400,17 @@ def kill_outlaw(
 def _maybe_buy_off(ctx: "SimulationContext", case: SimulationOutlawCase, year: int, rng: random.Random) -> bool:
     if case.offense_type == "murder" and case.severity_01 >= 0.82 and case.knownness_01 >= 0.48:
         return False
-    threshold = 0.56 if case.offense_type == "murder" else 0.32
+    law_profile = _outlaw_law_profile_from_case(case)
+    threshold = (
+        (0.56 if case.offense_type == "murder" else 0.32)
+        * law_profile.buyoff_threshold_multiplier
+    )
     if case.buyoff_power_01 < threshold:
         return False
-    chance = clamp01(case.buyoff_power_01 * 0.45 - case.severity_01 * 0.16)
+    chance = clamp01(
+        (case.buyoff_power_01 * 0.45 - case.severity_01 * 0.16)
+        * law_profile.buyoff_chance_multiplier
+    )
     if rng.random() >= chance:
         return False
     resolve_outlaw_case(ctx, case.case_key, year=int(year), resolution="bought_off")
@@ -819,12 +1434,28 @@ def _record_raid(ctx: "SimulationContext", case: SimulationOutlawCase, refuge: S
 
 
 def _pursuit_outcome(
-    case: SimulationOutlawCase, refuge: SimulationOutlawRefuge, traits: dict[str, float], rng: random.Random
+    case: SimulationOutlawCase,
+    refuge: SimulationOutlawRefuge,
+    traits: dict[str, float],
+    rng: random.Random,
+    law_profile: OutlawLawProfile | None = None,
 ) -> str:
+    profile = law_profile or _outlaw_law_profile_from_case(case)
     courage = clamp01((float(traits.get("courage", 0.0)) + 100.0) / 200.0)
     discipline = clamp01((float(traits.get("discipline", 0.0)) + 100.0) / 200.0)
-    capture = clamp01(0.28 + case.pursuit_pressure_01 * 0.42 - refuge.concealment_01 * 0.18)
-    death = clamp01(0.08 + case.severity_01 * 0.20 + courage * 0.10 - discipline * 0.06)
+    capture = clamp01(
+        0.28
+        + case.pursuit_pressure_01 * 0.42
+        - refuge.concealment_01 * 0.18
+        + profile.capture_chance_add
+    )
+    death = clamp01(
+        0.08
+        + case.severity_01 * 0.20
+        + courage * 0.10
+        - discipline * 0.06
+        + profile.death_chance_add
+    )
     roll = rng.random()
     if roll < death:
         return "killed"
@@ -856,17 +1487,28 @@ def simulation_outlaws_annual_tick(ctx: "SimulationContext", year: int) -> None:
             + int(case.accused_person_id) * 131
             + int(getattr(ctx, "placename_rng_salt", 0))
         )
+        law_profile = _outlaw_law_profile_from_case(case)
         current_status = str(rec.person.outlaw_status or "").strip().lower()
         if current_status != OUTLAW_STATUS_FUGITIVE:
             if _maybe_buy_off(ctx, case, int(year), rng):
                 continue
-            flee_chance = clamp01(0.18 + case.pursuit_pressure_01 * 0.62 - case.buyoff_power_01 * 0.22)
+            flee_chance = clamp01(
+                0.18
+                + case.pursuit_pressure_01 * 0.62
+                - case.buyoff_power_01 * 0.22
+                + law_profile.flee_chance_add
+            )
             if rng.random() < flee_chance:
                 flee_to_refuge(ctx, case.case_key, year=int(year))
             continue
 
         if case.expected_forget_year is not None and int(year) >= int(case.expected_forget_year):
-            return_chance = clamp01(0.28 + case.buyoff_power_01 * 0.20 + (1.0 - case.knownness_01) * 0.24)
+            return_chance = clamp01(
+                0.28
+                + case.buyoff_power_01 * 0.20
+                + (1.0 - case.knownness_01) * 0.24
+                + law_profile.return_chance_add
+            )
             if rng.random() < return_chance:
                 resolve_outlaw_case(ctx, case.case_key, year=int(year), resolution="forgotten")
                 continue
@@ -890,10 +1532,15 @@ def simulation_outlaws_annual_tick(ctx: "SimulationContext", year: int) -> None:
             + case.pursuit_pressure_01 * 0.23
             + max(0, refuge.band_size - 1) * 0.035
             - refuge.concealment_01 * 0.12
+            + law_profile.discovery_chance_add
         )
         if rng.random() >= discovery_chance:
             continue
-        refuge = replace(refuge, discovered_year=refuge.discovered_year or int(year), last_activity_year=int(year))
+        refuge = replace(
+            refuge,
+            discovered_year=refuge.discovered_year or int(year),
+            last_activity_year=int(year),
+        )
         ctx.outlaw_refuges[refuge.refuge_id] = refuge
         ctx._record_simulation_event(
             int(year),
@@ -907,7 +1554,13 @@ def simulation_outlaws_annual_tick(ctx: "SimulationContext", year: int) -> None:
                 "discovery_chance_01": round(discovery_chance, 5),
             },
         )
-        outcome = _pursuit_outcome(case, refuge, work_trait_values(rec.person), rng)
+        outcome = _pursuit_outcome(
+            case,
+            refuge,
+            work_trait_values(rec.person),
+            rng,
+            law_profile,
+        )
         if outcome == "killed":
             kill_outlaw(ctx, case.case_key, year=int(year))
         elif outcome == "captured":

@@ -166,6 +166,126 @@
   - `python -m unittest
     unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_outlaw_refuges_and_selection_detail`.
 
+## Outlawry Follow-Up: Prison Systems
+
+- Closed the durable custody/imprisonment TODO for captured or punished outlaws:
+  - `SimulationOutlawCustody` now records case, person, status, custody site,
+    start year, expected release year, release year, severity, and details;
+  - captured/punished resolutions create custody rows, mark the person
+    `imprisoned`, clear normal work, and move labor/housing state to custody;
+  - returned/forgotten/bought-off paths clear person custody fields so custody
+    remains distinct from fugitive, returned, forgotten, bought-off, and killed
+    outcomes.
+- Save and readable surfaces now persist and reload custody state:
+  - save schema v22 adds `simulation_outlaw_custodies`, `custody_id` on outlaw
+    cases, additive person custody checkpoint columns, and readable custody
+    columns/views;
+  - checkpoint load restores active/recent custody rows into
+    `ctx.outlaw_custodies` alongside cases and refuges;
+  - event-history reports include outlaw custody count and severity metrics.
+- Browser/person surfaces now show custody without leaking raw ids:
+  - Gradio person sheets/share text show current Outlaw Custody;
+  - outlaw case tables/details include custody status/site/expected release;
+  - `outlaw_captured` event prose says captured into custody and includes the
+    expected release year when available.
+- Added focused regression coverage in:
+  - `unit_test.test_simulation_outlaws` for capture labor state and custody
+    save/load/readable-view round-trip;
+  - `unit_test.test_gradio_data_browser` for custody in person sheet/share text,
+    case details, and event prose.
+- Verified on the lower-powered PC with:
+  - `python -m py_compile library\simulation_outlaws.py library\person.py
+    library\simulation_context.py library\world_save.py
+    library\event_history_report.py utils\gradio_data_browser.py
+    unit_test\test_simulation_outlaws.py unit_test\test_gradio_data_browser.py`;
+  - `python -m unittest -v
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_captured_outlaw_custody_checkpoint_roundtrip_and_readable_views`;
+  - `python -m unittest -v
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_capture_death_and_forgotten_return_resolve_cases`;
+  - `python -m unittest -v
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_outlaws_do_not_keep_or_receive_normal_jobs`;
+  - `python -m unittest -v
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_outlaw_custody_surfaces_in_person_views`;
+  - `python -m unittest -v
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_outlawry_uses_refuge_display_names`;
+  - `python -m unittest -v
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_outlaw_browser_loads_cases_refuges_and_person_selection`;
+  - `python utils\util_load_config.py --world default`;
+  - `python -m unittest -v unit_test.test_event_catalog
+    unit_test.test_event_ontology`;
+  - `python -m unittest -v unit_test.test_event_history_report`;
+  - `git diff --check`.
+- The full `unit_test.test_simulation_outlaws` module was attempted first on
+  this laptop and exceeded the 3-minute timeout before output; the touched
+  behaviors passed when run as focused tests.
+
+## Outlawry Follow-Up: Passive-Person Promotion
+
+- Closed the passive/cohort outlaw-entry TODO:
+  - `library.simulation_outlaws.open_outlaw_case_from_passive(...)` now
+    promotes an existing passive person or a latest-cohort adult before opening
+    a normal outlaw case;
+  - `promote_passive_outlaw_accused(...)` records promotion reason
+    `outlaw_case_accused`, selector/provenance source metadata, and reuses the
+    existing passive-promotion event/backfill/log machinery;
+  - promoted accused people receive normal wanted-case state and can continue
+    through existing refuge flight, capture, custody, and event flows.
+- Added module-map guidance for the new outlaw helper.
+- Added focused regression coverage in `unit_test.test_simulation_outlaws`:
+  - explicit passive-person promotion preserves name/family backfill provenance,
+    opens an outlaw case, flees to refuge, and can be captured into custody;
+  - aggregate passive-cohort promotion decrements the cohort, records source
+    cohort metadata, opens an outlaw case, and can flee to refuge.
+- Verified on the lower-powered PC with:
+  - `python -m py_compile library\simulation_outlaws.py
+    unit_test\test_simulation_outlaws.py`;
+  - `python -m unittest -v
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_passive_person_can_be_promoted_into_outlaw_case_and_flow`;
+  - `python -m unittest -v
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_passive_cohort_can_be_promoted_into_outlaw_case`;
+  - `git diff --check`.
+
+## Outlawry Follow-Up: Law-Code Variation By Polity
+
+- Closed the polity/legal-profile outlaw handling TODO:
+  - `OutlawLawProfile` now defines customary, strict-justice, and
+    lenient-compromise law postures for outlaw handling;
+  - settlement, region, or regional-member polities can supply
+    `notes["outlaw_law_profile"]`, `notes["law_code_profile"]`, or
+    `notes["law_profile"]`; otherwise broad polity type falls back to a default
+    law profile;
+  - case details and event payloads now carry law profile/source/polity context
+    for readable analysis.
+- Law profiles now affect the actual outlaw flow:
+  - case severity, pursuit pressure, and expected forgetting horizon at case
+    creation;
+  - buy-off threshold and buy-off chance;
+  - fugitive flee, discovery, capture, death, and return chances in the annual
+    outlaw tick;
+  - custody/imprisonment duration for captured or punished outlaws;
+  - passive/cohort property-crime entry thresholds, so the early promotion gate
+    matches the local legal severity profile.
+- Added focused deterministic coverage in `unit_test.test_simulation_outlaws`:
+  - strict versus lenient settlement polities produce distinct severity,
+    pursuit pressure, and expected forget years for the same property crime;
+  - strict law blocks a borderline buy-off that lenient law permits, and strict
+    custody runs longer than lenient custody for the same base offense.
+- Verified on the lower-powered PC with:
+  - `python -m py_compile library\simulation_outlaws.py
+    unit_test\test_simulation_outlaws.py`;
+  - `python -m unittest
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_polity_law_profiles_change_case_tuning
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_polity_law_profiles_change_buyoff_and_punishment`;
+  - `python -m unittest
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_polity_law_profiles_change_case_tuning
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_polity_law_profiles_change_buyoff_and_punishment
+    unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_buyoff_has_hard_limit_for_severe_public_murder`;
+  - `git diff --check` (passed with existing LF-to-CRLF working-copy
+    warnings).
+- The full `unit_test.test_simulation_outlaws` module was attempted first on
+  this laptop and exceeded the 2-minute timeout before output; the touched
+  behaviors passed when run as focused tests.
+
 ## Placename Length And Visible `-by` Tuning
 
 - Added settlement display-length budgeting in `library.placenames_generation`:
