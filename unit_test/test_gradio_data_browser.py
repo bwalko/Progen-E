@@ -3762,6 +3762,68 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertNotIn('class="road road-line"', hidden)
         self.assertNotIn("data-road-usage", hidden)
 
+    def test_world_map_html_renders_outlaw_refuges_and_selection_detail(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            cfg = root / "config.sqlite"
+            cfg.touch()
+            save = root / "save.sqlite"
+            con = _memory_outlaw_place_save()
+            con.commit()
+            with closing(sqlite3.connect(save)) as out:
+                con.backup(out)
+            con.close()
+            geometry = WorldMapGeometry(
+                world="test",
+                version="unit",
+                width=1.0,
+                height=1.0,
+                cells=[
+                    RegionCell(
+                        region_id="r1",
+                        continent_id="test",
+                        center_x=0.5,
+                        center_y=0.5,
+                        polygon=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                        elevation=0.0,
+                        moisture=0.0,
+                        ruggedness=0.0,
+                        terrain_family="plains",
+                        is_coastal=False,
+                        feature_ids=[],
+                    )
+                ],
+                micro_cells=[],
+                features=[],
+                edges=[],
+                rivers=[],
+            )
+
+            original_db_path = gdb._db_path
+            original_geometry_cache = gdb._cached_world_map_geometry
+            gdb._db_path = lambda world, db_kind: cfg if db_kind == "Config DB" else save
+            gdb._cached_world_map_geometry = lambda *args, **kwargs: geometry
+            gdb._render_world_map_html_cached.cache_clear()
+            try:
+                shown = render_world_map_html("test", include_overlays=True, include_roads=False)
+                detail = render_world_map_selection_detail(
+                    "test",
+                    json.dumps({"view": "Outlaw Refuges", "id": "outlaw_refuge:r1:1"}),
+                )
+            finally:
+                gdb._db_path = original_db_path
+                gdb._cached_world_map_geometry = original_geometry_cache
+                gdb._render_world_map_html_cached.cache_clear()
+
+        self.assertIn('class="outlaw-refuge active"', shown)
+        self.assertIn('data-outlaw-refuge-id="outlaw_refuge:r1:1"', shown)
+        self.assertIn('data-outlaw-refuge-name="The Blackthorn Crag"', shown)
+        self.assertIn("Outlaw Refuges", shown)
+        self.assertIn("outlaw refuge", shown)
+        self.assertIn("The Blackthorn Crag", detail)
+        self.assertIn("Fordham", detail)
+        self.assertNotIn("outlaw_refuge:r1:1</h2>", detail)
+
     def test_world_map_route_selection_detail_identifies_route_layer(self) -> None:
         road_html = render_world_map_selection_detail(
             "test",

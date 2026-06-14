@@ -138,6 +138,34 @@
   - `python -m unittest unit_test.test_save_checkpoint`;
   - `python utils/util_load_config.py --world default`.
 
+## Outlawry Follow-Up: Richer Refuge Maps
+
+- Closed the map/debug/browser visibility TODO for named outlaw refuges:
+  - `library.world_map_svg` now has `OutlawRefugeMapOverlay` rows loaded from
+    `simulation_outlaw_refuges_readable` when available;
+  - refuge markers are projected near their recorded settlement when possible,
+    with deterministic in-region fallback placement;
+  - generated SVG maps render clickable `outlaw-refuge` markers and labels
+    using display names such as "The Blackthorn Crag" instead of visible raw
+    refuge IDs;
+  - Gradio world-map clicks open the existing outlaw-refuge detail sheet via
+    an `Outlaw Refuges` selection payload;
+  - overlay debug JSON now includes outlaw-refuge counts, rows, display names,
+    nearby settlement IDs/names, map coordinates, and distance-to-near-settlement
+    diagnostics.
+- Added focused regression coverage in:
+  - `unit_test.test_world_map_geometry` for loading/rendering outlaw-refuge
+    overlays and debug-context rows;
+  - `unit_test.test_gradio_data_browser` for world-map refuge markers and
+    selection-detail routing.
+- Verified on the lower-powered PC with:
+  - `python -m py_compile library\world_map_svg.py utils\gradio_data_browser.py
+    unit_test\test_world_map_geometry.py unit_test\test_gradio_data_browser.py`;
+  - `python -m unittest
+    unit_test.test_world_map_geometry.TestWorldMapGeometry.test_world_map_overlays_render_outlaw_refuges_with_debug_context`;
+  - `python -m unittest
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_outlaw_refuges_and_selection_detail`.
+
 ## Placename Length And Visible `-by` Tuning
 
 - Added settlement display-length budgeting in `library.placenames_generation`:

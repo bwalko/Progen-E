@@ -1114,6 +1114,8 @@ def _render_world_map_html_cached(
         overlay_text = "active settlements and polities" if include_overlays else "base geography only"
     if include_overlays and include_roads:
         overlay_text = overlay_text.replace("settlements", "settlements, roads and sea lanes")
+    if include_overlays:
+        overlay_text = overlay_text.replace("polities", "polities and outlaw refuges")
     zoom_sync = world_map_zoom_sync_script("s")
     controls = (
         '<div class="map-controls">'
@@ -1130,7 +1132,7 @@ def _render_world_map_html_cached(
         f'<div class="place-sheet world-map-card" onclick="{_world_map_click_onclick()}">'
         f"<h2>{html.escape(world_id)} World Map</h2>"
         f'<p class="place-muted">Generated polygon geography; showing {html.escape(overlay_text)}. '
-        "Click a region, settlement, or named feature to open its detail sheet. Use the mouse wheel or drag to zoom and pan.</p>"
+        "Click a region, settlement, outlaw refuge, or named feature to open its detail sheet. Use the mouse wheel or drag to zoom and pan.</p>"
         f"{controls}"
         f"{svg}"
         "</div>"
@@ -1145,18 +1147,19 @@ def _world_map_click_onclick() -> str:
             "if(svg&&svg.dataset.dragged==='1'){svg.dataset.dragged='0';return true;}"
             "if(!target||!target.closest){return true;}"
             "const town=target.closest('[data-settlement-id]');"
-            "const feature=town?null:target.closest('[data-feature-id]');"
-            "const route=(town||feature)?null:target.closest('[data-map-layer]');"
-            "const region=town||feature||route?null:target.closest('[data-region-id],[data-region-label]');"
+            "const refuge=town?null:target.closest('[data-outlaw-refuge-id]');"
+            "const feature=(town||refuge)?null:target.closest('[data-feature-id]');"
+            "const route=(town||refuge||feature)?null:target.closest('[data-map-layer]');"
+            "const region=town||refuge||feature||route?null:target.closest('[data-region-id],[data-region-label]');"
             "const routeValue=route?{view:'Map Routes',layer:route.dataset.mapLayer||'',river_id:route.dataset.riverId||'',class_name:route.getAttribute('class')||'',from_settlement_id:route.dataset.roadFromSettlementId||route.dataset.seaRouteFromSettlementId||'',to_settlement_id:route.dataset.roadToSettlementId||route.dataset.seaRouteToSettlementId||'',regions:route.dataset.seaRouteRegions||'',usage:route.dataset.roadUsage||route.dataset.seaRouteUsage||'',actual_usage:route.dataset.roadActual||route.dataset.seaRouteActual||'',implied_usage:route.dataset.roadImplied||route.dataset.seaRouteImplied||''}:null;"
-            "if(!region&&!route){return true;}"
-            "const id=town?town.dataset.settlementId:(feature?feature.dataset.featureId:(route?(routeValue.river_id||((routeValue.from_settlement_id||'?')+'->'+(routeValue.to_settlement_id||'?'))):(region.dataset.regionId||region.dataset.regionLabel)));"
+            "if(!region&&!route&&!refuge){return true;}"
+            "const id=town?town.dataset.settlementId:(refuge?refuge.dataset.outlawRefugeId:(feature?feature.dataset.featureId:(route?(routeValue.river_id||((routeValue.from_settlement_id||'?')+'->'+(routeValue.to_settlement_id||'?'))):(region.dataset.regionId||region.dataset.regionLabel))));"
             "if(!id){return true;}"
             "event.preventDefault();event.stopPropagation();"
             "const input=document.querySelector('#map-open-selection textarea,#map-open-selection input');"
             "const button=document.querySelector('#map-open-button button,#map-open-button');"
             "if(input&&button){"
-            "const value=JSON.stringify(route?Object.assign({id:id},routeValue):(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||'',named:feature.dataset.featureNamed||'0'}:{view:town?'Towns':'Regions',id:id}));"
+            "const value=JSON.stringify(route?Object.assign({id:id},routeValue):(refuge?{view:'Outlaw Refuges',id:id,region_id:refuge.dataset.regionId||'',name:refuge.dataset.outlawRefugeName||'',near_settlement_id:refuge.dataset.nearSettlementId||''}:(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||'',named:feature.dataset.featureNamed||'0'}:{view:town?'Towns':'Regions',id:id})));"
             "const descriptor=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value');"
             "if(descriptor&&descriptor.set){descriptor.set.call(input,value);}else{input.value=value;}"
             "input.dispatchEvent(new Event('input',{bubbles:true}));"
@@ -10605,13 +10608,15 @@ def _map_selection_settlement_label(world: str, settlement_id: object) -> str:
 
 def render_world_map_selection_detail(world: str, selection_json: str) -> str:
     if not selection_json:
-        return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
+        return '<div class="place-sheet muted">Click a region, settlement, outlaw refuge, or named feature on the map to inspect it.</div>'
     try:
         selection = json.loads(selection_json)
     except (TypeError, ValueError, json.JSONDecodeError):
-        return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
+        return '<div class="place-sheet muted">Click a region, settlement, outlaw refuge, or named feature on the map to inspect it.</div>'
     view = str(selection.get("view") or "Regions")
     item_id = str(selection.get("id") or "").strip()
+    if view == "Outlaw Refuges" and item_id:
+        return render_outlaw_refuge_detail(world, item_id)
     if view == "Map Routes" and item_id:
         layer = str(selection.get("layer") or "").strip()
         layer_title = {
@@ -10691,7 +10696,7 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
             '</div>'
         )
     if view not in {"Regions", "Towns"} or not item_id:
-        return '<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>'
+        return '<div class="place-sheet muted">Click a region, settlement, outlaw refuge, or named feature on the map to inspect it.</div>'
     return render_place_detail(world, view, _encode_place_key(world, "", item_id))
 
 
@@ -10712,7 +10717,7 @@ def render_world_map_with_detail_reset(
             include_inactive_settlements=include_inactive_settlements,
             include_roads=include_roads,
         ),
-        '<div class="place-sheet muted">Click a region, settlement, or named feature on the map to inspect it.</div>',
+        '<div class="place-sheet muted">Click a region, settlement, outlaw refuge, or named feature on the map to inspect it.</div>',
     )
 
 

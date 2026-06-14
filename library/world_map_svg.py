@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from library.fontawesome_free_icons import FONT_AWESOME_FREE_SOLID, FontAwesomeIcon
+from library.simulation_outlaws import outlaw_refuge_display_name
 from library.world_map_roads import (
     RoadMapEdge,
     SeaRouteMapEdge,
@@ -68,10 +69,27 @@ class PolityMapOverlay:
 
 
 @dataclass(frozen=True)
+class OutlawRefugeMapOverlay:
+    refuge_id: str
+    region_id: str
+    display_name: str
+    x: float
+    y: float
+    status: str
+    near_settlement_id: str | None = None
+    near_settlement_name: str | None = None
+    active_case_count: int = 0
+    band_size: int = 0
+    concealment_01: float = 0.0
+    support_01: float = 0.0
+
+
+@dataclass(frozen=True)
 class WorldMapOverlays:
     settlements: list[SettlementMapOverlay]
     polities_by_region_id: dict[str, PolityMapOverlay]
     features: list[FeatureMapOverlay] = field(default_factory=list)
+    outlaw_refuges: list[OutlawRefugeMapOverlay] = field(default_factory=list)
     roads: list[RoadMapEdge] = field(default_factory=list)
     sea_routes: list[SeaRouteMapEdge] = field(default_factory=list)
 
@@ -116,12 +134,12 @@ def world_map_zoom_sync_script(svg_var: str, *, map_width: int = 1200) -> str:
         "const pxu=Math.max(rect.width/vb.width,rect.height/vb.height,.001);"
         "const maxIcon=0.02*Math.max(rect.width,rect.height)/pxu;"
         f"{svg_var}.querySelectorAll('.region-label').forEach(e=>e.style.fontSize=(11*m/z)+'px');"
-        f"{svg_var}.querySelectorAll('.feature-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
+        f"{svg_var}.querySelectorAll('.feature-label,.outlaw-refuge-label').forEach(e=>e.style.fontSize=(9*m/z)+'px');"
         f"{svg_var}.querySelectorAll('.settlement-label').forEach(e=>e.style.fontSize=(9.5*m/z)+'px');"
-        f"{svg_var}.querySelectorAll('.feature-label[data-point-x],.settlement-label[data-point-x]').forEach(e=>{{"
+        f"{svg_var}.querySelectorAll('.feature-label[data-point-x],.settlement-label[data-point-x],.outlaw-refuge-label[data-point-x]').forEach(e=>{{"
         "const px=+e.dataset.pointX,py=+e.dataset.pointY,dx=+e.dataset.dx||0,dy=+e.dataset.dy||0;"
         "e.setAttribute('x',px+dx/z);e.setAttribute('y',py+dy/z);});"
-        f"{svg_var}.querySelectorAll('.settlement').forEach(e=>{{"
+        f"{svg_var}.querySelectorAll('.settlement,.outlaw-refuge').forEach(e=>{{"
         "const b=+e.dataset.baseR||4;const maxR=maxIcon/2;"
         "e.setAttribute('r',Math.min(maxR,Math.max(2.4,Math.min(7.0,b*m/z))));});"
         f"{svg_var}.querySelectorAll('.feature').forEach(e=>{{"
@@ -177,6 +195,29 @@ def _stable_seed(*parts: object) -> int:
 
 def _stable_color(value: object) -> str:
     return _POLITY_COLORS[_stable_seed(value) % len(_POLITY_COLORS)]
+
+
+def _sqlite_row_value(row: sqlite3.Row, key: str, default: object = None) -> object:
+    try:
+        if key in row.keys():
+            return row[key]
+    except (AttributeError, IndexError, KeyError):
+        pass
+    return default
+
+
+def _to_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value) if value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value) if value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
 
 
 def _hex_to_rgb(color: str) -> tuple[int, int, int]:
@@ -1678,15 +1719,30 @@ def load_world_map_overlays(
 ) -> WorldMapOverlays:
     """Load optional settlement and polity overlays from ``save.sqlite``."""
     if save_db_path is None:
-        return WorldMapOverlays(settlements=[], polities_by_region_id={}, features=[], roads=[], sea_routes=[])
+        return WorldMapOverlays(
+            settlements=[],
+            polities_by_region_id={},
+            features=[],
+            outlaw_refuges=[],
+            roads=[],
+            sea_routes=[],
+        )
     path = Path(save_db_path)
     if not path.exists():
-        return WorldMapOverlays(settlements=[], polities_by_region_id={}, features=[], roads=[], sea_routes=[])
+        return WorldMapOverlays(
+            settlements=[],
+            polities_by_region_id={},
+            features=[],
+            outlaw_refuges=[],
+            roads=[],
+            sea_routes=[],
+        )
     settlement_limit = max(0, int(max_settlements))
     cells = geometry.cell_by_region_id()
     settlements: list[SettlementMapOverlay] = []
     features_by_id: dict[str, FeatureMapOverlay] = {}
     polities: dict[str, PolityMapOverlay] = {}
+    outlaw_refuges: list[OutlawRefugeMapOverlay] = []
     roads: list[RoadMapEdge] = (
         build_settlement_road_overlays(
             geometry=geometry,
@@ -1811,10 +1867,97 @@ def load_world_map_overlays(
                     polity_type_id=str(row["polity_type_id"] or ""),
                     color=_stable_color(pid),
                 )
+        refuge_source = (
+            "simulation_outlaw_refuges_readable"
+            if "simulation_outlaw_refuges_readable" in relations
+            else "simulation_outlaw_refuges"
+        )
+        if "simulation_outlaw_refuges" in relations and cells:
+            columns = {
+                str(r["name"])
+                for r in conn.execute(f"PRAGMA table_info({refuge_source})").fetchall()
+            }
+            status_clause = ""
+            if "status" in columns and not include_inactive_settlements:
+                status_clause = "WHERE status = 'active'"
+            status_order = "status = 'active' DESC, " if "status" in columns else ""
+            active_case_order = "coalesce(active_case_count, 0) DESC, " if "active_case_count" in columns else ""
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM {refuge_source}
+                {status_clause}
+                ORDER BY {status_order}{active_case_order}refuge_id
+                LIMIT ?
+                """,
+                (max(1, settlement_limit),),
+            ).fetchall()
+            settlements_by_id = {settlement.settlement_id: settlement for settlement in settlements}
+            for row in rows:
+                refuge_id = str(_sqlite_row_value(row, "refuge_id", "") or "").strip()
+                if not refuge_id:
+                    continue
+                region_id = str(
+                    _sqlite_row_value(row, "region_id", "")
+                    or _sqlite_row_value(row, "region_key", "")
+                    or ""
+                ).strip()
+                if region_id not in cells:
+                    continue
+                near_sid = str(
+                    _sqlite_row_value(row, "near_settlement_id", "")
+                    or _sqlite_row_value(row, "settlement_id", "")
+                    or _sqlite_row_value(row, "near_settlement_key", "")
+                    or ""
+                ).strip()
+                near_settlement = settlements_by_id.get(near_sid)
+                near_name = near_settlement.display_name if near_settlement is not None else ""
+                explicit_name = str(_sqlite_row_value(row, "display_name", "") or "").strip()
+                display_name = explicit_name or outlaw_refuge_display_name(
+                    refuge_id,
+                    region_id=region_id,
+                    near_place_label=near_name or near_sid,
+                    year=_sqlite_row_value(row, "founded_year", ""),
+                )
+                if near_settlement is not None:
+                    angle = (_stable_seed(refuge_id, "near-settlement-angle") % 360) * math.pi / 180.0
+                    distance = 0.026 + (_stable_seed(refuge_id, "near-settlement-distance") % 18) / 1000.0
+                    x, y = project_world_point_to_region_footprint(
+                        geometry,
+                        region_id,
+                        (
+                            near_settlement.x + math.cos(angle) * distance,
+                            near_settlement.y + math.sin(angle) * distance,
+                        ),
+                    )
+                else:
+                    rng = random.Random(_stable_seed(geometry.version, refuge_id, "outlaw-refuge-overlay"))
+                    x, y = project_local_point_to_region_footprint(
+                        geometry,
+                        region_id,
+                        (0.26 + rng.random() * 0.48, 0.26 + rng.random() * 0.48),
+                    )
+                outlaw_refuges.append(
+                    OutlawRefugeMapOverlay(
+                        refuge_id=refuge_id,
+                        region_id=region_id,
+                        display_name=display_name,
+                        x=x,
+                        y=y,
+                        status=str(_sqlite_row_value(row, "status", "") or ""),
+                        near_settlement_id=near_sid or None,
+                        near_settlement_name=near_name or None,
+                        active_case_count=max(0, _to_int(_sqlite_row_value(row, "active_case_count", 0))),
+                        band_size=max(0, _to_int(_sqlite_row_value(row, "band_size", 0))),
+                        concealment_01=max(0.0, min(1.0, _to_float(_sqlite_row_value(row, "concealment_01", 0.0)))),
+                        support_01=max(0.0, min(1.0, _to_float(_sqlite_row_value(row, "support_01", 0.0)))),
+                    )
+                )
     return WorldMapOverlays(
         settlements=settlements,
         polities_by_region_id=polities,
         features=sorted(features_by_id.values(), key=lambda f: (f.region_id, f.feature_id)),
+        outlaw_refuges=sorted(outlaw_refuges, key=lambda r: (r.region_id, r.refuge_id)),
         roads=roads,
         sea_routes=sea_routes,
     )
@@ -1949,13 +2092,51 @@ def build_world_map_overlay_debug_data(
                 "rendered_shape": rendered_shape,
             }
         )
+    refuge_rows: list[dict[str, object]] = []
+    refuges_without_named_near_settlement = 0
+    for refuge in overlays.outlaw_refuges:
+        near_settlement = (
+            settlements_by_id.get(refuge.near_settlement_id)
+            if refuge.near_settlement_id
+            else None
+        )
+        if refuge.near_settlement_id and not refuge.near_settlement_name:
+            refuges_without_named_near_settlement += 1
+        refuge_rows.append(
+            {
+                "refuge_id": refuge.refuge_id,
+                "display_name": refuge.display_name,
+                "region_id": refuge.region_id,
+                "near_settlement_id": refuge.near_settlement_id or "",
+                "near_settlement_name": refuge.near_settlement_name or "",
+                "status": refuge.status,
+                "active_case_count": refuge.active_case_count,
+                "band_size": refuge.band_size,
+                "concealment_01": round(refuge.concealment_01, 4),
+                "support_01": round(refuge.support_01, 4),
+                "x": round(refuge.x, 5),
+                "y": round(refuge.y, 5),
+                "distance_to_near_settlement": (
+                    round(math.hypot(refuge.x - near_settlement.x, refuge.y - near_settlement.y), 5)
+                    if near_settlement is not None
+                    else None
+                ),
+            }
+        )
     return {
         "counts": {
             "settlements": len(overlays.settlements),
             "features": len(overlays.features),
+            "outlaw_refuges": len(overlays.outlaw_refuges),
             "polity_regions": len(overlays.polities_by_region_id),
             "roads": len(overlays.roads),
             "sea_routes": len(overlays.sea_routes),
+        },
+        "outlaw_refuges": {
+            "active": sum(1 for refuge in overlays.outlaw_refuges if refuge.status == "active"),
+            "with_near_settlement": sum(1 for refuge in overlays.outlaw_refuges if refuge.near_settlement_id),
+            "without_named_near_settlement": refuges_without_named_near_settlement,
+            "rows": refuge_rows,
         },
         "roads": {
             "actual_routes": sum(1 for road in overlays.roads if road.actual_usage > 0.0),
@@ -2001,6 +2182,7 @@ def build_world_map_overlay_debug_data(
             "sea_route_land_crossing_segments": sea_land_crossing_segments,
             "max_sea_route_endpoint_distance": round(max(sea_endpoint_distances, default=0.0), 5),
             "missing_sea_route_endpoint_settlements": missing_endpoint_settlements,
+            "outlaw_refuges_without_named_near_settlement": refuges_without_named_near_settlement,
             "road_rendered_sharp_turn_reduction": (
                 sum(int(row["turns_ge_75_degrees"]) for row in road_shape_rows)
                 - sum(int(row["turns_ge_75_degrees"]) for row in rendered_road_shape_rows)
@@ -2041,7 +2223,7 @@ def render_world_map_svg(
         "const py=(event.clientY-r.top)/r.height;const nx=s.width*k,ny=s.height*k;"
         "s.x+=s.width*px-nx*px;s.y+=s.height*py-ny*py;s.width=nx;s.height=ny;"
         "zf(this);event.preventDefault();event.stopPropagation();\" "
-        "onpointerdown=\"if(event.target.closest('[data-settlement-id],[data-feature-id],[data-region-id],[data-region-label]')){this.dataset.pan='0';this.dataset.dragged='0';return;}this.dataset.pan='1';this.dataset.dragged='0';this.dataset.px=event.clientX;this.dataset.py=event.clientY;"
+        "onpointerdown=\"if(event.target.closest('[data-settlement-id],[data-feature-id],[data-outlaw-refuge-id],[data-region-id],[data-region-label]')){this.dataset.pan='0';this.dataset.dragged='0';return;}this.dataset.pan='1';this.dataset.dragged='0';this.dataset.px=event.clientX;this.dataset.py=event.clientY;"
         "this.dataset.vx=this.viewBox.baseVal.x;this.dataset.vy=this.viewBox.baseVal.y;"
         "this.setPointerCapture(event.pointerId);\" "
         f"onpointermove=\"{zoom_script}if(this.dataset.pan!=='1')return;const dx=event.clientX-this.dataset.px;const dy=event.clientY-this.dataset.py;"
@@ -2077,7 +2259,7 @@ def render_world_map_svg(
         "</linearGradient>",
         "</defs>",
         "<style>",
-        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend,.terrain-contour{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.terrain-contour{fill:none;mix-blend-mode:multiply;vector-effect:non-scaling-stroke}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-water,.river-highlight,.river-mouth{pointer-events:visiblePainted;cursor:help}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.road,.sea-route{fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:stroke}.road{stroke-linecap:round}.sea-route{stroke-linecap:butt}.road-underlay,.sea-route-underlay{pointer-events:none}.road-line,.sea-route-line,.sea-route-harbor{cursor:help}.road-underlay{stroke:#fffdf3;mix-blend-mode:normal}.road-line{stroke:#b21f3a}.sea-route-underlay{stroke:#e6fbff;mix-blend-mode:screen}.sea-route-line{stroke:#174ea6;stroke-dasharray:8 6}.sea-route-harbor{fill:#174ea6;stroke:#e6fbff;stroke-width:1.2;vector-effect:non-scaling-stroke;pointer-events:visiblePainted}.feature,.settlement{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.feature-label,.region-label,.settlement-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}",
+        ".cell{stroke:#74694f;stroke-width:1.0;stroke-linejoin:round}.micro-cell{stroke:none}.water-cell{stroke:#2f607c;stroke-width:.25;stroke-linejoin:round;pointer-events:none}.water-cell.lake{stroke:#d7f3f1;stroke-width:.38}.terrain-blend,.terrain-contour{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.coast-shelf,.coast-beach,.coast-shadow{stroke-linecap:butt;stroke-linejoin:round;pointer-events:none}.terrain-mottle,.terrain-texture{mix-blend-mode:soft-light;pointer-events:none}.terrain-shade{mix-blend-mode:multiply;pointer-events:none}.terrain-shade-light{mix-blend-mode:screen;pointer-events:none}.terrain-contour{fill:none;mix-blend-mode:multiply;vector-effect:non-scaling-stroke}.region-boundary{stroke:#151b2d;stroke-width:.45;stroke-linecap:round;stroke-linejoin:round}.coast-shelf{stroke:#8fb7c2;stroke-width:8.0}.coast-beach{stroke:#d0c096;stroke-width:3.4}.coast-shadow{stroke:#25344d;stroke-width:2.6}.coast-line{stroke:#1d2938;stroke-width:1.35;stroke-linecap:butt;stroke-linejoin:round}.river-corridor,.river-bank,.river-water,.river-mouth-bank,.river-mouth{stroke:none;fill-rule:evenodd}.river-corridor{mix-blend-mode:multiply}.river-water,.river-highlight,.river-mouth{pointer-events:visiblePainted;cursor:help}.river-highlight{stroke:#8cc7cf;stroke-linecap:round;stroke-linejoin:round;fill:none}.road,.sea-route{fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:stroke}.road{stroke-linecap:round}.sea-route{stroke-linecap:butt}.road-underlay,.sea-route-underlay{pointer-events:none}.road-line,.sea-route-line,.sea-route-harbor{cursor:help}.road-underlay{stroke:#fffdf3;mix-blend-mode:normal}.road-line{stroke:#b21f3a}.sea-route-underlay{stroke:#e6fbff;mix-blend-mode:screen}.sea-route-line{stroke:#174ea6;stroke-dasharray:8 6}.sea-route-harbor{fill:#174ea6;stroke:#e6fbff;stroke-width:1.2;vector-effect:non-scaling-stroke;pointer-events:visiblePainted}.feature,.settlement,.outlaw-refuge{vector-effect:non-scaling-stroke}.feature{cursor:pointer}.feature-fa-underlay{fill:none;stroke:#fff8e6;stroke-width:3.2;stroke-linejoin:round;opacity:.92;vector-effect:non-scaling-stroke}.feature-fa-shape{stroke-width:.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.named-feature .feature-fa-underlay{stroke-width:3.6}.settlement{stroke:#ffffff;stroke-width:.9}.settlement.abandoned{opacity:.28}.outlaw-refuge{stroke:#fff8e6;stroke-width:1.25;fill:#5a1f2e;cursor:pointer}.outlaw-refuge.inactive{opacity:.36}.feature-label,.region-label,.settlement-label,.outlaw-refuge-label{font-family:Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#fff8e6;stroke-linejoin:round;vector-effect:non-scaling-stroke}.feature-label{font-size:9px;fill:#172033;font-weight:800;stroke-width:2.8px}.region-label{font-size:11px;fill:#1f2332;font-weight:600;stroke-width:2.6px}.settlement-label{font-size:9.5px;fill:#111111;font-weight:700;stroke-width:2.0px}.outlaw-refuge-label{font-size:9px;fill:#4b1021;font-weight:800;stroke-width:2.4px}",
         "</style>",
         f'<rect x="{-width * 20}" y="{-height * 20}" width="{width * 41}" height="{height * 41}" fill="url(#ocean-gradient)" />',
     ]
@@ -2511,6 +2693,7 @@ def render_world_map_svg(
         parts.append("</g>")
 
     overlay_settlements = overlays.settlements if overlays is not None else []
+    overlay_outlaw_refuges = overlays.outlaw_refuges if overlays is not None else []
     named_feature_overlays = overlays.features if overlays is not None else []
     region_screen_polygons = {
         cell.region_id: [_scale(point, width, height, pad) for point in cell.polygon]
@@ -2841,6 +3024,62 @@ def render_world_map_svg(
             )
 
     if overlays is not None:
+        for refuge in sorted(
+            overlay_outlaw_refuges,
+            key=lambda r: (
+                (r.status or "").strip().lower() != "active",
+                -r.active_case_count,
+                r.refuge_id,
+            ),
+        ):
+            x, y = _scale((refuge.x, refuge.y), width, height, pad)
+            radius = max(3.2, min(5.8, 3.4 + math.sqrt(max(0, refuge.active_case_count + refuge.band_size)) * 0.26))
+            x, y = _place_marker(
+                x,
+                y,
+                radius,
+                occupied_markers,
+                bounds=(width, height),
+                seed=(refuge.refuge_id, refuge.display_name),
+                max_offset=28.0,
+                allowed_polygon=region_screen_polygons.get(refuge.region_id),
+            )
+            status_class = "active" if refuge.status.strip().lower() == "active" else "inactive"
+            title_parts = [refuge.display_name]
+            if refuge.near_settlement_name:
+                title_parts.append(f"near {refuge.near_settlement_name}")
+            if refuge.active_case_count:
+                title_parts.append(f"{refuge.active_case_count} active outlaw case(s)")
+            parts.append(
+                f'<circle class="outlaw-refuge {status_class}" data-outlaw-refuge-id="{html.escape(refuge.refuge_id)}" '
+                f'data-region-id="{html.escape(refuge.region_id)}" data-outlaw-refuge-name="{html.escape(refuge.display_name)}" '
+                f'data-near-settlement-id="{html.escape(refuge.near_settlement_id or "")}" '
+                f'cx="{x:.1f}" cy="{y:.1f}" r="{radius:.1f}" data-base-r="{radius:.1f}">'
+                f'{_svg_title(" | ".join(title_parts))}</circle>'
+            )
+            if labels:
+                shown = refuge.display_name[:24]
+                chosen: tuple[float, float, str] | None = None
+                for dx, dy, anchor in (
+                    (radius + 3.0, -3.0, "start"),
+                    (radius + 3.0, 8.2, "start"),
+                    (-(radius + 3.0), -3.0, "end"),
+                    (-(radius + 3.0), 8.2, "end"),
+                    (0.0, -(radius + 5.0), "middle"),
+                    (0.0, radius + 11.0, "middle"),
+                ):
+                    if _claim_label(occupied_labels, _label_box(x + dx, y + dy, shown, 9.0, anchor=anchor), bounds=(width, height)):
+                        chosen = (dx, dy, anchor)
+                        break
+                if chosen is None:
+                    chosen = (radius + 3.0, 8.2, "start")
+                dx, dy, anchor = chosen
+                parts.append(
+                    f'<text class="outlaw-refuge-label" data-outlaw-refuge-id="{html.escape(refuge.refuge_id)}" '
+                    f'data-region-id="{html.escape(refuge.region_id)}" data-point-x="{x:.1f}" data-point-y="{y:.1f}" '
+                    f'data-dx="{dx:.2f}" data-dy="{dy:.2f}" x="{x + dx:.1f}" y="{y + dy:.1f}" '
+                    f'text-anchor="{anchor}">{html.escape(shown)}</text>'
+                )
         for settlement in displayed_settlements:
             x, y, radius = settlement_positions.get(
                 settlement.settlement_id,

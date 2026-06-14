@@ -27,9 +27,37 @@ names, readable/browser/person surfaces prefer those names over raw refuge IDs,
 and legacy rows without saved names receive deterministic display labels; see
 `TODONE.md`.
 
-Future outlaw work should be opened only for a concrete next behavior such as
-prison systems, passive-person promotion into outlaw cases, richer refuge maps,
-law-code variation by polity, or measured tuning/reporting gaps.
+The third follow-up is complete: outlaw refuges now appear as named clickable
+markers in generated world maps and map debug output includes refuge rows with
+nearby settlement/region context; see `TODONE.md`.
+
+### Candidate Next Outlaw TODOs
+
+Open and implement one item at a time, with a fresh completion pass in
+`TODONE.md` when finished.
+
+- [ ] **Prison systems**: Add custody/imprisonment state for captured or
+  punished outlaws, distinct from fugitive, returned, forgotten, or killed
+  outcomes.
+  - Completion boundary: captured outlaws can persist durable custody state
+    through save/load, readable views, event prose, and person/browser surfaces.
+- [ ] **Passive-person promotion into outlaw cases**: Promote passive/cohort
+  people into detailed simulation when they become narratively important through
+  outlaw accusations, refuge life, raids, capture, or punishment.
+  - Completion boundary: a passive person entering an outlaw case becomes a
+    detailed person with enough provenance, relationship, and event state to
+    participate in existing outlaw flows.
+- [ ] **Law-code variation by polity**: Let polity/legal context affect
+  outlaw severity, punishment, buy-off tolerance, pursuit pressure, and return
+  outcomes.
+  - Completion boundary: two or more polity/legal profiles produce distinct
+    outlaw handling in deterministic tests without hardcoding one-off outcomes.
+- [ ] **Measured tuning and reporting gaps**: Add reports or tune rates only
+  after a short seeded sample or existing save shows a concrete imbalance, such
+  as too many/few cases, raids, captures, deaths, buy-offs, or returns.
+  - Completion boundary: the measured gap is documented, the tuning/reporting
+    change is implemented, and a focused rerun or report demonstrates the new
+    behavior.
 
 ## Completed Context: Genome-Driven Events, Lost Records, And Chronicle Prose
 

@@ -37,6 +37,7 @@ Use this checklist at the beginning of every coding session.
 
 ## 5) Tracking-doc discipline
 
+- After every substantive repo change, do a completion pass on `TODO.md` and `TODONE.md`: record completed tracked work in `TODONE.md`, remove or update the matching actionable item in `TODO.md`, and note in the final response if no tracking-doc edit was warranted.
 - `TODO.md` should contain only actionable remaining work plus the minimum context needed to choose and implement the next task.
 - Completed functionality belongs in `TODONE.md`, not as long "already done" prose in `TODO.md`.
 - If completed context must remain in `TODO.md` because later work depends on it, label it clearly as context for completed functionality needed by the next task.

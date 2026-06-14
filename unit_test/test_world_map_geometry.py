@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import tempfile
 import unittest
@@ -44,6 +45,7 @@ from library.world_map_svg import (
     _place_marker,
     _point_in_polygon as _svg_point_in_polygon,
     _thing_polygon_id,
+    build_world_map_overlay_debug_data,
     load_world_map_overlays,
     render_world_map_svg,
 )
@@ -1190,6 +1192,100 @@ class TestWorldMapGeometry(unittest.TestCase):
         self.assertEqual(overlays.features[0].display_name, "Bluewater")
         self.assertEqual(overlays.features[0].kind, "river")
         self.assertEqual(overlays.polities_by_region_id[cell.region_id].polity_name, "Test Realm")
+
+    def test_world_map_overlays_render_outlaw_refuges_with_debug_context(self) -> None:
+        geometry = build_world_map_geometry(world="default", db_path=self.cfg)
+        cell = geometry.cells[0]
+        save_path = Path(self._td.name) / "outlaw-refuge-save.sqlite"
+        import sqlite3
+
+        with closing(sqlite3.connect(save_path)) as con:
+            con.execute(
+                """
+                create table simulation_settlements (
+                    settlement_id text, region_id text, display_name text,
+                    population_cap integer, status text, site_slot integer,
+                    local_geography_json text
+                )
+                """
+            )
+            con.execute(
+                "insert into simulation_settlements values (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"{cell.region_id}:s1",
+                    cell.region_id,
+                    "Test Town",
+                    42,
+                    "active",
+                    1,
+                    json.dumps({"settlements": [{"settlement_slot": 0, "x": 0.5, "y": 0.5}]}),
+                ),
+            )
+            con.execute(
+                """
+                create table simulation_outlaw_refuges (
+                    refuge_id text primary key,
+                    display_name text,
+                    region_id text,
+                    near_settlement_id text,
+                    status text,
+                    founded_year integer,
+                    discovered_year integer,
+                    abandoned_year integer,
+                    band_size integer,
+                    concealment_01 real,
+                    support_01 real,
+                    last_activity_year integer,
+                    active_case_count integer,
+                    details_json text
+                )
+                """
+            )
+            con.execute(
+                """
+                insert into simulation_outlaw_refuges values (
+                    'outlaw_refuge:test:1', 'The Blackthorn Crag', ?, ?, 'active',
+                    1001, 1003, null, 3, 0.64, 0.12, 1004, 1, '{}'
+                )
+                """,
+                (cell.region_id, f"{cell.region_id}:s1"),
+            )
+            con.execute(
+                """
+                create view simulation_outlaw_refuges_readable as
+                select refuge_id, display_name, region_id, near_settlement_id, status,
+                       founded_year, discovered_year, abandoned_year, band_size,
+                       concealment_01, support_01, last_activity_year,
+                       active_case_count, details_json
+                from simulation_outlaw_refuges
+                """
+            )
+            con.commit()
+
+        overlays = load_world_map_overlays(geometry=geometry, save_db_path=save_path)
+        self.assertEqual(len(overlays.outlaw_refuges), 1)
+        refuge = overlays.outlaw_refuges[0]
+        self.assertEqual(refuge.display_name, "The Blackthorn Crag")
+        self.assertEqual(refuge.near_settlement_name, "Test Town")
+        self.assertEqual(refuge.active_case_count, 1)
+        self.assertNotEqual((refuge.x, refuge.y), (overlays.settlements[0].x, overlays.settlements[0].y))
+        self.assertLess(
+            math.hypot(refuge.x - overlays.settlements[0].x, refuge.y - overlays.settlements[0].y),
+            0.08,
+        )
+
+        svg = render_world_map_svg(geometry, overlays=overlays)
+        self.assertIn('class="outlaw-refuge active"', svg)
+        self.assertIn('data-outlaw-refuge-id="outlaw_refuge:test:1"', svg)
+        self.assertIn('data-outlaw-refuge-name="The Blackthorn Crag"', svg)
+        self.assertIn("The Blackthorn Crag", svg)
+        self.assertNotIn(">outlaw_refuge:test:1<", svg)
+
+        debug = build_world_map_overlay_debug_data(geometry, overlays)
+        self.assertEqual(debug["counts"]["outlaw_refuges"], 1)
+        self.assertEqual(debug["outlaw_refuges"]["rows"][0]["display_name"], "The Blackthorn Crag")
+        self.assertEqual(debug["outlaw_refuges"]["rows"][0]["near_settlement_name"], "Test Town")
+        self.assertLess(debug["outlaw_refuges"]["rows"][0]["distance_to_near_settlement"], 0.08)
 
     def test_local_anchor_settlement_and_feature_share_projection(self) -> None:
         geometry = build_world_map_geometry(world="default", db_path=self.cfg)
