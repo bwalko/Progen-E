@@ -1672,6 +1672,9 @@ def _apply_murder_consequences(
             )
         ]
     }
+    relationship_closures = _close_murder_victim_relationships(ctx, int(year), incident)
+    if relationship_closures:
+        consequences["relationship_closures"] = relationship_closures
     outlaw_case = outlaw_case_from_murder(ctx, int(year), incident)
     if outlaw_case is not None:
         consequences["outlaw_case"] = outlaw_case
@@ -1690,6 +1693,50 @@ def _relationship_update_at_year(
     if ctx._pending_simulation_events:
         return ctx._pending_simulation_events[-1][2]
     return {}
+
+
+def _close_murder_victim_relationships(
+    ctx: "SimulationContext", year: int, incident: MurderIncident
+) -> list[dict[str, object]]:
+    killer_id = int(incident.killer.person_id)
+    victim_id = int(incident.victim.person_id)
+    pair_set = {killer_id, victim_id}
+    closures: list[dict[str, object]] = []
+    coupled = (
+        incident.killer.person.partner_person_id == victim_id
+        or incident.victim.person.partner_person_id == killer_id
+        or any({int(a), int(b)} == pair_set for a, b in ctx.couples)
+    )
+    if coupled:
+        payload = _relationship_update_at_year(
+            ctx, int(year), "dissolve_couple", killer_id, victim_id
+        )
+        if payload:
+            payload.update(
+                {
+                    "breakup_reasons": ["murder"],
+                    "breakup_trigger": "murder",
+                }
+            )
+            closures.append({"relationship": "partner", "payload": payload})
+    paramours = (
+        incident.killer.person.paramour_person_id == victim_id
+        or incident.victim.person.paramour_person_id == killer_id
+        or any({int(a), int(b)} == pair_set for a, b in ctx.paramours)
+    )
+    if paramours:
+        payload = _relationship_update_at_year(
+            ctx, int(year), "end_paramour_relationship", killer_id, victim_id
+        )
+        if payload:
+            payload.update(
+                {
+                    "end_reason": "murder",
+                    "end_reasons": ["murder"],
+                }
+            )
+            closures.append({"relationship": "paramour", "payload": payload})
+    return closures
 
 
 def _reputation_rank(value: object) -> int:

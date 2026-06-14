@@ -1,5 +1,94 @@
 # TODONE
 
+## Gradio Event Card And Relationship History Bugfix Pass
+
+- Closed the current Gradio-specific TODO bugfixes:
+  - event-card links now override the broad Gradio anchor padding inside
+    cards/details, keeping person links from looking like padded controls;
+  - browser event cards keep concise human-visible sentences while moving
+    code-like values into expandable Details drawers for job assignment/loss,
+    status and patronage changes, elite household investment, childcare
+    shortfall, prosperity crisis, property crime, murder, outlawry, and career
+    fitness update rows;
+  - childcare shortfall run-away rows now read as the child running away, with
+    supply/shortfall/outcome fields in Details;
+  - household prosperity crisis rows hide savings and member lists in Details,
+    and member lists use readable full names;
+  - career-fitness update rows hide scores and high-deviation trait lists in
+    Details;
+  - Partner and Paramour histories are now rendered in one Relationship History
+    timeline with distinct partner and paramour bar colors plus a legend, and
+    share text uses the same combined section.
+- Added focused Gradio regression coverage for the CSS override, event-card
+  detail drawers, household examples, career-fitness rows, job-loss nuance,
+  combined relationship history, and the Outlawry event-card overlap.
+- Validation:
+  - `python -m py_compile utils/gradio_data_browser.py
+    unit_test/test_gradio_data_browser.py`;
+  - `python -m unittest unit_test.test_gradio_data_browser`;
+  - `python -m unittest
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_job_event_fitness_uses_event_payload_not_current_person_score
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_property_crime_event_cards_use_payload_details
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_has_combined_relationship_history_section
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_history_timeline_css_avoids_overflowing_lifespan_grid
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_career_fitness_update_uses_event_payload
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_job_market_churn_event_uses_recorded_fit_nuance
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_events_match_household_array_payloads
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_events_match_household_prosperity_payloads
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_outlawry_uses_refuge_display_names
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_outlaw_custody_surfaces_in_person_views`.
+- Removed the completed `Gradio Bugfixes` section from `TODO.md`.
+
+## Outlawry And Refuge Bugfix Pass
+
+- Closed the current Outlawry-specific TODO bugfixes:
+  - partner murder now explicitly closes killer-victim partner/paramour ties in
+    murder consequences before death cleanup, so stale partner relationships do
+    not survive murder deaths;
+  - outlaw flight still strips normal work, service, and residence state, but
+    official partners now break only through a deterministic spouse-trait check
+    keyed to loyalty strain and neurochemical confusion; paramours still end at
+    flight;
+  - imprisoned outlaws are alive and persisted, but excluded from ordinary
+    settlement/social/household/economy/incident participation until release,
+    escape, or death;
+  - custody now has annual release, escape, and death-in-custody outcomes, with
+    release returning the person to ordinary unemployed life and escape
+    reopening fugitive outlawry;
+  - outlaw case places now prefer the victim/target location for display while
+    preserving accused-location law-profile tuning;
+  - old and new outlaw raid/custody payloads resolve `near_settlement_id` and
+    custody sites as readable places instead of "an unrecorded place";
+  - Gradio Outlawry person cards now show a concise human sentence with
+    code-like status/severity/custody/place fields in an expandable Details
+    drawer.
+- Added focused regression coverage:
+  - `unit_test.test_simulation_outlaws` for flight partner retention/breakup,
+    custody absence/release, and custody death/escape outcomes;
+  - `unit_test.test_simulation_incidents` for partner-murder relationship
+    closure;
+  - `unit_test.test_gradio_data_browser` for Outlawry detail drawers and
+    readable raid places.
+- Validation:
+  - `python -m py_compile library/simulation_outlaws.py
+    library/simulation_context.py library/simulation_incidents.py
+    library/simulation_social.py library/simulation_household_care.py
+    library/simulation_economy.py library/event_prose.py
+    utils/gradio_data_browser.py unit_test/test_simulation_outlaws.py
+    unit_test/test_simulation_incidents.py unit_test/test_gradio_data_browser.py`;
+  - `python -m unittest unit_test.test_simulation_outlaws`;
+  - `python -m unittest unit_test.test_simulation_incidents`;
+  - `python -m unittest
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_outlaw_browser_loads_cases_refuges_and_person_selection
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_outlawry_uses_refuge_display_names
+    unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_outlaw_custody_surfaces_in_person_views`;
+  - `python -m unittest unit_test.test_simulation_social_breakups
+    unit_test.test_relationships_residence`;
+  - `python -m unittest unit_test.test_simulation_household_care`;
+  - `python -m unittest unit_test.test_simulation_economy`.
+- Removed the completed Outlawry-specific items from `TODO.md`; the separate
+  Gradio cleanup is now recorded in the pass above.
+
 ## Outlawry And Refuge V1
 
 - Completed staged implementation of outlaws as simulation state, not a job

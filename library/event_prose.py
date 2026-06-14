@@ -1371,7 +1371,13 @@ def _article(text: str) -> str:
 def _event_place(
     row: Mapping[str, Any], payload: Mapping[str, Any], rr: EventProseResolver
 ) -> str:
-    settlement = row.get("settlement_id") or payload.get("settlement_id")
+    settlement = (
+        row.get("settlement_id")
+        or payload.get("settlement_id")
+        or payload.get("near_settlement_id")
+        or payload.get("custody_site_settlement_id")
+        or payload.get("from_settlement_id")
+    )
     region = row.get("region_id") or payload.get("region_id")
     return rr.place(settlement, region)
 
@@ -1383,6 +1389,8 @@ def _record_place(
         row.get("preserving_settlement_id")
         or row.get("settlement_id")
         or payload.get("settlement_id")
+        or payload.get("near_settlement_id")
+        or payload.get("custody_site_settlement_id")
     )
     region = (
         row.get("preserving_region_id") or row.get("region_id") or payload.get("region_id")

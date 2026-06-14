@@ -8,6 +8,7 @@ import unittest
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
@@ -26,6 +27,7 @@ from library.simulation_outlaws import (
     open_outlaw_case_from_passive,
     open_outlaw_case,
     resolve_outlaw_case,
+    simulation_outlaws_annual_tick,
     _maybe_buy_off,
 )
 from library.world_save import checkpoint_simulation_to_save, try_load_simulation_checkpoint
@@ -74,6 +76,14 @@ def _genome(**overrides: float) -> dict[str, float]:
 class _ZeroRandom:
     def random(self) -> float:
         return 0.0
+
+
+class _FixedRandom:
+    def __init__(self, value: float) -> None:
+        self.value = float(value)
+
+    def random(self) -> float:
+        return self.value
 
 
 class TestSimulationOutlaws(unittest.TestCase):
@@ -139,7 +149,7 @@ class TestSimulationOutlaws(unittest.TestCase):
             )
         )
 
-    def test_case_opening_and_flight_cut_off_contacts(self) -> None:
+    def test_case_opening_and_flight_cuts_paramour_but_can_keep_partner(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             ctx = self._context(Path(td))
             settlement = ctx.ensure_active_settlement_for_region("aeria_north")
@@ -190,8 +200,8 @@ class TestSimulationOutlaws(unittest.TestCase):
             self.assertIsNone(accused.person.current_settlement_id)
             self.assertEqual(accused.person.outlaw_refuge_id, refuge.refuge_id)
             self.assertEqual(accused.person.housing_status, "outlaw_refuge")
-            self.assertIsNone(accused.person.partner_person_id)
-            self.assertIsNone(partner.person.partner_person_id)
+            self.assertEqual(accused.person.partner_person_id, partner.person_id)
+            self.assertEqual(partner.person.partner_person_id, accused.person_id)
             self.assertIsNone(accused.person.paramour_person_id)
             self.assertIsNone(paramour.person.paramour_person_id)
             self.assertNotIn(
@@ -203,6 +213,43 @@ class TestSimulationOutlaws(unittest.TestCase):
                     )
                 },
             )
+
+    def test_outlaw_flight_can_break_disloyal_spouse_relationship(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            accused = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Male",
+            )
+            spouse = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Female",
+                genome=_genome(loyalty=99.0),
+            )
+            ctx.add_couple(accused.person_id, spouse.person_id)
+
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=accused,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.75,
+                knownness_01=0.65,
+                source_event_key="test:property:spouse-break",
+                target_person_id=spouse.person_id,
+            )
+            self.assertIsNotNone(case)
+            self.assertIsNotNone(flee_to_refuge(ctx, case.case_key, year=1001))
+
+            self.assertIsNone(accused.person.partner_person_id)
+            self.assertIsNone(spouse.person.partner_person_id)
+            self.assertNotIn((accused.person_id, spouse.person_id), ctx.couples)
 
     def test_outlaws_do_not_keep_or_receive_normal_jobs(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -903,6 +950,144 @@ class TestSimulationOutlaws(unittest.TestCase):
                 loaded.outlaw_custodies[str(custody_id)].site_settlement_id,
                 settlement.settlement_id,
             )
+
+    def test_custody_blocks_ordinary_residence_until_release(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            accused = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=accused,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.70,
+                knownness_01=0.65,
+                source_event_key="test:custody:release",
+                target_person_id=accused.person_id,
+            )
+            self.assertIsNotNone(case)
+            flee_to_refuge(ctx, case.case_key, year=1001)
+            resolve_outlaw_case(ctx, case.case_key, year=1002, resolution="captured")
+            custody_id = str(accused.person.outlaw_custody_id)
+            custody = ctx.outlaw_custodies[custody_id]
+
+            residents = {
+                rec.person_id
+                for rec in ctx.current_people_by_settlement().get(
+                    settlement.settlement_id, []
+                )
+            }
+            self.assertNotIn(accused.person_id, residents)
+            self.assertEqual(accused.person.outlaw_status, OUTLAW_STATUS_IMPRISONED)
+            self.assertEqual(accused.person.current_settlement_id, settlement.settlement_id)
+
+            simulation_outlaws_annual_tick(
+                ctx,
+                int(custody.expected_release_year or 1003),
+            )
+
+            self.assertEqual(ctx.outlaw_custodies[custody_id].status, "released")
+            self.assertEqual(accused.person.outlaw_status, OUTLAW_STATUS_RETURNED)
+            self.assertIsNone(accused.person.outlaw_custody_id)
+            residents = {
+                rec.person_id
+                for rec in ctx.current_people_by_settlement().get(
+                    settlement.settlement_id, []
+                )
+            }
+            self.assertIn(accused.person_id, residents)
+            self.assertIn(
+                "outlaw_returned",
+                [event_type for _year, event_type, _payload in ctx._pending_simulation_events],
+            )
+
+    def test_custody_can_end_in_death_or_escape_before_release(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            dying = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            death_case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=dying,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.70,
+                knownness_01=0.65,
+                source_event_key="test:custody:death",
+                target_person_id=dying.person_id,
+            )
+            self.assertIsNotNone(death_case)
+            flee_to_refuge(ctx, death_case.case_key, year=1001)
+            resolve_outlaw_case(ctx, death_case.case_key, year=1002, resolution="captured")
+            death_custody_id = str(dying.person.outlaw_custody_id)
+
+            with patch(
+                "library.simulation_outlaws.random.Random",
+                lambda *args, **kwargs: _FixedRandom(0.0),
+            ):
+                simulation_outlaws_annual_tick(ctx, 1003)
+
+            self.assertEqual(ctx.outlaw_custodies[death_custody_id].status, "died")
+            self.assertNotIn(dying.person_id, ctx.current_people_ids)
+            self.assertEqual(
+                ctx.outlaw_cases[death_case.case_key].resolution,
+                "died_in_custody",
+            )
+            self.assertIn(
+                "outlaw_died_in_custody",
+                [event_type for _year, event_type, _payload in ctx._pending_simulation_events],
+            )
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            escaping = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            escape_case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=escaping,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.70,
+                knownness_01=0.65,
+                source_event_key="test:custody:escape",
+                target_person_id=escaping.person_id,
+            )
+            self.assertIsNotNone(escape_case)
+            flee_to_refuge(ctx, escape_case.case_key, year=1001)
+            resolve_outlaw_case(ctx, escape_case.case_key, year=1002, resolution="captured")
+            escape_custody_id = str(escaping.person.outlaw_custody_id)
+
+            with patch(
+                "library.simulation_outlaws.random.Random",
+                lambda *args, **kwargs: _FixedRandom(0.03),
+            ):
+                simulation_outlaws_annual_tick(ctx, 1003)
+
+            self.assertEqual(ctx.outlaw_custodies[escape_custody_id].status, "escaped")
+            self.assertEqual(escaping.person.outlaw_status, OUTLAW_STATUS_FUGITIVE)
+            self.assertIsNone(escaping.person.current_settlement_id)
+            self.assertEqual(ctx.outlaw_cases[escape_case.case_key].status, "active")
+            event_types = [
+                event_type for _year, event_type, _payload in ctx._pending_simulation_events
+            ]
+            self.assertIn("outlaw_escape", event_types)
+            self.assertIn("outlaw_flight", event_types)
 
 
 if __name__ == "__main__":

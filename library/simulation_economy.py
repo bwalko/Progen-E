@@ -18,6 +18,7 @@ from library.simulation_careers import (
     resolve_job_era,
     resource_pressure_for_person,
 )
+from library.simulation_outlaws import is_outlaw_absent
 
 if TYPE_CHECKING:
     from library.simulation_context import SimulationContext, SimulationPersonRecord
@@ -208,6 +209,8 @@ def _update_household_prosperity(
     for rec in ctx.iter_current_people(sorted_by_id=True):
         if rec.person_id not in ctx.current_people_ids:
             continue
+        if is_outlaw_absent(rec.person):
+            continue
         if ctx._person_is_dependent_minor(rec, year):
             continue
         hkey = frozenset(_household_ids_for_job_move(ctx, rec, year, indexes=care_indexes))
@@ -337,6 +340,8 @@ def _apply_elite_household_investments(
     scandal_count = 0
     for rec in ctx.iter_current_people(sorted_by_id=True):
         if rec.person_id not in ctx.current_people_ids:
+            continue
+        if is_outlaw_absent(rec.person):
             continue
         if ctx._person_is_dependent_minor(rec, year):
             continue
@@ -569,6 +574,8 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
 
     # --- Unemployed / no job: baseline wage prosperity for conception hooks ---
     for rec in ctx.iter_current_people(sorted_by_id=True):
+        if is_outlaw_absent(rec.person):
+            continue
         es = (rec.person.employment_status or "").strip().lower()
         job = (rec.person.job or "").strip()
         if es != "employed" or not job:
@@ -595,6 +602,8 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
     # Group employed workers by settlement
     by_sid: dict[str, list[SimulationPersonRecord]] = {}
     for rec in ctx.iter_current_people(sorted_by_id=True):
+        if is_outlaw_absent(rec.person):
+            continue
         if (rec.person.employment_status or "").strip().lower() != "employed":
             continue
         if not (rec.person.job or "").strip():

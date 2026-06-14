@@ -455,6 +455,8 @@ body.dark .sim-progress-card,
     --person-sheet-trait-marker-ring: rgba(255,255,255,.8);
     --person-sheet-legacy-track: rgba(111, 96, 70, .20);
     --person-sheet-legacy-fill: #6a7d3e;
+    --relationship-partner-bar: #6a7d3e;
+    --relationship-paramour-bar: #a85f68;
     border: 1px solid var(--person-sheet-border) !important;
     background: linear-gradient(180deg, var(--person-sheet-bg-start) 0%, var(--person-sheet-bg-end) 100%) !important;
     color: var(--person-sheet-text) !important;
@@ -644,6 +646,8 @@ body.dark .person-sheet,
     --person-sheet-trait-marker-ring: rgba(0,0,0,.75);
     --person-sheet-legacy-track: rgba(244, 234, 215, .18);
     --person-sheet-legacy-fill: #9fc46b;
+    --relationship-partner-bar: #9fc46b;
+    --relationship-paramour-bar: #e38a96;
 }
 .person-sheet,
 .person-sheet * {
@@ -923,6 +927,12 @@ body.dark .person-sheet,
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
     cursor: help;
 }
+.history-bar-partner {
+    background: var(--relationship-partner-bar);
+}
+.history-bar-paramour {
+    background: var(--relationship-paramour-bar);
+}
 .history-bar:hover,
 .history-bar:focus {
     background: var(--person-sheet-link-hover);
@@ -943,6 +953,37 @@ body.dark .person-sheet,
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+.event-card :where(a, a.person-link),
+.event-card-body :where(a, a.person-link),
+.event-card-details :where(a, a.person-link) {
+    padding: 0 !important;
+}
+.relationship-history-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin: 0 0 6px;
+    color: var(--person-sheet-muted) !important;
+    font-size: 12px;
+}
+.relationship-history-key {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+.relationship-history-swatch {
+    width: 18px;
+    height: 8px;
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .16);
+}
+.relationship-history-swatch-partner {
+    background: var(--relationship-partner-bar);
+}
+.relationship-history-swatch-paramour {
+    background: var(--relationship-paramour-bar);
 }
 @media (max-width: 720px) {
     .history-lifespan-grid {
@@ -4930,6 +4971,25 @@ def _person_list_text(
     return shown
 
 
+def _person_list_full_text(
+    con: sqlite3.Connection,
+    world: str,
+    person_ids: object,
+    *,
+    limit: int = 5,
+) -> str:
+    if not isinstance(person_ids, list) or not person_ids:
+        return "none"
+    names: list[str] = []
+    for pid in person_ids[:limit]:
+        _row, person = _lookup_person(con, world, pid)
+        names.append(_person_name(person) if person else "Unknown")
+    shown = ", ".join(names)
+    if len(person_ids) > limit:
+        shown += f", and {len(person_ids) - limit} more"
+    return shown
+
+
 def _person_list_html(
     con: sqlite3.Connection,
     world: str,
@@ -5149,15 +5209,18 @@ def _event_murder_sentence_html(
     victim_id = payload.get("victim_person_id") or payload.get("target_person_id")
     killer = _short_person_html_for_event(con, world, killer_id, focus_person_id)
     victim = _short_person_html_for_event(con, world, victim_id, focus_person_id)
-    incident_kind = html.escape(str(payload.get("incident_kind") or "").strip().replace("_", " "))
-    motive = html.escape(str(payload.get("motive") or "").strip().replace("_", " "))
-    context = [part for part in (incident_kind, f"motive: {motive}" if motive else "") if part]
-    tail = f"; {'; '.join(context)}" if context else ""
+    incident_kind = str(payload.get("incident_kind") or "").strip().replace("_", " ")
+    motive = str(payload.get("motive") or "").strip().replace("_", " ")
+    details = _event_details_html(
+        ("kind", incident_kind),
+        ("motive", motive),
+        ("place", _event_place_text(con, world, payload)),
+    )
     if _same_person_id(victim_id, focus_person_id):
-        return f"{victim} was killed by {killer}{tail}."
+        return f"{victim} was killed by {killer}." + details
     if _same_person_id(killer_id, focus_person_id):
-        return f"{killer} killed {victim}{tail}."
-    return f"{killer} killed {victim}{tail}."
+        return f"{killer} killed {victim}." + details
+    return f"{killer} killed {victim}." + details
 
 
 def _event_label_text(value: object, default: str = "unknown") -> str:
@@ -5166,7 +5229,12 @@ def _event_label_text(value: object, default: str = "unknown") -> str:
 
 
 def _event_place_text(con: sqlite3.Connection, world: str, payload: dict[str, object]) -> str:
-    settlement_id = payload.get("settlement_id")
+    settlement_id = (
+        payload.get("settlement_id")
+        or payload.get("near_settlement_id")
+        or payload.get("custody_site_settlement_id")
+        or payload.get("from_settlement_id")
+    )
     settlement_table = _place_read_relation(con, "simulation_settlements")
     if settlement_id and _has_relation(con, settlement_table):
         settlement = _safe_settlement_name(con, world, settlement_id)
@@ -5281,21 +5349,18 @@ def _property_crime_sentence_html(
     target = _short_person_html_for_event(con, world, target_id, focus_person_id)
     kind = html.escape(_event_label_text(payload.get("incident_kind"), "property crime"))
     place = html.escape(_event_place_text(con, world, payload))
-    bits = [f"{perpetrator} committed {kind} against {target} at {place}"]
-    if payload.get("loss_value") not in (None, ""):
-        bits.append(f"loss {_fmt_number(payload.get('loss_value'), 3)}")
     motive = _event_label_text(payload.get("motive"), "")
-    if motive:
-        bits.append(f"motive {html.escape(motive)}")
     witnesses = _event_person_list(
         con, world, payload.get("witness_person_ids") or payload.get("witnesses"), focus_person_id, html_mode=False
     )
     details = _event_details_html(
+        ("loss", _fmt_number(payload.get("loss_value"), 3) if payload.get("loss_value") not in (None, "") else ""),
+        ("motive", motive),
         ("witnesses", witnesses),
         ("region", _event_label_text(payload.get("region_id"), "")),
         ("settlement", payload.get("settlement_id")),
     )
-    return "; ".join(bits) + "." + details
+    return f"{perpetrator} committed {kind} against {target} at {place}." + details
 
 
 def _knowledge_culture_sentence(
@@ -5416,6 +5481,10 @@ def _outlaw_event_sentence(
         expected = payload.get("custody_expected_release_year")
         expected_tail = f"; expected release {_format_year(expected)}" if expected not in (None, "") else ""
         return f"{accused} was captured into custody for {offense}{expected_tail}."
+    if event_type == "outlaw_escape":
+        return f"{accused} escaped custody and fled."
+    if event_type == "outlaw_died_in_custody":
+        return f"{accused} died in custody."
     if event_type == "outlaw_killed":
         return f"{accused} was killed during outlaw pursuit."
     if event_type == "outlaw_bought_off":
@@ -5448,33 +5517,57 @@ def _outlaw_event_sentence_html(
     place = html.escape(_event_place_text(con, world, payload))
     refuge = html.escape(_outlaw_refuge_label(con, world, payload))
     pressure = _event_float(payload, "pursuit_pressure_01")
-    pressure_tail = f"; pursuit pressure {pressure:.2f}" if pressure is not None else ""
     if event_type == "outlaw_case_opened":
-        return f"{accused} became wanted for {offense} at {place}{pressure_tail}."
+        return (
+            f"{accused} became wanted for {offense} at {place}."
+            + _event_details_html(("pursuit pressure", f"{pressure:.2f}" if pressure is not None else ""))
+        )
     if event_type == "outlaw_flight":
-        return f"{accused} fled ordinary settlement life for {refuge}{pressure_tail}."
+        return (
+            f"{accused} fled ordinary settlement life for {refuge}."
+            + _event_details_html(("pursuit pressure", f"{pressure:.2f}" if pressure is not None else ""))
+        )
     if event_type == "outlaw_refuge_joined":
         band = payload.get("band_size")
-        band_tail = f"; band size {html.escape(str(band))}" if band not in (None, "") else ""
-        return f"{accused} joined {refuge} near {place}{band_tail}."
+        return (
+            f"{accused} joined {refuge} near {place}."
+            + _event_details_html(("band size", band))
+        )
     if event_type == "outlaw_raid":
         band = payload.get("band_size")
-        band_tail = f"; band size {html.escape(str(band))}" if band not in (None, "") else ""
-        return f"Outlaws from {refuge} raided near {place}{band_tail}."
+        return (
+            f"Outlaws from {refuge} raided near {place}."
+            + _event_details_html(("band size", band))
+        )
     if event_type == "outlaw_pursuit":
         band = payload.get("band_size")
-        band_tail = f"; band size {html.escape(str(band))}" if band not in (None, "") else ""
-        return f"Forces pursued {accused} at {refuge}{band_tail}."
+        return (
+            f"Forces pursued {accused} at {refuge}."
+            + _event_details_html(("band size", band))
+        )
     if event_type == "outlaw_captured":
         expected = payload.get("custody_expected_release_year")
-        expected_tail = f"; expected release {html.escape(_format_year(expected))}" if expected not in (None, "") else ""
-        return f"{accused} was captured into custody for {offense}{expected_tail}."
+        return (
+            f"{accused} was captured into custody for {offense}."
+            + _event_details_html(
+                (
+                    "expected release",
+                    _format_year(expected) if expected not in (None, "") else "",
+                )
+            )
+        )
+    if event_type == "outlaw_escape":
+        return f"{accused} escaped custody and fled."
+    if event_type == "outlaw_died_in_custody":
+        return f"{accused} died in custody."
     if event_type == "outlaw_killed":
         return f"{accused} was killed during outlaw pursuit."
     if event_type == "outlaw_bought_off":
         buyoff = _event_float(payload, "buyoff_power_01")
-        buyoff_tail = f"; buy-off power {buyoff:.2f}" if buyoff is not None else ""
-        return f"{accused}'s wanted case was bought off or softened{buyoff_tail}."
+        return (
+            f"{accused}'s wanted case was bought off or softened."
+            + _event_details_html(("buy-off power", f"{buyoff:.2f}" if buyoff is not None else ""))
+        )
     if event_type == "outlaw_returned":
         return f"{accused} returned from outlawry with the case resolved."
     if event_type == "outlaw_forgotten":
@@ -5765,14 +5858,13 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             if household_childcare
             else [f"{person} became {job}"]
         )
-        if descriptor and not household_childcare:
-            bits.append(f"matched through {html.escape(str(descriptor))}")
-        if fitness is not None:
-            bits.append(f"fitness {fitness:.2f}")
         previous = payload.get("previous_job")
-        if previous:
-            bits.append(f"previously {html.escape(str(previous))}")
-        return "; ".join(bits) + "."
+        details = _event_details_html(
+            ("matched through", descriptor if descriptor and not household_childcare else ""),
+            ("fitness", f"{fitness:.2f}" if fitness is not None else ""),
+            ("previously", previous),
+        )
+        return "; ".join(bits) + "." + details
 
     if event_type in {"elite_job_promoted", "guild_admission", "status_rise"}:
         new_job = payload.get("new_job") or payload.get("target_job")
@@ -5782,18 +5874,25 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         bits = [f"{person} rose in status"]
         if new_job:
             bits.append(f"new role {html.escape(str(new_job))}")
-        if previous:
-            bits.append(f"previously {html.escape(str(previous))}")
-        if old_standing is not None and new_standing is not None:
-            bits.append(f"standing {old_standing:.2f} -> {new_standing:.2f}")
-        return "; ".join(bits) + "."
+        details = _event_details_html(
+            ("previously", previous),
+            (
+                "standing",
+                f"{old_standing:.2f} -> {new_standing:.2f}"
+                if old_standing is not None and new_standing is not None
+                else "",
+            ),
+        )
+        return "; ".join(bits) + "." + details
 
     if event_type == "patronage_granted":
         patron = _short_person_html_for_event(con, world, payload.get("patron_person_id"), focus_person_id)
         client = _short_person_html_for_event(con, world, payload.get("client_person_id") or payload.get("person_id"), focus_person_id)
         strength = _event_float(payload, "strength_01")
-        tail = f" with strength {strength:.2f}" if strength is not None else ""
-        return f"{patron} extended patronage to {client}{tail}."
+        return (
+            f"{patron} extended patronage to {client}."
+            + _event_details_html(("strength", f"{strength:.2f}" if strength is not None else ""))
+        )
 
     if event_type in {"status_fall", "bankruptcy", "elite_scandal"}:
         old_standing = _event_float(payload, "previous_social_standing_01")
@@ -5803,27 +5902,40 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             f"{person}'s standing fell",
             f"reason {html.escape(str(reason).replace('_', ' '))}",
         ]
-        if old_standing is not None and new_standing is not None:
-            bits.append(f"standing {old_standing:.2f} -> {new_standing:.2f}")
-        return "; ".join(bits) + "."
+        details = _event_details_html(
+            (
+                "standing",
+                f"{old_standing:.2f} -> {new_standing:.2f}"
+                if old_standing is not None and new_standing is not None
+                else "",
+            )
+        )
+        return "; ".join(bits) + "." + details
 
     if event_type == "elite_household_investment":
         kind = html.escape(str(payload.get("investment_kind") or "investment").replace("_", " "))
         value = _event_float(payload, "investment_value")
         pool_delta = _event_float(payload, "prosperity_pool_delta")
-        bits = [f"{person}'s household made a {kind}"]
-        if value is not None:
-            bits.append(f"value {value:.2f}")
-        if pool_delta is not None:
-            bits.append(f"settlement prosperity +{pool_delta:.2f}")
-        return "; ".join(bits) + "."
+        return (
+            f"{person}'s household made a {kind}."
+            + _event_details_html(
+                ("value", f"{value:.2f}" if value is not None else ""),
+                (
+                    "settlement prosperity",
+                    f"+{pool_delta:.2f}" if pool_delta is not None else "",
+                ),
+            )
+        )
 
     if event_type == "job_lost":
         old_job = html.escape(str(payload.get("old_job") or "their job"))
-        reason = html.escape(str(payload.get("reason") or "unknown reason").replace("_", " "))
-        nuance = [html.escape(part) for part in _job_loss_nuance_parts(payload)]
-        tail = f" ({'; '.join(nuance)})" if nuance else ""
-        return f"{person} lost {old_job}; {reason}{tail}."
+        reason = str(payload.get("reason") or "unknown reason").replace("_", " ")
+        nuance = _job_loss_nuance_parts(payload)
+        details = _event_details_html(
+            ("reason", reason),
+            ("details", "; ".join(nuance)),
+        )
+        return f"{person} lost {old_job}." + details
 
     if event_type == "unemployment_started":
         reason = html.escape(str(payload.get("reason") or "unknown reason").replace("_", " "))
@@ -5888,32 +6000,40 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         minor_count = len(minors) if isinstance(minors, list) else int(payload.get("need") or 0)
         supply = _event_float(payload, "supply")
         shortfall = _event_float(payload, "shortfall")
-        outcome = html.escape(str(payload.get("outcome") or "unknown").replace("_", " "))
+        outcome = str(payload.get("outcome") or "unknown").replace("_", " ")
         victim = _short_person_html_for_event(con, world, payload.get("victim_person_id") or focus_person_id, focus_person_id)
-        bits = [f"Household childcare shortfall affected {minor_count} dependent minor{'s' if minor_count != 1 else ''}"]
-        if supply is not None:
-            bits.append(f"care supply {supply:.2f}")
-        if shortfall is not None:
-            bits.append(f"shortfall {shortfall:.2f}")
-        bits.append(f"outcome {outcome}")
-        bits.append(f"victim {victim}")
-        return "; ".join(bits) + "."
+        if outcome == "run away":
+            visible = f"{victim} ran away."
+        elif outcome and outcome != "unknown":
+            visible = f"{victim} faced a childcare crisis."
+        else:
+            visible = f"{victim}'s household had a childcare shortfall."
+        details = _event_details_html(
+            (
+                "dependent minors",
+                f"{minor_count} dependent minor{'s' if minor_count != 1 else ''}",
+            ),
+            ("care supply", f"{supply:.2f}" if supply is not None else ""),
+            ("shortfall", f"{shortfall:.2f}" if shortfall is not None else ""),
+            ("outcome", outcome),
+            ("victim", _short_person_for_event(con, world, payload.get("victim_person_id") or focus_person_id, focus_person_id)),
+        )
+        return visible + details
 
     if event_type == "household_prosperity_crisis":
-        members = _person_list_html(
-            con,
-            world,
-            payload.get("household_member_ids"),
-            focus_person_id=focus_person_id,
-        )
         before = _event_float(payload, "prosperity_before")
         after = _event_float(payload, "prosperity_after")
         purseholder = _short_person_html_for_event(con, world, payload.get("purseholder_person_id") or focus_person_id, focus_person_id)
-        bits = [f"{purseholder}'s household entered prosperity crisis"]
-        if before is not None and after is not None:
-            bits.append(f"savings {before:.2f} -&gt; {after:.2f}")
-        bits.append(f"members: {members}")
-        return "; ".join(bits) + "."
+        details = _event_details_html(
+            (
+                "savings",
+                f"{before:.2f} -> {after:.2f}"
+                if before is not None and after is not None
+                else "",
+            ),
+            ("members", _person_list_full_text(con, world, payload.get("household_member_ids"))),
+        )
+        return f"{purseholder}'s household entered prosperity crisis." + details
 
     if event_type == "office_succession":
         holder = _short_person_html_for_event(con, world, payload.get("holder_person_id") or focus_person_id, focus_person_id)
@@ -5926,14 +6046,12 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         fitness = _event_fitness_score(payload)
         near = payload.get("near_perfect_traits") or []
         high = payload.get("high_deviation_traits") or []
-        parts = [f"{person}'s career fitness was updated"]
-        if fitness is not None:
-            parts.append(f"score {fitness:.2f}")
-        if near:
-            parts.append(f"strengths near ideal: {html.escape(', '.join(str(x) for x in near))}")
-        if high:
-            parts.append(f"high-deviation traits: {html.escape(', '.join(str(x) for x in high))}")
-        return "; ".join(parts) + "."
+        details = _event_details_html(
+            ("score", f"{fitness:.2f}" if fitness is not None else ""),
+            ("strengths near ideal", ", ".join(str(x) for x in near) if near else ""),
+            ("high-deviation traits", ", ".join(str(x) for x in high) if high else ""),
+        )
+        return f"{person}'s career fitness was updated." + details
 
     if event_type == "death":
         return f"{person} died."
@@ -6285,8 +6403,10 @@ def _history_lifespan_grid_html(
     row_label_html: Callable[[dict[str, object]], str],
     bar_label_text: Callable[[dict[str, object]], str],
     skip_entry: Callable[[dict[str, object]], bool] | None = None,
+    bar_class: Callable[[dict[str, object]], str] | None = None,
 ) -> list[str]:
     skip_entry = skip_entry or (lambda _entry: False)
+    bar_class = bar_class or (lambda _entry: "")
     visible_entries = [entry for entry in entries if not skip_entry(entry)]
     if not visible_entries:
         return [f'<div class="relation muted">{html.escape(empty_text)}</div>']
@@ -6323,8 +6443,14 @@ def _history_lifespan_grid_html(
             left, width = _history_bar_position(entry, start_year, end_year)
             label = bar_label_text(entry)
             title = _history_bar_title(entry, label)
+            extra_class = str(bar_class(entry) or "").strip()
+            class_attr = (
+                f'history-bar {html.escape(extra_class, quote=True)}'
+                if extra_class
+                else "history-bar"
+            )
             bars.append(
-                '<span class="history-bar" tabindex="0" '
+                f'<span class="{class_attr}" tabindex="0" '
                 f'style="--history-bar-left: {left:.3f}%; --history-bar-width: {width:.3f}%" '
                 f'title="{html.escape(title, quote=True)}" '
                 f'aria-label="{html.escape(title, quote=True)}">'
@@ -6388,6 +6514,73 @@ def _relationship_history_items_html(
     )
 
 
+def _combined_relationship_history_entries(
+    partner_entries: list[dict[str, object]],
+    paramour_entries: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    out: list[dict[str, object]] = []
+    for kind, entries in (("Partner", partner_entries), ("Paramour", paramour_entries)):
+        for entry in entries:
+            out.append({**entry, "relationship_kind": kind})
+    return sorted(
+        out,
+        key=lambda entry: (
+            _history_int(entry.get("start_year"))
+            if _history_int(entry.get("start_year")) is not None
+            else -10**12,
+            _history_int(entry.get("end_year"))
+            if _history_int(entry.get("end_year")) is not None
+            else 10**12,
+            str(entry.get("relationship_kind") or ""),
+            str(entry.get("person_id") or ""),
+        ),
+    )
+
+
+def _relationship_kind_label(entry: dict[str, object]) -> str:
+    kind = str(entry.get("relationship_kind") or "Partner").strip()
+    return "Paramour" if kind.lower() == "paramour" else "Partner"
+
+
+def _combined_relationship_history_items_html(
+    con: sqlite3.Connection,
+    world: str,
+    entries: list[dict[str, object]],
+    person: dict[str, object] | None = None,
+    current_year: int | None = None,
+) -> list[str]:
+    if not entries:
+        return ['<div class="relation muted">No recorded relationship history</div>']
+    legend = (
+        '<div class="relationship-history-legend" aria-label="Relationship legend">'
+        '<span class="relationship-history-key">'
+        '<span class="relationship-history-swatch relationship-history-swatch-partner" aria-hidden="true"></span>'
+        "Partner</span>"
+        '<span class="relationship-history-key">'
+        '<span class="relationship-history-swatch relationship-history-swatch-paramour" aria-hidden="true"></span>'
+        "Paramour</span>"
+        "</div>"
+    )
+    grid = _history_lifespan_grid_html(
+        entries,
+        person=person,
+        current_year=current_year,
+        empty_text="No recorded relationship history",
+        row_key=lambda entry: str(entry.get("person_id")),
+        row_label_html=lambda entry: _person_link_html_compact(con, world, entry.get("person_id")),
+        bar_label_text=lambda entry: (
+            f"{_relationship_kind_label(entry)} with "
+            f"{_person_link_text(con, world, entry.get('person_id'))}"
+        ),
+        bar_class=lambda entry: (
+            "history-bar-paramour"
+            if _relationship_kind_label(entry) == "Paramour"
+            else "history-bar-partner"
+        ),
+    )
+    return [legend, *grid]
+
+
 def _job_history_lines(entries: list[dict[str, object]]) -> list[str]:
     if not entries:
         return ["- No recorded job history."]
@@ -6407,6 +6600,21 @@ def _relationship_history_lines(
         return [f"- {empty_text}."]
     return [
         f"- {_history_year_range(entry.get('start_year'), entry.get('end_year'))}: "
+        f"{_person_link_text(con, world, entry.get('person_id'))}"
+        for entry in entries
+    ]
+
+
+def _combined_relationship_history_lines(
+    con: sqlite3.Connection,
+    world: str,
+    entries: list[dict[str, object]],
+) -> list[str]:
+    if not entries:
+        return ["- No recorded relationship history."]
+    return [
+        f"- {_history_year_range(entry.get('start_year'), entry.get('end_year'))}: "
+        f"{_relationship_kind_label(entry)} - "
         f"{_person_link_text(con, world, entry.get('person_id'))}"
         for entry in entries
     ]
@@ -6782,12 +6990,27 @@ def _person_outlaw_case_items_html(
         offense = str(
             _row_value(row, "offense_kind") or _row_value(row, "offense_type") or "outlaw case"
         ).replace("_", " ")
+        offense_type = str(_row_value(row, "offense_type") or "").strip().lower()
+        if offense_type == "murder" and affected not in (None, ""):
+            visible_line = f"{accused} murdered {affected_html}"
+        elif affected not in (None, ""):
+            visible_line = f"{accused} committed {html.escape(offense)} against {affected_html}"
+        else:
+            visible_line = f"{accused} became wanted for {html.escape(offense)}"
+        detail_html = (
+            '<details class="event-card-details">'
+            '<summary>Details</summary>'
+            f'<span>{html.escape(detail)}</span>'
+            '</details>'
+            if detail
+            else ""
+        )
         items.append(
             '<div class="relation consequence-row consequence-outlaw">'
             f'<strong>{html.escape(_year_span_text(_row_value(row, "start_year"), _row_value(row, "resolved_year")))} · '
             f'Outlawry: {html.escape(offense)}</strong><br>'
-            f'accused: {accused}; affected: {affected_html}'
-            f'<br><span class="muted">{html.escape(detail)}</span>'
+            f'{visible_line}'
+            f'{detail_html}'
             '</div>'
         )
     return items
@@ -6960,6 +7183,7 @@ def _person_outlaw_case_lines(
             ),
         )
         custody_tail = f"; {custody_bits}" if custody_bits else ""
+        place_tail = _place_tail(row, con, world)
         lines.append(
             f"- {_year_span_text(_row_value(row, 'start_year'), _row_value(row, 'resolved_year'))}: "
             f"{offense}; role {_person_outlaw_case_role(row, focus_person_id)}; "
@@ -6968,7 +7192,7 @@ def _person_outlaw_case_lines(
             f"severity {_fmt_number(_row_value(row, 'severity_01'))}; "
             f"knownness {_fmt_number(_row_value(row, 'knownness_01'))}; "
             f"pursuit {_fmt_number(_row_value(row, 'pursuit_pressure_01'))}; "
-            f"buy-off {_fmt_number(_row_value(row, 'buyoff_power_01'))}; refuge {refuge}{custody_tail}."
+            f"buy-off {_fmt_number(_row_value(row, 'buyoff_power_01'))}; refuge {refuge}{custody_tail}{place_tail}."
         )
     return lines
 
@@ -7599,6 +7823,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         person,
         current_year,
     )
+    relationship_history = _combined_relationship_history_entries(
+        partner_history,
+        paramour_history,
+    )
     obligation_rows = _person_obligation_rows(con, world, row["person_id"])
     reputation_mark_rows = _person_reputation_mark_rows(con, world, row["person_id"])
     legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
@@ -7632,19 +7860,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         con, world, knowledge_effect_rows, row["person_id"]
     )
     job_items = _job_history_items_html(job_history, person, current_year)
-    partner_items = _relationship_history_items_html(
+    relationship_items = _combined_relationship_history_items_html(
         con,
         world,
-        partner_history,
-        "No recorded partner history",
-        person,
-        current_year,
-    )
-    paramour_items = _relationship_history_items_html(
-        con,
-        world,
-        paramour_history,
-        "No recorded paramour history",
+        relationship_history,
         person,
         current_year,
     )
@@ -7867,13 +8086,9 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         <h3 id="person-{row['person_id']}-job-history" class="section-title">Job History</h3>
         <div class="history-list">{''.join(job_items)}</div>
       </section>
-      <section aria-labelledby="person-{row['person_id']}-partner-history">
-        <h3 id="person-{row['person_id']}-partner-history" class="section-title">Partner History</h3>
-        <div class="history-list">{''.join(partner_items)}</div>
-      </section>
-      <section aria-labelledby="person-{row['person_id']}-paramour-history">
-        <h3 id="person-{row['person_id']}-paramour-history" class="section-title">Paramour History</h3>
-        <div class="history-list">{''.join(paramour_items)}</div>
+      <section aria-labelledby="person-{row['person_id']}-relationship-history">
+        <h3 id="person-{row['person_id']}-relationship-history" class="section-title">Relationship History</h3>
+        <div class="history-list">{''.join(relationship_items)}</div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-events">
         <h3 id="person-{row['person_id']}-events" class="section-title">Events</h3>
@@ -7936,6 +8151,10 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
         person,
         current_year,
     )
+    relationship_history = _combined_relationship_history_entries(
+        partner_history,
+        paramour_history,
+    )
     obligation_rows = _person_obligation_rows(con, world, row["person_id"])
     reputation_mark_rows = _person_reputation_mark_rows(con, world, row["person_id"])
     legal_fallout_rows = _person_legal_fallout_rows(con, world, row["person_id"])
@@ -7958,17 +8177,10 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
         con, world, knowledge_effect_rows, row["person_id"]
     )
     job_history_lines = _job_history_lines(job_history)
-    partner_history_lines = _relationship_history_lines(
+    relationship_history_lines = _combined_relationship_history_lines(
         con,
         world,
-        partner_history,
-        "No recorded partner history",
-    )
-    paramour_history_lines = _relationship_history_lines(
-        con,
-        world,
-        paramour_history,
-        "No recorded paramour history",
+        relationship_history,
     )
     event_lines: list[str] = []
     for event in events:
@@ -8051,11 +8263,8 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             "Job History:",
             *job_history_lines,
             "",
-            "Partner History:",
-            *partner_history_lines,
-            "",
-            "Paramour History:",
-            *paramour_history_lines,
+            "Relationship History:",
+            *relationship_history_lines,
             "",
             "Genome highlights:",
             "Values are signed deviations from ideal. Zero is the ideal center; traits close to zero are exceptional strengths, while large positive or negative values are stronger deviations.",

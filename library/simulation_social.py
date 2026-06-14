@@ -20,6 +20,7 @@ from library.relationship_attraction import (
     relationship_pair_score_01,
 )
 from library.reproduction import pair_prosperity_01
+from library.simulation_outlaws import is_outlaw_absent
 from library.simulation_careers import resource_pressure_for_person
 
 if TYPE_CHECKING:
@@ -96,6 +97,8 @@ def settlement_separation(ctx: SimulationContext, person_a_id: int, person_b_id:
     rb = ctx.id_to_record.get(person_b_id)
     if ra is None or rb is None:
         return 10**6
+    if is_outlaw_absent(ra.person) or is_outlaw_absent(rb.person):
+        return 10**6
     sa = (ra.person.current_settlement_id or ra.person.birthplace_settlement_id or "").strip()
     sb = (rb.person.current_settlement_id or rb.person.birthplace_settlement_id or "").strip()
     if not sa or not sb:
@@ -124,6 +127,8 @@ def _paramour_minimum_age_years(rec) -> int:
 
 def paramour_individual_eligible(rec, year: int) -> bool:
     """Alive through ``year`` and at or past the paramour age floor for that year."""
+    if is_outlaw_absent(rec.person):
+        return False
     if rec.person.deathyear is not None and int(rec.person.deathyear) <= int(year):
         return False
     age = int(year) - int(rec.person.birthyear)
@@ -420,6 +425,8 @@ def maybe_dissolve_partner_couples(
         if ra is None or rb is None:
             continue
         if a_id not in ctx.current_people_ids or b_id not in ctx.current_people_ids:
+            continue
+        if is_outlaw_absent(ra.person) or is_outlaw_absent(rb.person):
             continue
         if ra.person.partner_person_id != b_id or rb.person.partner_person_id != a_id:
             continue

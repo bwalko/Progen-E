@@ -11,40 +11,6 @@
   explicit TODO before extending the current geography/job/knowledge-driven
   trade-network model into commodity production, cargo, prices, or supply chains.
 
-## Outlawry And Refuge Bugfixes
-
-- When a person murders a partner (possibly only their own partner, but also possibly all partners), the partner relationship remains after death and isn't closed off. This is likely a murder-based glitch.
-
-- When a person is captured into custody and there is an "expected release" in the future, the person appears to continue normal life events as if they were not into custody. There should be a chance for escape or a chance to die in custody (a raised chance), but they should be in custody.
-
-- When a person flees as an outlaw to a refuge, things their current job should be lost. A partner should not be automatically lost, but it should have a chance of ending, although it should be dictated by the spouse's loyalty or insanity (i.e. if they are insane, they may not understand).
-
-- All crimes seem to say that it takes place in an "unrecorded place." This should be in the places where the victim was. Or the culprit's location as a fallback.
-
-## Gradio Bugfixes
-
-- The css class .gradio-container-6-14-0 .gradio-style a has padding where it probably shouldn't. At least not when they are within the event cards.
-
-- Event cards aren't hiding code-like details. For example, "Household childcare shortfall affected 3 dependent minors; care supply 2.35; shortfall 0.65; outcome run away; victim Auberlin." This should expandable detail. The normal text should just say that Auberlin ran away. Other examples
-  
-  - Litavicos's household entered prosperity crisis; savings 0.23 -> 0.00; members: Litavicos, Els, Auberlin, Nes, Greth.
-  
-  - Els lost child rearer; resource scarcity (local resource pressure 1.00; job fit 0.51).
-  
-  - Els became wanted for kin killing at an unrecorded place; pursuit pressure 0.90.
-  
-  - Outlaws from The Whispering Ford raided near an unrecorded place; band size 3.
-  
-  - Orgatorix's career fitness was updated; score 0.44; high-deviation traits: frugality, honesty, justice, modesty, patience.
-  
-  - There are a lot more examples similar to these.
-
-- Under Outlawry, these are code-like details, these should be expantable with the normal text just being Els murdered Litavicos (although it's missing some aspects like the kin murder, although it's technically the partner here). 
-  
-  - accused: Els; affected: Litavicos role: accused; status: resolved; resolution: captured; custody: active; custody type: imprisonment; custody site: Ralbommunby; expected release: 1025; severity: 0.96; knownness: 0.66; pursuit: 0.90; buy-off: 0.02; refuge: The Lanternless Ford; place: Ralbommunby, Boreas Peat River
-
-- Partner and Paramour can be in the same table, the Paramour bars should just be called out as a different color than the partner bars.
-
 ## Completed Context: Genome-Driven Events, Lost Records, And Chronicle Prose
 
 The event-system foundation is complete across Workstreams 1-8. `TODONE.md`

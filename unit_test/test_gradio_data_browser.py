@@ -324,8 +324,17 @@ def _memory_outlaw_place_save() -> sqlite3.Connection:
         """
         insert into simulation_events (world, sim_year, event_type, payload_json)
         values (
+            'test', 1001, 'outlaw_case_opened',
+            '{"person_id": 1, "accused_person_id": 1, "target_person_id": 2, "settlement_id": "r1:s1", "region_id": "r1", "incident_kind": "kin_killing", "pursuit_pressure_01": 0.90}'
+        )
+        """
+    )
+    con.execute(
+        """
+        insert into simulation_events (world, sim_year, event_type, payload_json)
+        values (
             'test', 1004, 'outlaw_raid',
-            '{"person_id": 1, "outlaw_refuge_id": "outlaw_refuge:r1:1", "outlaw_refuge_display_name": "The Blackthorn Crag", "near_settlement_id": "r1:s1", "region_id": "r1", "offense_type": "property_crime"}'
+            '{"person_id": 1, "outlaw_refuge_id": "outlaw_refuge:r1:1", "outlaw_refuge_display_name": "The Blackthorn Crag", "near_settlement_id": "r1:s1", "region_id": "r1", "offense_type": "property_crime", "band_size": 3}'
         )
         """
     )
@@ -1813,7 +1822,8 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         html = _event_sentence_html(con, "test", event, 1)
 
         self.assertIn("fitness 0.12", text)
-        self.assertIn("fitness 0.12", html)
+        self.assertIn("event-card-details", html)
+        self.assertIn("fitness: 0.12", html)
         self.assertNotIn("0.99", text)
         self.assertNotIn("0.99", html)
 
@@ -1912,7 +1922,12 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("<strong", html)
         self.assertIn(">Bea</a>", html)
         self.assertIn("storehouse robbery", html)
-        self.assertIn("loss 0.180", html)
+        visible_html = html.split("<details", 1)[0]
+        self.assertNotIn("loss", visible_html)
+        self.assertNotIn("motive", visible_html)
+        self.assertIn("event-card-details", html)
+        self.assertIn("loss: 0.180", html)
+        self.assertIn("motive: scarcity", html)
         self.assertNotIn("property crime: Ada", html.lower())
 
     def test_knowledge_event_cards_prefer_specific_focus_and_flavor_sparse_records(self) -> None:
@@ -1950,7 +1965,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("a new art practice", sparse_html)
         self.assertIn("not a specific invention", sparse_html)
 
-    def test_person_sheet_has_separate_history_sections(self) -> None:
+    def test_person_sheet_has_combined_relationship_history_section(self) -> None:
         con = _memory_save()
         _attach_empty_genome_config(con)
         con.execute("create table world_state (id integer primary key, current_year integer)")
@@ -1995,11 +2010,10 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         share = gdb._render_person_share_text(con, "test", row, person)
 
         self.assertLess(sheet.index("Job History"), sheet.index(">Events</h3>"))
-        self.assertLess(sheet.index("Partner History"), sheet.index(">Events</h3>"))
-        self.assertLess(sheet.index("Paramour History"), sheet.index(">Events</h3>"))
-        job_section = sheet[sheet.index("Job History"):sheet.index("Partner History")]
-        partner_section = sheet[sheet.index("Partner History"):sheet.index("Paramour History")]
-        paramour_section = sheet[sheet.index("Paramour History"):sheet.index(">Events</h3>")]
+        self.assertLess(sheet.index("Relationship History"), sheet.index(">Events</h3>"))
+        self.assertNotIn("Paramour History", sheet)
+        job_section = sheet[sheet.index("Job History"):sheet.index("Relationship History")]
+        relationship_section = sheet[sheet.index("Relationship History"):sheet.index(">Events</h3>")]
         self.assertIn("history-lifespan-grid", job_section)
         self.assertIn("history-axis", job_section)
         self.assertIn("history-row-label", job_section)
@@ -2011,19 +2025,22 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("smith", job_section)
         self.assertNotIn("Unemployed", job_section)
         self.assertIn("scribe", job_section)
-        self.assertIn("101-115", partner_section)
-        self.assertIn(">Bea</a>", partner_section)
-        self.assertIn('title="Bea Forge (b. 8)"', partner_section)
-        self.assertIn('title="101-115 | 14 years | Bea Forge (b. 8)"', partner_section)
-        self.assertIn("person-link", partner_section)
-        self.assertIn("103-112", paramour_section)
-        self.assertIn(">Cato</a>", paramour_section)
-        self.assertIn('title="Cato Vale (b. 5)"', paramour_section)
-        self.assertIn('title="103-112 | 9 years | Cato Vale (b. 5)"', paramour_section)
-        self.assertIn("person-link", paramour_section)
+        self.assertIn("relationship-history-legend", relationship_section)
+        self.assertIn("history-bar-partner", relationship_section)
+        self.assertIn("history-bar-paramour", relationship_section)
+        self.assertIn("101-115", relationship_section)
+        self.assertIn(">Bea</a>", relationship_section)
+        self.assertIn('title="Bea Forge (b. 8)"', relationship_section)
+        self.assertIn('title="101-115 | 14 years | Partner with Bea Forge (b. 8)"', relationship_section)
+        self.assertIn("person-link", relationship_section)
+        self.assertIn("103-112", relationship_section)
+        self.assertIn(">Cato</a>", relationship_section)
+        self.assertIn('title="Cato Vale (b. 5)"', relationship_section)
+        self.assertIn('title="103-112 | 9 years | Paramour with Cato Vale (b. 5)"', relationship_section)
         self.assertIn("Job History:\n- 100-105: smith", share)
-        self.assertIn("Partner History:\n- 101-115: Bea Forge", share)
-        self.assertIn("Paramour History:\n- 103-112: Cato Vale", share)
+        self.assertIn("Relationship History:\n- 101-115: Partner - Bea Forge", share)
+        self.assertIn("- 103-112: Paramour - Cato Vale", share)
+        self.assertNotIn("Paramour History:", share)
 
     def test_job_history_gaps_do_not_expand_short_unemployment_spans(self) -> None:
         items = gdb._job_history_items_html(
@@ -2062,6 +2079,9 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             ".history-axis-tick-edge-end",
             gdb.APP_CSS,
         )
+        self.assertIn(".event-card :where(a, a.person-link)", gdb.APP_CSS)
+        self.assertIn("padding: 0 !important;", gdb.APP_CSS)
+        self.assertIn(".history-bar-paramour", gdb.APP_CSS)
 
     def test_gradio_year_labels_use_bce_for_negative_years(self) -> None:
         con = _memory_save()
@@ -2654,7 +2674,12 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         )
 
         self.assertIn("score 0.46", _event_sentence(con, "test", event, 1))
-        self.assertIn("score 0.46", _event_sentence_html(con, "test", event, 1))
+        html = _event_sentence_html(con, "test", event, 1)
+        visible_html = html.split("<details", 1)[0]
+        self.assertIn("career fitness was updated", visible_html)
+        self.assertNotIn("score", visible_html)
+        self.assertIn("event-card-details", html)
+        self.assertIn("score: 0.46", html)
 
     def test_job_market_churn_event_uses_recorded_fit_nuance(self) -> None:
         con = _memory_save()
@@ -2679,6 +2704,10 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertIn("poor fit despite decent general ability", text)
         self.assertIn("job keyed to focus / optimal", text)
+        visible_html = html.split("<details", 1)[0]
+        self.assertIn("lost scribe", visible_html)
+        self.assertNotIn("resource", visible_html)
+        self.assertIn("event-card-details", html)
         self.assertIn("job fit 0.42", html)
 
     def test_people_browser_can_sort_by_legacy_score_columns(self) -> None:
@@ -2831,6 +2860,13 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual([r["event_type"] for r in parent_events], ["household_childcare_shortfall"])
         self.assertEqual([r["event_type"] for r in child_events], ["household_childcare_shortfall"])
         self.assertIn("childcare shortfall", _event_sentence(con, "test", child_events[0], 2))
+        html = _event_sentence_html(con, "test", child_events[0], 2)
+        visible_html = html.split("<details", 1)[0]
+        self.assertIn("Bea</strong> ran away", visible_html)
+        self.assertNotIn("care supply", visible_html)
+        self.assertIn("event-card-details", html)
+        self.assertIn("care supply: 0.25", html)
+        self.assertIn("shortfall: 0.75", html)
 
     def test_person_events_match_household_prosperity_payloads(self) -> None:
         con = _memory_save()
@@ -2858,6 +2894,14 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertEqual([r["event_type"] for r in rows], ["household_prosperity_crisis"])
         self.assertIn("prosperity crisis", _event_sentence(con, "test", rows[0], 2))
+        html = _event_sentence_html(con, "test", rows[0], 2)
+        visible_html = html.split("<details", 1)[0]
+        self.assertIn("household entered prosperity crisis", visible_html)
+        self.assertNotIn("savings", visible_html)
+        self.assertNotIn("members", visible_html)
+        self.assertIn("event-card-details", html)
+        self.assertIn("savings: 0.21 -&gt; 0.18", html)
+        self.assertIn("members: Ada Forge, Bea Forge", html)
 
     def test_person_events_use_normalized_event_people_when_available(self) -> None:
         con = _memory_save()
@@ -3505,6 +3549,11 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             person = gdb._person_from_row(row, {})
             outlaw_rows = gdb._person_outlaw_case_rows(con, "test", 1)
             outlaw_html = "".join(gdb._person_outlaw_case_items_html(con, "test", outlaw_rows, 1))
+            events = gdb._person_event_rows(con, "test", 1)
+            case_event = [event for event in events if event["event_type"] == "outlaw_case_opened"][0]
+            case_html = gdb._event_sentence_html(con, "test", case_event, 1)
+            raid_event = [event for event in events if event["event_type"] == "outlaw_raid"][0]
+            raid_html = gdb._event_sentence_html(con, "test", raid_event, 1)
             sheet = gdb._render_person_sheet(con, "test", row, person)
             share = gdb._render_person_share_text(con, "test", row, person)
         finally:
@@ -3516,6 +3565,17 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             self.assertIn("River Country", visible)
             self.assertNotIn("outlaw_refuge:r1:1", visible)
             self.assertNotIn("r1:s1", visible)
+        self.assertIn("committed storehouse robbery", outlaw_html)
+        self.assertIn("event-card-details", outlaw_html)
+        self.assertNotIn("accused:", outlaw_html)
+        case_visible_html = case_html.split("<details", 1)[0]
+        self.assertIn("became wanted for kin killing at Fordham", case_visible_html)
+        self.assertNotIn("pursuit pressure", case_visible_html)
+        self.assertIn("pursuit pressure: 0.90", case_html)
+        self.assertIn("raided near Fordham", raid_html)
+        self.assertIn("event-card-details", raid_html)
+        self.assertIn("band size", raid_html)
+        self.assertNotIn("unrecorded place", raid_html)
 
     def test_person_outlaw_custody_surfaces_in_person_views(self) -> None:
         con = _memory_outlaw_place_save()

@@ -22,6 +22,8 @@ from library.incident_rates import (
 from library.event_scoring import EventScoringContext
 from library.simulation_context import SimulationContext
 from library.simulation_incidents import (
+    MurderIncident,
+    _apply_murder_consequences,
     _build_incident_scoring_facts,
     _incident_context_map,
     _knowledge_culture_kind,
@@ -682,6 +684,57 @@ class TestSimulationIncidents(unittest.TestCase):
                 str(row["prose_variant_key"]),
                 "violent_crime_record.rumored.default",
             )
+
+    def test_partner_murder_closes_relationship_state(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            killer = self._add_adult(
+                ctx,
+                genome=VIOLENT_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            victim = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            ctx.add_couple(killer.person_id, victim.person_id)
+            ctx._pending_simulation_events.clear()
+
+            incident = MurderIncident(
+                killer=killer,
+                victim=victim,
+                incident_kind="domestic_murder",
+                motive="partner_conflict",
+                witness_person_ids=(),
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                actor_propensity=0.9,
+                resource_pressure=0.4,
+                historical_importance=0.7,
+                genome_signals={},
+            )
+            consequences = _apply_murder_consequences(ctx, 1001, incident)
+
+            self.assertIn("relationship_closures", consequences)
+            self.assertIsNone(killer.person.partner_person_id)
+            self.assertIsNone(victim.person.partner_person_id)
+            self.assertNotIn((killer.person_id, victim.person_id), ctx.couples)
+            self.assertIn(
+                "couple_dissolved",
+                [event_type for _year, event_type, _payload in ctx._pending_simulation_events],
+            )
+
+            ctx.mark_dead({victim.person_id}, deathyear=1001)
+
+            self.assertIsNone(killer.person.partner_person_id)
+            self.assertIsNone(victim.person.partner_person_id)
+            self.assertNotIn(victim.person_id, ctx.current_people_ids)
 
     def test_forced_murder_tick_allows_population_scaled_multiple_events(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

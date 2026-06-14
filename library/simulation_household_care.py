@@ -19,6 +19,7 @@ from library import simulation_timing
 from library.mind_body import clamp_mind_body_value
 from library.person import Person
 from library.simulation_careers import _household_ids_for_job_move, _residence_settlement_id
+from library.simulation_outlaws import is_outlaw_absent
 
 if TYPE_CHECKING:
     from library.simulation_context import SimulationContext, SimulationPersonRecord
@@ -170,6 +171,8 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
 
     by_settlement = ctx.current_people_by_settlement()
     for rec in ctx.iter_current_people(sorted_by_id=True):
+        if is_outlaw_absent(rec.person):
+            continue
         if rec.person_id in alive_ids and ctx._person_is_dependent_minor(rec, year):
             minor_ids.append(rec.person_id)
     minor_id_set = set(minor_ids)
@@ -225,6 +228,8 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
         return tuple(sorted(ids))
 
     for rec in ctx.iter_current_people(sorted_by_id=True):
+        if is_outlaw_absent(rec.person):
+            continue
         if int(rec.person_id) in minor_id_set:
             continue
         hids = indexed_household_ids(rec)
@@ -242,6 +247,8 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
     for mid in minor_ids:
         mrec = ctx.id_to_record.get(int(mid))
         if mrec is None:
+            continue
+        if is_outlaw_absent(mrec.person):
             continue
         msid = _residence_sid(mrec)
         hkey: frozenset[int] | None = None
@@ -261,6 +268,8 @@ def build_year_indexes(ctx: SimulationContext, year: int) -> YearCareIndexes:
         minor_ids_by_household_mut.setdefault(hkey, set()).add(int(mid))
 
     for service_rec in ctx.iter_current_people(sorted_by_id=True):
+        if is_outlaw_absent(service_rec.person):
+            continue
         if int(service_rec.person_id) in minor_id_set:
             continue
         if (service_rec.person.job_market_type or "").strip().lower() != "domestic_service":
@@ -649,7 +658,11 @@ def _grandparent_supply_extras(
             if gp not in ctx.current_people_ids:
                 continue
             gr = ctx.id_to_record.get(gp)
-            if gr is not None and _residence_sid(gr) == household_sid:
+            if (
+                gr is not None
+                and not is_outlaw_absent(gr.person)
+                and _residence_sid(gr) == household_sid
+            ):
                 extras.add(gp)
     return frozenset(extras)
 
@@ -664,7 +677,7 @@ def _collect_household_keys_with_minors(
     minor_ids = indexes.minor_ids if indexes is not None else tuple(
         int(rec.person_id)
         for rec in ctx.iter_current_people(sorted_by_id=True)
-        if ctx._person_is_dependent_minor(rec, year)
+        if not is_outlaw_absent(rec.person) and ctx._person_is_dependent_minor(rec, year)
     )
     for mid in minor_ids:
         crec = ctx.id_to_record.get(int(mid))

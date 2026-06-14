@@ -23,6 +23,7 @@ OUTLAW_CAREER_BLOCKING_STATUSES = frozenset(
 )
 
 OUTLAW_RNG_STREAM = 1_740_331
+CUSTODY_RNG_STREAM = 1_992_041
 PROPERTY_OUTLAW_MIN_SEVERITY = 0.36
 PASSIVE_OUTLAW_PROMOTION_REASON = "outlaw_case_accused"
 
@@ -274,7 +275,11 @@ def _unique_refuge_display_name(name: str, used_names: set[str]) -> str:
 
 
 def is_outlaw_absent(person: object) -> bool:
-    return str(getattr(person, "outlaw_status", "") or "").strip().lower() == OUTLAW_STATUS_FUGITIVE
+    """True when a person is alive but unavailable for ordinary settlement life."""
+    return str(getattr(person, "outlaw_status", "") or "").strip().lower() in {
+        OUTLAW_STATUS_FUGITIVE,
+        OUTLAW_STATUS_IMPRISONED,
+    }
 
 
 def outlaw_blocks_normal_career(person: object) -> bool:
@@ -365,6 +370,25 @@ def _person_residence(ctx: "SimulationContext", rec: "SimulationPersonRecord") -
     if rid is None:
         rid = (rec.person.birthplace_region_id or "").strip() or None
     return (sid or None), rid
+
+
+def _case_place_from_people(
+    ctx: "SimulationContext",
+    *,
+    accused: "SimulationPersonRecord",
+    victim_person_id: int | None,
+    target_person_id: int | None,
+) -> tuple[str | None, str | None]:
+    for pid in (victim_person_id, target_person_id):
+        if pid is None:
+            continue
+        other = ctx.id_to_record.get(int(pid))
+        if other is None:
+            continue
+        sid, rid = _person_residence(ctx, other)
+        if sid or rid:
+            return sid, rid
+    return _person_residence(ctx, accused)
 
 
 def _patronage_strength(ctx: "SimulationContext", person_id: int) -> float:
@@ -643,6 +667,271 @@ def _custody_event_payload(custody: SimulationOutlawCustody | None) -> dict[str,
     }
 
 
+def _custody_rng(ctx: "SimulationContext", custody: SimulationOutlawCustody, year: int) -> random.Random:
+    return random.Random(
+        int(year) * CUSTODY_RNG_STREAM
+        + int(custody.person_id) * 257
+        + _stable_index((custody.custody_id, custody.case_key))
+        + int(getattr(ctx, "placename_rng_salt", 0))
+    )
+
+
+def _custody_year_outcome(
+    custody: SimulationOutlawCustody,
+    rec: "SimulationPersonRecord",
+    *,
+    year: int,
+    rng: random.Random,
+) -> str | None:
+    expected = custody.expected_release_year
+    if expected is not None and int(year) >= int(expected):
+        return "released"
+    if custody.start_year is not None and int(year) <= int(custody.start_year):
+        return None
+    traits = work_trait_values(rec.person)
+    severity = clamp01(float(custody.severity_01 or 0.0))
+    neuro = clamp01(abs(float(traits.get("neurochemical", 0.0))) / 100.0)
+    resilience = clamp01((100.0 + float(traits.get("resilience", 0.0))) / 200.0)
+    courage = clamp01((100.0 + float(traits.get("courage", 0.0))) / 200.0)
+    adaptability = clamp01((100.0 + float(traits.get("adaptability", 0.0))) / 200.0)
+    death_chance = clamp01(
+        0.012
+        + severity * 0.020
+        + neuro * 0.018
+        - resilience * 0.006
+    )
+    escape_chance = clamp01(
+        0.007
+        + courage * 0.012
+        + adaptability * 0.012
+        - severity * 0.004
+    )
+    roll = rng.random()
+    if roll < death_chance:
+        return "died"
+    if roll < death_chance + escape_chance:
+        return "escaped"
+    return None
+
+
+def _release_outlaw_custody(
+    ctx: "SimulationContext",
+    custody: SimulationOutlawCustody,
+    rec: "SimulationPersonRecord",
+    *,
+    year: int,
+) -> None:
+    case = (getattr(ctx, "outlaw_cases", {}) or {}).get(custody.case_key)
+    sid = custody.site_settlement_id
+    if case is not None:
+        sid = _return_settlement(ctx, case, rec) or sid
+    custody = replace(custody, status="released", release_year=int(year))
+    ctx.outlaw_custodies[custody.custody_id] = custody
+    if case is not None:
+        ctx.outlaw_cases[case.case_key] = replace(
+            case,
+            details={
+                **(case.details or {}),
+                "custody_status": "released",
+                "custody_release_year": int(year),
+            },
+        )
+    rec.person = replace(
+        rec.person,
+        current_settlement_id=sid,
+        outlaw_status=OUTLAW_STATUS_RETURNED,
+        outlaw_refuge_id=None,
+        outlaw_custody_id=None,
+        outlaw_custody_status=None,
+        outlaw_custody_start_year=None,
+        outlaw_custody_expected_release_year=None,
+        outlaw_custody_release_year=int(year),
+        outlaw_custody_site_settlement_id=None,
+        housing_status="own_household" if sid else None,
+        household_role="released_outlaw",
+        employment_status="unemployed",
+        job=None,
+        job_assigned_year=None,
+        job_era=None,
+        job_tier=None,
+        last_job=rec.person.last_job or rec.person.job,
+        job_lost_year=int(year) if rec.person.job else rec.person.job_lost_year,
+        job_market_type="none",
+        host_person_id=None,
+        employer_person_id=None,
+    )
+    payload: dict[str, Any] = {
+        "year": int(year),
+        "event_type": "outlaw_returned",
+        "person_id": int(rec.person_id),
+        "accused_person_id": int(rec.person_id),
+        "resolution": "released_from_custody",
+        "settlement_id": sid,
+        "region_id": custody.region_id,
+        **_custody_event_payload(custody),
+    }
+    if case is not None:
+        payload.update(
+            _case_event_payload(
+                case,
+                event_type="outlaw_returned",
+                resolution="released_from_custody",
+            )
+        )
+        payload["settlement_id"] = sid or case.settlement_id
+        payload["region_id"] = custody.region_id or case.region_id
+    ctx._record_simulation_event(int(year), "outlaw_returned", payload)
+    ctx.invalidate_alive_census_cache()
+    ctx.invalidate_annual_indexes()
+
+
+def _escape_outlaw_custody(
+    ctx: "SimulationContext",
+    custody: SimulationOutlawCustody,
+    rec: "SimulationPersonRecord",
+    *,
+    year: int,
+) -> None:
+    case = (getattr(ctx, "outlaw_cases", {}) or {}).get(custody.case_key)
+    custody = replace(custody, status="escaped", release_year=int(year))
+    ctx.outlaw_custodies[custody.custody_id] = custody
+    sid = custody.site_settlement_id or rec.person.current_settlement_id
+    rec.person = replace(
+        rec.person,
+        current_settlement_id=sid,
+        outlaw_status=OUTLAW_STATUS_WANTED,
+        outlaw_case_key=custody.case_key,
+        outlaw_refuge_id=None,
+        outlaw_custody_id=None,
+        outlaw_custody_status=None,
+        outlaw_custody_start_year=None,
+        outlaw_custody_expected_release_year=None,
+        outlaw_custody_release_year=int(year),
+        outlaw_custody_site_settlement_id=None,
+        employment_status="unemployed",
+        housing_status="own_household" if sid else None,
+        household_role="escaped_prisoner",
+        job=None,
+        job_assigned_year=None,
+        job_era=None,
+        job_tier=None,
+        job_market_type="none",
+        host_person_id=None,
+        employer_person_id=None,
+        last_free_settlement_id=sid or rec.person.last_free_settlement_id,
+    )
+    if case is not None:
+        case = replace(
+            case,
+            status="active",
+            resolved_year=None,
+            resolution=None,
+            custody_id=None,
+            last_seen_year=int(year),
+            expected_forget_year=max(
+                int(case.expected_forget_year or year + 3),
+                int(year) + 3,
+            ),
+            details={
+                **(case.details or {}),
+                "escaped_custody_id": custody.custody_id,
+                "custody_status": "escaped",
+                "custody_release_year": int(year),
+            },
+        )
+        ctx.outlaw_cases[case.case_key] = case
+        ctx._record_simulation_event(
+            int(year),
+            "outlaw_escape",
+            {
+                "year": int(year),
+                **_case_event_payload(case, event_type="outlaw_escape"),
+                "settlement_id": sid or case.settlement_id,
+                "region_id": custody.region_id or case.region_id,
+                **_custody_event_payload(custody),
+            },
+        )
+        flee_to_refuge(ctx, case.case_key, year=int(year))
+    ctx.invalidate_alive_census_cache()
+    ctx.invalidate_annual_indexes()
+
+
+def _kill_outlaw_in_custody(
+    ctx: "SimulationContext",
+    custody: SimulationOutlawCustody,
+    rec: "SimulationPersonRecord",
+    *,
+    year: int,
+) -> None:
+    case = (getattr(ctx, "outlaw_cases", {}) or {}).get(custody.case_key)
+    custody = replace(custody, status="died", release_year=int(year))
+    ctx.outlaw_custodies[custody.custody_id] = custody
+    payload: dict[str, Any] = {
+        "year": int(year),
+        "event_type": "outlaw_died_in_custody",
+        "person_id": int(rec.person_id),
+        "accused_person_id": int(rec.person_id),
+        "settlement_id": custody.site_settlement_id,
+        "region_id": custody.region_id,
+        "resolution": "died_in_custody",
+        **_custody_event_payload(custody),
+    }
+    if case is not None:
+        case = replace(
+            case,
+            status="resolved",
+            resolved_year=int(year),
+            resolution="died_in_custody",
+            details={
+                **(case.details or {}),
+                "custody_status": "died",
+                "custody_release_year": int(year),
+            },
+        )
+        ctx.outlaw_cases[case.case_key] = case
+        payload.update(
+            _case_event_payload(
+                case,
+                event_type="outlaw_died_in_custody",
+                resolution="died_in_custody",
+            )
+        )
+        payload["settlement_id"] = custody.site_settlement_id or case.settlement_id
+        payload["region_id"] = custody.region_id or case.region_id
+    ctx._record_simulation_event(int(year), "outlaw_died_in_custody", payload)
+    if int(rec.person_id) in ctx.current_people_ids:
+        ctx.mark_dead({int(rec.person_id)}, deathyear=int(year))
+
+
+def _process_active_custodies(ctx: "SimulationContext", year: int) -> None:
+    for custody in sorted(
+        (getattr(ctx, "outlaw_custodies", {}) or {}).values(),
+        key=lambda c: (c.start_year if c.start_year is not None else 0, c.custody_id),
+    ):
+        if str(custody.status or "").strip().lower() != "active":
+            continue
+        rec = ctx.id_to_record.get(int(custody.person_id))
+        if rec is None or int(custody.person_id) not in ctx.current_people_ids:
+            ctx.outlaw_custodies[custody.custody_id] = replace(
+                custody,
+                status="died",
+                release_year=int(year),
+            )
+            continue
+        outcome = _custody_year_outcome(
+            custody,
+            rec,
+            year=int(year),
+            rng=_custody_rng(ctx, custody, int(year)),
+        )
+        if outcome == "released":
+            _release_outlaw_custody(ctx, custody, rec, year=int(year))
+        elif outcome == "escaped":
+            _escape_outlaw_custody(ctx, custody, rec, year=int(year))
+        elif outcome == "died":
+            _kill_outlaw_in_custody(ctx, custody, rec, year=int(year))
+
+
 def _passive_person_settlement_id(person: object) -> str:
     return str(
         getattr(person, "current_settlement_id", None)
@@ -891,8 +1180,18 @@ def open_outlaw_case(
 
     base_severity = clamp01(severity_01)
     knownness = clamp01(knownness_01)
-    sid, rid = _person_residence(ctx, accused)
-    law_profile, law_details = _outlaw_law_context(ctx, settlement_id=sid, region_id=rid)
+    accused_sid, accused_rid = _person_residence(ctx, accused)
+    sid, rid = _case_place_from_people(
+        ctx,
+        accused=accused,
+        victim_person_id=victim_person_id,
+        target_person_id=target_person_id,
+    )
+    law_profile, law_details = _outlaw_law_context(
+        ctx,
+        settlement_id=accused_sid,
+        region_id=accused_rid,
+    )
     severity = clamp01(base_severity * law_profile.severity_multiplier)
     if (
         str(offense_type or "").strip() == "property_crime"
@@ -1115,6 +1414,48 @@ def _choose_refuge(
     return refuge
 
 
+def _flight_partner_break_rng(
+    ctx: "SimulationContext",
+    *,
+    year: int,
+    person_a_id: int,
+    person_b_id: int,
+) -> random.Random:
+    lo, hi = sorted((int(person_a_id), int(person_b_id)))
+    return random.Random(
+        int(year) * (OUTLAW_RNG_STREAM + 907)
+        + int(getattr(ctx, "placename_rng_salt", 0)) * 37
+        + lo * 20_021
+        + hi
+    )
+
+
+def _spouse_breaks_after_outlaw_flight(
+    spouse: "SimulationPersonRecord",
+    *,
+    rng: random.Random,
+) -> tuple[bool, float, list[str]]:
+    """Whether the spouse ends the partnership when the accused flees."""
+    traits = work_trait_values(spouse.person)
+    loyalty_deviation = clamp01(abs(float(traits.get("loyalty", 0.0))) / 100.0)
+    neuro_deviation = clamp01(abs(float(traits.get("neurochemical", 0.0))) / 100.0)
+    reasons: list[str] = []
+    if neuro_deviation >= 0.88:
+        return False, 0.0, ["spouse_confusion"]
+    if loyalty_deviation <= 0.12:
+        return False, 0.0, ["spouse_loyalty"]
+    if loyalty_deviation >= 0.92:
+        return True, 1.0, ["spouse_disloyalty"]
+    chance = clamp01(0.08 + loyalty_deviation * 0.72 - neuro_deviation * 0.35)
+    if loyalty_deviation >= 0.45:
+        reasons.append("spouse_loyalty_strain")
+    if neuro_deviation >= 0.45:
+        reasons.append("spouse_confusion")
+    if not reasons:
+        reasons.append("outlaw_flight_strain")
+    return rng.random() < chance, chance, reasons
+
+
 def flee_to_refuge(
     ctx: "SimulationContext", case_key: str, *, year: int
 ) -> SimulationOutlawRefuge | None:
@@ -1132,11 +1473,37 @@ def flee_to_refuge(
     if rec.person.paramour_person_id is not None:
         try:
             ctx.end_paramour_relationship(int(rec.person_id), int(rec.person.paramour_person_id))
+            ctx._pending_simulation_events[-1][2].update(
+                {
+                    "end_reason": "outlaw_flight",
+                    "end_reasons": ["outlaw_flight"],
+                }
+            )
         except (LookupError, ValueError):
             pass
     if rec.person.partner_person_id is not None:
+        partner_id = int(rec.person.partner_person_id)
+        partner = ctx.id_to_record.get(partner_id)
         try:
-            ctx.dissolve_couple(int(rec.person_id), int(rec.person.partner_person_id))
+            if partner is not None:
+                breaks, chance, reasons = _spouse_breaks_after_outlaw_flight(
+                    partner,
+                    rng=_flight_partner_break_rng(
+                        ctx,
+                        year=int(year),
+                        person_a_id=int(rec.person_id),
+                        person_b_id=partner_id,
+                    ),
+                )
+                if breaks:
+                    ctx.dissolve_couple(int(rec.person_id), partner_id)
+                    ctx._pending_simulation_events[-1][2].update(
+                        {
+                            "breakup_probability": round(chance, 5),
+                            "breakup_reasons": reasons,
+                            "breakup_trigger": "outlaw_flight",
+                        }
+                    )
         except (LookupError, ValueError):
             pass
     refuge = _choose_refuge(ctx, case, int(year))
@@ -1176,6 +1543,7 @@ def flee_to_refuge(
         {
             "year": int(year),
             **_case_event_payload(case, event_type="outlaw_flight"),
+            "settlement_id": last_free or case.settlement_id,
             "from_settlement_id": last_free,
             "outlaw_refuge_id": refuge.refuge_id,
             "outlaw_refuge_display_name": refuge.display_name,
@@ -1188,6 +1556,8 @@ def flee_to_refuge(
         {
             "year": int(year),
             **_case_event_payload(case, event_type="outlaw_refuge_joined"),
+            "settlement_id": refuge.near_settlement_id or case.settlement_id,
+            "region_id": refuge.region_id or case.region_id,
             "outlaw_refuge_id": refuge.refuge_id,
             "outlaw_refuge_display_name": refuge.display_name,
             "band_size": int(refuge.band_size),
@@ -1424,6 +1794,8 @@ def _record_raid(ctx: "SimulationContext", case: SimulationOutlawCase, refuge: S
         {
             "year": int(year),
             **_case_event_payload(case, event_type="outlaw_raid"),
+            "settlement_id": refuge.near_settlement_id or case.settlement_id,
+            "region_id": refuge.region_id or case.region_id,
             "outlaw_refuge_id": refuge.refuge_id,
             "outlaw_refuge_display_name": refuge.display_name,
             "near_settlement_id": refuge.near_settlement_id,
@@ -1548,6 +1920,8 @@ def simulation_outlaws_annual_tick(ctx: "SimulationContext", year: int) -> None:
             {
                 "year": int(year),
                 **_case_event_payload(case, event_type="outlaw_pursuit"),
+                "settlement_id": refuge.near_settlement_id or case.settlement_id,
+                "region_id": refuge.region_id or case.region_id,
                 "outlaw_refuge_id": refuge.refuge_id,
                 "outlaw_refuge_display_name": refuge.display_name,
                 "band_size": int(refuge.band_size),
@@ -1565,3 +1939,4 @@ def simulation_outlaws_annual_tick(ctx: "SimulationContext", year: int) -> None:
             kill_outlaw(ctx, case.case_key, year=int(year))
         elif outcome == "captured":
             resolve_outlaw_case(ctx, case.case_key, year=int(year), resolution="captured")
+    _process_active_custodies(ctx, int(year))
