@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import random
 import time
 from dataclasses import dataclass, replace
@@ -22,6 +23,7 @@ from library.event_scoring import (
     property_crime_propensity,
     public_virtue_propensity,
     scandal_exposure_propensity,
+    serial_predator_propensity,
     threshold_excess_value_weights,
     threshold_excess_weights,
     trait_value as _trait,
@@ -43,10 +45,10 @@ if TYPE_CHECKING:
 
 
 INCIDENT_ADULT_MIN_AGE = 16
-MURDER_BASE_SETTLEMENT_CHANCE = 0.0040
+MURDER_BASE_SETTLEMENT_CHANCE = 0.00075
 MURDER_TARGET_PER_10K_PER_YEAR = 4.0
 MURDER_ANNUAL_CAP_HEADROOM = 2.0
-MURDER_RATE_CONTEXT_MULTIPLIER = 1.0
+MURDER_RATE_CONTEXT_MULTIPLIER = 0.18
 MURDER_SETTLEMENT_CHANCE_CAP = 0.30
 MURDER_PROPENSITY_THRESHOLD = 0.24
 MURDER_SETTLEMENT_SAMPLE_CAP = 250
@@ -55,6 +57,9 @@ MURDER_MAX_SETTLEMENT_TRIALS = 24
 MURDER_MAX_EVENTS_PER_YEAR = 24
 MURDER_RNG_STREAM = 610_019
 MURDER_SAMPLE_STREAM = 610_021
+MURDER_SERIAL_PROPENSITY_WEIGHT = 3.25
+MURDER_PRIOR_KILLER_WEIGHT = 0.42
+MURDER_REPEAT_KILLER_SELECTION_MULTIPLIER_CAP = 2.25
 THEFT_BASE_SETTLEMENT_CHANCE = 0.0075
 THEFT_SETTLEMENT_CHANCE_CAP = 0.04
 THEFT_PROPENSITY_THRESHOLD = 0.24
@@ -105,6 +110,8 @@ class MurderIncident:
     resource_pressure: float
     historical_importance: float
     genome_signals: dict[str, float]
+    serial_predator_propensity: float = 0.0
+    previous_murder_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -363,6 +370,7 @@ def _incident_kind(
     ctx: "SimulationContext",
     killer: "SimulationPersonRecord",
     motive: str,
+    serial_score: float,
     rng: random.Random,
 ) -> str:
     if motive in {"partner_conflict", "paramour_conflict"}:
@@ -401,6 +409,14 @@ def _incident_kind(
             "murder",
             tags=("brawl", "impulse"),
             default="rash_brawl_killing",
+            rng=rng,
+        )
+    if serial_score >= 0.62:
+        return _catalog_incident_kind(
+            ctx,
+            "murder",
+            tags=("predatory", "planned"),
+            default="predatory_murder",
             rng=rng,
         )
     if (
@@ -446,6 +462,83 @@ def _genome_signal_payload(
         for trait in chosen_traits
         if trait in (rec.person.genome or {})
     }
+
+
+def _previous_murder_counts_by_killer(
+    ctx: "SimulationContext", person_ids: set[int], *, before_year: int
+) -> dict[int, int]:
+    """Count known prior killer-role murder events from pending and saved events."""
+
+    ids = {int(pid) for pid in person_ids if pid is not None}
+    counts = {pid: 0 for pid in ids}
+    if not ids:
+        return counts
+    for sim_year, event_type, payload in getattr(ctx, "_pending_simulation_events", ()):
+        if str(event_type or "") != "murder":
+            continue
+        try:
+            if sim_year is not None and int(sim_year) >= int(before_year):
+                continue
+        except (TypeError, ValueError):
+            pass
+        try:
+            pid = int(payload.get("killer_person_id"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if pid in counts:
+            counts[pid] += 1
+    save_path = getattr(ctx, "save_db_path", None)
+    if save_path is None:
+        return counts
+    try:
+        with sqlite3.connect(save_path) as conn:
+            conn.row_factory = sqlite3.Row
+            exists = conn.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'simulation_event_people'
+                """
+            ).fetchone()
+            if exists is None:
+                return counts
+            id_list = sorted(ids)
+            for start in range(0, len(id_list), 500):
+                chunk = id_list[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                params: list[object] = [*chunk, int(before_year)]
+                rows = conn.execute(
+                    f"""
+                    SELECT ep.person_id, COUNT(*) AS c
+                    FROM simulation_event_people ep
+                    JOIN simulation_events e ON e.id = ep.event_id
+                    WHERE ep.role = 'killer'
+                      AND e.event_type = 'murder'
+                      AND ep.person_id IN ({placeholders})
+                      AND (e.sim_year IS NULL OR e.sim_year < ?)
+                    GROUP BY ep.person_id
+                    """,
+                    params,
+                ).fetchall()
+                for row in rows:
+                    pid = int(row["person_id"])
+                    counts[pid] = counts.get(pid, 0) + int(row["c"])
+    except sqlite3.Error:
+        return counts
+    return counts
+
+
+def _repeat_murder_selection_multiplier(
+    *, serial_propensity: float, previous_murders: int
+) -> float:
+    serial_pressure = max(0.0, float(serial_propensity) - 0.50)
+    prior_pressure = min(1.0, max(0, int(previous_murders)) / 3.0)
+    multiplier = (
+        1.0
+        + serial_pressure * float(MURDER_SERIAL_PROPENSITY_WEIGHT)
+        + prior_pressure * float(MURDER_PRIOR_KILLER_WEIGHT)
+    )
+    return max(1.0, min(float(MURDER_REPEAT_KILLER_SELECTION_MULTIPLIER_CAP), multiplier))
 
 
 def _historical_importance(
@@ -947,6 +1040,19 @@ def _maybe_murder_in_settlement(
     propensities = contextual_propensity_by_person_id(
         adults, violent_actor_propensity, contexts
     )
+    previous_murders = _previous_murder_counts_by_killer(
+        ctx,
+        {int(rec.person_id) for rec in adults},
+        before_year=int(year),
+    )
+    serial_propensities = {
+        int(rec.person_id): serial_predator_propensity(
+            rec,
+            context=contexts.get(int(rec.person_id)),
+            previous_murders=previous_murders.get(int(rec.person_id), 0),
+        )
+        for rec in adults
+    }
     max_propensity = max(propensities.values(), default=0.0)
     chance = _murder_chance_from_propensity(
         adults_count=len(adults),
@@ -963,9 +1069,19 @@ def _maybe_murder_in_settlement(
         return None
     killer = _weighted_choice(
         candidate_killers,
-        threshold_excess_weights(
-            candidate_killers, propensities, MURDER_PROPENSITY_THRESHOLD
-        ),
+        [
+            base_weight
+            * _repeat_murder_selection_multiplier(
+                serial_propensity=serial_propensities.get(int(rec.person_id), 0.0),
+                previous_murders=previous_murders.get(int(rec.person_id), 0),
+            )
+            for rec, base_weight in zip(
+                candidate_killers,
+                threshold_excess_weights(
+                    candidate_killers, propensities, MURDER_PROPENSITY_THRESHOLD
+                ),
+            )
+        ],
         rng,
     )
     if killer is None:
@@ -992,12 +1108,20 @@ def _maybe_murder_in_settlement(
     return MurderIncident(
         killer=killer,
         victim=victim,
-        incident_kind=_incident_kind(ctx, killer, motive, rng),
+        incident_kind=_incident_kind(
+            ctx,
+            killer,
+            motive,
+            serial_propensities.get(int(killer.person_id), 0.0),
+            rng,
+        ),
         motive=motive,
         witness_person_ids=witness_ids,
         settlement_id=settlement_id,
         region_id=region_id,
         actor_propensity=propensities[killer.person_id],
+        serial_predator_propensity=serial_propensities.get(int(killer.person_id), 0.0),
+        previous_murder_count=previous_murders.get(int(killer.person_id), 0),
         resource_pressure=pressure,
         historical_importance=_historical_importance(
             killer, victim, len(witness_ids)
@@ -2948,6 +3072,14 @@ def _record_murder_incident(
             "settlement_id": incident.settlement_id,
             "region_id": incident.region_id,
             "actor_violent_propensity": round(incident.actor_propensity, 5),
+            "serial_predator_propensity": round(
+                incident.serial_predator_propensity, 5
+            ),
+            "previous_murder_count": int(incident.previous_murder_count),
+            "serial_predator_candidate": bool(
+                incident.serial_predator_propensity >= 0.62
+                or int(incident.previous_murder_count) >= 2
+            ),
             "resource_pressure": round(incident.resource_pressure, 5),
             "historical_importance": round(incident.historical_importance, 5),
             "consequences": consequences,

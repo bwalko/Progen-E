@@ -1702,19 +1702,59 @@ def _segment_has_non_land_samples(
     return False
 
 
-def _naturalized_direct_road_points(
+def _segment_has_unbridged_channel_samples(
     geometry: WorldMapGeometry,
-    points: list[Point],
+    start: Point,
+    end: Point,
+    ford_points: list[Point],
+    *,
+    samples: int = 9,
+) -> bool:
+    if not geometry.micro_cells:
+        return False
+    for idx in range(1, max(2, samples + 1)):
+        t = idx / (samples + 1)
+        point = (start[0] + (end[0] - start[0]) * t, start[1] + (end[1] - start[1]) * t)
+        cell = _land_cell_containing_point(geometry, point)
+        if cell is None or not getattr(cell, "is_channel", False):
+            continue
+        segment_distance = math.hypot(end[0] - start[0], end[1] - start[1])
+        ford_clearance = max(0.018, min(0.09, segment_distance * 0.35))
+        if _nearest_ford_distance(point, ford_points) > ford_clearance:
+            return True
+    return False
+
+
+def _road_bend_sign(start: Point, end: Point, bias: float) -> float:
+    if abs(bias) > 1e-7:
+        return 1.0 if bias >= 0.0 else -1.0
+    key = (
+        int(round(start[0] * 1000003))
+        ^ (int(round(start[1] * 1000033)) << 1)
+        ^ (int(round(end[0] * 1000037)) << 2)
+        ^ (int(round(end[1] * 1000039)) << 3)
+    )
+    return 1.0 if key % 2 == 0 else -1.0
+
+
+def _naturalized_road_segment_points(
+    geometry: WorldMapGeometry,
+    start: Point,
+    end: Point,
     *,
     start_cell: MicroRegionCell,
     end_cell: MicroRegionCell,
+    ford_points: list[Point] | None = None,
 ) -> list[Point]:
-    if len(points) != 2 or not geometry.micro_cells:
-        return points
-    start, end = points
+    ford_points = ford_points or []
+    if not geometry.micro_cells or start_cell.continent_id != end_cell.continent_id:
+        return [start, end]
     distance = math.hypot(end[0] - start[0], end[1] - start[1])
-    if distance < 0.035:
-        return points
+    if distance < 0.045:
+        return [start, end]
+    if _segment_has_non_land_samples(geometry, start, end, samples=7):
+        return [start, end]
+
     dx = (end[0] - start[0]) / distance
     dy = (end[1] - start[1]) / distance
     px, py = -dy, dx
@@ -1724,26 +1764,94 @@ def _naturalized_direct_road_points(
         (float(start_cell.center_y) + float(end_cell.center_y)) / 2.0,
     )
     bias = (cell_midpoint[0] - midpoint[0]) * px + (cell_midpoint[1] - midpoint[1]) * py
-    first_sign = 1.0 if bias >= 0.0 else -1.0
-    for amount in (
-        min(0.030, max(0.008, distance * 0.18)),
-        min(0.022, max(0.006, distance * 0.12)),
-        min(0.016, max(0.004, distance * 0.08)),
-    ):
-        for sign in (first_sign, -first_sign):
-            candidate = (
-                _clamp(midpoint[0] + px * sign * amount, 0.006, 0.994),
-                _clamp(midpoint[1] + py * sign * amount, 0.006, 0.994),
+    first_sign = _road_bend_sign(start, end, bias)
+    amounts = (
+        min(0.060, max(0.014, distance * 0.24)),
+        min(0.045, max(0.010, distance * 0.18)),
+        min(0.030, max(0.008, distance * 0.12)),
+    )
+    fraction_sets = ((0.34, 0.66), (0.50,))
+    for fractions in fraction_sets:
+        for amount in amounts:
+            for sign in (first_sign, -first_sign):
+                candidates: list[Point] = []
+                for fraction in fractions:
+                    x = start[0] + (end[0] - start[0]) * fraction + px * sign * amount
+                    y = start[1] + (end[1] - start[1]) * fraction + py * sign * amount
+                    candidates.append((_clamp(x, 0.006, 0.994), _clamp(y, 0.006, 0.994)))
+                candidate_cells = [_land_cell_containing_point(geometry, point) for point in candidates]
+                if any(cell is None or cell.continent_id != start_cell.continent_id for cell in candidate_cells):
+                    continue
+                if any(
+                    getattr(cell, "is_channel", False)
+                    and _nearest_ford_distance(point, ford_points) > max(0.018, min(0.09, distance * 0.35))
+                    for point, cell in zip(candidates, candidate_cells)
+                    if cell is not None
+                ):
+                    continue
+                segment = _dedupe_path_points([start, *candidates, end])
+                if len(segment) < 3:
+                    continue
+                if any(
+                    _segment_has_non_land_samples(geometry, a, b, samples=5)
+                    for a, b in zip(segment, segment[1:])
+                ):
+                    continue
+                if any(
+                    _segment_has_unbridged_channel_samples(geometry, a, b, ford_points, samples=5)
+                    for a, b in zip(segment, segment[1:])
+                ):
+                    continue
+                return segment
+    return [start, end]
+
+
+def _naturalized_direct_road_points(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+    *,
+    start_cell: MicroRegionCell,
+    end_cell: MicroRegionCell,
+    ford_points: list[Point] | None = None,
+) -> list[Point]:
+    if len(points) != 2 or not geometry.micro_cells:
+        return points
+    start, end = points
+    naturalized = _naturalized_road_segment_points(
+        geometry,
+        start,
+        end,
+        start_cell=start_cell,
+        end_cell=end_cell,
+        ford_points=ford_points,
+    )
+    return naturalized if len(naturalized) > 2 else points
+
+
+def _naturalize_long_road_segments(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+    ford_points: list[Point] | None = None,
+) -> list[Point]:
+    ford_points = ford_points or []
+    if len(points) < 2 or not geometry.micro_cells:
+        return points
+    out: list[Point] = [points[0]]
+    for start, end in zip(points, points[1:]):
+        start_cell = _land_cell_containing_point(geometry, start) or _cell_for_point(geometry, start)
+        end_cell = _land_cell_containing_point(geometry, end) or _cell_for_point(geometry, end)
+        segment = [start, end]
+        if start_cell is not None and end_cell is not None:
+            segment = _naturalized_road_segment_points(
+                geometry,
+                start,
+                end,
+                start_cell=start_cell,
+                end_cell=end_cell,
+                ford_points=ford_points,
             )
-            cell = _land_cell_containing_point(geometry, candidate)
-            if cell is None or cell.continent_id != start_cell.continent_id:
-                continue
-            if _segment_has_non_land_samples(geometry, start, candidate, samples=5):
-                continue
-            if _segment_has_non_land_samples(geometry, candidate, end, samples=5):
-                continue
-            return _dedupe_path_points([start, candidate, end])
-    return points
+        out.extend(segment[1:])
+    return _dedupe_path_points(out)
 
 
 def _micro_path_edge_points(
@@ -1833,16 +1941,18 @@ def _route_between_points(
     if start.micro_id == end.micro_id:
         points = _maybe_boundary_arc_between_points(start, start_point, end_point) or [start_point, end_point]
         points = _dedupe_path_points(points)
+        route_length = _path_length(points)
         points = _naturalized_direct_road_points(
             geometry,
             points,
             start_cell=start,
             end_cell=end,
+            ford_points=ford_points,
         )
         return _RoadPath(
             points=points,
             cost=max(0.0001, math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1])),
-            length=_path_length(points),
+            length=route_length,
         )
     by_id = {cell.micro_id: cell for cell in geometry.micro_cells}
     adjacency, shared_edges = _road_micro_graph(geometry.micro_cells)
@@ -1886,16 +1996,20 @@ def _route_between_points(
         ford_points,
     )
     points = _clean_road_points(points, ford_points)
+    route_length = _path_length(points)
+    points = _naturalize_long_road_segments(geometry, points, ford_points)
+    points = _clean_road_points(points, ford_points)
     points = _naturalized_direct_road_points(
         geometry,
         points,
         start_cell=start,
         end_cell=end,
+        ford_points=ford_points,
     )
     route = _RoadPath(
         points=points,
         cost=max(0.0001, distances[end.micro_id]),
-        length=_path_length(points),
+        length=route_length,
     )
     if ford_path is not None:
         direct_distance = max(0.0001, math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1]))
@@ -1917,12 +2031,13 @@ def _route_between_points(
                 list(ford_path.points),
                 start_cell=start,
                 end_cell=end,
+                ford_points=ford_points,
             )
             if natural_ford_points != ford_path.points:
                 return _RoadPath(
                     points=natural_ford_points,
                     cost=ford_path.cost,
-                    length=_path_length(natural_ford_points),
+                    length=ford_path.length,
                 )
             return ford_path
     return route
@@ -1992,10 +2107,12 @@ def _route_via_ford_point(
     if first is None or second is None:
         return None
     points = _clean_road_points([*first.points, *second.points[1:]], [ford_point])
+    route_length = first.length + second.length
+    points = _naturalize_long_road_segments(geometry, points, [ford_point])
+    points = _clean_road_points(points, [ford_point])
     if len(points) < 2:
         return None
-    length = _path_length(points)
-    return _RoadPath(points=points, cost=max(0.0001, first.cost + second.cost), length=length)
+    return _RoadPath(points=points, cost=max(0.0001, first.cost + second.cost), length=route_length)
 
 
 def _route_between_nodes(
@@ -2052,6 +2169,9 @@ def _route_between_nodes(
                     *last_connector.points[1:],
                 ]
                 points = _clean_road_points(points, ford_points)
+                route_length = _path_length(points)
+                points = _naturalize_long_road_segments(geometry, points, ford_points)
+                points = _clean_road_points(points, ford_points)
                 start_cell = _land_cell_containing_point(geometry, start_point)
                 end_cell = _land_cell_containing_point(geometry, end_point)
                 if start_cell is not None and end_cell is not None:
@@ -2060,10 +2180,10 @@ def _route_between_nodes(
                         points,
                         start_cell=start_cell,
                         end_cell=end_cell,
+                        ford_points=ford_points,
                     )
                 if len(points) >= 2:
-                    length = _path_length(points)
-                    return _RoadPath(points=points, cost=max(0.0001, length), length=length)
+                    return _RoadPath(points=points, cost=max(0.0001, route_length), length=route_length)
     return _route_between_points(
         geometry,
         start_point,

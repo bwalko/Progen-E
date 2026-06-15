@@ -6,7 +6,9 @@ import json
 import os
 import random
 import secrets
+import sqlite3
 import time
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -15,6 +17,7 @@ from zlib import crc32
 import numpy as np
 
 from library.generator import generate_person_random
+from library.detailed_population_variance import apply_detailed_selection_variance
 from library.passive_population import (
     PassiveCohort,
     build_passive_marriage_candidate_index,
@@ -22,6 +25,10 @@ from library.passive_population import (
     promote_passive_candidate_for_marriage,
     promote_passive_candidate_for_office,
     promote_passive_candidate_for_settlement_context,
+)
+from library.nondetailed_population import (
+    run_nondetailed_sql_annual_tick_for_save,
+    seed_nondetailed_from_active_settlements,
 )
 from library.random_names import choose_random_first_last
 from library.settlements import SettlementState
@@ -43,6 +50,7 @@ from library import simulation_timing
 from library.simulation_context import SimulationContext, SimulationPersonRecord
 from library.simulation_export import people_export_payload, settlements_geo_export_payload
 from library.simulation_mortality import apply_annual_mortality
+from library.world_save import ensure_checkpoint_schema
 
 KIN_PAIR_PARENT_CHILD_PROB = 0.000001
 KIN_PAIR_GRANDPARENT_GRANDCHILD_PROB = 0.000002
@@ -368,8 +376,25 @@ def generate_population_founder(
     gender: str,
     simulation_year: int,
     rng: random.Random,
+    person_id_seed: int = 0,
 ):
     """Generate a founder with age inside that person's fertility window."""
+    def selected_founder(person):
+        with_parent_names = _with_founder_parent_names(ctx, person)
+        return apply_detailed_selection_variance(
+            with_parent_names,
+            person_id=int(person_id_seed),
+            year=int(simulation_year),
+            reason="founder",
+            source={
+                "source_kind": "founder",
+                "gender": gender,
+                "birthyear": int(with_parent_names.birthyear),
+                "settlement_id": with_parent_names.current_settlement_id,
+                "name": with_parent_names.full_name,
+            },
+        )
+
     probe = generate_person_random(
         gender=gender,
         age=18,
@@ -390,7 +415,7 @@ def generate_population_founder(
         f_lo, f_hi = _fertile_founder_age_bounds(founder)
         actual_age = int(simulation_year) - int(founder.birthyear)
         if f_lo <= actual_age <= f_hi:
-            return _with_founder_parent_names(ctx, founder)
+            return selected_founder(founder)
     fallback_age = max(lo, min(hi, int(probe.min_fertility_age or lo)))
     founder = generate_person_random(
         species=probe.species,
@@ -400,7 +425,7 @@ def generate_population_founder(
         simulation_year=simulation_year,
         simulation_context=ctx,
     )
-    return _with_founder_parent_names(ctx, founder)
+    return selected_founder(founder)
 
 
 def _geo_summary(local_geography_json: str | None) -> str:
@@ -1624,6 +1649,7 @@ def _run_population_growth_year_loop(
     duration_years: int,
     passive_population_scale: float,
     detailed_active_soft_cap: int | None,
+    use_nondetailed_directory: bool = False,
     progress_callback: Callable[[int], None] | None,
 ) -> None:
     end_exclusive = int(start_year) + int(duration_years)
@@ -1691,15 +1717,42 @@ def _run_population_growth_year_loop(
 
         if prof:
             t0 = tpc()
-        refresh_passive_background_cohorts(
-            ctx,
-            year,
-            population_scale=passive_population_scale,
-            extra_newborns_by_place=passive_births_by_place,
-        )
-        ensure_detailed_floor_for_active_settlements(ctx, year)
+        if use_nondetailed_directory:
+            with closing(sqlite3.connect(ctx.save_db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                seed_nondetailed_from_active_settlements(
+                    conn,
+                    ctx,
+                    year=year,
+                    population_scale=passive_population_scale,
+                    start_person_id=ctx.next_person_id,
+                )
+                conn.commit()
+            ctx.last_nondetailed_tick_result = run_nondetailed_sql_annual_tick_for_save(
+                ctx.save_db_path,
+                year=year,
+            )
+            with closing(sqlite3.connect(ctx.save_db_path)) as conn:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(person_id), 0) FROM simulation_people_nondetailed"
+                ).fetchone()
+            ctx.next_person_id = max(int(ctx.next_person_id), int(row[0] or 0) + 1)
+        else:
+            refresh_passive_background_cohorts(
+                ctx,
+                year,
+                population_scale=passive_population_scale,
+                extra_newborns_by_place=passive_births_by_place,
+            )
+            ensure_detailed_floor_for_active_settlements(ctx, year)
         if prof:
-            simulation_timing.accumulate("runner.passive_cohorts", tpc() - t0)
+            simulation_timing.accumulate(
+                "runner.nondetailed_directory"
+                if use_nondetailed_directory
+                else "runner.passive_cohorts",
+                tpc() - t0,
+            )
 
         persist_to_save = ctx._should_checkpoint_snapshot(year)
         _record_profile_scale_snapshot(ctx, year, "before_summary")
@@ -1726,6 +1779,7 @@ def run_population_growth_simulation(
     starting_couples: int,
     passive_population_scale: float = 1.0,
     detailed_active_soft_cap: int | None = None,
+    use_nondetailed_directory: bool = False,
     progress_callback: Callable[[int], None] | None = None,
     print_timing_report: bool = True,
 ) -> None:
@@ -1738,17 +1792,21 @@ def run_population_growth_simulation(
 
     founder_rng = random.Random(int(sim_seed) * 1_000_003 + int(start_year) + 71_009)
     for _ in range(starting_couples):
+        male_person_id_seed = int(ctx.next_person_id)
         male = generate_population_founder(
             ctx,
             gender="Male",
             simulation_year=start_year,
             rng=founder_rng,
+            person_id_seed=male_person_id_seed,
         )
+        female_person_id_seed = int(ctx.next_person_id) + 1
         female = generate_population_founder(
             ctx,
             gender="Female",
             simulation_year=start_year,
             rng=founder_rng,
+            person_id_seed=female_person_id_seed,
         )
         male_rec = ctx.add_person(person=male, is_founder=True)
         female_rec = ctx.add_person(person=female, is_founder=True)
@@ -1761,6 +1819,7 @@ def run_population_growth_simulation(
         duration_years=duration_years,
         passive_population_scale=passive_population_scale,
         detailed_active_soft_cap=detailed_active_soft_cap,
+        use_nondetailed_directory=bool(use_nondetailed_directory),
         progress_callback=progress_callback,
     )
 
@@ -1775,6 +1834,7 @@ def continue_population_growth_simulation(
     duration_years: int,
     passive_population_scale: float = 1.0,
     detailed_active_soft_cap: int | None = None,
+    use_nondetailed_directory: bool = False,
     progress_callback: Callable[[int], None] | None = None,
     print_timing_report: bool = True,
 ) -> int:
@@ -1782,7 +1842,12 @@ def continue_population_growth_simulation(
 
     Returns the first simulation year processed by this continuation.
     """
-    if not ctx.people and not ctx.passive_people and not ctx.passive_cohorts:
+    if (
+        not ctx.people
+        and not ctx.passive_people
+        and not ctx.passive_cohorts
+        and ctx.nondetailed_population_count() <= 0
+    ):
         raise ValueError("Cannot resume population simulation without a loaded save.")
     current_year = (
         int(ctx.current_year)
@@ -1803,6 +1868,7 @@ def continue_population_growth_simulation(
         duration_years=duration_years,
         passive_population_scale=passive_population_scale,
         detailed_active_soft_cap=detailed_active_soft_cap,
+        use_nondetailed_directory=bool(use_nondetailed_directory),
         progress_callback=progress_callback,
     )
 

@@ -1,5 +1,677 @@
 # TODONE
 
+## Detailed Population Variance And Serial Predator Signal
+
+- Added `library.detailed_population_variance` for deterministic
+  center-or-extreme genome variance when a person is selected into full detailed
+  simulation:
+  - production founder generators now apply the selection-variance path;
+  - passive-person promotions apply it based on promotion reason/source;
+  - non-detailed city-directory promotions apply it with a
+    `source_kind=nondetailed_directory` profile;
+  - named selection profiles now distinguish ruler, officeholder, elite,
+    specialist, criminal/outlaw, religious, migrant/frontier, kinship-link,
+    inspection, spotlight, founder, and non-detailed-directory materialization;
+  - materialized people get a `High-Variance Detail` composite marker while
+    non-detailed baseline rows remain genome-free and ordinary.
+- Added a rare serial-predator signal inside existing murder-rate calibration:
+  - `serial_predator_propensity(...)` scores only extreme/repeat-capable
+    detailed profiles;
+  - murder event volume still comes from `incident_rates.csv` and the existing
+    homicide target gates;
+  - prior killer-role murder rows from pending events and `simulation_events` /
+    `simulation_event_people` bias candidate selection and event payloads;
+  - murder payloads now include `serial_predator_propensity`,
+    `previous_murder_count`, and `serial_predator_candidate`.
+- Strengthened repeat-predator emergence without increasing murder volume:
+  - murder chance and annual caps still come from the existing homicide-rate
+    gates;
+  - murder event volume was retuned to
+    `MURDER_BASE_SETTLEMENT_CHANCE = 0.00075` and
+    `MURDER_RATE_CONTEXT_MULTIPLIER = 0.18` after representative mixed-mode
+    probes showed the previous chance gates above the configured 4-per-10K
+    target;
+  - founder, baseline, officeholder/detail-floor, elite, specialist, spotlight,
+    and criminal/outlaw detailed-selection profiles now include profile-specific
+    rare repeat-capable tails, with criminal/outlaw remaining much higher than
+    ordinary detailed materialization;
+  - production founder generation now seeds detailed-selection variance with
+    the actual next person id instead of `0`, so rare deterministic profile
+    variation is per founder rather than collapsing through one id seed;
+  - after a murder gate passes, `_repeat_murder_selection_multiplier(...)`
+    explicitly boosts only already-eligible killer candidates with high serial
+    propensity or prior killer-role murders;
+  - the multiplier is capped at
+    `MURDER_REPEAT_KILLER_SELECTION_MULTIPLIER_CAP = 2.25`, which keeps one
+    capped repeat-prone candidate below a 1% killer-selection share in the
+    canonical 250-person murder sample while still making repeat emergence
+    meaningfully more likely than ordinary selection.
+- Added regression coverage for:
+  - promoted detailed people receiving higher-variance genomes;
+  - deterministic materialization for the same person/year/reason/source;
+  - founder selection receiving the variance marker;
+  - passive-promotion wiring through `SimulationContext`;
+  - serial-predator propensity staying low for ordinary people and rising for
+    extreme/repeat profiles;
+  - incident genome-signal payloads and pending prior-murder counts;
+  - the repeat-murder multiplier remaining bounded and its cap staying below
+    the 1% single-candidate guardrail share in the canonical settlement sample;
+  - the same cap still producing an expected 3+ murders for one persistent
+    capped repeat-prone candidate across a 500-murder emergence sample;
+  - the actual weighted killer-selection path producing a deterministic 3+
+    repeat-killer emergence across a 500-murder sample while staying at or
+    below the 1% serial-murder guardrail;
+  - a generated detailed-selection founder profile, scored by
+    `serial_predator_propensity(...)`, feeding that same weighted
+    killer-selection path and reaching 3+ repeat selections in a 500-murder
+    sample while staying within the 1% guardrail;
+  - founder materialization rarely but deterministically producing
+    serial-capable profiles in a bounded cohort.
+- Validation:
+  - `python -m unittest unit_test.test_detailed_population_variance
+    unit_test.test_event_scoring unit_test.test_simulation_incident_helpers`;
+  - `python -m unittest unit_test.test_simulation_incidents`;
+  - `python -m unittest unit_test.test_simulation_incident_helpers
+    unit_test.test_event_scoring`;
+  - `python -m unittest unit_test.test_simulation_incidents`, which passed with
+    existing `library\random_names.py` unclosed sqlite `ResourceWarning`s;
+  - `python -m py_compile library\simulation_incidents.py
+    unit_test\test_simulation_incident_helpers.py`;
+  - `python -m unittest unit_test.test_simulation_incident_helpers
+    unit_test.test_event_scoring`;
+  - `python -m unittest unit_test.test_mixed_mode_calibration`;
+  - `python -m py_compile library\simulation_incidents.py
+    unit_test\test_simulation_incident_helpers.py`;
+  - `python -m unittest unit_test.test_simulation_incident_helpers
+    unit_test.test_event_scoring unit_test.test_mixed_mode_calibration`;
+  - `python -m py_compile library\simulation_incidents.py
+    utils\run_mixed_mode_calibration.py
+    unit_test\test_simulation_incident_helpers.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - `python -m unittest unit_test.test_simulation_incidents`, which passed with
+    existing `library\random_names.py` unclosed sqlite `ResourceWarning`s;
+  - medium bundled-Python serial probe:
+    `utils\run_mixed_mode_calibration.py --targets 10000 --replicates 3
+    --years 20 --starting-couples 5 --min-detailed-cap 120
+    --max-detailed-cap 250 --output temp\mixed_mode_medium_serial_probe.tsv`,
+    which produced 3 murders across 3 scenarios,
+    `murder_per_10k_detailed_person_years=4.297994`, target ratio `1.074499`,
+    and `hybrid_calibration_status=needs_more_murder_sample`, confirming the
+    run was directionally near the murder-rate target but too small for serial
+    guardrail or emergence proof;
+  - attempted larger bundled-Python serial probe:
+    `utils\run_mixed_mode_calibration.py --targets 50000 --replicates 1
+    --years 50 --starting-couples 20 --detailed-fraction 0.05
+    --min-detailed-cap 1000 --max-detailed-cap 2500 --output
+    temp\mixed_mode_large_serial_probe.tsv`, which reached settlement spin-off
+    and stopped because bundled Python lacks the optional `shapely` dependency
+    required by world-map geometry;
+  - no-spin-off larger bundled-Python serial probe:
+    `utils\run_mixed_mode_calibration.py --targets 50000 --replicates 1
+    --years 50 --starting-couples 20 --detailed-fraction 0.05
+    --min-detailed-cap 1000 --max-detailed-cap 2500
+    --disable-birth-settlement-spinoff --output
+    temp\mixed_mode_large_no_spinoff_probe.tsv`, which completed in the bundled
+    runtime, wrote `birth_settlement_spinoff_disabled=yes`, produced 23 murders,
+    `murder_per_10k_detailed_person_years=9.055118`, target ratio `2.263780`,
+    and `hybrid_calibration_status=retune_murder_rate_above_target`;
+  - representative bundled-Python probe after optional-geometry fallback and
+    final murder-volume retune:
+    `utils\run_mixed_mode_calibration.py --targets 50000 --replicates 2
+    --years 50 --starting-couples 20 --detailed-fraction 0.05
+    --min-detailed-cap 1000 --max-detailed-cap 2500 --output
+    temp\mixed_mode_large_retuned_replicates2.tsv`, which kept
+    birth-settlement spin-off enabled, produced 12 murders across 35,601
+    detailed person-years, wrote
+    `murder_per_10k_detailed_person_years=3.370692`, target ratio `0.842673`,
+    `murder_rate_calibration_status=within_target_band`, and
+    `hybrid_calibration_status=needs_more_serial_guardrail_sample`;
+  - bundled-Python serial-profile smoke:
+    `utils\run_mixed_mode_calibration.py --targets 10000 --replicates 1
+    --years 10 --starting-couples 5 --min-detailed-cap 120
+    --max-detailed-cap 250 --output temp\mixed_mode_serial_profile_probe5.tsv`,
+    which wrote 1 serial-predator profile out of 158 scored detailed people
+    (`serial_predator_profile_share_of_scored_detailed=0.006329`) and
+    `max_serial_predator_propensity=0.776815`, after earlier profile smokes had
+    shown zero profiles and max propensities below the 0.62 candidate threshold;
+  - bundled-Python serial-profile status smoke:
+    `utils\run_mixed_mode_calibration.py --targets 10000 --replicates 1
+    --years 10 --starting-couples 5 --min-detailed-cap 120
+    --max-detailed-cap 250 --output temp\mixed_mode_profile_status_smoke.tsv`,
+    which wrote `serial_predator_profile_sample_ready=yes`,
+    `serial_predator_profile_calibration_status=serial_predator_profiles_present`,
+    `serial_predator_profile_target_share_max=0.020000`, and kept the overall
+    status at `needs_more_murder_sample` because the zero-murder smoke had not
+    reached the 10-murder rate gate;
+  - aggregate summary projection smoke:
+    `utils\run_mixed_mode_calibration.py --targets 10000 --replicates 1
+    --years 10 --starting-couples 5 --min-detailed-cap 120
+    --max-detailed-cap 250 --output temp\mixed_mode_projection_smoke.tsv`,
+    run with bundled Python, which wrote
+    `murder_sample_projection_rate_source=target`,
+    `serial_murder_sample_projected_additional_detailed_person_years=250000`,
+    and
+    `serial_murder_emergence_projected_additional_detailed_person_years=1250000`
+    before the temporary smoke files were removed;
+  - bundled-Python deterministic weighted-selection proof:
+    `python -m unittest unit_test.test_simulation_incident_helpers`, which
+    covers the actual `_weighted_choice(...)` killer-selection weighting path
+    and proves a capped repeat-capable candidate can reach 3+ selections in a
+    500-murder sample while remaining within the 1% guardrail;
+  - bundled-Python endogenous generated-profile proof:
+    `python -m unittest unit_test.test_simulation_incident_helpers`, which
+    covers a founder generated through `apply_detailed_selection_variance(...)`,
+    scored by `serial_predator_propensity(...)`, and then passed through the
+    same weighted killer-selection path;
+  - bundled-Python focused suite:
+    `python -m unittest unit_test.test_simulation_incident_helpers
+    unit_test.test_detailed_population_variance unit_test.test_event_scoring
+    unit_test.test_mixed_mode_calibration unit_test.test_event_history_report`;
+  - bundled-Python compile check:
+    `python -m py_compile unit_test\test_simulation_incident_helpers.py
+    library\detailed_population_variance.py library\simulation_incidents.py
+    library\event_scoring.py`;
+  - `python -m unittest unit_test.test_detailed_population_variance
+    unit_test.test_event_scoring unit_test.test_event_history_report
+    unit_test.test_mixed_mode_calibration`;
+  - `python -m unittest unit_test.test_mixed_mode_calibration
+    unit_test.test_event_history_report unit_test.test_detailed_population_variance
+    unit_test.test_event_scoring`, which passed with an existing
+    `library\world_map_geometry.py` unclosed sqlite `ResourceWarning`;
+  - `python -m unittest unit_test.test_mixed_mode_calibration`;
+  - `python -m py_compile library\detailed_population_variance.py
+    library\population_growth_runner.py library\event_history_report.py
+    utils\run_mixed_mode_calibration.py`;
+  - `python -m py_compile utils\run_mixed_mode_calibration.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - `python -m py_compile utils\run_mixed_mode_calibration.py
+    library\event_history_report.py library\detailed_population_variance.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - `python -m unittest unit_test.test_simulation_incident_helpers
+    unit_test.test_event_scoring unit_test.test_mixed_mode_calibration
+    unit_test.test_lazy_settlements`, which passed with an existing unclosed
+    sqlite `ResourceWarning`;
+  - `python -m py_compile library\simulation_incidents.py
+    library\placenames_generation.py library\simulation_context.py
+    utils\run_mixed_mode_calibration.py
+    unit_test\test_simulation_incident_helpers.py
+    unit_test\test_mixed_mode_calibration.py unit_test\test_lazy_settlements.py`;
+  - `python -m unittest unit_test.test_simulation_incidents`, which passed with
+    existing `library\random_names.py` unclosed sqlite `ResourceWarning`s;
+  - bundled-Python repeat-weight smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 1
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --output temp\mixed_mode_repeat_weight_smoke.tsv`, which still wrote all
+    calibration artifacts and the expected insufficient-sample murder,
+    serial-guardrail, and serial-emergence summary fields;
+  - `python -m unittest unit_test.test_detailed_population_variance
+    unit_test.test_event_history_report unit_test.test_mixed_mode_calibration`;
+  - `python -m py_compile library\detailed_population_variance.py
+    library\event_scoring.py library\simulation_incidents.py
+    library\simulation_context.py library\population_growth_runner.py
+    library\zero_point_colonies.py unit_test\test_detailed_population_variance.py
+    unit_test\test_event_scoring.py unit_test\test_simulation_incident_helpers.py
+    unit_test\test_simulation_incidents.py`;
+  - `python -m unittest unit_test.test_simulation_engine_zero_point`.
+
+## Hybrid Population Calibration Report Metrics
+
+- Extended `library.event_history_report` with a
+  `HybridPopulationCalibrationSummary` section:
+  - detailed people and alive detailed people;
+  - living non-detailed city-directory people;
+  - high-variance detailed marker count;
+  - genome-scored detailed people, extreme detailed people, and average
+    detailed variance score;
+  - event-year span, murder count, serial-predator candidate murder count,
+    approximate murders per 10K detailed person-years, and serial-candidate
+    share of murders.
+- Added TSV/text output for `hybrid_population_calibration.tsv` and the report
+  summary's "Hybrid Population Calibration" block.
+- Added `hybrid_variance_by_promotion_reason.tsv` so calibration reports can
+  compare detailed-person variance by the first persisted promotion reason,
+  including person count, high-variance marker count, scored count, extreme
+  count, and average variance score.
+- Added deterministic fixture coverage that proves the report can read detailed
+  person JSON, non-detailed rows, and serial-predator murder payload flags
+  without needing a long run, plus promotion-reason variance rows from
+  `simulation_promotion_log`.
+- Validation:
+  - `python -m unittest unit_test.test_event_history_report`;
+  - `python -m unittest unit_test.test_detailed_population_variance
+    unit_test.test_event_history_report unit_test.test_mixed_mode_calibration`;
+  - `python -m unittest unit_test.test_detailed_population_variance
+    unit_test.test_event_scoring unit_test.test_simulation_incident_helpers
+    unit_test.test_event_history_report`;
+  - `python -m py_compile library\event_history_report.py
+    unit_test\test_event_history_report.py library\detailed_population_variance.py
+    library\event_scoring.py library\simulation_incidents.py
+    utils\util_event_history_report.py utils\gradio_data_browser.py`.
+
+## Mixed-Mode Hybrid Calibration TSV
+
+- Extended `utils/run_mixed_mode_calibration.py` so each maintained calibration
+  row now includes event-history hybrid metrics from the generated save:
+  detailed-person counts, non-detailed counts, high-variance marker counts,
+  genome-scored and extreme detailed counts, average detailed variance score,
+  serial-predator profile counts/shares and propensity scores, murder counts,
+  serial-predator candidate counts, murder rate per 10K detailed person-years,
+  and serial-candidate share of murders.
+- Taught `library.event_history_report` to decode compact checkpoint genome /
+  mind-body arrays with config-provided trait slots, so production saves with
+  compact `g` / `mb` payloads produce numeric variance scores rather than only
+  marker counts.
+- Wired `utils/util_event_history_report.py` to pass the world's
+  `genome_save_columns` slot order into event-history reports.
+- Added explicit serial-murder guardrail fields to the hybrid report:
+  - distinct murder killers;
+  - repeat killers with 2+ recorded murders;
+  - stricter serial killers with 3+ recorded murders;
+  - murders committed by 3+ repeat killers;
+  - share of murders committed by 3+ repeat killers;
+  - target maximum share `0.01` and a calibration status that stays
+    `insufficient_murder_sample` until at least 100 murders are observed.
+- Added a separate serial-murder emergence diagnostic so long calibration
+  batches can distinguish "rare but present" from "never appears":
+  - report and batch summaries expose
+    `serial_murder_emergence_min_murder_sample=500`;
+  - below that sample they report `insufficient_emergence_sample`;
+  - at 500+ murders with no 3+ repeat killer they report
+    `no_serial_murder_emerged`;
+  - at 500+ murders with at least one 3+ repeat killer under the 1% ceiling they
+    report `serial_murder_emerged`.
+- Fixed the hybrid calibration rate denominator so the report prefers
+  `world_state.start_year/current_year`, then murder-event years, instead of
+  letting old birth/founder history events inflate the observation span.
+- Added mixed-mode murder-rate target columns:
+  - summed `detailed_person_years` from the runner's yearly summary stream, so
+    calibration rates use actual detailed exposure instead of final alive count
+    times run span;
+  - configured murder target per 10K detailed person-years;
+  - observed/target ratio;
+  - calibration status that stays `insufficient_murder_sample` until at least
+    10 murders are observed, then reports below/within/above the target band.
+- Added `--disable-birth-settlement-spinoff` to
+  `utils/run_mixed_mode_calibration.py` for large event-rate probes in runtimes
+  without optional Shapely/world-map geometry support; row TSVs include
+  `birth_settlement_spinoff_disabled`, and summary TSVs count disabled
+  scenarios so these stress probes are not mistaken for ordinary geography runs.
+- Added `--stop-when-hybrid-status` and `--min-scenarios-before-stop` to
+  `utils/run_mixed_mode_calibration.py` so long calibration batches can be
+  launched with a high replicate ceiling and stop as soon as the aggregate
+  `hybrid_calibration_status` reaches an explicit target such as
+  `within_hybrid_calibration_targets` or the `calibrated` alias.
+- Added `--resume-existing` to `utils/run_mixed_mode_calibration.py`, allowing
+  an interrupted or deliberately staged calibration batch to reload existing
+  row and promotion-reason TSVs, skip completed `scenario_index` values, run
+  only missing planned scenarios, and rewrite aggregate summaries from the
+  combined evidence. Resume matching now checks scenario index, target index,
+  replicate index, target population, and seed against the current scenario
+  plan before skipping a row, so changing the calibration plan does not silently
+  reuse mismatched evidence.
+- Added `--stop-after-total-murders` and
+  `--stop-after-detailed-person-years` to
+  `utils/run_mixed_mode_calibration.py` so representative long runs can stop at
+  explicit aggregate sample thresholds such as 100 murders for the serial
+  guardrail or 500 murders / roughly 1.25M detailed person-years for serial
+  emergence.
+- Added `recommended_next_calibration_*` fields to the aggregate summary so an
+  immature batch names the next sample target and the relevant resume/stop flags
+  instead of requiring the operator to infer the next command from several
+  readiness columns.
+- Added `--write-incremental` to `utils/run_mixed_mode_calibration.py`, using a
+  shared output writer that rewrites row, summary, per-scenario
+  promotion-reason, and aggregate promotion-reason TSVs after each completed
+  scenario. This preserves completed scenario evidence during long batches even
+  if a later scenario or process timeout interrupts the run.
+- Added an aggregate calibration summary TSV next to each mixed-mode row TSV:
+  - combines multi-row batches into total detailed person-years and total murder
+    samples;
+  - supports first-class `--replicates N` batches for each target population,
+    with `scenario_index`, `target_index`, `replicate_index`, and distinct seed
+    columns in the row TSV;
+  - writes per-scenario `*.promotion_reasons.tsv` and aggregate
+    `*.promotion_reason_summary.tsv` artifacts so temporary generated saves do
+    not discard promotion-reason variance diagnostics;
+  - adds profile-derived expected variance bands and sample-aware
+    `reason_variance_calibration_status` values for promotion-reason rows,
+    using `insufficient_reason_sample`, `below_profile_floor`,
+    `within_profile_band`, or `above_profile_ceiling`;
+  - computes weighted murder targets, observed/target ratio, and sample-aware
+    murder-rate status;
+  - aggregates serial-predator profile people, share of scored detailed people,
+    weighted average serial-predator propensity, and max serial-predator
+    propensity so batches can distinguish "no repeat-capable people exist" from
+    "repeat-capable people exist but murder sample is still immature";
+  - adds a sample-aware serial-profile calibration gate with 100 scored detailed
+    people as the minimum sample, a maximum profile-share ceiling of 2%, and
+    statuses for absent, present, too-common, or immature profile evidence;
+  - computes serial-murder 3+ killer share against the same 1% guardrail once
+    the combined sample reaches 100 murders;
+  - reports murder-rate and serial-murder sample thresholds, remaining murder
+    counts, and ready flags so small or medium batches say how much more sample
+    is needed before calibration statuses are meaningful;
+  - projects the additional detailed person-years and current-average scenario
+    equivalents needed to reach the 100-murder serial guardrail and 500-murder
+    serial-emergence gates, using the observed murder rate after the
+    10-murder rate sample is mature and the configured target rate before then;
+  - adds top-level `hybrid_calibration_ready` and
+    `hybrid_calibration_status` fields that compose murder-rate, serial
+    guardrail, and serial-emergence diagnostics into a single next-action
+    verdict such as `needs_more_murder_sample`,
+    `needs_more_serial_emergence_sample`, `serial_murder_too_common`, or
+    `within_hybrid_calibration_targets`;
+  - prioritizes mature murder-rate retuning in the overall verdict before
+    asking for larger serial samples, so an above/below-target homicide rate is
+    not masked by immature 100- or 500-murder serial diagnostics;
+  - aggregates `total_serial_murder_killers_3plus` separately from
+    `total_serial_murder_events_by_3plus_killers` so emergence and share checks
+    can answer different questions;
+  - weights average detailed-variance scores by scored detailed-person counts.
+- Made `library.world_map_geometry` importable without Shapely installed, while
+  still raising a clear Shapely-required error when polygon geometry is actually
+  built. This keeps non-map calibration/reporting tools runnable in lightweight
+  environments.
+- Made birth-settlement spin-off usable in bundled-Python calibration runs
+  without Shapely:
+  - settlement naming falls back to local geography without world-map overlays
+    when optional geometry is unavailable;
+  - duplicate-site polygon checks skip map-polygon comparison when optional
+    geometry is unavailable, while ordinary site slots/local geography still
+    distinguish settlements.
+- Added regression coverage for compact checkpoint payloads and TSV columns in
+  `unit_test.test_mixed_mode_calibration`, plus event-history coverage for the
+  serial-murder guardrail.
+- Validation:
+  - `python -m unittest unit_test.test_mixed_mode_calibration
+    unit_test.test_event_history_report`;
+  - `python -m unittest unit_test.test_event_history_report
+    unit_test.test_mixed_mode_calibration unit_test.test_event_scoring
+    unit_test.test_simulation_incident_helpers`;
+  - `python -m unittest unit_test.test_event_history_report
+    unit_test.test_mixed_mode_calibration`;
+  - `python -m py_compile library\event_history_report.py
+    utils\run_mixed_mode_calibration.py utils\util_event_history_report.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - `python -m py_compile library\event_history_report.py
+    unit_test\test_event_history_report.py utils\run_mixed_mode_calibration.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - `python -m py_compile library\event_history_report.py
+    library\world_map_geometry.py utils\run_mixed_mode_calibration.py
+    utils\util_event_history_report.py unit_test\test_event_history_report.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - bundled-Python smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000,1000 --years 1
+    --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20 --output
+    temp\mixed_mode_calibration_smoke.tsv`, which wrote both the row-level TSV
+    and `temp\mixed_mode_calibration_smoke.summary.tsv`, with the tiny combined
+    murder sample correctly remaining `insufficient_murder_sample`;
+  - bundled-Python replicate smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 2
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --output temp\mixed_mode_replicates_smoke.tsv`, which wrote two replicate
+    rows with seeds `15000` and `15001`, plus a summary with
+    `scenario_count=2` and `distinct_seed_count=2`;
+  - bundled-Python promotion-reason smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 2
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --output temp\mixed_mode_reason_smoke.tsv`, which wrote the two
+    promotion-reason artifacts and summarized `settlement_detail_floor` with
+    `detailed_people=95`, `high_variance_detail_people=95`, and
+    `average_detail_variance_score=0.687610`;
+  - bundled-Python promotion-reason status smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 2
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --output temp\mixed_mode_reason_status_smoke.tsv`, which summarized
+    `settlement_detail_floor` as selection profile `officeholder`, expected
+    variance band `0.454400..0.734400`, and `within_profile_band`;
+  - bundled-Python import check:
+    `python -c "import utils.run_mixed_mode_calibration as m; print('import ok')"`;
+  - `python -m unittest unit_test.test_mixed_mode_calibration`;
+  - `python -m py_compile utils\run_mixed_mode_calibration.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - `python -m unittest unit_test.test_event_history_report
+    unit_test.test_mixed_mode_calibration`;
+  - `python -m py_compile library\event_history_report.py
+    utils\run_mixed_mode_calibration.py unit_test\test_event_history_report.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - bundled-Python serial-emergence smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 1
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --output temp\mixed_mode_serial_emergence_smoke.tsv`, whose summary wrote
+    `total_serial_murder_killers_3plus=0`,
+    `serial_murder_emergence_min_murder_sample=500`,
+    `serial_murder_emergence_sample_remaining=500`,
+    `serial_murder_emergence_sample_ready=no`, and
+    `serial_murder_emergence_status=insufficient_emergence_sample`;
+  - bundled-Python sample-readiness smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 1
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --output temp\mixed_mode_sample_readiness_smoke.tsv`, which wrote summary
+    rows with `murder_rate_murder_sample_remaining=10`,
+    `murder_rate_sample_ready=no`, `serial_murder_sample_remaining=100`, and
+    `serial_murder_sample_ready=no` for a zero-murder tiny run;
+  - bundled-Python stop-status smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 3
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --stop-when-hybrid-status needs_more_murder_sample --output
+    temp\mixed_mode_stop_status_smoke.tsv`, which stopped after one scenario,
+    printed `stopping_early=yes`, and still wrote the normal row, summary, and
+    promotion-reason artifacts before the temporary files were removed;
+  - bundled-Python resume smoke:
+    first ran `utils\run_mixed_mode_calibration.py --targets 1000 --replicates
+    1 --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap
+    20 --output temp\mixed_mode_resume_smoke.tsv`, then reran with
+    `--replicates 2 --resume-existing` against the same output path; the second
+    run skipped scenario 0, added seed `15001`, rewrote the summary with
+    `scenario_count=2` and `distinct_seed_count=2`, then the temporary files
+    were removed;
+  - bundled-Python plan-aware resume smoke:
+    repeated the one-then-two-replicate resume check after tightening resume
+    matching, confirming scenario 0 was skipped only when its target, replicate,
+    population, and seed matched the current plan, and the resumed summary again
+    wrote `scenario_count=2` and `distinct_seed_count=2` before temporary files
+    were removed;
+  - bundled-Python sample-threshold smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 3
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --stop-after-detailed-person-years 1 --output
+    temp\mixed_mode_sample_stop_smoke.tsv`, which stopped after one scenario,
+    printed `matched_sample_threshold=yes`, and wrote summary rows
+    `scenario_count=1`, `total_detailed_person_years=52`, and
+    `hybrid_calibration_status=needs_more_murder_sample` before the temporary
+    files were removed;
+  - bundled-Python next-run-hint smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 1
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --output temp\mixed_mode_hint_smoke.tsv`, whose summary wrote
+    `recommended_next_calibration_reason=reach_murder_rate_sample`,
+    `recommended_next_calibration_stop_flag=--stop-after-total-murders`,
+    `recommended_next_calibration_stop_value=10`, and
+    `recommended_next_calibration_resume_flag=--resume-existing` before the
+    temporary files were removed;
+  - attempted representative bundled-Python rate-gate probe:
+    `utils\run_mixed_mode_calibration.py --targets 50000 --replicates 6
+    --years 50 --starting-couples 20 --detailed-fraction 0.05
+    --min-detailed-cap 1000 --max-detailed-cap 2500
+    --stop-after-total-murders 10 --output
+    temp\mixed_mode_rate_gate_probe.tsv`, which timed out at 300 seconds before
+    producing calibration artifacts; no `mixed_mode_rate_gate_probe*` files were
+    left in `temp`;
+  - retained representative bundled-Python rate-gate chunk:
+    `utils\run_mixed_mode_calibration.py --targets 50000 --replicates 1
+    --years 50 --starting-couples 20 --detailed-fraction 0.05
+    --min-detailed-cap 1000 --max-detailed-cap 2500
+    --stop-after-total-murders 10 --write-incremental --output
+    temp\mixed_mode_rate_gate_chunk.tsv`, which completed one scenario in about
+    155 seconds and wrote retained artifacts:
+    `temp/mixed_mode_rate_gate_chunk.tsv`,
+    `temp/mixed_mode_rate_gate_chunk.summary.tsv`,
+    `temp/mixed_mode_rate_gate_chunk.promotion_reasons.tsv`, and
+    `temp/mixed_mode_rate_gate_chunk.promotion_reason_summary.tsv`. The summary
+    reports `total_detailed_person_years=18947`, `total_murder_events=7`,
+    `murder_per_10k_detailed_person_years=3.694516`,
+    `murder_rate_calibration_status=insufficient_murder_sample`,
+    `total_serial_predator_profile_people=1`,
+    `serial_predator_profile_share_of_scored_detailed=0.000797`,
+    `serial_predator_profile_calibration_status=serial_predator_profiles_present`,
+    `serial_murder_sample_remaining=93`,
+    `serial_murder_emergence_sample_remaining=493`, and
+    `hybrid_calibration_status=needs_more_murder_sample`;
+  - resumed retained rate-gate chunk:
+    `utils\run_mixed_mode_calibration.py --targets 50000 --replicates 2
+    --years 50 --starting-couples 20 --detailed-fraction 0.05
+    --min-detailed-cap 1000 --max-detailed-cap 2500
+    --stop-after-total-murders 10 --write-incremental --resume-existing
+    --output temp\mixed_mode_rate_gate_chunk.tsv`, which skipped the existing
+    seed `15000`, added seed `15001`, stopped at the sample threshold, and
+    rewrote the retained artifacts. The aggregate summary now reports
+    `scenario_count=2`, `distinct_seed_count=2`,
+    `total_detailed_person_years=34998`, `total_murder_events=16`,
+    `murder_per_10k_detailed_person_years=4.571690`,
+    `murder_rate_target_ratio=1.142922`,
+    `murder_rate_calibration_status=within_target_band`,
+    `total_serial_predator_profile_people=8`,
+    `serial_predator_profile_share_of_scored_detailed=0.003400`,
+    `serial_predator_profile_calibration_status=serial_predator_profiles_present`,
+    `total_serial_predator_candidate_events=1`,
+    `serial_murder_sample_remaining=84`,
+    `serial_murder_sample_projected_additional_scenarios=11`,
+    `serial_murder_emergence_sample_remaining=484`, and
+    `hybrid_calibration_status=needs_more_serial_guardrail_sample`;
+  - bundled-Python incremental-output smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 1
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --write-incremental --output temp\mixed_mode_incremental_smoke.tsv`, which
+    wrote all four calibration artifacts with `scenario_count=1`,
+    `hybrid_calibration_status=needs_more_murder_sample`, and the expected
+    `recommended_next_calibration_*` fields before temporary files were removed;
+  - `python -m unittest unit_test.test_mixed_mode_calibration`;
+  - `python -m py_compile utils\run_mixed_mode_calibration.py
+    unit_test\test_mixed_mode_calibration.py`;
+  - bundled-Python overall-status smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --replicates 1
+    --years 1 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+    --output temp\mixed_mode_overall_status_smoke.tsv`, which printed
+    `summary_hybrid_status=needs_more_murder_sample` and wrote summary rows
+    `hybrid_calibration_ready=no` and
+    `hybrid_calibration_status=needs_more_murder_sample` for the expected
+    zero-murder tiny run;
+  - bundled-Python smoke:
+    `utils\run_mixed_mode_calibration.py --targets 1000 --years 1
+    --starting-couples 1 --min-detailed-cap 5 --max-detailed-cap 10 --output
+    temp\mixed_mode_calibration_smoke.tsv`, which wrote
+    `genome_scored_detailed_people=52` and
+    `average_detail_variance_score=0.684908` for the tiny smoke run, with
+    `serial_murder_calibration_status=insufficient_murder_sample`.
+- Medium-run evidence before adding the target-status columns:
+  - 20-year / 10,000 target / 5 starting couples run with corrected denominator
+    produced 84 detailed alive, 10,724 aggregate alive, 2 murders,
+    0 serial candidates, `event_year_span=20`,
+    `murder_per_10k_detailed_person_years=11.904762`, and
+    `serial_murder_calibration_status=insufficient_murder_sample`;
+  - 3-seed replicate of that scenario produced murder-rate rows of
+    `11.904762`, `5.555556`, and `0.000000`, showing the sample is still too
+    small/noisy for a hard murder-rate retune.
+  - After adding target/status columns and the Shapely import guard, the same
+    20-year / 10,000 target scenario wrote
+    `murder_per_10k_detailed_person_years=10.869565`,
+    `murder_target_per_10k_per_year=4.000000`,
+    `murder_rate_target_ratio=2.717391`, and
+    `murder_rate_calibration_status=insufficient_murder_sample` because only
+    2 murders were observed.
+
+## Non-Detailed City-Directory Population Slice
+
+- Added the first SQLite-backed city-directory model for non-detailed people:
+  - save schema v23 creates `simulation_people_nondetailed` plus readable view
+    and indexes for alive/age/place/job/partner-style queries;
+  - rows store narrow life/place/family/job-family facts without genome,
+    detailed job title, biography, event prose, or full `Person` payloads;
+  - `is_partnered` is tracked separately from exact `partner_person_id` so most
+    rows can support births without expensive full partner matching.
+- Added `library.nondetailed_population` with set-based annual operations:
+  - deterministic deaths, job-family assignment, bounded partnered-state
+    updates, births/newborn inserts, parent child-count updates, grouped
+    settlement job counts, and active-settlement seeding.
+- Wired the new directory into runtime surfaces:
+  - `SimulationContext` mixed population counts and settlement resident counts
+    include living non-detailed rows;
+  - yearly summaries now include non-detailed alive/birth/death counts;
+  - Gradio place stats include non-detailed population and job-family buckets;
+  - `promote_nondetailed_person(...)` materializes a directory row into a
+    detailed person while preserving known birth/place/family/job anchors.
+- Added a runner switch and benchmark utility:
+  - `utils/run_population_simulation.py --use-nondetailed-directory`;
+  - `utils/bench_nondetailed_directory.py` records insert/tick/group timings to
+    `temp/nondetailed_directory_bench.tsv`.
+- Validation:
+  - bundled-Python `py_compile` for the new module, runner, save/context,
+    browser, benchmark, and tests;
+  - `python -m unittest unit_test.test_nondetailed_population
+    unit_test.test_save_checkpoint.TestSaveCheckpoint.test_passive_people_checkpoint_roundtrip`;
+  - benchmark smoke with 20,000 total / 5,000 living directory rows;
+  - maintained 2,000,000 total / 500,000 living benchmark completed with
+    insert 10.844s, annual SQL tick 1.180s, grouped job counts 0.023s;
+  - one-year population smoke using `--use-nondetailed-directory`, producing
+    mixed yearly-summary counts with 50 living non-detailed rows at scale 0.05.
+
+## Non-Detailed Economy And Migration V1
+
+- Added aggregate job-family economy effects from
+  `simulation_people_nondetailed`:
+  - grouped settlement job-family counts now affect food pressure, prosperity
+    pool, market pull, and stability;
+  - food-worker shortages and military-heavy labor mixes raise pressure;
+  - craft/trade surplus lifts market/prosperity; care/admin/religious support
+    improves local stability;
+  - effects record `nondetailed_job_family_economy_effect` aggregate events.
+- Added bounded set-based migration for non-detailed directory rows:
+  - strained source settlements move adult directory rows toward existing
+    attractive settlements, considering food pressure, prosperity, regional
+    pressure, routes, market pull, stability, and resident mass;
+  - migration updates rows in SQL without creating detailed move events per
+    person;
+  - aggregate moves record `nondetailed_settlement_migration` events.
+- Wired the v1 effects into annual simulation:
+  - non-detailed migration runs during the migration tick before cap drift;
+  - non-detailed job-family effects run during the economy tick after detailed
+    worker-market effects.
+- Validation:
+  - `python -m py_compile library/nondetailed_population.py
+    library/simulation_economy.py library/simulation_migration.py
+    library/population_growth_runner.py library/simulation_context.py
+    utils/run_population_simulation.py unit_test/test_nondetailed_population.py`;
+  - `python -m unittest unit_test.test_nondetailed_population`;
+  - two-year population smoke using `--use-nondetailed-directory`, producing
+    55 living directory rows plus 2 `nondetailed_job_family_economy_effect`
+    events and 1 `nondetailed_settlement_migration` event.
+
+## Road Overlay Straight-Line Cleanup
+
+- Reduced visibly straight settlement-road overlays by naturalizing long road
+  chords into deterministic land-safe bow waypoints before SVG rendering:
+  - direct roads and long subsegments inside otherwise-routed roads now get
+    additional intermediate points when the bend stays on land;
+  - ford-aware channel checks prevent decorative bends from wandering through
+    unbridged river channels;
+  - route-choice accounting keeps using the underlying routing length so visual
+    waypoints do not make ford detours or network reuse look more expensive.
+- Added regression coverage for a long direct road inside a land cell, asserting
+  that no single segment dominates the visible road shape.
+- Default-world debug export comparison after the fix:
+  - long roads (`length >= 0.04`) with `max_segment_fraction >= 0.50` dropped
+    from 19 to 0;
+  - long roads with `directness_ratio <= 1.12` dropped from 13 to 0;
+  - remaining two-point or dominant-segment roads are short local connectors
+    under `0.04` world units.
+- Validation:
+  - `python -m py_compile library\world_map_roads.py
+    unit_test\test_world_map_roads.py`;
+  - `python -m unittest unit_test.test_world_map_roads`;
+  - `python utils\util_export_world_map_svg.py --world-id default --output
+    temp\road_debug.svg --debug-output temp\road_debug.json`.
+
 ## Gradio Event Card And Relationship History Bugfix Pass
 
 - Closed the current Gradio-specific TODO bugfixes:

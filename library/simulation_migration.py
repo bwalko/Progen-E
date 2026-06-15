@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import math
 import random
+import sqlite3
+from contextlib import closing
 from typing import TYPE_CHECKING
 
 from library.geography import list_regions, list_routes_from
+from library.nondetailed_population import run_nondetailed_sql_migration
+from library.world_save import ensure_checkpoint_schema
 
 if TYPE_CHECKING:
     from library.simulation_context import SimulationContext
@@ -190,6 +194,17 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 _move_migrant_and_coresident_partner(ctx, pid, rid, st.settlement_id, year)
             except (ValueError, LookupError):
                 continue
+
+    try:
+        with closing(sqlite3.connect(ctx.save_db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            ensure_checkpoint_schema(conn)
+            nd_migration = run_nondetailed_sql_migration(conn, ctx, year=year)
+            conn.commit()
+        if nd_migration.moved and hasattr(ctx, "sync_settlement_resident_counts"):
+            ctx.sync_settlement_resident_counts()
+    except sqlite3.Error:
+        pass
 
     tick_region_effective_cap_multipliers(ctx, rng)
     ctx.invalidate_annual_indexes()

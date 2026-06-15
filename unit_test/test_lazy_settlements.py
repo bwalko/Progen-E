@@ -105,6 +105,41 @@ class TestLazySettlements(unittest.TestCase):
             finally:
                 ctx.finalize_run()
 
+    def test_settlement_creation_falls_back_without_optional_world_geometry(self) -> None:
+        from library.simulation_context import SimulationContext
+        from pathlib import Path
+        import tempfile
+        from library.config_import import load_all_csvs_into_sqlite
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext(
+                db_path=cfg,
+                save_db_path=root / "save.sqlite",
+                world="default",
+                simulation_start_year=1000,
+                history_equivalent_start_year=1000,
+                current_year=1005,
+            )
+
+            def missing_geometry():
+                raise ModuleNotFoundError("optional geometry unavailable")
+
+            try:
+                ctx.world_map_geometry_for_settlements = missing_geometry  # type: ignore[method-assign]
+
+                first = ctx.ensure_active_settlement_for_region("boreas_fjord_shore")
+                second = ctx.create_additional_active_settlement("boreas_fjord_shore")
+
+                self.assertEqual([first.site_slot, second.site_slot], [1, 2])
+                self.assertEqual(first.local_geography_json, second.local_geography_json)
+                data = json.loads(first.local_geography_json or "{}")
+                self.assertEqual(len(data.get("settlements", [])), 2)
+            finally:
+                ctx.finalize_run()
+
     def test_proposed_same_polygon_settlement_reuses_active_settlement(self) -> None:
         from library.simulation_context import SimulationContext
         from pathlib import Path

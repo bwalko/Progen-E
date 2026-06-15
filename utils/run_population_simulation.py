@@ -259,6 +259,11 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help="Shift new births into passive cohorts once detailed alive reaches this target (default: 15000; use 0 to disable).",
     )
+    p.add_argument(
+        "--use-nondetailed-directory",
+        action="store_true",
+        help="Use the SQLite city-directory table for non-detailed population instead of aggregate passive cohorts.",
+    )
     args = p.parse_args()
     if args.years < 1:
         p.error("--years must be >= 1")
@@ -346,6 +351,7 @@ def main() -> None:
                 duration_years=int(args.years),
                 passive_population_scale=float(args.passive_population_scale),
                 detailed_active_soft_cap=soft_cap,
+                use_nondetailed_directory=bool(args.use_nondetailed_directory),
                 progress_callback=_print_progress,
                 print_timing_report=False,
             )
@@ -360,6 +366,7 @@ def main() -> None:
                 starting_couples=int(args.starting_couples),
                 passive_population_scale=float(args.passive_population_scale),
                 detailed_active_soft_cap=soft_cap,
+                use_nondetailed_directory=bool(args.use_nondetailed_directory),
                 progress_callback=_print_progress,
                 print_timing_report=False,
             )
@@ -443,6 +450,7 @@ def main() -> None:
         f"start_year={actual_start_year} | "
         f"starting_couples={0 if args.resume else args.starting_couples} | "
         f"detailed_active_soft_cap={args.detailed_active_soft_cap} | "
+        f"nondetailed_directory={bool(args.use_nondetailed_directory)} | "
         f"detailed_alive={alive_end} | passive_cohort_alive={passive_cohort_alive} | "
         f"report_files={'skipped' if args.skip_report_files else _OUTPUT_PATH} | "
         f"elapsed={elapsed:.2f}s"

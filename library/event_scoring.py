@@ -800,6 +800,54 @@ def violent_actor_propensity(
     )
 
 
+def serial_predator_propensity(
+    subject: Any,
+    *,
+    context: EventScoringContext | None = None,
+    previous_murders: int = 0,
+) -> float:
+    """Very rare repeat-predator signal inside the already-calibrated murder rate.
+
+    This is not a separate event-volume knob. It only identifies detailed people
+    whose extreme profile should make predatory or repeated killing more likely
+    when a murder event has already passed the era/population rate gates.
+    """
+
+    coldness = clamp01(
+        negative_extreme(subject, "empathy") * 0.48
+        + negative_extreme(subject, "justice") * 0.34
+        + negative_extreme(subject, "honesty") * 0.18
+    )
+    control = clamp01(
+        positive_extreme(subject, "perception") * 0.24
+        + positive_extreme(subject, "assertiveness") * 0.24
+        + ideal_strength(subject, "patience") * 0.18
+        + positive_extreme(subject, "discipline") * 0.14
+        + positive_extreme(subject, "persuasion") * 0.12
+        + positive_extreme(subject, "neurochemical") * 0.08
+    )
+    instability = clamp01(
+        positive_extreme(subject, "neurochemical") * 0.55
+        + negative_extreme(subject, "temperance") * 0.30
+        + positive_extreme(subject, "mating drive") * 0.15
+    )
+    prior = clamp01(float(previous_murders) / 3.0)
+    role = 0.0
+    if context is not None:
+        role += score_tag_weights(context.pressure_tags, {"scarcity": 0.02, "war": 0.02})
+        role += score_tag_weights(context.opportunity_tags, {"isolated": 0.04, "privacy": 0.03})
+    return clamp01(
+        coldness * 0.42
+        + control * 0.24
+        + instability * 0.14
+        + violent_actor_propensity(subject, context=context) * 0.10
+        + prior * 0.10
+        + role
+        - ideal_strength(subject, "empathy") * 0.10
+        - ideal_strength(subject, "justice") * 0.08
+    )
+
+
 def property_crime_propensity(
     subject: Any, *, context: EventScoringContext | None = None
 ) -> float:

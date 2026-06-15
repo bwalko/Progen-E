@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -32,6 +33,25 @@ def _insert_person(
         VALUES (?, 1, 1, ?, ?, 'female', 'human', 'human', 970, '{}')
         """,
         (int(person_id), first_name, last_name),
+    )
+
+
+def _insert_person_with_json(
+    conn: sqlite3.Connection,
+    person_id: int,
+    first_name: str,
+    last_name: str,
+    person_json: dict[str, object],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO simulation_people (
+            person_id, is_founder, is_alive, first_name, last_name,
+            gender, ethnic, species, birthyear, person_json
+        )
+        VALUES (?, 1, 1, ?, ?, 'female', 'human', 'human', 970, ?)
+        """,
+        (int(person_id), first_name, last_name, json.dumps(person_json)),
     )
 
 
@@ -638,6 +658,332 @@ class TestEventHistoryReport(unittest.TestCase):
                 summary,
             )
 
+    def test_hybrid_population_calibration_tracks_variance_and_serial_candidates(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            save = root / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                high_variance_json = {
+                    "genome": {
+                        "empathy": -96,
+                        "justice": -94,
+                        "honesty": -90,
+                        "neurochemical": 92,
+                        "assertiveness": 88,
+                        "perception": 96,
+                        "discipline": 95,
+                        "persuasion": 90,
+                    },
+                    "genome_composite_names": ["High-Variance Detail"],
+                }
+                ordinary_json = {
+                    "genome": {
+                        "empathy": 10,
+                        "justice": -12,
+                        "honesty": 8,
+                        "neurochemical": -7,
+                        "assertiveness": 5,
+                    }
+                }
+                _insert_person_with_json(conn, 1, "Ari", "Vale", high_variance_json)
+                _insert_person_with_json(conn, 2, "Bea", "Ash", ordinary_json)
+                _insert_person_with_json(conn, 3, "Cor", "Reed", ordinary_json)
+                conn.executemany(
+                    """
+                    INSERT INTO simulation_promotion_log (
+                        person_id, sim_year, reason, source_event_id,
+                        synthesized_json, created_at
+                    )
+                    VALUES (?, 1000, ?, NULL, '{}', '2026-01-01T00:00:00+00:00')
+                    """,
+                    [
+                        (1, "criminal_outlaw"),
+                        (2, "marriage_into_detailed_family"),
+                        (3, "marriage_into_detailed_family"),
+                    ],
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO simulation_people_nondetailed (
+                        person_id, birthyear, is_alive, gender, job_family
+                    )
+                    VALUES (?, 970, 1, 'female', 'food')
+                    """,
+                    [(1001,), (1002,), (1003,), (1004,)],
+                )
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1000,
+                            "murder",
+                            {
+                                "killer_person_id": 1,
+                                "victim_person_id": 2,
+                                "incident_kind": "predatory_murder",
+                                "historical_importance": 0.75,
+                                "serial_predator_candidate": True,
+                                "serial_predator_propensity": 0.72,
+                            },
+                        ),
+                        (
+                            1001,
+                            "murder",
+                            {
+                                "killer_person_id": 3,
+                                "victim_person_id": 2,
+                                "incident_kind": "murder",
+                                "historical_importance": 0.45,
+                                "serial_predator_candidate": False,
+                                "serial_predator_propensity": 0.08,
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                conn.commit()
+
+                report = build_event_history_report(conn, save_path=save, sample_limit=0)
+
+            h = report.hybrid_population_calibration
+            self.assertEqual(h.detailed_people, 3)
+            self.assertEqual(h.detailed_alive_people, 3)
+            self.assertEqual(h.non_detailed_alive_people, 4)
+            self.assertEqual(h.high_variance_detail_people, 1)
+            self.assertEqual(h.genome_scored_detailed_people, 3)
+            self.assertEqual(h.extreme_detail_people, 1)
+            self.assertEqual(h.serial_predator_profile_people, 1)
+            self.assertAlmostEqual(h.serial_predator_profile_share or 0.0, 1 / 3)
+            self.assertGreater(h.max_serial_predator_propensity or 0.0, 0.62)
+            self.assertGreater(h.average_serial_predator_propensity or 0.0, 0.20)
+            self.assertEqual(h.event_year_span, 2)
+            self.assertEqual(h.murder_events, 2)
+            self.assertEqual(h.serial_predator_candidate_events, 1)
+            self.assertEqual(h.distinct_murder_killers, 2)
+            self.assertEqual(h.repeat_murder_killers_2plus, 0)
+            self.assertEqual(h.serial_murder_killers_3plus, 0)
+            self.assertEqual(h.serial_murder_events_by_3plus_killers, 0)
+            self.assertAlmostEqual(
+                h.murder_per_10k_detailed_person_years or 0.0,
+                3333.333333,
+                places=5,
+            )
+            self.assertAlmostEqual(h.serial_candidate_share_of_murders or 0.0, 0.5)
+            self.assertEqual(h.serial_murder_calibration_status, "insufficient_murder_sample")
+            self.assertEqual(
+                h.serial_murder_emergence_status,
+                "insufficient_emergence_sample",
+            )
+            reason_rows = {
+                row.reason: row for row in report.hybrid_variance_by_promotion_reason
+            }
+            self.assertEqual(reason_rows["criminal_outlaw"].detailed_people, 1)
+            self.assertEqual(
+                reason_rows["criminal_outlaw"].high_variance_detail_people,
+                1,
+            )
+            self.assertEqual(
+                reason_rows["marriage_into_detailed_family"].detailed_people,
+                2,
+            )
+            self.assertEqual(
+                reason_rows["marriage_into_detailed_family"].extreme_detail_people,
+                0,
+            )
+            summary = format_event_history_summary(report)
+            self.assertIn("Hybrid Population Calibration", summary)
+            self.assertIn("serial_predator_profile_people: 1", summary)
+            self.assertIn("variance_by_promotion_reason_top", summary)
+            self.assertIn("criminal_outlaw", summary)
+            self.assertIn("serial_predator_candidate_events: 1", summary)
+            self.assertIn("serial_murder_calibration_status: insufficient_murder_sample", summary)
+            self.assertIn(
+                "serial_murder_emergence_status: insufficient_emergence_sample",
+                summary,
+            )
+
+    def test_hybrid_population_calibration_flags_serial_share_guardrail(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            save = root / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                for person_id in range(1, 121):
+                    _insert_person(conn, person_id, f"P{person_id}", "Vale")
+                events = []
+                for i in range(100):
+                    killer_id = 1 if i < 3 else i + 2
+                    victim_id = 120 - (i % 20)
+                    events.append(
+                        (
+                            1000 + i,
+                            "murder",
+                            {
+                                "killer_person_id": killer_id,
+                                "victim_person_id": victim_id,
+                                "incident_kind": "murder",
+                            },
+                        )
+                    )
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    events,
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                conn.commit()
+
+                report = build_event_history_report(conn, save_path=save, sample_limit=0)
+
+            h = report.hybrid_population_calibration
+            self.assertEqual(h.murder_events, 100)
+            self.assertEqual(h.repeat_murder_killers_2plus, 1)
+            self.assertEqual(h.serial_murder_killers_3plus, 1)
+            self.assertEqual(h.serial_murder_events_by_3plus_killers, 3)
+            self.assertAlmostEqual(h.serial_murder_event_share_3plus or 0.0, 0.03)
+            self.assertEqual(h.serial_murder_target_share_max, 0.01)
+            self.assertEqual(h.serial_murder_calibration_status, "above_real_life_guardrail")
+            self.assertEqual(
+                h.serial_murder_emergence_status,
+                "insufficient_emergence_sample",
+            )
+
+    def test_hybrid_population_calibration_flags_no_serial_emergence(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            save = root / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                for person_id in range(1, 650):
+                    _insert_person(conn, person_id, f"P{person_id}", "Vale")
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (
+                            1000 + i,
+                            "murder",
+                            {
+                                "killer_person_id": i + 1,
+                                "victim_person_id": 649 - (i % 100),
+                                "incident_kind": "murder",
+                            },
+                        )
+                        for i in range(500)
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                conn.commit()
+
+                report = build_event_history_report(conn, save_path=save, sample_limit=0)
+
+            h = report.hybrid_population_calibration
+            self.assertEqual(h.murder_events, 500)
+            self.assertEqual(h.serial_murder_killers_3plus, 0)
+            self.assertEqual(h.serial_murder_calibration_status, "within_real_life_guardrail")
+            self.assertEqual(h.serial_murder_emergence_min_murder_sample, 500)
+            self.assertEqual(h.serial_murder_emergence_status, "no_serial_murder_emerged")
+
+    def test_hybrid_population_calibration_flags_serial_emergence_within_guardrail(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            save = root / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                for person_id in range(1, 650):
+                    _insert_person(conn, person_id, f"P{person_id}", "Vale")
+                events = []
+                for i in range(500):
+                    killer_id = 1 if i < 3 else i + 2
+                    events.append(
+                        (
+                            1000 + i,
+                            "murder",
+                            {
+                                "killer_person_id": killer_id,
+                                "victim_person_id": 649 - (i % 100),
+                                "incident_kind": "murder",
+                            },
+                        )
+                    )
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    events,
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                conn.commit()
+
+                report = build_event_history_report(conn, save_path=save, sample_limit=0)
+
+            h = report.hybrid_population_calibration
+            self.assertEqual(h.murder_events, 500)
+            self.assertEqual(h.serial_murder_killers_3plus, 1)
+            self.assertEqual(h.serial_murder_events_by_3plus_killers, 3)
+            self.assertAlmostEqual(h.serial_murder_event_share_3plus or 0.0, 0.006)
+            self.assertEqual(h.serial_murder_calibration_status, "within_real_life_guardrail")
+            self.assertEqual(h.serial_murder_emergence_status, "serial_murder_emerged")
+
+    def test_hybrid_population_calibration_uses_world_clock_span(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            save = root / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                conn.execute(
+                    """
+                    CREATE TABLE world_state (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        start_year INTEGER NOT NULL,
+                        current_year INTEGER NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO world_state (id, start_year, current_year)
+                    VALUES (1, 1000, 1019)
+                    """
+                )
+                _insert_person(conn, 1, "Ari", "Vale")
+                _insert_person(conn, 2, "Bea", "Ash")
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    [
+                        (970, "birth", {"person_id": 1}),
+                        (
+                            1010,
+                            "murder",
+                            {
+                                "killer_person_id": 1,
+                                "victim_person_id": 2,
+                                "incident_kind": "murder",
+                            },
+                        ),
+                    ],
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                conn.commit()
+
+                report = build_event_history_report(conn, save_path=save, sample_limit=0)
+
+            h = report.hybrid_population_calibration
+            self.assertEqual(h.event_year_span, 20)
+            self.assertAlmostEqual(
+                h.murder_per_10k_detailed_person_years or 0.0,
+                250.0,
+            )
+
     def test_write_report_outputs_tsv_artifacts(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
@@ -647,6 +993,16 @@ class TestEventHistoryReport(unittest.TestCase):
                 ensure_checkpoint_schema(conn)
                 _insert_person(conn, 1, "Mira", "Vale")
                 _insert_person(conn, 2, "Eno", "Reed")
+                conn.execute(
+                    """
+                    INSERT INTO simulation_promotion_log (
+                        person_id, sim_year, reason, source_event_id,
+                        synthesized_json, created_at
+                    )
+                    VALUES (1, 1000, 'office_selection', NULL, '{}',
+                            '2026-01-01T00:00:00+00:00')
+                    """
+                )
                 append_simulation_event_rows(
                     conn,
                     "default",
@@ -682,6 +1038,8 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertTrue((out / "event_consequence_counts.tsv").exists())
             self.assertTrue((out / "event_consequence_metrics.tsv").exists())
             self.assertTrue((out / "outlaw_outcome_summary.tsv").exists())
+            self.assertTrue((out / "hybrid_population_calibration.tsv").exists())
+            self.assertTrue((out / "hybrid_variance_by_promotion_reason.tsv").exists())
             self.assertTrue((out / "public_chronicle_samples.tsv").exists())
             self.assertIn(
                 "murder",
@@ -698,6 +1056,24 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertIn(
                 "all\tsource_crimes\t1",
                 (out / "outlaw_outcome_summary.tsv").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "murder_events\t1",
+                (out / "hybrid_population_calibration.tsv").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "serial_murder_calibration_status\tinsufficient_murder_sample",
+                (out / "hybrid_population_calibration.tsv").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "serial_murder_emergence_status\tinsufficient_emergence_sample",
+                (out / "hybrid_population_calibration.tsv").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "office_selection\t1",
+                (out / "hybrid_variance_by_promotion_reason.tsv").read_text(
+                    encoding="utf-8"
+                ),
             )
 
 

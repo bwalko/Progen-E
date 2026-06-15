@@ -1,0 +1,7 @@
+scenario_index	target_index	replicate_index	target_population	sim_seed	reason	selection_profile	detailed_people	high_variance_detail_people	genome_scored_detailed_people	extreme_detail_people	average_detail_variance_score	expected_average_detail_variance_min	expected_average_detail_variance_max	reason_variance_calibration_status
+0	0	0	50000	15000	migration_into_focal_settlement	migrant_frontier	581	581	581	0	0.683101	0.419200	0.699200	within_profile_band
+0	0	0	50000	15000	settlement_detail_floor	officeholder	98	98	98	1	0.687593	0.455900	0.735900	within_profile_band
+0	0	0	50000	15000	marriage_into_detailed_family	kinship_link	45	45	45	0	0.677801	0.341200	0.621200	above_profile_ceiling
+1	0	1	50000	15001	migration_into_focal_settlement	migrant_frontier	583	583	583	1	0.681257	0.419200	0.699200	within_profile_band
+1	0	1	50000	15001	settlement_detail_floor	officeholder	154	154	154	4	0.690388	0.455900	0.735900	within_profile_band
+1	0	1	50000	15001	marriage_into_detailed_family	kinship_link	27	27	27	0	0.680937	0.341200	0.621200	above_profile_ceiling

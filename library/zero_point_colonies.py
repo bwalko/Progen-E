@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Sequence
 
 from library.generator import generate_person_random
+from library.detailed_population_variance import apply_detailed_selection_variance
 from library.geography import list_regions
 from library.geography import _get_route_edges_by_origin
 from library.world_map_geometry import build_world_map_geometry
@@ -256,7 +257,21 @@ def generate_founder_person(
         xf = p.max_fertility_age
         if xf is not None and yrs > int(xf) - 10:
             continue
-        return _with_founder_parent_names(ctx, p)
+        with_parent_names = _with_founder_parent_names(ctx, p)
+        return apply_detailed_selection_variance(
+            with_parent_names,
+            person_id=0,
+            year=sim_year,
+            reason="founder",
+            source={
+                "source_kind": "zero_point_founder",
+                "region_id": region_id,
+                "gender": gender,
+                "birthyear": int(with_parent_names.birthyear),
+                "settlement_id": with_parent_names.current_settlement_id,
+                "name": with_parent_names.full_name,
+            },
+        )
     return None
 
 

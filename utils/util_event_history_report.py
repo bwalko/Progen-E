@@ -24,7 +24,7 @@ from library.event_history_report import (  # noqa: E402
     format_event_history_summary,
     write_event_history_report,
 )
-from library.world_save import ensure_checkpoint_schema  # noqa: E402
+from library.world_save import ensure_checkpoint_schema, _trait_slots_from_config  # noqa: E402
 
 
 def _parse_event_types(raw: str) -> set[str] | None:
@@ -72,6 +72,7 @@ def main() -> None:
     args = _parse_args()
     world = str(args.world or "default").strip() or "default"
     save_db = args.save_db or (_ROOT / "worlds" / world / "save.sqlite")
+    config_db = _ROOT / "worlds" / world / "config.sqlite"
     output_dir = args.output_dir or (_ROOT / "temp" / "event_history_report" / world)
     sample_types = _parse_event_types(str(args.sample_event_types or ""))
     if not save_db.exists():
@@ -87,6 +88,7 @@ def main() -> None:
             save_path=save_db,
             sample_limit=max(0, int(args.sample_limit)),
             sample_event_types=sample_types,
+            trait_slots=_trait_slots_from_config(config_db),
         )
     write_event_history_report(report, output_dir)
     print(format_event_history_summary(report), end="")

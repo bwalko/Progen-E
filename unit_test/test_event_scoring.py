@@ -22,6 +22,7 @@ from library.event_scoring import (
     propensity_by_person_id,
     religious_cultural_conflict_propensity,
     score_propensity,
+    serial_predator_propensity,
     threshold_excess_weights,
     violent_actor_propensity,
 )
@@ -153,6 +154,38 @@ class TestEventScoring(unittest.TestCase):
         self.assertLess(violent_actor_propensity(stable), 0.05)
         self.assertGreater(property_crime_propensity(property_actor), 0.75)
         self.assertLess(property_crime_propensity(stable), 0.05)
+
+    def test_serial_predator_propensity_requires_extreme_or_repeat_profile(self) -> None:
+        ordinary = _record(1, {trait: 0.0 for trait in ("empathy", "justice", "honesty")})
+        extreme = _record(
+            2,
+            {
+                "empathy": -98,
+                "justice": -96,
+                "honesty": -90,
+                "temperance": -88,
+                "patience": 5,
+                "neurochemical": 94,
+                "assertiveness": 92,
+                "perception": 90,
+                "discipline": 88,
+                "persuasion": 86,
+                "mating drive": 80,
+                "courage": 85,
+                "ambition": 82,
+            },
+        )
+        context = EventScoringContext(
+            pressure_tags=frozenset({"scarcity"}),
+            opportunity_tags=frozenset({"isolated", "privacy"}),
+        )
+
+        self.assertLess(serial_predator_propensity(ordinary), 0.05)
+        self.assertGreater(serial_predator_propensity(extreme, context=context), 0.60)
+        self.assertGreater(
+            serial_predator_propensity(extreme, context=context, previous_murders=2),
+            serial_predator_propensity(extreme, context=context),
+        )
 
     def test_new_workstream_propensity_specs_cover_future_event_families(self) -> None:
         political_actor = _record(

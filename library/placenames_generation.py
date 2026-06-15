@@ -631,6 +631,12 @@ def seed_settlement_naming_for_region(
     geo_rng = make_region_geography_rng(
         world, region.region_id, slot=0, salt=getattr(ctx, "placename_rng_salt", 0)
     )
+    world_geometry = None
+    if hasattr(ctx, "world_map_geometry_for_settlements"):
+        try:
+            world_geometry = ctx.world_map_geometry_for_settlements()
+        except ModuleNotFoundError:
+            world_geometry = None
     graph = build_local_region_graph(
         world=world,
         region=region,
@@ -642,11 +648,7 @@ def seed_settlement_naming_for_region(
         map_seed=getattr(ctx, "world_map_seed", None),
         ethnic_weights=weights,
         placename_lexicon=lex,
-        world_geometry=(
-            ctx.world_map_geometry_for_settlements()
-            if hasattr(ctx, "world_map_geometry_for_settlements")
-            else None
-        ),
+        world_geometry=world_geometry,
     )
     used_names = {
         (st.display_name or "").strip()

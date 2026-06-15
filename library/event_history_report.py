@@ -9,6 +9,8 @@ import sqlite3
 from pathlib import Path
 
 from library.event_prose import EventRecordProse, load_public_chronicle_prose
+from library.detailed_population_variance import HIGH_VARIANCE_DETAIL_COMPOSITE
+from library.event_scoring import serial_predator_propensity
 
 
 INCIDENT_EVENT_TYPES: frozenset[str] = frozenset(
@@ -30,6 +32,11 @@ INCIDENT_EVENT_TYPES: frozenset[str] = frozenset(
         "outlaw_forgotten",
     }
 )
+
+SERIAL_MURDER_TARGET_SHARE_MAX = 0.01
+SERIAL_MURDER_MIN_MURDER_SAMPLE = 100
+SERIAL_MURDER_EMERGENCE_MIN_MURDER_SAMPLE = 500
+SERIAL_PREDATOR_PROFILE_THRESHOLD = 0.62
 
 
 @dataclass(frozen=True)
@@ -70,6 +77,45 @@ class OutlawOutcomeSummary:
 
 
 @dataclass(frozen=True)
+class HybridPopulationCalibrationSummary:
+    detailed_people: int
+    detailed_alive_people: int
+    non_detailed_alive_people: int
+    high_variance_detail_people: int
+    genome_scored_detailed_people: int
+    extreme_detail_people: int
+    average_detail_variance_score: float | None
+    serial_predator_profile_people: int
+    serial_predator_profile_share: float | None
+    average_serial_predator_propensity: float | None
+    max_serial_predator_propensity: float | None
+    event_year_span: int
+    murder_events: int
+    serial_predator_candidate_events: int
+    distinct_murder_killers: int
+    repeat_murder_killers_2plus: int
+    serial_murder_killers_3plus: int
+    serial_murder_events_by_3plus_killers: int
+    murder_per_10k_detailed_person_years: float | None
+    serial_candidate_share_of_murders: float | None
+    serial_murder_event_share_3plus: float | None
+    serial_murder_target_share_max: float
+    serial_murder_calibration_status: str
+    serial_murder_emergence_min_murder_sample: int
+    serial_murder_emergence_status: str
+
+
+@dataclass(frozen=True)
+class HybridVarianceByPromotionReason:
+    reason: str
+    detailed_people: int
+    high_variance_detail_people: int
+    genome_scored_detailed_people: int
+    extreme_detail_people: int
+    average_detail_variance_score: float | None
+
+
+@dataclass(frozen=True)
 class EventHistoryReport:
     total_events: int
     total_records: int
@@ -81,6 +127,8 @@ class EventHistoryReport:
     consequence_counts: tuple[CountRow, ...]
     consequence_metric_summaries: tuple[ConsequenceMetricSummary, ...]
     outlaw_outcome_summary: tuple[OutlawOutcomeSummary, ...]
+    hybrid_population_calibration: HybridPopulationCalibrationSummary
+    hybrid_variance_by_promotion_reason: tuple[HybridVarianceByPromotionReason, ...]
     public_samples: tuple[EventRecordProse, ...]
 
 
@@ -90,6 +138,7 @@ def build_event_history_report(
     save_path: Path | None = None,
     sample_limit: int = 12,
     sample_event_types: Iterable[str] | None = INCIDENT_EVENT_TYPES,
+    trait_slots: Sequence[str] = (),
 ) -> EventHistoryReport:
     """Build a compact, deterministic report from event-readable views."""
 
@@ -109,6 +158,14 @@ def build_event_history_report(
         consequence_counts=tuple(_consequence_counts(conn)),
         consequence_metric_summaries=tuple(_consequence_metric_summaries(conn)),
         outlaw_outcome_summary=tuple(_outlaw_outcome_summary(conn)),
+        hybrid_population_calibration=_hybrid_population_calibration(
+            conn, trait_slots=tuple(str(slot) for slot in trait_slots)
+        ),
+        hybrid_variance_by_promotion_reason=tuple(
+            _hybrid_variance_by_promotion_reason(
+                conn, trait_slots=tuple(str(slot) for slot in trait_slots)
+            )
+        ),
         public_samples=tuple(
             load_public_chronicle_prose(
                 conn,
@@ -155,6 +212,14 @@ def write_event_history_report(report: EventHistoryReport, output_dir: Path) -> 
     _write_outlaw_outcome_summary(
         output_dir / "outlaw_outcome_summary.tsv",
         report.outlaw_outcome_summary,
+    )
+    _write_hybrid_population_calibration(
+        output_dir / "hybrid_population_calibration.tsv",
+        report.hybrid_population_calibration,
+    )
+    _write_hybrid_variance_by_promotion_reason(
+        output_dir / "hybrid_variance_by_promotion_reason.tsv",
+        report.hybrid_variance_by_promotion_reason,
     )
     _write_public_samples(output_dir / "public_chronicle_samples.tsv", report.public_samples)
     (output_dir / "summary.txt").write_text(format_event_history_summary(report), encoding="utf-8")
@@ -230,6 +295,91 @@ def format_event_history_summary(report: EventHistoryReport) -> str:
             lines.append(text)
     else:
         lines.append("- none")
+    lines.append("")
+    lines.append("Hybrid Population Calibration")
+    h = report.hybrid_population_calibration
+    lines.append(f"- detailed_people: {h.detailed_people}")
+    lines.append(f"- detailed_alive_people: {h.detailed_alive_people}")
+    lines.append(f"- non_detailed_alive_people: {h.non_detailed_alive_people}")
+    lines.append(f"- high_variance_detail_people: {h.high_variance_detail_people}")
+    lines.append(f"- genome_scored_detailed_people: {h.genome_scored_detailed_people}")
+    lines.append(f"- extreme_detail_people: {h.extreme_detail_people}")
+    avg_text = (
+        "n/a"
+        if h.average_detail_variance_score is None
+        else f"{h.average_detail_variance_score:.4f}"
+    )
+    lines.append(f"- average_detail_variance_score: {avg_text}")
+    serial_profile_share = (
+        "n/a"
+        if h.serial_predator_profile_share is None
+        else f"{h.serial_predator_profile_share:.4f}"
+    )
+    avg_serial_propensity = (
+        "n/a"
+        if h.average_serial_predator_propensity is None
+        else f"{h.average_serial_predator_propensity:.4f}"
+    )
+    max_serial_propensity = (
+        "n/a"
+        if h.max_serial_predator_propensity is None
+        else f"{h.max_serial_predator_propensity:.4f}"
+    )
+    lines.append(f"- serial_predator_profile_people: {h.serial_predator_profile_people}")
+    lines.append(f"- serial_predator_profile_share: {serial_profile_share}")
+    lines.append(f"- average_serial_predator_propensity: {avg_serial_propensity}")
+    lines.append(f"- max_serial_predator_propensity: {max_serial_propensity}")
+    lines.append(f"- event_year_span: {h.event_year_span}")
+    lines.append(f"- murder_events: {h.murder_events}")
+    lines.append(f"- serial_predator_candidate_events: {h.serial_predator_candidate_events}")
+    lines.append(f"- distinct_murder_killers: {h.distinct_murder_killers}")
+    lines.append(f"- repeat_murder_killers_2plus: {h.repeat_murder_killers_2plus}")
+    lines.append(f"- serial_murder_killers_3plus: {h.serial_murder_killers_3plus}")
+    lines.append(
+        f"- serial_murder_events_by_3plus_killers: "
+        f"{h.serial_murder_events_by_3plus_killers}"
+    )
+    murder_rate = (
+        "n/a"
+        if h.murder_per_10k_detailed_person_years is None
+        else f"{h.murder_per_10k_detailed_person_years:.4f}"
+    )
+    serial_share = (
+        "n/a"
+        if h.serial_candidate_share_of_murders is None
+        else f"{h.serial_candidate_share_of_murders:.4f}"
+    )
+    lines.append(f"- murder_per_10k_detailed_person_years: {murder_rate}")
+    lines.append(f"- serial_candidate_share_of_murders: {serial_share}")
+    serial_3plus_share = (
+        "n/a"
+        if h.serial_murder_event_share_3plus is None
+        else f"{h.serial_murder_event_share_3plus:.4f}"
+    )
+    lines.append(f"- serial_murder_event_share_3plus: {serial_3plus_share}")
+    lines.append(f"- serial_murder_target_share_max: {h.serial_murder_target_share_max:.4f}")
+    lines.append(f"- serial_murder_calibration_status: {h.serial_murder_calibration_status}")
+    lines.append(
+        "- serial_murder_emergence_min_murder_sample: "
+        f"{h.serial_murder_emergence_min_murder_sample}"
+    )
+    lines.append(
+        f"- serial_murder_emergence_status: {h.serial_murder_emergence_status}"
+    )
+    if report.hybrid_variance_by_promotion_reason:
+        lines.append("- variance_by_promotion_reason_top:")
+        for row in report.hybrid_variance_by_promotion_reason[:5]:
+            avg = (
+                "n/a"
+                if row.average_detail_variance_score is None
+                else f"{row.average_detail_variance_score:.4f}"
+            )
+            lines.append(
+                "  "
+                f"{row.reason}: people={row.detailed_people}, "
+                f"high_variance={row.high_variance_detail_people}, "
+                f"extreme={row.extreme_detail_people}, avg={avg}"
+            )
     lines.append("")
     lines.append("Public Chronicle Samples")
     if report.public_samples:
@@ -764,6 +914,338 @@ def _outlaw_case_count(
     return _count_where(conn, "simulation_outlaw_cases_readable", where, params)
 
 
+def _hybrid_population_calibration(
+    conn: sqlite3.Connection,
+    *,
+    trait_slots: Sequence[str] = (),
+) -> HybridPopulationCalibrationSummary:
+    detailed_people = _count(conn, "simulation_people") if _relation_exists(conn, "simulation_people") else 0
+    detailed_alive = (
+        _count_where(conn, "simulation_people", "is_alive = 1")
+        if _relation_exists(conn, "simulation_people")
+        else 0
+    )
+    non_detailed_alive = (
+        _count_where(conn, "simulation_people_nondetailed", "is_alive = 1")
+        if _relation_exists(conn, "simulation_people_nondetailed")
+        else 0
+    )
+    high_variance = 0
+    variance_scores: list[float] = []
+    serial_profile_scores: list[float] = []
+    if _relation_exists(conn, "simulation_people"):
+        for row in conn.execute("SELECT person_json FROM simulation_people"):
+            payload = _payload(row["person_json"])
+            composites = payload.get("genome_composite_names") or ()
+            if isinstance(composites, str):
+                composite_values = {composites}
+            else:
+                try:
+                    composite_values = {str(value) for value in composites or ()}
+                except TypeError:
+                    composite_values = set()
+            if HIGH_VARIANCE_DETAIL_COMPOSITE in composite_values:
+                high_variance += 1
+            score = _person_payload_variance_score(payload, trait_slots=trait_slots)
+            if score is not None:
+                variance_scores.append(score)
+            genome = _person_payload_genome(payload, trait_slots=trait_slots)
+            if genome:
+                serial_profile_scores.append(serial_predator_propensity(genome))
+    murder_events = _event_count(conn, "murder") if _relation_exists(conn, "simulation_events_readable") else 0
+    serial_candidates = 0
+    murders_by_killer: dict[int, int] = {}
+    if _relation_exists(conn, "simulation_events_readable"):
+        for row in conn.execute(
+            """
+            SELECT payload_json
+            FROM simulation_events_readable
+            WHERE event_type = 'murder'
+            """
+        ):
+            payload = _payload(row["payload_json"])
+            if bool(payload.get("serial_predator_candidate")):
+                serial_candidates += 1
+            killer_id = _int_or_none(payload.get("killer_person_id"))
+            if killer_id is not None:
+                murders_by_killer[killer_id] = murders_by_killer.get(killer_id, 0) + 1
+    span = _event_year_span(conn)
+    person_years = detailed_alive * span
+    repeat_2plus = sum(1 for count in murders_by_killer.values() if count >= 2)
+    serial_3plus = sum(1 for count in murders_by_killer.values() if count >= 3)
+    serial_events_3plus = sum(count for count in murders_by_killer.values() if count >= 3)
+    murder_rate = (
+        float(murder_events) / float(person_years) * 10_000.0
+        if person_years > 0
+        else None
+    )
+    serial_share = (
+        float(serial_candidates) / float(murder_events)
+        if murder_events > 0
+        else None
+    )
+    serial_3plus_share = (
+        float(serial_events_3plus) / float(murder_events)
+        if murder_events > 0
+        else None
+    )
+    if murder_events < SERIAL_MURDER_MIN_MURDER_SAMPLE:
+        serial_status = "insufficient_murder_sample"
+    elif serial_3plus_share is not None and serial_3plus_share <= SERIAL_MURDER_TARGET_SHARE_MAX:
+        serial_status = "within_real_life_guardrail"
+    else:
+        serial_status = "above_real_life_guardrail"
+    if murder_events < SERIAL_MURDER_EMERGENCE_MIN_MURDER_SAMPLE:
+        serial_emergence_status = "insufficient_emergence_sample"
+    elif serial_3plus <= 0:
+        serial_emergence_status = "no_serial_murder_emerged"
+    elif serial_status == "above_real_life_guardrail":
+        serial_emergence_status = "above_real_life_guardrail"
+    else:
+        serial_emergence_status = "serial_murder_emerged"
+    return HybridPopulationCalibrationSummary(
+        detailed_people=detailed_people,
+        detailed_alive_people=detailed_alive,
+        non_detailed_alive_people=non_detailed_alive,
+        high_variance_detail_people=high_variance,
+        genome_scored_detailed_people=len(variance_scores),
+        extreme_detail_people=sum(1 for score in variance_scores if score >= 0.82),
+        average_detail_variance_score=(
+            sum(variance_scores) / len(variance_scores) if variance_scores else None
+        ),
+        serial_predator_profile_people=sum(
+            1
+            for score in serial_profile_scores
+            if score >= SERIAL_PREDATOR_PROFILE_THRESHOLD
+        ),
+        serial_predator_profile_share=(
+            sum(
+                1
+                for score in serial_profile_scores
+                if score >= SERIAL_PREDATOR_PROFILE_THRESHOLD
+            )
+            / len(serial_profile_scores)
+            if serial_profile_scores
+            else None
+        ),
+        average_serial_predator_propensity=(
+            sum(serial_profile_scores) / len(serial_profile_scores)
+            if serial_profile_scores
+            else None
+        ),
+        max_serial_predator_propensity=(
+            max(serial_profile_scores) if serial_profile_scores else None
+        ),
+        event_year_span=span,
+        murder_events=murder_events,
+        serial_predator_candidate_events=serial_candidates,
+        distinct_murder_killers=len(murders_by_killer),
+        repeat_murder_killers_2plus=repeat_2plus,
+        serial_murder_killers_3plus=serial_3plus,
+        serial_murder_events_by_3plus_killers=serial_events_3plus,
+        murder_per_10k_detailed_person_years=murder_rate,
+        serial_candidate_share_of_murders=serial_share,
+        serial_murder_event_share_3plus=serial_3plus_share,
+        serial_murder_target_share_max=SERIAL_MURDER_TARGET_SHARE_MAX,
+        serial_murder_calibration_status=serial_status,
+        serial_murder_emergence_min_murder_sample=(
+            SERIAL_MURDER_EMERGENCE_MIN_MURDER_SAMPLE
+        ),
+        serial_murder_emergence_status=serial_emergence_status,
+    )
+
+
+def _hybrid_variance_by_promotion_reason(
+    conn: sqlite3.Connection,
+    *,
+    trait_slots: Sequence[str] = (),
+) -> tuple[HybridVarianceByPromotionReason, ...]:
+    if not _relation_exists(conn, "simulation_people") or not _relation_exists(
+        conn, "simulation_promotion_log"
+    ):
+        return ()
+    rows = conn.execute(
+        """
+        SELECT
+            p.person_id,
+            p.person_json,
+            COALESCE(pl.reason, 'generated') AS reason
+        FROM simulation_people p
+        JOIN (
+            SELECT person_id, MIN(promotion_id) AS promotion_id
+            FROM simulation_promotion_log
+            GROUP BY person_id
+        ) first_promotion ON first_promotion.person_id = p.person_id
+        JOIN simulation_promotion_log pl
+          ON pl.promotion_id = first_promotion.promotion_id
+        """
+    ).fetchall()
+    grouped: dict[str, dict[str, object]] = {}
+    for row in rows:
+        reason = str(row["reason"] or "generated").strip() or "generated"
+        bucket = grouped.setdefault(
+            reason,
+            {
+                "people": 0,
+                "high_variance": 0,
+                "scores": [],
+            },
+        )
+        bucket["people"] = int(bucket["people"]) + 1
+        payload = _payload(row["person_json"])
+        composites = payload.get("genome_composite_names") or ()
+        if isinstance(composites, str):
+            composite_values = {composites}
+        else:
+            try:
+                composite_values = {str(value) for value in composites or ()}
+            except TypeError:
+                composite_values = set()
+        if HIGH_VARIANCE_DETAIL_COMPOSITE in composite_values:
+            bucket["high_variance"] = int(bucket["high_variance"]) + 1
+        score = _person_payload_variance_score(payload, trait_slots=trait_slots)
+        if score is not None:
+            bucket["scores"].append(score)
+    out: list[HybridVarianceByPromotionReason] = []
+    for reason, bucket in grouped.items():
+        scores = list(bucket["scores"])
+        out.append(
+            HybridVarianceByPromotionReason(
+                reason=reason,
+                detailed_people=int(bucket["people"]),
+                high_variance_detail_people=int(bucket["high_variance"]),
+                genome_scored_detailed_people=len(scores),
+                extreme_detail_people=sum(1 for score in scores if float(score) >= 0.82),
+                average_detail_variance_score=(
+                    sum(float(score) for score in scores) / len(scores)
+                    if scores
+                    else None
+                ),
+            )
+        )
+    return tuple(
+        sorted(
+            out,
+            key=lambda row: (
+                -int(row.detailed_people),
+                row.reason,
+            ),
+        )
+    )
+
+
+def _person_payload_variance_score(
+    payload: dict[str, object],
+    *,
+    trait_slots: Sequence[str] = (),
+) -> float | None:
+    raw = _person_payload_genome(payload, trait_slots=trait_slots)
+    if not isinstance(raw, dict):
+        return None
+    values: list[float] = []
+    for value in raw.values():
+        try:
+            values.append(abs(float(value)))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return None
+    values.sort(reverse=True)
+    top = values[: min(8, len(values))]
+    return max(0.0, min(1.0, sum(top) / len(top) / 99.99))
+
+
+def _person_payload_genome(
+    payload: dict[str, object],
+    *,
+    trait_slots: Sequence[str] = (),
+) -> dict[str, float]:
+    raw = (
+        payload.get("mind_body")
+        or payload.get("genome")
+        or _compact_trait_payload(payload, "mb", trait_slots=trait_slots)
+        or _compact_trait_payload(payload, "g", trait_slots=trait_slots)
+    )
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, float] = {}
+    for trait, value in raw.items():
+        try:
+            out[str(trait)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _compact_trait_payload(
+    payload: dict[str, object],
+    key: str,
+    *,
+    trait_slots: Sequence[str] = (),
+) -> dict[str, float]:
+    slots_raw = payload.get("ts")
+    values_raw = payload.get(key)
+    if isinstance(slots_raw, list):
+        slots = tuple(str(slot) for slot in slots_raw)
+    else:
+        slots = tuple(str(slot) for slot in trait_slots)
+    if not slots or not isinstance(values_raw, list):
+        return {}
+    out: dict[str, float] = {}
+    for trait, value in zip(slots, values_raw):
+        if value is None:
+            continue
+        name = str(trait or "").strip()
+        if not name:
+            continue
+        try:
+            out[name] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _event_year_span(conn: sqlite3.Connection) -> int:
+    if _relation_exists(conn, "world_state"):
+        try:
+            row = conn.execute(
+                """
+                SELECT start_year, current_year
+                FROM world_state
+                WHERE start_year IS NOT NULL AND current_year IS NOT NULL
+                ORDER BY id
+                LIMIT 1
+                """
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is not None:
+            try:
+                return max(1, int(row["current_year"]) - int(row["start_year"]) + 1)
+            except (KeyError, TypeError, ValueError):
+                pass
+    if not _relation_exists(conn, "simulation_events_readable"):
+        return 1
+    row = conn.execute(
+        """
+        SELECT MIN(sim_year) AS min_year, MAX(sim_year) AS max_year
+        FROM simulation_events_readable
+        WHERE event_type = 'murder' AND sim_year IS NOT NULL
+        """
+    ).fetchone()
+    if row is None or row["min_year"] is None or row["max_year"] is None:
+        row = conn.execute(
+            """
+            SELECT MIN(sim_year) AS min_year, MAX(sim_year) AS max_year
+            FROM simulation_events_readable
+            WHERE sim_year IS NOT NULL
+            """
+        ).fetchone()
+    if row is None or row["min_year"] is None or row["max_year"] is None:
+        return 1
+    return max(1, int(row["max_year"]) - int(row["min_year"]) + 1)
+
+
 def _event_count(conn: sqlite3.Connection, event_type: str) -> int:
     return _count_where(
         conn,
@@ -867,6 +1349,85 @@ def _write_outlaw_outcome_summary(
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _write_hybrid_population_calibration(
+    path: Path, row: HybridPopulationCalibrationSummary
+) -> None:
+    lines = ["metric\tvalue"]
+    values = {
+        "detailed_people": row.detailed_people,
+        "detailed_alive_people": row.detailed_alive_people,
+        "non_detailed_alive_people": row.non_detailed_alive_people,
+        "high_variance_detail_people": row.high_variance_detail_people,
+        "genome_scored_detailed_people": row.genome_scored_detailed_people,
+        "extreme_detail_people": row.extreme_detail_people,
+        "average_detail_variance_score": row.average_detail_variance_score,
+        "serial_predator_profile_people": row.serial_predator_profile_people,
+        "serial_predator_profile_share": row.serial_predator_profile_share,
+        "average_serial_predator_propensity": row.average_serial_predator_propensity,
+        "max_serial_predator_propensity": row.max_serial_predator_propensity,
+        "event_year_span": row.event_year_span,
+        "murder_events": row.murder_events,
+        "serial_predator_candidate_events": row.serial_predator_candidate_events,
+        "distinct_murder_killers": row.distinct_murder_killers,
+        "repeat_murder_killers_2plus": row.repeat_murder_killers_2plus,
+        "serial_murder_killers_3plus": row.serial_murder_killers_3plus,
+        "serial_murder_events_by_3plus_killers": row.serial_murder_events_by_3plus_killers,
+        "murder_per_10k_detailed_person_years": row.murder_per_10k_detailed_person_years,
+        "serial_candidate_share_of_murders": row.serial_candidate_share_of_murders,
+        "serial_murder_event_share_3plus": row.serial_murder_event_share_3plus,
+        "serial_murder_target_share_max": row.serial_murder_target_share_max,
+        "serial_murder_calibration_status": row.serial_murder_calibration_status,
+        "serial_murder_emergence_min_murder_sample": (
+            row.serial_murder_emergence_min_murder_sample
+        ),
+        "serial_murder_emergence_status": row.serial_murder_emergence_status,
+    }
+    for key, value in values.items():
+        if value is None:
+            text = ""
+        elif isinstance(value, float):
+            text = f"{value:.6f}"
+        else:
+            text = str(value)
+        lines.append(f"{key}\t{text}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_hybrid_variance_by_promotion_reason(
+    path: Path, rows: Sequence[HybridVarianceByPromotionReason]
+) -> None:
+    lines = [
+        "\t".join(
+            [
+                "reason",
+                "detailed_people",
+                "high_variance_detail_people",
+                "genome_scored_detailed_people",
+                "extreme_detail_people",
+                "average_detail_variance_score",
+            ]
+        )
+    ]
+    for row in rows:
+        lines.append(
+            "\t".join(
+                [
+                    _tsv_text(row.reason),
+                    str(row.detailed_people),
+                    str(row.high_variance_detail_people),
+                    str(row.genome_scored_detailed_people),
+                    str(row.extreme_detail_people),
+                    (
+                        ""
+                        if row.average_detail_variance_score is None
+                        else f"{row.average_detail_variance_score:.6f}"
+                    ),
+                ]
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _tracked_incident_counts(report: EventHistoryReport) -> tuple[CountRow, ...]:
     counts = {row.keys[0]: row.count for row in report.event_counts_by_type}
     return tuple(
@@ -939,6 +1500,13 @@ def _float(value: object) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 

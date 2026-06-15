@@ -17,10 +17,19 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
 
-from shapely.geometry import GeometryCollection
-from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
-from shapely.geometry import Polygon as ShapelyPolygon
-from shapely.ops import unary_union
+try:
+    from shapely.geometry import GeometryCollection
+    from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from shapely.ops import unary_union
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised by import-only tools.
+    GeometryCollection = None
+    ShapelyMultiPolygon = None
+    ShapelyPolygon = None
+    unary_union = None
+    _SHAPELY_IMPORT_ERROR: ModuleNotFoundError | None = exc
+else:
+    _SHAPELY_IMPORT_ERROR = None
 
 from library.geography import (
     Region,
@@ -33,6 +42,13 @@ from library.geography import (
 
 MAP_GEOMETRY_VERSION = "polygonal-v10"
 Point = tuple[float, float]
+
+
+def _require_shapely() -> None:
+    if _SHAPELY_IMPORT_ERROR is not None:
+        raise ModuleNotFoundError(
+            "world-map polygon geometry requires the optional 'shapely' package"
+        ) from _SHAPELY_IMPORT_ERROR
 
 
 @dataclass(frozen=True)
@@ -3065,6 +3081,7 @@ def _build_river_channels(rivers: list[RiverPath]) -> list[RiverChannel]:
 
 
 def _valid_polygon(points: list[Point]) -> ShapelyPolygon | None:
+    _require_shapely()
     if len(points) < 3:
         return None
     poly = ShapelyPolygon(points)
@@ -3085,6 +3102,7 @@ def _polygon_area_abs(points: list[Point]) -> float:
 
 
 def _polygons_from_geometry(geom: object) -> list[ShapelyPolygon]:
+    _require_shapely()
     if isinstance(geom, ShapelyPolygon):
         return [geom] if not geom.is_empty and geom.area > 1e-12 else []
     if isinstance(geom, ShapelyMultiPolygon):
@@ -3439,6 +3457,7 @@ def build_world_map_geometry(
     map_seed: object | None = None,
 ) -> WorldMapGeometry:
     """Derive stable polygon-map geometry from configured regions and routes."""
+    _require_shapely()
     world_id = (world or "").strip() or "default"
     continents = list_continents(world=world_id, db_path=db_path)
     all_regions = list_regions(world=world_id, db_path=db_path)

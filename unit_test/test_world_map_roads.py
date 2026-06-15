@@ -656,6 +656,17 @@ def _segment_samples_rect(
     return False
 
 
+def _path_length(points: list[tuple[float, float]]) -> float:
+    return sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+
+
+def _max_segment_fraction(points: list[tuple[float, float]]) -> float:
+    length = _path_length(points)
+    if length <= 0.0:
+        return 0.0
+    return max((math.dist(a, b) for a, b in zip(points, points[1:])), default=0.0) / length
+
+
 class TestWorldMapRoads(unittest.TestCase):
     def test_world_map_settlement_markers_use_saved_world_anchor_like_roads(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -1078,6 +1089,27 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertGreaterEqual(len(road.points), 3)
         self.assertGreater(max(abs(y - 0.50) for _x, y in road.points), 0.01)
         self.assertNotEqual(road.points, [(0.18, 0.50), (0.78, 0.50)])
+
+    def test_long_direct_road_gets_broad_land_safe_waypoints(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.12, 0.50), "b": (0.88, 0.50)},
+                [(10, "a", "b", 4)],
+            )
+            geometry = _geometry(
+                micro_cells=[
+                    _micro_cell("wide", 0.0, 0.0, 1.0, 1.0),
+                ]
+            )
+
+            roads = build_settlement_road_overlays(geometry=geometry, save_db_path=save)
+
+        road = _edge(roads, "a", "b")
+        self.assertIsNotNone(road)
+        self.assertGreaterEqual(len(road.points), 4)
+        self.assertLess(_max_segment_fraction(road.points), 0.42)
+        self.assertGreater(max(abs(y - 0.50) for _x, y in road.points), 0.04)
 
     def test_road_point_cleanup_prunes_tiny_hairpin_before_svg_smoothing(self) -> None:
         points = [(0.1, 0.1), (0.125, 0.102), (0.1008, 0.1006), (0.18, 0.12)]

@@ -8949,6 +8949,51 @@ def _cohort_place_stats(
     return alive_counts, top_jobs
 
 
+def _nondetailed_place_stats(
+    con: sqlite3.Connection,
+    place_kind: str,
+    place_ids: Iterable[str],
+    *,
+    limit: int = 3,
+) -> tuple[dict[str, int], dict[str, list[tuple[str, int]]]]:
+    ids = [str(place_id) for place_id in place_ids if str(place_id).strip()]
+    if not ids or not _has_relation(con, "simulation_people_nondetailed_readable"):
+        return {}, {}
+    column = "birthplace_region_id" if place_kind == "region" else "coalesce(current_settlement_id, birthplace_settlement_id)"
+    placeholders = ", ".join("?" for _ in ids)
+    rows = con.execute(
+        f"""
+        select
+          {column} as place_id,
+          coalesce(nullif(job_family, ''), 'other') as job_name,
+          count(*) as n
+        from simulation_people_nondetailed_readable
+        where is_alive = 1
+          and {column} in ({placeholders})
+        group by place_id, job_name
+        order by place_id, n desc, job_name collate nocase
+        """,
+        tuple(ids),
+    ).fetchall()
+    alive_counts: dict[str, int] = {place_id: 0 for place_id in ids}
+    job_counts: dict[str, dict[str, int]] = {place_id: {} for place_id in ids}
+    for row in rows:
+        place_id = str(row["place_id"] or "")
+        count = int(row["n"] or 0)
+        if not place_id:
+            continue
+        alive_counts[place_id] = alive_counts.get(place_id, 0) + count
+        label = _display_job_label(row["job_name"])
+        if label:
+            place_jobs = job_counts.setdefault(place_id, {})
+            place_jobs[label] = place_jobs.get(label, 0) + count
+    top_jobs = {
+        place_id: sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:limit]
+        for place_id, counts in job_counts.items()
+    }
+    return alive_counts, top_jobs
+
+
 def _alive_counts_and_top_jobs_by_place(
     con: sqlite3.Connection,
     world: str,
@@ -8996,16 +9041,19 @@ def _alive_counts_and_top_jobs_by_place(
     place_kind = "region" if "region" in place_sql else "settlement"
     passive_counts, passive_jobs = _passive_people_place_stats(con, place_kind, ids, limit=limit)
     cohort_counts, cohort_jobs = _cohort_place_stats(con, place_kind, ids, limit=limit)
+    nondetailed_counts, nondetailed_jobs = _nondetailed_place_stats(con, place_kind, ids, limit=limit)
     for place_id in ids:
         alive_counts[place_id] = (
             alive_counts.get(place_id, 0)
             + passive_counts.get(place_id, 0)
             + cohort_counts.get(place_id, 0)
+            + nondetailed_counts.get(place_id, 0)
         )
         top_jobs[place_id] = _merge_job_counts(
             top_jobs.get(place_id, []),
             passive_jobs.get(place_id, []),
             cohort_jobs.get(place_id, []),
+            nondetailed_jobs.get(place_id, []),
             limit=limit,
         )
     return alive_counts, top_jobs
@@ -9101,6 +9149,9 @@ def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, objec
         "polities": polities,
         "passive_people": _snapshot_table_rows(con, "simulation_people_light_readable", world),
         "cohorts": _snapshot_table_rows(con, "simulation_cohorts_readable", world),
+        "nondetailed_people": _snapshot_table_rows(
+            con, "simulation_people_nondetailed_readable", world
+        ),
         "territory": _snapshot_table_rows(con, "simulation_polity_territory", world),
         "seats": _snapshot_table_rows(con, "simulation_office_seats", world),
     }
@@ -9230,6 +9281,20 @@ def _snapshot_population_stats(
         job_counts[job] = job_counts.get(job, 0) + 1
     alive = len(detailed)
     for row in _snapshot_rows(snapshot, "passive_people"):
+        if not row.get("is_alive"):
+            continue
+        row_place = (
+            row.get("birthplace_region_id")
+            if place_kind == "region"
+            else row.get("current_settlement_id") or row.get("birthplace_settlement_id")
+        )
+        if str(row_place or "") != place_id:
+            continue
+        alive += 1
+        job = _display_job_label(row.get("job_family"))
+        if job:
+            job_counts[job] = job_counts.get(job, 0) + 1
+    for row in _snapshot_rows(snapshot, "nondetailed_people"):
         if not row.get("is_alive"):
             continue
         row_place = (

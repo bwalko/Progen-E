@@ -1,0 +1,4 @@
+reason	selection_profile	scenario_count	detailed_people	high_variance_detail_people	genome_scored_detailed_people	extreme_detail_people	average_detail_variance_score	expected_average_detail_variance_min	expected_average_detail_variance_max	reason_variance_calibration_status
+migration_into_focal_settlement	migrant_frontier	2	1164	1164	1164	1	0.682177	0.419200	0.699200	within_profile_band
+settlement_detail_floor	officeholder	2	252	252	252	5	0.689301	0.455900	0.735900	within_profile_band
+marriage_into_detailed_family	kinship_link	2	72	72	72	0	0.678977	0.341200	0.621200	above_profile_ceiling

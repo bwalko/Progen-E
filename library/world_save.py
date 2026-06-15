@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 22
+SAVE_SCHEMA_VERSION = 23
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -76,6 +76,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_region_lookup",
     "simulation_settlement_lookup",
     "simulation_people",
+    "simulation_people_nondetailed",
     "simulation_person_archive_scores",
     "simulation_person_archive_score_reasons",
     "simulation_people_light",
@@ -1292,6 +1293,36 @@ def _ensure_hybrid_population_tables(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_simulation_promotion_log_person
         ON simulation_promotion_log (person_id, sim_year);
+
+        CREATE TABLE IF NOT EXISTS simulation_people_nondetailed (
+            person_id INTEGER PRIMARY KEY,
+            birthyear INTEGER NOT NULL,
+            deathyear INTEGER,
+            is_alive INTEGER NOT NULL DEFAULT 1,
+            gender TEXT NOT NULL DEFAULT '',
+            species_key TEXT,
+            culture_key TEXT,
+            birthplace_region_key INTEGER,
+            birthplace_settlement_key INTEGER,
+            current_settlement_key INTEGER,
+            job_family TEXT NOT NULL DEFAULT 'other',
+            is_partnered INTEGER NOT NULL DEFAULT 0,
+            partner_person_id INTEGER,
+            father_id INTEGER,
+            mother_id INTEGER,
+            child_count INTEGER NOT NULL DEFAULT 0,
+            name_key TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_nondetailed_alive_age
+        ON simulation_people_nondetailed (is_alive, birthyear);
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_nondetailed_place
+        ON simulation_people_nondetailed (is_alive, current_settlement_key);
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_nondetailed_job
+        ON simulation_people_nondetailed (is_alive, current_settlement_key, job_family);
+        CREATE INDEX IF NOT EXISTS idx_simulation_people_nondetailed_partner
+        ON simulation_people_nondetailed (
+            is_alive, current_settlement_key, gender, is_partnered, partner_person_id, birthyear
+        );
         """
     )
     cols = set(_table_columns(conn, "simulation_people_light"))
@@ -1310,6 +1341,13 @@ def _ensure_hybrid_population_tables(conn: sqlite3.Connection) -> None:
     ):
         if col not in cols:
             conn.execute(f"ALTER TABLE simulation_people_light ADD COLUMN {col} {spec}")
+    nd_cols = set(_table_columns(conn, "simulation_people_nondetailed"))
+    for col, spec in (
+        ("is_partnered", "INTEGER NOT NULL DEFAULT 0"),
+        ("name_key", "TEXT"),
+    ):
+        if col not in nd_cols:
+            conn.execute(f"ALTER TABLE simulation_people_nondetailed ADD COLUMN {col} {spec}")
 
 
 def _event_origin_from_payload(payload: dict) -> str:
@@ -6568,6 +6606,30 @@ def _ensure_readable_place_views(conn: sqlite3.Connection) -> None:
         FROM simulation_cohorts c
         LEFT JOIN simulation_region_lookup rl ON rl.region_key = c.region_key
         LEFT JOIN simulation_settlement_lookup sl ON sl.settlement_key = c.settlement_key;
+
+        CREATE VIEW IF NOT EXISTS simulation_people_nondetailed_readable AS
+        SELECT
+            p.person_id,
+            p.birthyear,
+            p.deathyear,
+            p.is_alive,
+            p.gender,
+            p.species_key,
+            p.culture_key,
+            br.region_id AS birthplace_region_id,
+            bs.settlement_id AS birthplace_settlement_id,
+            cs.settlement_id AS current_settlement_id,
+            p.job_family,
+            p.is_partnered,
+            p.partner_person_id,
+            p.father_id,
+            p.mother_id,
+            p.child_count,
+            p.name_key
+        FROM simulation_people_nondetailed p
+        LEFT JOIN simulation_region_lookup br ON br.region_key = p.birthplace_region_key
+        LEFT JOIN simulation_settlement_lookup bs ON bs.settlement_key = p.birthplace_settlement_key
+        LEFT JOIN simulation_settlement_lookup cs ON cs.settlement_key = p.current_settlement_key;
         """
     )
 
@@ -6730,6 +6792,7 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_person_almanack_evidence")
         conn.execute("DELETE FROM simulation_people_light")
         conn.execute("DELETE FROM simulation_cohorts")
+        conn.execute("DELETE FROM simulation_people_nondetailed")
         conn.execute("DELETE FROM simulation_promotion_log")
         conn.execute("DELETE FROM simulation_patronage_ties")
         conn.execute("DELETE FROM simulation_outlaw_cases")
@@ -9145,6 +9208,11 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             max_any = max(max_any, int(mx_row["m"]))
         max_passive = max(passive_people.keys(), default=0)
         max_any = max(max_any, max_passive)
+        nd_row = conn.execute(
+            "SELECT MAX(person_id) AS m FROM simulation_people_nondetailed",
+        ).fetchone()
+        if nd_row is not None and nd_row["m"] is not None:
+            max_any = max(max_any, int(nd_row["m"]))
         next_id = max_any + 1
         if meta_row is not None and str(meta_row["meta_value"] or "").strip():
             next_id = max(next_id, int(meta_row["meta_value"]))

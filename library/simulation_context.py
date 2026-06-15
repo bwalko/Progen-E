@@ -17,12 +17,14 @@ import numpy as np
 
 from library import simulation_timing
 from library.config_import import refresh_world_config_from_csv
+from library.detailed_population_variance import apply_detailed_selection_variance
 from library.passive_population import (
     PassiveCohort,
     PassivePerson,
     PassivePersonRecord,
     passive_person_to_detailed_person,
 )
+from library.nondetailed_population import NondetailedTickResult
 from library.person import Person
 from library.geography import get_region, list_regions, region_connectivity_score
 from library.random_names import preload_name_cache
@@ -200,6 +202,9 @@ class SimulationContext:
     passive_people: dict[int, PassivePersonRecord] = field(default_factory=dict)
     passive_cohorts: list[PassiveCohort] = field(default_factory=list)
     passive_promotion_log: list[PassivePromotionLogEntry] = field(default_factory=list)
+    last_nondetailed_tick_result: NondetailedTickResult = field(
+        default_factory=NondetailedTickResult
+    )
     patronage_ties: dict[tuple[int, int, str], SimulationPatronageTie] = field(default_factory=dict)
     outlaw_cases: dict[str, SimulationOutlawCase] = field(default_factory=dict)
     outlaw_refuges: dict[str, SimulationOutlawRefuge] = field(default_factory=dict)
@@ -811,6 +816,13 @@ class SimulationContext:
             simulation_context=self,
             simulation_year=int(year),
         )
+        person = apply_detailed_selection_variance(
+            person,
+            person_id=int(prec.person_id),
+            year=int(year),
+            reason=reason_text,
+            source=source_payload,
+        )
         rec = SimulationPersonRecord(
             person_id=int(prec.person_id),
             person=person,
@@ -909,6 +921,130 @@ class SimulationContext:
                 "mother_id": rec.mother_id,
                 "reason": reason_text,
             },
+        )
+        return rec
+
+    def promote_nondetailed_person(
+        self,
+        nondetailed_id: int,
+        *,
+        year: int,
+        reason: str,
+        source: dict[str, Any] | None = None,
+    ) -> SimulationPersonRecord | None:
+        """Materialize one SQLite city-directory person into detailed simulation."""
+        from library.world_save import ensure_checkpoint_schema
+
+        reason_text = str(reason).strip() or "nondetailed_promotion"
+        source_payload = dict(source or {})
+        with closing(sqlite3.connect(self.save_db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            ensure_checkpoint_schema(conn)
+            row = conn.execute(
+                """
+                SELECT *
+                FROM simulation_people_nondetailed_readable
+                WHERE person_id = ?
+                """,
+                (int(nondetailed_id),),
+            ).fetchone()
+            if row is None:
+                return None
+            passive = PassivePerson(
+                name=str(row["name_key"] or ""),
+                birthyear=int(row["birthyear"]),
+                deathyear=(
+                    int(row["deathyear"]) if row["deathyear"] is not None else None
+                ),
+                gender=str(row["gender"] or ""),
+                species=str(row["species_key"]) if row["species_key"] is not None else None,
+                ethnic=str(row["culture_key"]) if row["culture_key"] is not None else None,
+                birthplace_region_id=(
+                    str(row["birthplace_region_id"])
+                    if row["birthplace_region_id"] is not None
+                    else None
+                ),
+                birthplace_settlement_id=(
+                    str(row["birthplace_settlement_id"])
+                    if row["birthplace_settlement_id"] is not None
+                    else None
+                ),
+                current_settlement_id=(
+                    str(row["current_settlement_id"])
+                    if row["current_settlement_id"] is not None
+                    else None
+                ),
+                job_family=str(row["job_family"] or ""),
+                partner_person_id=(
+                    int(row["partner_person_id"])
+                    if row["partner_person_id"] is not None
+                    else None
+                ),
+                father_id=int(row["father_id"]) if row["father_id"] is not None else None,
+                mother_id=int(row["mother_id"]) if row["mother_id"] is not None else None,
+                child_count=int(row["child_count"] or 0),
+                status_bucket=(
+                    "partnered" if int(row["is_partnered"] or 0) else "common"
+                ),
+                prosperity_bucket="common",
+            )
+            conn.execute(
+                "DELETE FROM simulation_people_nondetailed WHERE person_id = ?",
+                (int(nondetailed_id),),
+            )
+            conn.commit()
+
+        person = passive_person_to_detailed_person(
+            passive,
+            simulation_context=self,
+            simulation_year=int(year),
+        )
+        person = apply_detailed_selection_variance(
+            person,
+            person_id=int(nondetailed_id),
+            year=int(year),
+            reason=reason_text,
+            source={
+                **source_payload,
+                "source_kind": "nondetailed_directory",
+            },
+        )
+        rec = SimulationPersonRecord(
+            person_id=int(nondetailed_id),
+            person=person,
+            is_founder=False,
+            father_id=passive.father_id,
+            mother_id=passive.mother_id,
+        )
+        self.people.append(rec)
+        self.id_to_record[rec.person_id] = rec
+        if person.deathyear is None or int(person.deathyear) > int(year):
+            self.current_people_ids.add(rec.person_id)
+        self.next_person_id = max(int(self.next_person_id), int(rec.person_id) + 1)
+        self._add_record_to_alive_census_cache(rec)
+        self.invalidate_alive_columns_cache()
+        payload = {
+            "year": int(year),
+            "person_id": int(rec.person_id),
+            "reason": reason_text,
+            "birthyear": int(person.birthyear),
+            "settlement_id": person.current_settlement_id,
+            "region_id": person.birthplace_region_id,
+            "source": {
+                **source_payload,
+                "source_kind": "nondetailed_directory",
+            },
+        }
+        self._record_inferred_simulation_event(
+            year, "nondetailed_person_promoted", payload
+        )
+        self.passive_promotion_log.append(
+            PassivePromotionLogEntry(
+                person_id=int(rec.person_id),
+                sim_year=int(year),
+                reason=reason_text,
+                synthesized=payload,
+            )
         )
         return rec
 
@@ -1806,7 +1942,34 @@ class SimulationContext:
             sid = (cohort.settlement_id or "").strip()
             if sid:
                 out[sid] = out.get(sid, 0) + max(0, int(cohort.population_count))
+        for sid, count in self.nondetailed_population_counts_by_settlement().items():
+            out[sid] = out.get(sid, 0) + int(count)
         return out
+
+    def nondetailed_population_counts_by_settlement(self) -> dict[str, int]:
+        """Alive SQLite city-directory people by settlement, without loading rows."""
+        try:
+            from library.world_save import ensure_checkpoint_schema
+            from library.nondetailed_population import nondetailed_counts_by_settlement
+
+            with closing(sqlite3.connect(self.save_db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                return nondetailed_counts_by_settlement(conn)
+        except sqlite3.Error:
+            return {}
+
+    def nondetailed_population_count(self) -> int:
+        try:
+            from library.world_save import ensure_checkpoint_schema
+            from library.nondetailed_population import nondetailed_alive_count
+
+            with closing(sqlite3.connect(self.save_db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                return nondetailed_alive_count(conn)
+        except sqlite3.Error:
+            return 0
 
     def passive_population_counts_by_region(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -2098,8 +2261,12 @@ class SimulationContext:
                 ly = float(site.get("y", 0.5))
             except (TypeError, ValueError):
                 return None
+            try:
+                geometry = self.world_map_geometry_for_settlements()
+            except ModuleNotFoundError:
+                return None
             return project_local_point_to_region_footprint(
-                self.world_map_geometry_for_settlements(),
+                geometry,
                 region_id,
                 (lx, ly),
             )
@@ -2117,7 +2284,10 @@ class SimulationContext:
         candidate_xy = self._site_world_xy_from_geo_json(local_geography_json, site_slot, rid)
         if candidate_xy is None:
             return None
-        geometry = self.world_map_geometry_for_settlements()
+        try:
+            geometry = self.world_map_geometry_for_settlements()
+        except ModuleNotFoundError:
+            return None
         candidate_micro_id = micro_cell_id_for_world_point(
             geometry,
             candidate_xy,
@@ -2385,6 +2555,7 @@ class SimulationContext:
                 for rec in self.passive_people.values()
                 if rec.person.deathyear is None or int(rec.person.deathyear) > int(year)
             )
+            nondetailed_alive_count = self.nondetailed_population_count()
             aggregate_cohort_alive_count = sum(
                 int(c.population_count)
                 for c in self.passive_cohorts
@@ -2417,17 +2588,21 @@ class SimulationContext:
                     "dead_count": len(self.people) - detailed_alive_count,
                     "detailed_alive_count": detailed_alive_count,
                     "passive_person_alive_count": passive_person_alive_count,
+                    "nondetailed_alive_count": nondetailed_alive_count,
                     "aggregate_cohort_alive_count": aggregate_cohort_alive_count,
                     "aggregate_cohort_partnered_count": aggregate_cohort_partnered_count,
                     "mixed_mode_alive_count": (
                         detailed_alive_count
                         + passive_person_alive_count
+                        + nondetailed_alive_count
                         + aggregate_cohort_alive_count
                     ),
                     "births_count": births_count,
                     "deaths_count": deaths_count,
                     "passive_cohort_births_count": passive_cohort_births_count,
                     "passive_cohort_deaths_count": passive_cohort_deaths_count,
+                    "nondetailed_births_count": int(self.last_nondetailed_tick_result.births),
+                    "nondetailed_deaths_count": int(self.last_nondetailed_tick_result.deaths),
                     "couples_count": len(self.couples),
                     "infant_mortality_pct": mortality_rates["infant_mortality_pct"],
                     "under5_mortality_pct": mortality_rates["under5_mortality_pct"],
