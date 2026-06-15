@@ -22,6 +22,14 @@ Future event work should be added as a fresh concrete TODO only when there is a
 specific new generator, consequence ledger, prose/report/browser need, measured
 tuning problem, or performance regression to handle.
 
+## Sanity Checks and Bugfixes
+
+- I see zero evidence of potential serial killer like lives. If anything, the propensity for murder has become much more one-off. I simmed 200 years with not a single person committing more than one murder. Remember that the crime rates (and all other rates) need to take into consideration the full population, which includes all non-detailed people.
+
+- When I looked at the table in SQLite for the non-detailed lightweight people, it had zero records. This may be because it just hasn't been fully implemented yet.
+
+- The non-detailed to detailed person ratio is still very small, it probably needs to be closer to 100-1 than 8-1.
+
 ## Paramour Fertility And Out-Of-Wedlock Children
 
 Add support for paramour relationships to produce children.
@@ -285,49 +293,10 @@ As non-detailed people expand into the storage layer for normal population mass,
 the detailed-person sample should increasingly represent people with unusual
 importance, variance, or narrative salience.
 
-Completed v1 context: generated production founders plus passive and
-non-detailed directory promotions now receive deterministic detailed-selection
-variance; murder selection now records and uses a rare serial-predator signal
-inside the existing calibrated homicide-rate gates; event-history reports now
-include hybrid-population calibration metrics for detailed variance,
-non-detailed population counts, murder rates, and serial-predator shares; the
-mixed-mode calibration TSV now writes those report-derived fields from generated
-saves; stricter serial-murder guardrail fields now track 3+ murder repeat
-killers against a target maximum of 1% of murders once the sample reaches 100
-murders; murder-rate rows now include the configured target, observed/target
-ratio, and a sample-aware calibration status; detailed-selection variance now
-uses named reason profiles, and event-history reports write
-`hybrid_variance_by_promotion_reason.tsv` for reason-level tuning; the
-mixed-mode calibration runner preserves those reason-level diagnostics in
-batch-level promotion-reason TSVs with sample-aware profile-band statuses; the
-aggregate summary also reports each murder-sample threshold, remaining sample
-count, and readiness flag so longer calibration batches can see how far short
-they are; serial-murder diagnostics now include a separate emergence status that
-requires at least 500 murders before treating a zero-serial result as meaningful;
-the murder selector now applies an explicit capped repeat-predator multiplier to
-already-eligible killer candidates after the homicide-rate gate passes, so
-repeat emergence can happen without raising total murder volume, with the cap
-tightened so one capped repeat-prone candidate in the canonical 250-person
-murder sample stays below the 1% serial-murder guardrail; the aggregate summary
-now also writes an overall `hybrid_calibration_status` and readiness flag so
-long batches can answer whether the combined detailed-population variance,
-murder-rate band, serial guardrail, and serial emergence checks are actually
-ready and within target; the mixed-mode calibration runner can disable
-birth-settlement spin-off for large event-rate probes when the runtime lacks
-optional world-map geometry dependencies, and settlement spin-off now falls back
-to non-map local geography when optional world-map geometry is unavailable;
-mixed-mode reports now also expose serial-predator profile counts and propensity
-scores, and rare repeat-capable profiles now appear in the biased detailed
-population sample instead of being absent from ordinary founder/detail-floor
-materialization; the aggregate mixed-mode summary now projects the additional
-detailed person-years and current-average scenario equivalents needed to reach
-the 100-murder serial guardrail and 500-murder serial emergence sample gates,
-using observed murder rate once the 10-murder rate sample is mature and the
-configured target rate before then; focused regression coverage now proves a
-generated detailed-selection profile can feed the real serial-propensity and
-weighted killer-selection path to produce 3+ repeat selection in a 500-murder
-sample while staying within the 1% guardrail. See
-`TODONE.md`.
+Completed context needed for the next calibration step: detailed-selection
+variance, serial-predator scoring, report/TSV calibration metrics, resume-safe
+mixed-mode calibration batches, and focused repeat-selection regression coverage
+are implemented. See `TODONE.md` for the full completion record.
 
 Design intent:
 
@@ -383,41 +352,11 @@ Completion boundary:
   `--disable-birth-settlement-spinoff` only for deliberate event-rate stress
   tests, not fully representative settlement-geography runs.
 - Use calibration statuses rather than single small-run rates for retuning:
-  murder-rate status is meaningful after at least 10 observed murders, and
-  serial-murder guardrail status is meaningful after at least 100 observed
-  murders. The mixed-mode calibration runner writes scenario/target/replicate
-  columns plus an aggregate `*.summary.tsv` beside the row-level TSV so
-  multi-row batches can be judged by combined murder samples, weighted murder
-  targets, summed `detailed_person_years`, serial-murder guardrail status, and
-  weighted detailed-variance and serial-propensity scores. The summary includes
-  sample-threshold, remaining-sample, and ready fields for the 100 scored-person
-  serial-profile gate, 10-murder rate band, 100-murder serial guardrail, and
-  500-murder serial-emergence check, plus an overall
-  `hybrid_calibration_status` that reports whether the next action is more
-  sample, murder-rate retuning, serial-profile retuning, serial-guardrail
-  retuning, serial-emergence retuning, or acceptance as
-  `within_hybrid_calibration_targets`. It also writes projection-rate source,
-  projected additional detailed person-years, and projected additional
-  current-average scenarios for the 100- and 500-murder serial sample gates. It
-  can also stop a large replicate batch early with
-  `--stop-when-hybrid-status calibrated` or another explicit aggregate status
-  once `--min-scenarios-before-stop` is satisfied, and can resume existing row
-  and promotion-reason TSVs with `--resume-existing` so long calibration
-  batches can be accumulated across multiple process runs. It can also stop
-  after explicit aggregate sample thresholds with `--stop-after-total-murders`
-  or `--stop-after-detailed-person-years`, which is the practical way to run to
-  the 100-murder guardrail or 500-murder emergence gates without guessing a
-  fixed replicate count. The summary also writes `recommended_next_calibration_*`
-  fields that name the next sample target and resume/stop flags for continuing
-  the batch. Use `--write-incremental` for long probes so completed scenarios
-  rewrite the row, summary, and promotion-reason TSVs before the next scenario
-  begins. Resume skips are plan-aware: existing rows are only treated as
-  complete when their scenario index, target index, replicate index, target
-  population, and seed match the current requested scenario plan. It also writes
-  per-scenario and aggregate
-  promotion-reason variance TSVs for reason-specific tuning, including
-  `within_profile_band`, `below_profile_floor`, `above_profile_ceiling`, and
-  `insufficient_reason_sample` statuses.
+  murder-rate status is meaningful after at least 10 observed murders,
+  serial-murder guardrail status after at least 100 observed murders, and
+  serial emergence after at least 500 observed murders. Long probes should use
+  `--write-incremental`, `--resume-existing`, and explicit sample-stop flags so
+  partial evidence is retained and the aggregate summary names the next gate.
 - Tune the numeric values for the reason-specific variance profiles for ruler,
   officeholder, elite, specialist, criminal/outlaw, religious, migrant/frontier,
   kinship-link, inspection, and spotlight promotion reasons after real
@@ -501,3 +440,4 @@ Important invariant:
 
 1. Use late-year profiling to confirm the next hot path for ~15K active people.
 2. Get 15K active people / 10 late years under 5 minutes.
+

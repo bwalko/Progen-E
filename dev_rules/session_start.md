@@ -41,4 +41,5 @@ Use this checklist at the beginning of every coding session.
 - `TODO.md` should contain only actionable remaining work plus the minimum context needed to choose and implement the next task.
 - Completed functionality belongs in `TODONE.md`, not as long "already done" prose in `TODO.md`.
 - If completed context must remain in `TODO.md` because later work depends on it, label it clearly as context for completed functionality needed by the next task.
+- Maintain `TODONE.md` as a chronological completion log: append new completed batches at the end unless a nearby reorganization is clearly safer, use dated/version-style headings when useful, group compact entries under `Enhancements` and `Fixes` where appropriate, and keep entries evidence-oriented rather than copying long TODO prose.
 - Every workstream should have a realistic completion boundary. Do not turn a completed workstream into a never-ending list of speculative follow-ups; create a new TODO only when the next item is concrete, useful, and worth the added runtime or maintenance cost.

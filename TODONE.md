@@ -2633,3 +2633,15 @@ completion.
 ### Not Done
 
 - Tab-select autoloading for Gradio grids is intentionally **not** considered solved. See `TODO.md` before adding or keeping `.select(...)` handlers on tabs that populate large tables.
+
+## 2026-06-15 Tracking-Doc Cleanup
+
+### Fixes
+
+- Compressed the `TODO.md` detailed-population calibration section so it keeps
+  only the design intent, latest retained evidence, next continuation command,
+  and remaining calibration/tuning decisions.
+- Left completed implementation details in the existing `TODONE.md` completion
+  entries for detailed-selection variance, serial-predator diagnostics,
+  mixed-mode calibration reports, and hybrid-population support instead of
+  duplicating the full history inside `TODO.md`.
