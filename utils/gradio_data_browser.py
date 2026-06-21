@@ -9648,6 +9648,32 @@ def _city_state_note_items(note: dict[str, object]) -> list[str]:
     hegemon = note.get("hegemon_polity_id")
     if hegemon not in (None, ""):
         items.append(f"Hegemon polity: {hegemon}")
+    occupation = str(note.get("occupation_status") or "").strip()
+    if occupation:
+        items.append(f"Occupation: {occupation.replace('_', ' ')}")
+    overlord = note.get("overlord_polity_id") or note.get("previous_overlord_polity_id")
+    if overlord not in (None, ""):
+        items.append(f"Overlord polity: {overlord}")
+    tribute_to = note.get("tribute_to_polity_id")
+    if tribute_to not in (None, ""):
+        tribute = note.get("tribute_rate")
+        tribute_text = f"Tribute to polity {tribute_to}"
+        if tribute not in (None, ""):
+            tribute_text += f": {_fmt_number(tribute)}"
+        items.append(tribute_text)
+    garrisoned_by = note.get("garrisoned_by_polity_id")
+    if garrisoned_by not in (None, ""):
+        strength = note.get("garrison_strength")
+        garrison_text = f"Garrisoned by polity {garrisoned_by}"
+        if strength not in (None, ""):
+            garrison_text += f": {_fmt_number(strength)}"
+        items.append(garrison_text)
+    regime = str(note.get("regime_form") or "").strip()
+    if regime:
+        items.append(f"Regime: {regime.replace('_', ' ')}")
+    legitimacy = str(note.get("office_legitimacy") or "").strip()
+    if legitimacy:
+        items.append(f"Office legitimacy: {legitimacy.replace('_', ' ')}")
     colony = str(note.get("colony_autonomy_level") or "").strip()
     if colony:
         items.append(f"Colony status: {colony.replace('_', ' ')}")

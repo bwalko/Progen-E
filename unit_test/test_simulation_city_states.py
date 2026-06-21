@@ -7,11 +7,12 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
 from library.config_import import load_all_csvs_into_sqlite
 from library.person import Person
-from library.polity import OfficeSeatState, PolityState, TerritoryOpenRow
+from library.polity import AllianceState, OfficeSeatState, PolityState, TerritoryOpenRow
 from library.settlements import SettlementState, make_settlement_id
 from library.simulation_city_states import (
     summarize_city_state_patterns,
@@ -350,6 +351,175 @@ class TestSimulationCityStates(unittest.TestCase):
             note = ctx.gov_polities[2].notes["city_state"]
             self.assertEqual(note["colony_autonomy_level"], "dependent")
             self.assertEqual(note["mother_settlement_id"], mother.settlement_id)
+
+    def test_occupation_and_liberation_keep_local_city_events_active(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            city = self._settlement(
+                ctx,
+                "march",
+                seq=1,
+                display_name="March City",
+                prosperity=2.0,
+                stability=0.28,
+                market=1.0,
+                pressure=1.05,
+            )
+            leader = self._add_people(ctx, settlement=city, count=14)[0]
+            ctx.gov_polities[9] = PolityState(
+                polity_id=9,
+                polity_type_id="kingdom",
+                parent_polity_id=None,
+                name="Overkingdom",
+                capital_settlement_id=None,
+                founding_dynasty_id=None,
+                founded_sim_year=990,
+            )
+            pol = self._add_city_polity(
+                ctx,
+                polity_id=1,
+                settlement=city,
+                name="March City",
+                leader_person_id=leader,
+                parent_polity_id=9,
+            )
+            ctx.gov_polities[1] = replace(
+                pol,
+                notes={"city_state": {"occupation_pressure": 0.72}},
+            )
+            ctx._pending_simulation_events.clear()
+
+            simulation_city_states_annual_tick(ctx, 1000)
+
+            events = {
+                event_type: payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+            }
+            self.assertIn("city_state_occupation_imposed", events)
+            self.assertIn("city_state_public_works", events)
+            self.assertEqual(events["city_state_public_works"]["autonomy_state"], "occupied")
+            self.assertEqual(events["city_state_public_works"]["overlord_polity_id"], 9)
+            self.assertTrue(
+                any(
+                    t.polity_id == 1
+                    and t.target_kind == "settlement"
+                    and t.target_id == city.settlement_id
+                    for t in ctx.gov_territory_rows
+                )
+            )
+            self.assertEqual(ctx.gov_polities[1].notes["city_state"]["autonomy_state"], "occupied")
+
+            ctx.gov_polities[1] = replace(ctx.gov_polities[1], parent_polity_id=None)
+            ctx._pending_simulation_events.clear()
+            simulation_city_states_annual_tick(ctx, 1001)
+
+            event_types = [event_type for _year, event_type, _payload in ctx._pending_simulation_events]
+            self.assertIn("city_state_liberated", event_types)
+            note = ctx.gov_polities[1].notes["city_state"]
+            self.assertEqual(note["occupation_status"], "liberated")
+            self.assertEqual(note["autonomy_state"], "liberated")
+
+    def test_hegemon_imposes_tribute_garrison_and_league_can_break(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            strong, small = self._seed_two_rival_cities(ctx)
+
+            simulation_city_states_annual_tick(ctx, 1000)
+
+            event_types = [event_type for _year, event_type, _payload in ctx._pending_simulation_events]
+            self.assertIn("city_state_tribute_imposed", event_types)
+            self.assertIn("city_state_garrison_installed", event_types)
+            subject_note = ctx.gov_polities[2].notes["city_state"]
+            self.assertEqual(subject_note["tribute_to_polity_id"], 1)
+            self.assertEqual(subject_note["garrisoned_by_polity_id"], 1)
+            self.assertEqual(ctx.gov_alliances[0].payload["status"], "tribute_league")
+
+            ctx.settlements_by_id[strong.settlement_id] = replace(
+                ctx.settlements_by_id[strong.settlement_id],
+                prosperity_pool=0.0,
+                stability=0.08,
+                market_pull=0.0,
+            )
+            ctx.settlements_by_id[small.settlement_id] = replace(
+                ctx.settlements_by_id[small.settlement_id],
+                prosperity_pool=1.6,
+                stability=0.72,
+                market_pull=0.55,
+            )
+            ctx._pending_simulation_events.clear()
+            simulation_city_states_annual_tick(ctx, 1001)
+
+            broken = [
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "city_state_league_broken"
+            ]
+            self.assertEqual(len(broken), 1)
+            self.assertEqual(broken[0]["breakdown_reason"], "hegemon_declined")
+            self.assertTrue(all(a.until_sim_year == 1001 for a in ctx.gov_alliances if a.kind == "city_state_league"))
+            self.assertEqual(ctx.gov_polities[1].notes["city_state"]["autonomy_state"], "independent")
+            self.assertNotIn("tribute_to_polity_id", ctx.gov_polities[2].notes["city_state"])
+
+    def test_internal_politics_records_tyranny_exile_and_debt_relief(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            city = self._settlement(
+                ctx,
+                "basin",
+                seq=1,
+                display_name="Basin City",
+                prosperity=0.6,
+                stability=0.22,
+                market=0.2,
+                pressure=1.25,
+            )
+            people = self._add_people(ctx, settlement=city, count=10)
+            leader, rival = people[0], people[1]
+            rival_rec = ctx.id_to_record[rival]
+            rival_rec.person = replace(
+                rival_rec.person,
+                social_standing_01=0.94,
+                societal_impact_01=0.86,
+                perceived_worth_01=0.82,
+                leader_tendency="leader",
+                status_tendency="ambitious",
+            )
+            self._add_city_polity(ctx, polity_id=1, settlement=city, name="Basin City", leader_person_id=leader)
+            ctx._pending_simulation_events.clear()
+
+            simulation_city_states_annual_tick(ctx, 1000)
+
+            event_types = [event_type for _year, event_type, _payload in ctx._pending_simulation_events]
+            self.assertIn("city_state_civic_crisis", event_types)
+            self.assertIn("city_state_tyranny_usurpation", event_types)
+            note = ctx.gov_polities[1].notes["city_state"]
+            self.assertEqual(note["regime_form"], "tyranny")
+            self.assertEqual(note["office_legitimacy"], "contested")
+            self.assertEqual(note["tyrant_person_id"], rival)
+            self.assertEqual(
+                ctx.gov_office_seats[next(iter(ctx.gov_office_seats))].holder_person_id,
+                rival,
+            )
+
+            ctx._pending_simulation_events.clear()
+            simulation_city_states_annual_tick(ctx, 1001)
+            event_types = [event_type for _year, event_type, _payload in ctx._pending_simulation_events]
+            self.assertIn("city_state_exile_decreed", event_types)
+
+            ctx.settlements_by_id[city.settlement_id] = replace(
+                ctx.settlements_by_id[city.settlement_id],
+                stability=0.50,
+                food_pressure=1.05,
+            )
+            ctx._pending_simulation_events.clear()
+            simulation_city_states_annual_tick(ctx, 1008)
+
+            event_types = [event_type for _year, event_type, _payload in ctx._pending_simulation_events]
+            self.assertIn("city_state_debt_relief", event_types)
+            note = ctx.gov_polities[1].notes["city_state"]
+            self.assertEqual(note["office_legitimacy"], "reformed")
+            self.assertNotIn("unresolved_civic_crisis_year", note)
+            self.assertGreater(ctx.settlements_by_id[city.settlement_id].stability, 0.50)
 
 
 if __name__ == "__main__":

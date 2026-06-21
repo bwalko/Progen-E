@@ -1991,6 +1991,13 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                         "city_state": {
                             "autonomy_state": "hegemon",
                             "league_id": "city_league:delta:1",
+                            "occupation_status": "liberated",
+                            "tribute_to_polity_id": 2,
+                            "tribute_rate": 0.08,
+                            "garrisoned_by_polity_id": 2,
+                            "garrison_strength": 0.22,
+                            "regime_form": "tyranny",
+                            "office_legitimacy": "contested",
                             "last_public_works_project": "storehouse",
                         }
                     }
@@ -2036,6 +2043,11 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Office History", html)
         self.assertIn("City-State", html)
         self.assertIn("Autonomy: hegemon", html)
+        self.assertIn("Occupation: liberated", html)
+        self.assertIn("Tribute to polity 2", html)
+        self.assertIn("Garrisoned by polity 2", html)
+        self.assertIn("Regime: tyranny", html)
+        self.assertIn("Office legitimacy: contested", html)
         self.assertIn("Latest civic work: storehouse", html)
         self.assertIn("1000-1004", html)
         self.assertIn("ended: death", html)

@@ -11,43 +11,13 @@
   explicit TODO before extending the current geography/job/knowledge-driven
   trade-network model into commodity production, cargo, prices, or supply chains.
 
-## City-State Dynamics V2 Follow-Ups
+## Completed Context: City-State Dynamics
 
-Context: the first generic city-state layer is implemented; see `TODONE.md` for
-the completion evidence. It adds annual `city_state_*` events, public works,
-city leagues, hegemony, resource disputes, civic crisis/reform, colony-status
-notes, event prose/records, browser polity-sheet notes, and a small pattern
-report command. Future work should extend that layer rather than recreate a
-parallel city-state system.
-
-### Occupation And Liberation Hooks
-
-- Wire warfare/campaign or parent-polity pressure into explicit city-state
-  autonomy changes for `occupied` and `liberated`.
-- Keep local civic events active while occupied, but mark public records with
-  overlord/occupation context.
-- Completion is a deterministic fixture where a city-state enters occupation,
-  later becomes liberated or restored, and polity/settlement history reads back
-  the autonomy changes.
-
-### Tribute, Garrisons, And League Breakdown
-
-- Extend `city_state_league` alliance payloads so a hegemon can impose tribute,
-  garrisons, or vassal-like pressure on members.
-- Add trust/pressure decay so leagues can fracture after defeat, faction-memory
-  buildup, declining hegemon score, or rising rival power.
-- Completion is focused coverage where a league forms, becomes hegemon-led,
-  imposes pressure, then either survives or breaks with readable chronicle
-  events.
-
-### Deeper Internal City Politics
-
-- Add concrete council/magistrate/temple/merchant-elite office or event hooks
-  only where existing government titles and seats are not expressive enough.
-- Add tyranny/usurpation and exile/debt-relief reform events using existing
-  traits, legal fallout, reputation marks, and faction memory.
-- Completion is a fixture where internal city conflict changes later civic
-  stability, office legitimacy, and history prose without raw IDs.
+The generic city-state V1 and V2 layers are complete; see `TODONE.md` for the
+completion evidence. Future city-state work should be added as a fresh concrete
+TODO only when there is a specific new generator, consequence ledger,
+prose/report/browser need, measured tuning problem, or performance regression to
+handle.
 
 ## Completed Context: Genome-Driven Events, Lost Records, And Chronicle Prose
 

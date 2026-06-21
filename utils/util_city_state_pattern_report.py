@@ -27,6 +27,14 @@ CITY_STATE_PATTERN_BUCKETS: dict[str, str] = {
     "city_state_autonomy_changed": "empire_pressure_or_autonomy",
     "city_state_civic_crisis": "civic_crisis_or_reform",
     "city_state_civic_reform": "civic_crisis_or_reform",
+    "city_state_occupation_imposed": "empire_pressure_or_autonomy",
+    "city_state_liberated": "empire_pressure_or_autonomy",
+    "city_state_tribute_imposed": "league_pressure_or_breakdown",
+    "city_state_garrison_installed": "league_pressure_or_breakdown",
+    "city_state_league_broken": "league_pressure_or_breakdown",
+    "city_state_tyranny_usurpation": "internal_politics_or_reform",
+    "city_state_exile_decreed": "internal_politics_or_reform",
+    "city_state_debt_relief": "internal_politics_or_reform",
 }
 
 

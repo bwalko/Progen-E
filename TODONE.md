@@ -2990,3 +2990,45 @@ completion.
   unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history
   unit_test.test_save_checkpoint.TestSaveCheckpoint.test_deep_consequence_payloads_persist_factions_and_institutions`
 - `python utils/util_city_state_pattern_report.py --world default`
+
+## 2026-06-21 City-State Dynamics V2 Follow-Ups
+
+### Enhancements
+
+- Completed the occupation/liberation follow-up without adding new save tables:
+  city-state polities can record `city_state_occupation_imposed` under
+  campaign or parent-polity pressure, retain local civic events while occupied,
+  and later record `city_state_liberated` when the overlord is removed.
+- Extended city-state notes and browser polity sheets with occupation,
+  overlord, tribute, garrison, regime, and office-legitimacy fields.
+- Added hegemon-led league pressure: active `city_state_league` alliance
+  payloads can now carry tribute/garrison terms, and member city notes remember
+  the hegemon, tribute rate, garrison sponsor, and pressure year.
+- Added league breakdown when hegemon-led leagues lose trust, suffer tribute
+  pressure, or the hegemon declines below a rival member. Breakdown closes the
+  active league alliances in RAM, clears member pressure notes, and records a
+  public city chronicle event with faction-memory consequences.
+- Added internal city politics follow-ups for tyranny/usurpation, political
+  exile, and debt relief. Tyranny can swap the head office through the existing
+  government office helpers, exile and debt relief use existing legal fallout,
+  reputation marks, and faction-memory consequence ledgers, and debt relief can
+  improve settlement stability while resolving a civic crisis.
+- Registered V2 event types in `config/event_catalog.csv` and
+  `config/event_ontology.csv`, extended city-state prose, and added the new
+  pattern buckets to both the library and standalone city-state report command.
+- Replaced the pending V2 TODO section with a compact completed-context note;
+  no further City-State V2 TODO remains from the current plan.
+
+### Validation
+
+- `python utils/util_load_config.py --world default`
+- `python -m py_compile library/simulation_city_states.py
+  library/event_prose.py utils/gradio_data_browser.py
+  utils/util_city_state_pattern_report.py unit_test/test_simulation_city_states.py
+  unit_test/test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_simulation_city_states`
+- `python -m unittest unit_test.test_simulation_city_states
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_deep_consequence_payloads_persist_factions_and_institutions`
+- `python -m unittest unit_test.test_event_prose`
+- `python utils/util_city_state_pattern_report.py --world default`

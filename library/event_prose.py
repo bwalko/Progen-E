@@ -1362,6 +1362,23 @@ def _city_state_focus(event_type: str, payload: Mapping[str, Any]) -> str:
     if event_type == "city_state_civic_reform":
         reform = _label(payload.get("reform_kind") or "civic reform")
         return f"the city-state enacted {reform}"
+    if event_type == "city_state_occupation_imposed":
+        return "the city-state came under occupation"
+    if event_type == "city_state_liberated":
+        return "the city-state recovered local freedom"
+    if event_type == "city_state_tribute_imposed":
+        return "tribute was imposed on the city-state"
+    if event_type == "city_state_garrison_installed":
+        return "a garrison was installed in the city-state"
+    if event_type == "city_state_league_broken":
+        reason = _label(payload.get("breakdown_reason") or "league breakdown")
+        return f"the city league broke over {reason}"
+    if event_type == "city_state_tyranny_usurpation":
+        return "a contested tyranny seized civic authority"
+    if event_type == "city_state_exile_decreed":
+        return "the city-state decreed a political exile"
+    if event_type == "city_state_debt_relief":
+        return "the city-state enacted debt relief"
     return et
 
 
