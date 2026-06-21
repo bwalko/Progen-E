@@ -1976,8 +1976,26 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             """
             INSERT INTO simulation_polities (
                 polity_id, polity_type_id, name, founded_sim_year
-            ) VALUES (1, 'kingdom', 'Northrealm', 1000)
+            ) VALUES (1, 'city_state', 'Northrealm', 1000)
             """
+        )
+        con.execute(
+            """
+            UPDATE simulation_polities
+            SET notes_json = ?
+            WHERE polity_id = 1
+            """,
+            (
+                json.dumps(
+                    {
+                        "city_state": {
+                            "autonomy_state": "hegemon",
+                            "league_id": "city_league:delta:1",
+                            "last_public_works_project": "storehouse",
+                        }
+                    }
+                ),
+            ),
         )
         con.execute(
             """
@@ -2016,6 +2034,9 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertIn("Ruler Timeline", html)
         self.assertIn("Office History", html)
+        self.assertIn("City-State", html)
+        self.assertIn("Autonomy: hegemon", html)
+        self.assertIn("Latest civic work: storehouse", html)
         self.assertIn("1000-1004", html)
         self.assertIn("ended: death", html)
         self.assertIn("1005-present", html)

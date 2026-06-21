@@ -258,6 +258,8 @@ def render_event_admin_summary(
             f"{year}: battle fought at {place}; outcome "
             f"{_label(payload.get('battle_outcome') or payload.get('outcome'))}."
         )
+    elif event_type.startswith("city_state_"):
+        prose = f"{year}: {_city_state_focus(event_type, payload)} at {place}."
     else:
         primary = _coerce_int(row.get("primary_person_id"))
         actor = f"; primary: {rr.person(primary)}" if primary is not None else ""
@@ -657,6 +659,18 @@ def _public_text(
             f"A later record at {place}{source} brought event "
             f"{payload.get('original_event_id')} back into memory."
         )
+    if event_type.startswith("city_state_"):
+        focus = _city_state_focus(event_type, payload)
+        return _choose_text(
+            row,
+            payload,
+            "public.city_state.known",
+            (
+                f"The city chronicle of {place} recorded {focus} in {year}.",
+                f"A civic notice at {place} preserved {focus} for {year}.",
+                f"Later copyists kept {focus} in the public record of {place}.",
+            ),
+        )
     if event_type == "death":
         return (
             f"The mortuary roll of {place} recorded the death of "
@@ -816,6 +830,20 @@ def _rumor_text(
                 f"the tale named {_motive(payload)} as the spur.",
                 f"The school talk of {place} preserved {focus} as {creator}'s work, "
                 f"but not every witness agreed.",
+            ),
+        )
+    if event_type.startswith("city_state_"):
+        focus = _city_state_focus(event_type, payload)
+        cause = _label(distortion.get("rumored_cause") or payload.get("reason"))
+        cause_clause = "" if cause == "unknown" else f"; the story gave {cause} as the cause"
+        return _choose_text(
+            row,
+            payload,
+            "public.city_state.rumor",
+            (
+                f"City rumor in {place} carried {focus} from {year}{cause_clause}.",
+                f"The civic tale at {place} said {focus} marked {year}{cause_clause}.",
+                f"Later talk in {place} remembered {focus}, though the terms stayed unsettled.",
             ),
         )
     if event_type in {
@@ -1038,6 +1066,17 @@ def _public_unknown_text(
                 f"the patron, witnesses, or maker.",
             ),
         )
+    if event_type.startswith("city_state_"):
+        return _choose_text(
+            row,
+            payload,
+            "public.city_state.unknown",
+            (
+                f"The public memory of {place} knew a city-state change marked {year}, but not its cause or terms.",
+                f"A civic notice at {place} preserved {year} as a turning point, while the details fell out of the public copy.",
+                f"The city chronicle of {place} kept the year {year}, but not the agreement, dispute, or office pressure behind it.",
+            ),
+        )
     if event_type == "death":
         victim = _public_person(row, payload, rr, "public_victim_person_id", "person_id")
         return (
@@ -1226,6 +1265,8 @@ def _event_focus(event_type: str, payload: Mapping[str, Any], rr: EventProseReso
         )
     if event_type == "knowledge_culture":
         return _knowledge_focus(payload)
+    if event_type.startswith("city_state_"):
+        return _city_state_focus(event_type, payload)
     if event_type == "birth":
         return f"the birth of {rr.person(payload.get('person_id'))}"
     if event_type == "death":
@@ -1286,6 +1327,59 @@ def _knowledge_focus(payload: Mapping[str, Any]) -> str:
     if domain != "unknown":
         return f"{kind} in {domain}"
     return kind
+
+
+def _city_state_focus(event_type: str, payload: Mapping[str, Any]) -> str:
+    et = _label(event_type)
+    if event_type == "city_state_urban_consolidation":
+        return "the city-state entered the civic record"
+    if event_type == "city_state_public_works":
+        project = _label(payload.get("civic_project") or "public works")
+        return f"the city undertook {project}"
+    if event_type == "city_state_resource_dispute":
+        dispute = _label(payload.get("dispute_kind") or "resource dispute")
+        other = payload.get("polity_b_id")
+        other_clause = " with a rival city" if other not in (None, "") else ""
+        return f"the city-state opened {dispute}{other_clause}"
+    if event_type == "city_state_league_formed":
+        members = _count_list(payload.get("member_polity_ids"))
+        return f"a defensive city league formed with {members} members"
+    if event_type == "city_state_hegemony_declared":
+        members = _count_list(payload.get("member_polity_ids"))
+        return f"the city claimed hegemony over a league of {members} members"
+    if event_type == "city_state_colony_status_changed":
+        level = _label(payload.get("colony_autonomy_level") or payload.get("autonomy_state"))
+        mother = payload.get("mother_settlement_id")
+        mother_clause = " from its mother city" if mother not in (None, "") else ""
+        return f"a maritime colony shifted to {level}{mother_clause}"
+    if event_type == "city_state_autonomy_changed":
+        old = _label(payload.get("from_autonomy_state"))
+        new = _label(payload.get("autonomy_state"))
+        return f"the city-state changed autonomy from {old} to {new}"
+    if event_type == "city_state_civic_crisis":
+        reason = _label(payload.get("crisis_reason") or "civic crisis")
+        return f"the city-state entered {reason}"
+    if event_type == "city_state_civic_reform":
+        reform = _label(payload.get("reform_kind") or "civic reform")
+        return f"the city-state enacted {reform}"
+    return et
+
+
+def _count_list(value: object) -> int:
+    if isinstance(value, (list, tuple, set)):
+        return len(value)
+    if value is None or value == "":
+        return 0
+    text = str(value).strip()
+    if not text:
+        return 0
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, (list, tuple, set)):
+        return len(parsed)
+    return len([part for part in text.replace(";", ",").split(",") if part.strip()])
 
 
 def _move_destination_clause(payload: Mapping[str, Any], rr: EventProseResolver) -> str:

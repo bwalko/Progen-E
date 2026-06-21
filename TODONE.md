@@ -2945,3 +2945,48 @@ completion.
 - `python -m py_compile library\simulation_context.py
   unit_test\test_nondetailed_population.py`
 - `python -m unittest unit_test.test_nondetailed_population`
+
+## 2026-06-21 City-State Dynamics And Ancient Urban Politics V1
+
+### Enhancements
+
+- Added `library.simulation_city_states` as a lightweight annual city-state
+  layer over existing settlement-grain `city_state` polities, settlements,
+  offices, alliances, trade outposts, event records, institutions, reputation
+  marks, faction memory, and legal fallout.
+- Wired the city-state tick into annual summaries after government bootstraps
+  and before economy, with profiling under `summary.city_states`.
+- Added generic `city_state_*` event families for urban consolidation, public
+  works, civic crises/reforms, resource disputes, leagues, hegemony,
+  colony-status changes, and autonomy changes.
+- Registered the city-state event families in `config/event_catalog.csv` and
+  `config/event_ontology.csv`.
+- Routed city-state events through public chronicle defaults, public
+  unknown/rumor stages, event prose, and durable consequence upserts for civic
+  institutions, leadership reputation, faction memory, and legal fallout.
+- Added polity-sheet City-State notes in the Gradio browser for autonomy,
+  leagues, hegemony, colony status, latest civic works, and unresolved crises.
+- Added `utils/util_city_state_pattern_report.py` to summarize broad
+  city-state pattern buckets from `save.sqlite`; the default save currently
+  reports 307 maritime-colony lifecycle events from the existing trade-network
+  side.
+- Replaced the broad implementation TODO with concrete V2 follow-ups for
+  occupation/liberation, tribute/garrison league pressure, league breakdown,
+  and deeper internal politics.
+
+### Validation
+
+- `python utils/util_load_config.py --world default`
+- `python -m py_compile library/simulation_city_states.py
+  library/simulation_context.py library/world_save.py library/event_prose.py
+  utils/gradio_data_browser.py utils/util_city_state_pattern_report.py
+  unit_test/test_simulation_city_states.py unit_test/test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_simulation_city_states`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history`
+- `python -m unittest
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_deep_consequence_payloads_persist_factions_and_institutions`
+- `python -m unittest unit_test.test_simulation_city_states
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_deep_consequence_payloads_persist_factions_and_institutions`
+- `python utils/util_city_state_pattern_report.py --world default`

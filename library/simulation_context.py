@@ -2661,6 +2661,13 @@ class SimulationContext:
             t0 = tpc()
         simulation_government_annual_tick(self, year)
         # Government has its own exclusive inner profile phases.
+        from library.simulation_city_states import simulation_city_states_annual_tick
+
+        if prof:
+            t0 = tpc()
+        simulation_city_states_annual_tick(self, year)
+        if prof:
+            simulation_timing.accumulate("summary.city_states", tpc() - t0)
         from library.simulation_economy import simulation_economy_annual_tick
 
         if prof:

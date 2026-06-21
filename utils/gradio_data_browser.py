@@ -9619,6 +9619,47 @@ def _snapshot_polity_names_for_settlement(snapshot: dict[str, object], settlemen
     return ", ".join(sorted(name for name in names if name))
 
 
+def _city_state_note_from_value(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        raw_notes = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+        raw_notes = parsed if isinstance(parsed, dict) else {}
+    city_state = raw_notes.get("city_state")
+    return dict(city_state) if isinstance(city_state, dict) else {}
+
+
+def _city_state_note_items(note: dict[str, object]) -> list[str]:
+    if not note:
+        return []
+    items: list[str] = []
+    autonomy = str(note.get("autonomy_state") or "").strip()
+    if autonomy:
+        items.append(f"Autonomy: {autonomy.replace('_', ' ')}")
+    league = str(note.get("league_id") or note.get("hegemony_league_id") or "").strip()
+    if league:
+        items.append(f"League: {league}")
+    hegemon = note.get("hegemon_polity_id")
+    if hegemon not in (None, ""):
+        items.append(f"Hegemon polity: {hegemon}")
+    colony = str(note.get("colony_autonomy_level") or "").strip()
+    if colony:
+        items.append(f"Colony status: {colony.replace('_', ' ')}")
+    project = str(note.get("last_public_works_project") or "").strip()
+    if project:
+        items.append(f"Latest civic work: {project.replace('_', ' ')}")
+    crisis = str(note.get("unresolved_civic_crisis_reason") or "").strip()
+    if crisis:
+        items.append(f"Unresolved crisis: {crisis.replace('_', ' ')}")
+    return items
+
+
 def _snapshot_region_map_html(
     snapshot: dict[str, object],
     region_id: str,
@@ -10730,6 +10771,7 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
         )[:12]
     ]
     vassal_items = [f"{v.get('name')} ({v.get('polity_type_id')})" for v in vassals]
+    city_state_items = _city_state_note_items(_city_state_note_from_value(row.get("notes_json") or row.get("notes")))
     cards = "".join(
         [
             _detail_card("Type", row.get("polity_type_id") or ""),
@@ -10749,6 +10791,7 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
         f'<div class="place-grid">{cards}</div>'
         '<div class="place-columns">'
         f'<section><h3>Territory</h3>{_ul(territory_items)}</section>'
+        f'<section><h3>City-State</h3>{_ul(city_state_items)}</section>'
         f'<section><h3>Offices</h3>{_ul(seat_items)}</section>'
         f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
         f'<section><h3>Ruler Timeline</h3>{_ul(ruler_items)}</section>'
@@ -11187,6 +11230,10 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
         )[:12]
     ]
     vassal_items = [f"{v['name']} ({v['polity_type_id']})" for v in vassals]
+    row_keys = set(row.keys()) if hasattr(row, "keys") else set()
+    city_state_items = _city_state_note_items(
+        _city_state_note_from_value(row["notes_json"] if "notes_json" in row_keys else "")
+    )
     cards = "".join(
         [
             _detail_card("Type", row["polity_type_id"] or ""),
@@ -11206,6 +11253,7 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
         f'<div class="place-grid">{cards}</div>'
         '<div class="place-columns">'
         f'<section><h3>Territory</h3>{_ul(territory_items)}</section>'
+        f'<section><h3>City-State</h3>{_ul(city_state_items)}</section>'
         f'<section><h3>Offices</h3>{_ul(seat_items)}</section>'
         f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
         f'<section><h3>Ruler Timeline</h3>{_ul(ruler_items)}</section>'

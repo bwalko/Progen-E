@@ -1799,7 +1799,8 @@ def _upsert_simulation_domain_state_from_event(
     created_at: str | None = None,
     place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
-    if str(event_type or "").strip() != "knowledge_culture":
+    event_type_s = str(event_type or "").strip()
+    if event_type_s != "knowledge_culture" and not event_type_s.startswith("city_state_"):
         return
     primary_state = _knowledge_state_delta_from_payload(payload)
     diffusion_states = _knowledge_state_diffusion_from_payload(payload)
@@ -3186,7 +3187,8 @@ def _upsert_simulation_institution_rows(
     created_at: str | None = None,
     place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
-    if str(event_type or "").strip() != "knowledge_culture":
+    event_type_s = str(event_type or "").strip()
+    if event_type_s != "knowledge_culture" and not event_type_s.startswith("city_state_"):
         return
     rows = _event_institution_rows_from_payload(payload)
     if not rows:
@@ -4148,6 +4150,8 @@ def _event_record_kind_for_type(
         return "public_virtue_record", "public_known", 0.85
     if et in {"knowledge_culture", "invention", "discovery", "legal_precedent"}:
         return "knowledge_record", "public_known", 0.8
+    if et.startswith("city_state_"):
+        return "city_chronicle", "public_known", 0.9
     if et in _SECRET_RECORD_EVENT_TYPES:
         return "household_secret", "private_known", 1.0
     if et == "birth":
@@ -4221,7 +4225,10 @@ def _default_public_stage_record_specs(
 ) -> list[dict[str, object]]:
     et = str(event_type or "").strip()
     origin = str(event_origin or "").strip().lower()
-    if origin in {"inferred", "backfilled"} or et not in _DEFAULT_PUBLIC_STAGE_EVENT_TYPES:
+    if origin in {"inferred", "backfilled"} or (
+        et not in _DEFAULT_PUBLIC_STAGE_EVENT_TYPES
+        and not et.startswith("city_state_")
+    ):
         return []
     p = _clean_stage_payload(payload)
     specs: list[dict[str, object]] = []
@@ -4315,6 +4322,34 @@ def _default_public_stage_record_specs(
                 public_stage="rumored",
                 record_type="court_rumor",
                 confidence=0.55,
+                distortion={"rumored_cause": reason},
+            )
+    elif et.startswith("city_state_"):
+        add(
+            record_key="public_city_state_terms_unclear",
+            public_stage="unknown",
+            record_type="city_chronicle_uncertainty",
+            confidence=0.55,
+            distortion={
+                "uncertain_fields": ["cause", "terms"],
+                "public_cause": "unknown",
+            },
+        )
+        reason = _stage_label(
+            p.get("reason")
+            or p.get("city_state_pattern")
+            or p.get("civic_project")
+            or p.get("crisis_reason")
+            or p.get("dispute_kind")
+            or p.get("autonomy_state")
+            or p.get("league_status")
+        )
+        if reason and reason != "unknown":
+            add(
+                record_key="public_city_state_rumor",
+                public_stage="rumored",
+                record_type="city_chronicle_rumor",
+                confidence=0.58,
                 distortion={"rumored_cause": reason},
             )
     elif et.startswith("campaign_") or et == "battle_fought":
@@ -5168,6 +5203,7 @@ def _backfill_simulation_event_public_stage_records(conn: sqlite3.Connection) ->
         SELECT e.id, e.event_type, e.event_origin, e.payload_json
         FROM simulation_events e
         WHERE e.event_type IN ({placeholders})
+           OR e.event_type LIKE 'city_state_%'
         ORDER BY e.id
         """,
         tuple(sorted(_DEFAULT_PUBLIC_STAGE_EVENT_TYPES)),
@@ -7279,9 +7315,10 @@ def append_simulation_event_rows(
                 ts,
             )
         )
-        if (
-            event_origin not in {"inferred", "backfilled"}
-            and str(event_type or "").strip() in _DEFAULT_PUBLIC_STAGE_EVENT_TYPES
+        event_type_s = str(event_type or "").strip()
+        if event_origin not in {"inferred", "backfilled"} and (
+            event_type_s in _DEFAULT_PUBLIC_STAGE_EVENT_TYPES
+            or event_type_s.startswith("city_state_")
         ):
             public_stage_rows.append((int(event_id), event_type, event_origin, payload))
 
