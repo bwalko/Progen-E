@@ -13,6 +13,11 @@ if "gradio" not in sys.modules and importlib.util.find_spec("gradio") is None:
 
 import utils.gradio_data_browser as gdb
 from library.config_import import load_all_csvs_into_sqlite
+from library.government_checkpoint import (
+    append_office_holding,
+    close_office_holding,
+    ensure_government_schema,
+)
 from library.person_archive_scores import ensure_person_archive_score_schema
 from library.world_save import (
     append_simulation_event_rows,
@@ -1881,6 +1886,64 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertNotIn(">Ada</a> became smith", html)
         self.assertNotIn(">Ada Forge</a> became smith", html)
 
+    def test_birth_event_marks_out_of_wedlock_children(self) -> None:
+        con = _memory_save()
+        con.execute(
+            """
+            insert into simulation_people (
+                person_id, world, is_founder, father_id, mother_id, is_alive, person_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                3,
+                "test",
+                0,
+                1,
+                2,
+                1,
+                json.dumps({"first_name": "Cuno", "last_name": "Forge", "birthyear": 10}),
+            ),
+        )
+        event = _event_row(
+            con,
+            "birth",
+            {
+                "child_id": 3,
+                "person_a_id": 1,
+                "person_b_id": 2,
+                "birth_relationship_type": "paramour",
+                "born_out_of_wedlock": True,
+                "legitimacy_status": "bastard",
+            },
+        )
+
+        text = _event_sentence(con, "test", event, 3)
+        shown_html = _event_sentence_html(con, "test", event, 3)
+
+        self.assertIn("Cuno was born out of wedlock", text)
+        self.assertIn("Cuno", shown_html)
+        self.assertIn("born out of wedlock", shown_html)
+
+    def test_death_event_shows_childbirth_cause(self) -> None:
+        con = _memory_save()
+        event = _event_row(
+            con,
+            "death",
+            {
+                "person_id": 1,
+                "death_cause": "childbirth",
+                "related_child_ids": [3],
+            },
+        )
+
+        text = _event_sentence(con, "test", event, 1)
+        shown_html = _event_sentence_html(con, "test", event, 1)
+
+        self.assertIn("Ada died from childbirth", text)
+        self.assertIn("Ada", shown_html)
+        self.assertIn("died from childbirth", shown_html)
+
     def test_person_sheet_event_uses_compact_link_names_with_full_hover(self) -> None:
         con = _memory_save()
         event = _event_row(
@@ -1896,6 +1959,68 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("<strong", html)
         self.assertIn(">Bea</a>", html)
         self.assertIn('title="Bea Forge (b. 8)"', html)
+
+    def test_polity_sheet_shows_ruler_timeline_and_office_history(self) -> None:
+        con = _memory_save()
+        con.execute("ALTER TABLE simulation_people ADD COLUMN first_name TEXT")
+        con.execute("ALTER TABLE simulation_people ADD COLUMN last_name TEXT")
+        con.execute(
+            """
+            UPDATE simulation_people
+            SET first_name = json_extract(person_json, '$.first_name'),
+                last_name = json_extract(person_json, '$.last_name')
+            """
+        )
+        ensure_government_schema(con)
+        con.execute(
+            """
+            INSERT INTO simulation_polities (
+                polity_id, polity_type_id, name, founded_sim_year
+            ) VALUES (1, 'kingdom', 'Northrealm', 1000)
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO simulation_office_seats (
+                seat_id, polity_id, title_id, slot_index, status
+            ) VALUES (10, 1, 'king', 0, 'active')
+            """
+        )
+        append_office_holding(
+            con,
+            world="test",
+            seat_id=10,
+            holder_person_id=1,
+            start_sim_year=1000,
+            ensure_schema=False,
+        )
+        close_office_holding(
+            con,
+            world="test",
+            seat_id=10,
+            holder_person_id=1,
+            end_sim_year=1004,
+            end_reason="death",
+            ensure_schema=False,
+        )
+        append_office_holding(
+            con,
+            world="test",
+            seat_id=10,
+            holder_person_id=2,
+            start_sim_year=1005,
+            ensure_schema=False,
+        )
+
+        html = _render_polity_sheet(con, "test", "1")
+
+        self.assertIn("Ruler Timeline", html)
+        self.assertIn("Office History", html)
+        self.assertIn("1000-1004", html)
+        self.assertIn("ended: death", html)
+        self.assertIn("1005-present", html)
+        self.assertIn("Ada Forge", html)
+        self.assertIn("Bea Forge", html)
 
     def test_property_crime_event_cards_use_payload_details(self) -> None:
         con = _memory_save()

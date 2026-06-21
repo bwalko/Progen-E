@@ -6,6 +6,13 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from library.trait_impacts import (
+    center_signal_01 as _trait_center_signal_01,
+    directional_deviation_signal_01 as _trait_directional_deviation_signal_01,
+    trait_category_pressure,
+    trait_values as _trait_values,
+)
+
 
 TraitMode = Literal["negative_extreme", "positive_extreme", "ideal_strength"]
 
@@ -54,31 +61,43 @@ def clamp01(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
 def genome_traits(subject: Any) -> Mapping[str, float]:
     """Return a best-effort genome trait mapping from a record, person, or dict."""
 
-    if isinstance(subject, Mapping):
-        raw = subject.get("genome", subject)
-    else:
-        person = getattr(subject, "person", subject)
-        raw = getattr(person, "genome", None)
-    return raw if isinstance(raw, Mapping) else {}
+    return _trait_values(subject)
 
 
 def trait_value(subject: Any, trait: str) -> float:
+    raw = _trait_value_if_present(subject, trait)
+    return 0.0 if raw is None else raw
+
+
+def _trait_value_if_present(subject: Any, trait: str) -> float | None:
     try:
-        return float(genome_traits(subject).get(trait, 0.0))
+        traits = genome_traits(subject)
+        if trait not in traits:
+            return None
+        return float(traits.get(trait, 0.0))
     except (TypeError, ValueError):
-        return 0.0
+        return None
 
 
 def negative_extreme(subject: Any, trait: str) -> float:
-    return clamp01((-trait_value(subject, trait) - 35.0) / 65.0)
+    value = _trait_value_if_present(subject, trait)
+    if value is None:
+        return 0.0
+    return _trait_directional_deviation_signal_01(value, "deficient")
 
 
 def positive_extreme(subject: Any, trait: str) -> float:
-    return clamp01((trait_value(subject, trait) - 35.0) / 65.0)
+    value = _trait_value_if_present(subject, trait)
+    if value is None:
+        return 0.0
+    return _trait_directional_deviation_signal_01(value, "excess")
 
 
 def ideal_strength(subject: Any, trait: str) -> float:
-    return clamp01(1.0 - abs(trait_value(subject, trait)) / 55.0)
+    value = _trait_value_if_present(subject, trait)
+    if value is None:
+        return 0.0
+    return _trait_center_signal_01(value)
 
 
 def score_trait_factor(subject: Any, factor: TraitFactor) -> float:
@@ -743,22 +762,28 @@ def property_crime_skill_factor(subject: Any) -> float:
 def instability_crime_pressure(subject: Any) -> float:
     """Extreme unstable, delusional, or paranoid traits that can spill into crime."""
 
-    return clamp01(
+    directed = clamp01(
         positive_extreme(subject, "neurochemical") * 0.55
         + positive_extreme(subject, "creativity") * 0.20
         + positive_extreme(subject, "intellect") * 0.15
         + positive_extreme(subject, "perception") * 0.10
     )
+    practical = trait_category_pressure(subject, "violence")
+    health = trait_category_pressure(subject, "mortality_health")
+    return clamp01(directed * 0.78 + practical * 0.18 + health * 0.04)
 
 
 def greed_crime_pressure(subject: Any) -> float:
     """Ruthless, miserly, and envious extremes most relevant to property crime."""
 
-    return clamp01(
+    directed = clamp01(
         positive_extreme(subject, "ambition") * 0.35
         + positive_extreme(subject, "frugality") * 0.30
         + negative_extreme(subject, "generosity") * 0.35
     )
+    practical = trait_category_pressure(subject, "finances")
+    legal = trait_category_pressure(subject, "legal_fallout")
+    return clamp01(directed * 0.78 + practical * 0.17 + legal * 0.05)
 
 
 def jealousy_crime_pressure(
@@ -766,12 +791,17 @@ def jealousy_crime_pressure(
 ) -> float:
     """Possessive/envious extremes, strongest under relationship opportunity."""
 
-    base = clamp01(
+    directed = clamp01(
         negative_extreme(subject, "generosity") * 0.24
         + positive_extreme(subject, "loyalty") * 0.22
         + positive_extreme(subject, "mating drive") * 0.22
         + positive_extreme(subject, "perception") * 0.20
         + positive_extreme(subject, "neurochemical") * 0.12
+    )
+    base = clamp01(
+        directed * 0.82
+        + trait_category_pressure(subject, "marriage_paramour") * 0.10
+        + trait_category_pressure(subject, "household_stability") * 0.08
     )
     if base <= 0.0:
         return 0.0
@@ -857,7 +887,7 @@ def property_crime_propensity(
         context=context,
         extra_risk=(
             property_crime_skill_factor(subject)
-            + greed_crime_pressure(subject) * 0.20
+            + greed_crime_pressure(subject) * 0.37
             + instability_crime_pressure(subject) * 0.04
         ),
     )

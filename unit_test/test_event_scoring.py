@@ -60,11 +60,16 @@ def _record(person_id: int, genome: dict[str, float], **person_kwargs: object) -
 class TestEventScoring(unittest.TestCase):
     def test_trait_basis_preserves_centered_signed_genome_semantics(self) -> None:
         rec = _record(1, {"justice": -95, "courage": 95, "empathy": 0})
+        ordinary = _record(2, {"justice": -50, "courage": 50, "empathy": 50})
 
-        self.assertAlmostEqual(negative_extreme(rec, "justice"), 60.0 / 65.0)
-        self.assertAlmostEqual(positive_extreme(rec, "courage"), 60.0 / 65.0)
+        self.assertAlmostEqual(negative_extreme(rec, "justice"), 1.0)
+        self.assertAlmostEqual(positive_extreme(rec, "courage"), 1.0)
         self.assertEqual(ideal_strength(rec, "empathy"), 1.0)
+        self.assertEqual(negative_extreme(ordinary, "justice"), 0.0)
+        self.assertEqual(positive_extreme(ordinary, "courage"), 0.0)
+        self.assertEqual(ideal_strength(ordinary, "empathy"), 0.0)
         self.assertEqual(negative_extreme(rec, "missing"), 0.0)
+        self.assertEqual(ideal_strength(rec, "missing"), 0.0)
 
     def test_propensity_specs_accept_raw_records_and_context_tags(self) -> None:
         rec = _record(

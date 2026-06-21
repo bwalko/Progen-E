@@ -175,6 +175,111 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertIn(50, ctx.current_people_ids)
             self.assertEqual(ctx.nondetailed_population_count(), 0)
 
+    def test_context_promotes_nondetailed_people_by_selector(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_selector",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            ctx.settlements_by_id["r1:s1"] = SettlementState(
+                settlement_id="r1:s1",
+                region_id="r1",
+                resident_count=10,
+                household_cap=3,
+            )
+            ctx.settlements_by_id["r1:s2"] = SettlementState(
+                settlement_id="r1:s2",
+                region_id="r1",
+                resident_count=10,
+                household_cap=3,
+            )
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=980,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id="r1:s1",
+                        job_family="care",
+                    ),
+                    person_id=60,
+                )
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=979,
+                        gender="Male",
+                        region_id="r1",
+                        settlement_id="r1:s1",
+                        job_family="trade",
+                    ),
+                    person_id=61,
+                )
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=978,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id="r1:s2",
+                        job_family="care",
+                    ),
+                    person_id=62,
+                )
+                conn.commit()
+
+            promoted = ctx.promote_nondetailed_people(
+                year=1000,
+                reason="user_inspection",
+                settlement_id="r1:s1",
+                job_family="care",
+                limit=5,
+            )
+            region_promoted = ctx.promote_nondetailed_people(
+                year=1000,
+                reason="regional_spotlight",
+                region_id="r1",
+                limit=1,
+            )
+
+            self.assertEqual([rec.person_id for rec in promoted], [60])
+            self.assertEqual([rec.person_id for rec in region_promoted], [61])
+            self.assertIn(60, ctx.current_people_ids)
+            self.assertIn(61, ctx.current_people_ids)
+            self.assertEqual(ctx.nondetailed_population_count(), 1)
+            event_payload = next(
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "nondetailed_person_promoted"
+                and payload.get("person_id") == 60
+            )
+            self.assertEqual(event_payload["source"]["selector_settlement_id"], "r1:s1")
+            self.assertEqual(event_payload["source"]["selector_job_family"], "care")
+
+    def test_context_nondetailed_selector_requires_filter(self) -> None:
+        ctx = SimulationContext(
+            db_path=Path("unused-config.sqlite"),
+            save_db_path=Path("unused-save.sqlite"),
+            world="default",
+            simulation_start_year=1000,
+            current_year=1000,
+        )
+
+        with self.assertRaises(ValueError):
+            ctx.promote_nondetailed_people(year=1000, reason="missing_selector")
+
     def test_job_family_counts_affect_settlement_economy(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)

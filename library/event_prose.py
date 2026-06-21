@@ -226,7 +226,9 @@ def render_event_admin_summary(
     elif event_type == "birth":
         prose = f"{year}: {rr.person(payload.get('person_id'))} was born at {place}."
     elif event_type == "death":
-        prose = f"{year}: {rr.person(payload.get('person_id'))} died at {place}."
+        cause = _label(payload.get("death_cause") or payload.get("cause"))
+        cause_clause = "" if cause == "unknown" else f" from {cause}"
+        prose = f"{year}: {rr.person(payload.get('person_id'))} died{cause_clause} at {place}."
     elif event_type in {
         "settlement_move_planned",
         "settlement_move_dropped",

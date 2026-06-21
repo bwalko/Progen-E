@@ -45,6 +45,7 @@ _DEFAULT_DETAILED_FRACTION = 0.001
 _DEFAULT_MIN_DETAILED_CAP = 200
 _DEFAULT_MAX_DETAILED_CAP = 2_000
 _DEFAULT_OUTPUT = _ROOT / "temp" / "mixed_mode_calibration.tsv"
+_CALIBRATION_POPULATION_BACKEND = "nondetailed_directory"
 _MURDER_RATE_MIN_MURDER_SAMPLE = 10
 _REASON_VARIANCE_MIN_SAMPLE = 10
 _SERIAL_PROFILE_MIN_SCORED_SAMPLE = 100
@@ -176,14 +177,23 @@ def _latest_mixed_counts(ctx: SimulationContext, year: int) -> dict[str, int]:
         for c in latest_cohorts
         if (c.status_bucket or "").strip().lower() == "partnered"
     )
+    nondetailed_alive = int(ctx.nondetailed_population_count())
     return {
         "detailed_alive": detailed_alive,
         "passive_person_alive": passive_person_alive,
+        "nondetailed_alive": nondetailed_alive,
+        "nondetailed_births": int(ctx.last_nondetailed_tick_result.births),
+        "nondetailed_deaths": int(ctx.last_nondetailed_tick_result.deaths),
         "aggregate_cohort_alive": aggregate_alive,
         "aggregate_cohort_births": aggregate_births,
         "aggregate_cohort_deaths": aggregate_deaths,
         "aggregate_cohort_partnered": aggregate_partnered,
-        "mixed_mode_alive": detailed_alive + passive_person_alive + aggregate_alive,
+        "mixed_mode_alive": (
+            detailed_alive
+            + passive_person_alive
+            + nondetailed_alive
+            + aggregate_alive
+        ),
         "cohort_rows": len(latest_cohorts),
         "promotion_count": sum(
             1
@@ -193,10 +203,10 @@ def _latest_mixed_counts(ctx: SimulationContext, year: int) -> dict[str, int]:
     }
 
 
-def _detailed_person_years_from_rows(rows: list[dict[str, object]]) -> int:
+def _person_years_from_rows(rows: list[dict[str, object]], field: str) -> int:
     total = 0
     for row in rows:
-        value = row.get("detailed_alive_count")
+        value = row.get(field)
         if value is None or value == "":
             continue
         try:
@@ -204,6 +214,14 @@ def _detailed_person_years_from_rows(rows: list[dict[str, object]]) -> int:
         except (TypeError, ValueError):
             continue
     return total
+
+
+def _detailed_person_years_from_rows(rows: list[dict[str, object]]) -> int:
+    return _person_years_from_rows(rows, "detailed_alive_count")
+
+
+def _mixed_person_years_from_rows(rows: list[dict[str, object]]) -> int:
+    return _person_years_from_rows(rows, "mixed_mode_alive_count")
 
 
 def _detailed_person_years_from_file_store(file_store: object) -> int:
@@ -216,6 +234,18 @@ def _detailed_person_years_from_file_store(file_store: object) -> int:
             with path.open(newline="", encoding="utf-8") as f:
                 rows.extend(dict(row) for row in csv.DictReader(f))
     return _detailed_person_years_from_rows(rows)
+
+
+def _mixed_person_years_from_file_store(file_store: object) -> int:
+    rows: list[dict[str, object]] = []
+    rows.extend(list(getattr(file_store, "_yearly_summary_rows", ()) or ()))
+    root_dir = getattr(file_store, "root_dir", None)
+    if root_dir is not None:
+        path = Path(root_dir) / "yearly_summary.csv"
+        if path.exists():
+            with path.open(newline="", encoding="utf-8") as f:
+                rows.extend(dict(row) for row in csv.DictReader(f))
+    return _mixed_person_years_from_rows(rows)
 
 
 def _read_tsv_rows(path: Path) -> list[dict[str, object]]:
@@ -265,6 +295,7 @@ def _hybrid_calibration_fields(
     trait_slots: tuple[str, ...] = (),
     murder_target_per_10k: float | None = None,
     detailed_person_years: int | None = None,
+    mixed_person_years: int | None = None,
 ) -> dict[str, object]:
     with closing(sqlite3.connect(save_path)) as conn:
         conn.row_factory = sqlite3.Row
@@ -277,19 +308,43 @@ def _hybrid_calibration_fields(
             trait_slots=trait_slots,
         )
     h = report.hybrid_population_calibration
-    exposure_person_years = (
+    detailed_exposure_person_years = (
         max(0, int(detailed_person_years))
         if detailed_person_years is not None
         else max(0, int(h.detailed_alive_people)) * max(0, int(h.event_year_span))
     )
-    murder_rate = (
-        float(h.murder_events) / float(exposure_person_years) * 10_000.0
-        if exposure_person_years > 0
+    mixed_exposure_person_years = (
+        max(0, int(mixed_person_years))
+        if mixed_person_years is not None
+        else max(
+            0,
+            int(h.detailed_alive_people) + int(h.non_detailed_alive_people),
+        )
+        * max(0, int(h.event_year_span))
+    )
+    calibration_exposure_person_years = (
+        mixed_exposure_person_years
+        if mixed_exposure_person_years > 0
+        else detailed_exposure_person_years
+    )
+    detailed_murder_rate = (
+        float(h.murder_events) / float(detailed_exposure_person_years) * 10_000.0
+        if detailed_exposure_person_years > 0
         else None
     )
+    mixed_murder_rate = (
+        float(h.murder_events) / float(mixed_exposure_person_years) * 10_000.0
+        if mixed_exposure_person_years > 0
+        else None
+    )
+    calibration_murder_rate = (
+        mixed_murder_rate
+        if mixed_murder_rate is not None
+        else detailed_murder_rate
+    )
     murder_ratio = (
-        float(murder_rate) / float(murder_target_per_10k)
-        if murder_rate is not None
+        float(calibration_murder_rate) / float(murder_target_per_10k)
+        if calibration_murder_rate is not None
         and murder_target_per_10k is not None
         and float(murder_target_per_10k) > 0.0
         else None
@@ -315,7 +370,13 @@ def _hybrid_calibration_fields(
             h.max_serial_predator_propensity
         ),
         "event_year_span": h.event_year_span,
-        "detailed_person_years": exposure_person_years,
+        "detailed_person_years": detailed_exposure_person_years,
+        "mixed_person_years": calibration_exposure_person_years,
+        "murder_rate_population_basis": (
+            "mixed_population"
+            if mixed_murder_rate is not None
+            else "detailed_population"
+        ),
         "murder_events": h.murder_events,
         "serial_predator_candidate_events": h.serial_predator_candidate_events,
         "distinct_murder_killers": h.distinct_murder_killers,
@@ -323,14 +384,17 @@ def _hybrid_calibration_fields(
         "serial_murder_killers_3plus": h.serial_murder_killers_3plus,
         "serial_murder_events_by_3plus_killers": h.serial_murder_events_by_3plus_killers,
         "murder_per_10k_detailed_person_years": _format_optional_float(
-            murder_rate
+            detailed_murder_rate
+        ),
+        "murder_per_10k_mixed_person_years": _format_optional_float(
+            mixed_murder_rate
         ),
         "murder_target_per_10k_per_year": _format_optional_float(
             murder_target_per_10k
         ),
         "murder_rate_target_ratio": _format_optional_float(murder_ratio),
         "murder_rate_calibration_status": _murder_rate_calibration_status(
-            observed_per_10k=murder_rate,
+            observed_per_10k=calibration_murder_rate,
             target_per_10k=murder_target_per_10k,
             murder_events=h.murder_events,
         ),
@@ -458,6 +522,10 @@ def _overall_hybrid_calibration_status(summary: dict[str, object]) -> str:
     )
     serial_status = str(summary.get("serial_murder_calibration_status") or "")
     emergence_status = str(summary.get("serial_murder_emergence_status") or "")
+    profile_ok = profile_status == "serial_predator_profiles_present" or (
+        profile_status == "no_serial_predator_profiles"
+        and emergence_status == "serial_murder_emerged"
+    )
 
     if murder_status in {"target_unavailable", "insufficient_murder_sample"}:
         return "needs_more_murder_sample"
@@ -467,7 +535,10 @@ def _overall_hybrid_calibration_status(summary: dict[str, object]) -> str:
         return "retune_murder_rate_above_target"
     if profile_status == "insufficient_profile_sample":
         return "needs_more_serial_profile_sample"
-    if profile_status == "no_serial_predator_profiles":
+    if (
+        profile_status == "no_serial_predator_profiles"
+        and emergence_status != "serial_murder_emerged"
+    ):
         return "retune_serial_predator_profiles_absent"
     if profile_status == "serial_predator_profiles_too_common":
         return "retune_serial_predator_profiles_too_common"
@@ -481,7 +552,7 @@ def _overall_hybrid_calibration_status(summary: dict[str, object]) -> str:
         return "serial_murder_not_emerging"
     if (
         murder_status == "within_target_band"
-        and profile_status == "serial_predator_profiles_present"
+        and profile_ok
         and serial_status == "within_real_life_guardrail"
         and emergence_status == "serial_murder_emerged"
     ):
@@ -656,7 +727,8 @@ def _reason_variance_output_row(
 
 
 def _aggregate_calibration_summary(rows: list[dict[str, object]]) -> dict[str, object]:
-    person_years = 0
+    detailed_person_years = 0
+    mixed_person_years = 0
     target_person_years: list[tuple[float, float]] = []
     variance_people: list[tuple[float, float]] = []
     total_murders = 0
@@ -685,17 +757,38 @@ def _aggregate_calibration_summary(rows: list[dict[str, object]]) -> dict[str, o
         if sim_seed is not None:
             seeds.add(sim_seed)
         event_year_span = _optional_int(row.get("event_year_span")) or 0
-        row_person_years = _optional_int(row.get("detailed_person_years"))
-        if row_person_years is None:
+        row_detailed_person_years = _optional_int(row.get("detailed_person_years"))
+        if row_detailed_person_years is None:
             detailed_alive = _optional_int(row.get("report_detailed_alive_people")) or 0
-            row_person_years = max(0, detailed_alive) * max(0, event_year_span)
-        row_person_years = max(0, int(row_person_years))
-        person_years += row_person_years
+            row_detailed_person_years = max(0, detailed_alive) * max(0, event_year_span)
+        row_detailed_person_years = max(0, int(row_detailed_person_years))
+        row_mixed_person_years = _optional_int(row.get("mixed_person_years"))
+        if row_mixed_person_years is None:
+            final_mixed_alive = _optional_int(row.get("mixed_mode_alive"))
+            if final_mixed_alive is not None and event_year_span > 0:
+                row_mixed_person_years = max(0, final_mixed_alive) * max(
+                    0, event_year_span
+                )
+            else:
+                detailed_alive = _optional_int(row.get("report_detailed_alive_people")) or 0
+                non_detailed_alive = (
+                    _optional_int(row.get("report_non_detailed_alive_people")) or 0
+                )
+                row_mixed_person_years = (
+                    max(0, detailed_alive + non_detailed_alive)
+                    * max(0, event_year_span)
+                )
+        row_mixed_person_years = max(
+            row_detailed_person_years,
+            int(row_mixed_person_years or 0),
+        )
+        detailed_person_years += row_detailed_person_years
+        mixed_person_years += row_mixed_person_years
         total_event_year_span += max(0, event_year_span)
 
         target_rate = _optional_float(row.get("murder_target_per_10k_per_year"))
-        if target_rate is not None and row_person_years > 0:
-            target_person_years.append((target_rate, float(row_person_years)))
+        if target_rate is not None and row_mixed_person_years > 0:
+            target_person_years.append((target_rate, float(row_mixed_person_years)))
 
         scored = _optional_int(row.get("genome_scored_detailed_people")) or 0
         variance_score = _optional_float(row.get("average_detail_variance_score"))
@@ -732,10 +825,20 @@ def _aggregate_calibration_summary(rows: list[dict[str, object]]) -> dict[str, o
             _optional_int(row.get("report_non_detailed_alive_people")) or 0
         )
 
-    observed_murder_rate = (
-        (float(total_murders) / float(person_years)) * 10_000.0
-        if person_years > 0
+    observed_detailed_murder_rate = (
+        (float(total_murders) / float(detailed_person_years)) * 10_000.0
+        if detailed_person_years > 0
         else None
+    )
+    observed_mixed_murder_rate = (
+        (float(total_murders) / float(mixed_person_years)) * 10_000.0
+        if mixed_person_years > 0
+        else None
+    )
+    observed_murder_rate = (
+        observed_mixed_murder_rate
+        if observed_mixed_murder_rate is not None
+        else observed_detailed_murder_rate
     )
     target_murder_rate = _weighted_average(target_person_years)
     murder_ratio = (
@@ -801,7 +904,8 @@ def _aggregate_calibration_summary(rows: list[dict[str, object]]) -> dict[str, o
         "distinct_target_count": len(targets),
         "distinct_seed_count": len(seeds),
         "total_event_year_span": total_event_year_span,
-        "total_detailed_person_years": person_years,
+        "total_detailed_person_years": detailed_person_years,
+        "total_mixed_person_years": mixed_person_years,
         "total_report_non_detailed_alive_people": total_non_detailed_alive,
         "total_genome_scored_detailed_people": total_genome_scored,
         "total_high_variance_detail_people": total_high_variance,
@@ -838,11 +942,19 @@ def _aggregate_calibration_summary(rows: list[dict[str, object]]) -> dict[str, o
         "murder_rate_sample_ready": (
             "yes" if murder_rate_sample_remaining == 0 else "no"
         ),
+        "murder_rate_population_basis": (
+            "mixed_population"
+            if observed_mixed_murder_rate is not None
+            else "detailed_population"
+        ),
         "weighted_murder_target_per_10k_per_year": _format_optional_float(
             target_murder_rate
         ),
         "murder_per_10k_detailed_person_years": _format_optional_float(
-            observed_murder_rate
+            observed_detailed_murder_rate
+        ),
+        "murder_per_10k_mixed_person_years": _format_optional_float(
+            observed_mixed_murder_rate
         ),
         "murder_rate_target_ratio": _format_optional_float(murder_ratio),
         "murder_rate_calibration_status": _murder_rate_calibration_status(
@@ -872,10 +984,13 @@ def _aggregate_calibration_summary(rows: list[dict[str, object]]) -> dict[str, o
         "serial_murder_sample_projected_additional_detailed_person_years": (
             serial_sample_projected_person_years
         ),
+        "serial_murder_sample_projected_additional_mixed_person_years": (
+            serial_sample_projected_person_years
+        ),
         "serial_murder_sample_projected_additional_scenarios": (
             _project_additional_scenarios_for_person_years(
                 additional_person_years=serial_sample_projected_person_years,
-                current_person_years=person_years,
+                current_person_years=mixed_person_years,
                 scenario_count=len(rows),
             )
         ),
@@ -892,10 +1007,13 @@ def _aggregate_calibration_summary(rows: list[dict[str, object]]) -> dict[str, o
         "serial_murder_emergence_projected_additional_detailed_person_years": (
             serial_emergence_projected_person_years
         ),
+        "serial_murder_emergence_projected_additional_mixed_person_years": (
+            serial_emergence_projected_person_years
+        ),
         "serial_murder_emergence_projected_additional_scenarios": (
             _project_additional_scenarios_for_person_years(
                 additional_person_years=serial_emergence_projected_person_years,
-                current_person_years=person_years,
+                current_person_years=mixed_person_years,
                 scenario_count=len(rows),
             )
         ),
@@ -1141,6 +1259,7 @@ def run_calibration(
             starting_couples=int(starting_couples),
             passive_population_scale=passive_scale,
             detailed_active_soft_cap=detailed_cap,
+            use_nondetailed_directory=True,
             print_timing_report=False,
         )
         end_year = _DEFAULT_START_YEAR + int(years) - 1
@@ -1153,12 +1272,14 @@ def run_calibration(
         ).target_per_10k_per_year
         counts = _latest_mixed_counts(ctx, end_year)
         detailed_person_years = _detailed_person_years_from_file_store(ctx.file_store)
+        mixed_person_years = _mixed_person_years_from_file_store(ctx.file_store)
     elapsed = time.perf_counter() - t0
     hybrid_fields = _hybrid_calibration_fields(
         save_path,
         trait_slots=_trait_slots_from_config(cfg_path),
         murder_target_per_10k=murder_target_per_10k,
         detailed_person_years=detailed_person_years,
+        mixed_person_years=mixed_person_years,
     )
     return {
         "target_population": int(target_population),
@@ -1170,6 +1291,7 @@ def run_calibration(
         "base_capacity": int(base_capacity),
         "passive_population_scale": f"{passive_scale:.8f}",
         "detailed_active_soft_cap": int(detailed_cap),
+        "population_backend": _CALIBRATION_POPULATION_BACKEND,
         "birth_settlement_spinoff_disabled": (
             "yes" if disable_birth_settlement_spinoff else "no"
         ),
@@ -1194,10 +1316,14 @@ def _write_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "base_capacity",
         "passive_population_scale",
         "detailed_active_soft_cap",
+        "population_backend",
         "birth_settlement_spinoff_disabled",
         "elapsed_s",
         "detailed_alive",
         "passive_person_alive",
+        "nondetailed_alive",
+        "nondetailed_births",
+        "nondetailed_deaths",
         "aggregate_cohort_alive",
         "aggregate_cohort_births",
         "aggregate_cohort_deaths",
@@ -1218,6 +1344,8 @@ def _write_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "max_serial_predator_propensity",
         "event_year_span",
         "detailed_person_years",
+        "mixed_person_years",
+        "murder_rate_population_basis",
         "murder_events",
         "serial_predator_candidate_events",
         "distinct_murder_killers",
@@ -1225,6 +1353,7 @@ def _write_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "serial_murder_killers_3plus",
         "serial_murder_events_by_3plus_killers",
         "murder_per_10k_detailed_person_years",
+        "murder_per_10k_mixed_person_years",
         "murder_target_per_10k_per_year",
         "murder_rate_target_ratio",
         "murder_rate_calibration_status",
@@ -1391,6 +1520,18 @@ def main() -> None:
     if bool(args.resume_existing):
         rows.extend(_read_tsv_rows(output_path))
         reason_rows.extend(_read_tsv_rows(reason_path))
+        rows = [
+            row
+            for row in rows
+            if str(row.get("population_backend") or "").strip()
+            == _CALIBRATION_POPULATION_BACKEND
+        ]
+        retained_scenario_indexes = _completed_scenario_indexes(rows)
+        reason_rows = [
+            row
+            for row in reason_rows
+            if (_optional_int(row.get("scenario_index")) in retained_scenario_indexes)
+        ]
     scenarios = _scenario_plan(
         tuple(args.targets),
         replicates=int(args.replicates),
@@ -1518,11 +1659,13 @@ def main() -> None:
                     f"seed={row['sim_seed']}",
                     f"mixed={row['mixed_mode_alive']}",
                     f"detailed={row['detailed_alive']}/{row['detailed_active_soft_cap']}",
+                    f"nondetailed={row.get('nondetailed_alive', 0)}",
                     f"aggregate={row['aggregate_cohort_alive']}",
                     f"rows={row['cohort_rows']}",
                     f"promotions={row['promotion_count']}",
                     f"high_variance={row['high_variance_detail_people']}",
-                    f"murder_rate_10k={row['murder_per_10k_detailed_person_years'] or 'n/a'}",
+                    f"murder_rate_full_10k={row.get('murder_per_10k_mixed_person_years') or 'n/a'}",
+                    f"murder_rate_detail_10k={row['murder_per_10k_detailed_person_years'] or 'n/a'}",
                     f"murder_target={row['murder_target_per_10k_per_year'] or 'n/a'}",
                     f"murder_status={row['murder_rate_calibration_status']}",
                     f"serial_share={row['serial_candidate_share_of_murders'] or 'n/a'}",
@@ -1537,7 +1680,8 @@ def main() -> None:
             (
                 f"summary_scenarios={summary['scenario_count']}",
                 f"summary_murders={summary['total_murder_events']}",
-                f"summary_murder_rate_10k={summary['murder_per_10k_detailed_person_years'] or 'n/a'}",
+                f"summary_murder_rate_full_10k={summary['murder_per_10k_mixed_person_years'] or 'n/a'}",
+                f"summary_murder_rate_detail_10k={summary['murder_per_10k_detailed_person_years'] or 'n/a'}",
                 f"summary_murder_status={summary['murder_rate_calibration_status']}",
                 f"summary_serial_3plus={summary['serial_murder_event_share_3plus'] or 'n/a'}",
                 f"summary_serial_status={summary['serial_murder_calibration_status']}",

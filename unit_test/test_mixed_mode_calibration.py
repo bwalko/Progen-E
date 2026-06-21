@@ -327,6 +327,7 @@ class TestMixedModeCalibration(unittest.TestCase):
                 ),
                 murder_target_per_10k=4.0,
                 detailed_person_years=2500,
+                mixed_person_years=5000,
             )
             reason_rows = _hybrid_reason_variance_rows(
                 save,
@@ -357,8 +358,11 @@ class TestMixedModeCalibration(unittest.TestCase):
         self.assertEqual(fields["repeat_murder_killers_2plus"], 0)
         self.assertEqual(fields["serial_murder_killers_3plus"], 0)
         self.assertEqual(fields["detailed_person_years"], 2500)
+        self.assertEqual(fields["mixed_person_years"], 5000)
+        self.assertEqual(fields["murder_rate_population_basis"], "mixed_population")
         self.assertEqual(fields["murder_per_10k_detailed_person_years"], "4.000000")
-        self.assertEqual(fields["murder_rate_target_ratio"], "1.000000")
+        self.assertEqual(fields["murder_per_10k_mixed_person_years"], "2.000000")
+        self.assertEqual(fields["murder_rate_target_ratio"], "0.500000")
         self.assertEqual(fields["murder_target_per_10k_per_year"], "4.000000")
         self.assertEqual(fields["murder_rate_calibration_status"], "insufficient_murder_sample")
         self.assertEqual(fields["serial_candidate_share_of_murders"], "1.000000")
@@ -504,6 +508,7 @@ class TestMixedModeCalibration(unittest.TestCase):
                 "report_non_detailed_alive_people": 99000,
                 "event_year_span": 100,
                 "detailed_person_years": 100000,
+                "mixed_person_years": 100000,
                 "murder_events": 40,
                 "murder_target_per_10k_per_year": "4.000000",
                 "serial_predator_candidate_events": 2,
@@ -525,6 +530,7 @@ class TestMixedModeCalibration(unittest.TestCase):
                 "report_non_detailed_alive_people": 100000,
                 "event_year_span": 200,
                 "detailed_person_years": 200000,
+                "mixed_person_years": 200000,
                 "murder_events": 80,
                 "murder_target_per_10k_per_year": "4.000000",
                 "serial_predator_candidate_events": 4,
@@ -547,11 +553,14 @@ class TestMixedModeCalibration(unittest.TestCase):
         self.assertEqual(summary["distinct_seed_count"], 2)
         self.assertEqual(summary["total_event_year_span"], 300)
         self.assertEqual(summary["total_detailed_person_years"], 300000)
+        self.assertEqual(summary["total_mixed_person_years"], 300000)
         self.assertEqual(summary["total_murder_events"], 120)
         self.assertEqual(summary["murder_rate_min_murder_sample"], 10)
         self.assertEqual(summary["murder_rate_murder_sample_remaining"], 0)
         self.assertEqual(summary["murder_rate_sample_ready"], "yes")
+        self.assertEqual(summary["murder_rate_population_basis"], "mixed_population")
         self.assertEqual(summary["murder_per_10k_detailed_person_years"], "4.000000")
+        self.assertEqual(summary["murder_per_10k_mixed_person_years"], "4.000000")
         self.assertEqual(summary["murder_rate_target_ratio"], "1.000000")
         self.assertEqual(summary["murder_rate_calibration_status"], "within_target_band")
         self.assertEqual(summary["serial_murder_event_share_3plus"], "0.008333")
@@ -630,6 +639,37 @@ class TestMixedModeCalibration(unittest.TestCase):
         )
         self.assertEqual(summary["max_serial_predator_propensity"], "0.700000")
 
+    def test_aggregate_summary_uses_mixed_person_years_for_murder_rate(self) -> None:
+        summary = _aggregate_calibration_summary(
+            [
+                {
+                    "target_population": 100000,
+                    "sim_seed": 15,
+                    "report_detailed_alive_people": 1000,
+                    "report_non_detailed_alive_people": 99000,
+                    "event_year_span": 100,
+                    "detailed_person_years": 100000,
+                    "mixed_person_years": 1000000,
+                    "murder_events": 40,
+                    "murder_target_per_10k_per_year": "4.000000",
+                    "serial_predator_candidate_events": 0,
+                    "serial_murder_killers_3plus": 0,
+                    "serial_murder_events_by_3plus_killers": 0,
+                    "genome_scored_detailed_people": 120,
+                    "average_detail_variance_score": "0.500000",
+                    "high_variance_detail_people": 2,
+                    "extreme_detail_people": 1,
+                    "serial_predator_profile_people": 1,
+                }
+            ]
+        )
+
+        self.assertEqual(summary["murder_rate_population_basis"], "mixed_population")
+        self.assertEqual(summary["murder_per_10k_detailed_person_years"], "4.000000")
+        self.assertEqual(summary["murder_per_10k_mixed_person_years"], "0.400000")
+        self.assertEqual(summary["murder_rate_target_ratio"], "0.100000")
+        self.assertEqual(summary["murder_rate_calibration_status"], "below_target_band")
+
     def test_aggregate_summary_reports_remaining_murder_sample(self) -> None:
         rows = [
             {
@@ -638,6 +678,7 @@ class TestMixedModeCalibration(unittest.TestCase):
                 "report_detailed_alive_people": 1000,
                 "report_non_detailed_alive_people": 99000,
                 "event_year_span": 50,
+                "mixed_person_years": 50000,
                 "murder_events": 2,
                 "murder_target_per_10k_per_year": "4.000000",
                 "serial_predator_candidate_events": 1,
@@ -723,6 +764,7 @@ class TestMixedModeCalibration(unittest.TestCase):
                     "report_detailed_alive_people": 1000,
                     "report_non_detailed_alive_people": 99000,
                     "event_year_span": 500,
+                    "mixed_person_years": 500000,
                     "murder_events": 500,
                     "murder_target_per_10k_per_year": "10.000000",
                     "serial_predator_candidate_events": 3,
@@ -757,6 +799,7 @@ class TestMixedModeCalibration(unittest.TestCase):
                     "report_detailed_alive_people": 1000,
                     "report_non_detailed_alive_people": 99000,
                     "event_year_span": 500,
+                    "mixed_person_years": 500000,
                     "murder_events": 500,
                     "murder_target_per_10k_per_year": "10.000000",
                     "serial_predator_candidate_events": 0,
@@ -779,6 +822,40 @@ class TestMixedModeCalibration(unittest.TestCase):
         self.assertEqual(
             summary["hybrid_calibration_status"],
             "serial_murder_not_emerging",
+        )
+
+    def test_guarded_serial_emergence_can_satisfy_status_without_static_profile(self) -> None:
+        summary = _aggregate_calibration_summary(
+            [
+                {
+                    "target_population": 100000,
+                    "sim_seed": 16,
+                    "report_detailed_alive_people": 1000,
+                    "report_non_detailed_alive_people": 99000,
+                    "event_year_span": 500,
+                    "mixed_person_years": 1000000,
+                    "murder_events": 500,
+                    "murder_target_per_10k_per_year": "5.000000",
+                    "serial_predator_candidate_events": 1,
+                    "serial_murder_killers_3plus": 1,
+                    "serial_murder_events_by_3plus_killers": 3,
+                    "genome_scored_detailed_people": 120,
+                    "average_detail_variance_score": "0.500000",
+                    "high_variance_detail_people": 2,
+                    "extreme_detail_people": 1,
+                    "serial_predator_profile_people": 0,
+                }
+            ]
+        )
+
+        self.assertEqual(
+            summary["serial_predator_profile_calibration_status"],
+            "no_serial_predator_profiles",
+        )
+        self.assertEqual(summary["serial_murder_emergence_status"], "serial_murder_emerged")
+        self.assertEqual(
+            summary["hybrid_calibration_status"],
+            "within_hybrid_calibration_targets",
         )
 
     def test_overall_hybrid_calibration_status_prioritizes_retuning(self) -> None:
@@ -1039,9 +1116,13 @@ class TestMixedModeCalibration(unittest.TestCase):
                 "base_capacity": 1000,
                 "passive_population_scale": "100.00000000",
                 "detailed_active_soft_cap": 200,
+                "population_backend": "nondetailed_directory",
                 "elapsed_s": "0.100000",
                 "detailed_alive": 4,
                 "passive_person_alive": 0,
+                "nondetailed_alive": 1000,
+                "nondetailed_births": 10,
+                "nondetailed_deaths": 3,
                 "aggregate_cohort_alive": 1000,
                 "aggregate_cohort_births": 0,
                 "aggregate_cohort_deaths": 0,
@@ -1062,6 +1143,8 @@ class TestMixedModeCalibration(unittest.TestCase):
                 "max_serial_predator_propensity": "0.200000",
                 "event_year_span": 1,
                 "detailed_person_years": 4,
+                "mixed_person_years": 1004,
+                "murder_rate_population_basis": "mixed_population",
                 "murder_events": 0,
                 "serial_predator_candidate_events": 0,
                 "distinct_murder_killers": 0,
@@ -1069,6 +1152,7 @@ class TestMixedModeCalibration(unittest.TestCase):
                 "serial_murder_killers_3plus": 0,
                 "serial_murder_events_by_3plus_killers": 0,
                 "murder_per_10k_detailed_person_years": "",
+                "murder_per_10k_mixed_person_years": "",
                 "murder_target_per_10k_per_year": "4.000000",
                 "murder_rate_target_ratio": "",
                 "murder_rate_calibration_status": "insufficient_murder_sample",
@@ -1085,6 +1169,8 @@ class TestMixedModeCalibration(unittest.TestCase):
         self.assertIn("scenario_index\ttarget_index\treplicate_index", text)
         self.assertIn("murder_rate_calibration_status", text)
         self.assertIn("detailed_person_years", text)
+        self.assertIn("mixed_person_years", text)
+        self.assertIn("nondetailed_alive", text)
         self.assertIn("serial_predator_profile_people", text)
         self.assertIn("serial_candidate_share_of_murders", text)
         self.assertIn("serial_murder_calibration_status", text)

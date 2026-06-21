@@ -1938,6 +1938,7 @@ def _history_event_ids_from_person_ids(
         "previous_holder_id",
         "prior_head_person_id",
         "claimant_id",
+        "related_child_id",
     )
     array_fields = (
         "household_member_ids",
@@ -1945,6 +1946,7 @@ def _history_event_ids_from_person_ids(
         "moved_person_ids",
         "witness_person_ids",
         "betrayed_partner_person_ids",
+        "related_child_ids",
     )
     scalar_clauses: list[str] = []
     scalar_params: list[object] = []
@@ -2741,6 +2743,9 @@ _PERSON_COLUMN_KEYS = (
     "partner_person_id",
     "paramour_person_id",
     "last_birth_event_year",
+    "birth_relationship_type",
+    "born_out_of_wedlock",
+    "legitimacy_status",
     "job",
     "job_assigned_year",
     "job_era",
@@ -4781,6 +4786,29 @@ def _child_years_label(child: sqlite3.Row, person: dict[str, object]) -> str:
     return f"b. {birth_text}, d. unknown"
 
 
+def _truthy_marker(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _person_birth_status_label(person: dict[str, object]) -> str:
+    status = str(person.get("legitimacy_status") or "").strip().replace("_", " ")
+    relationship = (
+        str(person.get("birth_relationship_type") or "").strip().replace("_", " ")
+    )
+    born_out = _truthy_marker(person.get("born_out_of_wedlock"))
+    if status:
+        if relationship:
+            return f"{status} ({relationship})"
+        return status
+    if born_out:
+        return "out of wedlock"
+    return ""
+
+
 def _person_child_items_html(
     con: sqlite3.Connection,
     world: str,
@@ -4794,11 +4822,18 @@ def _person_child_items_html(
         person = _person_from_row(child, trait_slots)
         title = f"{_person_name(person)} ({_person_years_label(person)})"
         years = _child_years_label(child, person)
+        birth_status = _person_birth_status_label(person)
+        status_html = (
+            f'<br><span class="muted">{html.escape(birth_status)}</span>'
+            if birth_status
+            else ""
+        )
         items.append(
             '<div class="relation relation-compact" '
             f'title="{html.escape(title, quote=True)}">'
             f'{_person_link_html_compact(con, world, child["person_id"])}'
             f'<br><span class="muted">{html.escape(years)}</span>'
+            f'{status_html}'
             '</div>'
         )
     return items
@@ -5588,7 +5623,10 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
             return f"{child} entered the world as a founder."
         parent_a = _short_person_for_event(con, world, payload.get("person_a_id"), focus_person_id)
         parent_b = _short_person_for_event(con, world, payload.get("person_b_id"), focus_person_id)
-        return f"{child} was born to {parent_a} and {parent_b}."
+        tail = ""
+        if _truthy_marker(payload.get("born_out_of_wedlock")) or str(payload.get("legitimacy_status") or "").strip().lower() == "bastard":
+            tail = " out of wedlock"
+        return f"{child} was born{tail} to {parent_a} and {parent_b}."
 
     if event_type in {"couple_formed", "couple_dissolved", "paramour_formed", "paramour_ended", "same_sex_couple_formed"}:
         a = _short_person_for_event(con, world, payload.get("person_a_id"), focus_person_id)
@@ -5794,6 +5832,9 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         return "; ".join(parts) + "."
 
     if event_type == "death":
+        cause = str(payload.get("death_cause") or payload.get("cause") or "").strip()
+        if cause:
+            return f"{person} died from {cause.replace('_', ' ')}."
         return f"{person} died."
 
     details = payload.get("details")
@@ -5818,7 +5859,10 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             return f"{child} entered the world as a founder."
         parent_a = _short_person_html_for_event(con, world, payload.get("person_a_id"), focus_person_id)
         parent_b = _short_person_html_for_event(con, world, payload.get("person_b_id"), focus_person_id)
-        return f"{child} was born to {parent_a} and {parent_b}."
+        tail = ""
+        if _truthy_marker(payload.get("born_out_of_wedlock")) or str(payload.get("legitimacy_status") or "").strip().lower() == "bastard":
+            tail = " out of wedlock"
+        return f"{child} was born{tail} to {parent_a} and {parent_b}."
 
     if event_type in {"couple_formed", "couple_dissolved", "paramour_formed", "paramour_ended", "same_sex_couple_formed"}:
         a = _short_person_html_for_event(con, world, payload.get("person_a_id"), focus_person_id)
@@ -6054,6 +6098,9 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         return f"{person}'s career fitness was updated." + details
 
     if event_type == "death":
+        cause = str(payload.get("death_cause") or payload.get("cause") or "").strip()
+        if cause:
+            return f"{person} died from {html.escape(cause.replace('_', ' '))}."
         return f"{person} died."
 
     details = payload.get("details")
@@ -9141,6 +9188,11 @@ def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, objec
     regions = _snapshot_table_rows(con, _place_read_relation(con, "simulation_regions"), world)
     settlements = _snapshot_table_rows(con, _place_read_relation(con, "simulation_settlements"), world)
     polities = _snapshot_table_rows(con, "simulation_polities", world)
+    office_history = _snapshot_table_rows(
+        con, "simulation_office_history_readable", world
+    )
+    if not office_history:
+        office_history = [_row_to_dict(row) for row in _office_history_rows(con)]
     snapshot = {
         "world": world,
         "people": people,
@@ -9154,9 +9206,10 @@ def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, objec
         ),
         "territory": _snapshot_table_rows(con, "simulation_polity_territory", world),
         "seats": _snapshot_table_rows(con, "simulation_office_seats", world),
+        "office_history": office_history,
     }
     _log_info(
-        "place_snapshot_loaded world=%s people=%s regions=%s settlements=%s polities=%s territory=%s seats=%s elapsed=%.4fs",
+        "place_snapshot_loaded world=%s people=%s regions=%s settlements=%s polities=%s territory=%s seats=%s office_history=%s elapsed=%.4fs",
         world,
         len(people),
         len(regions),
@@ -9164,6 +9217,7 @@ def _load_place_snapshot(con: sqlite3.Connection, world: str) -> dict[str, objec
         len(polities),
         len(_snapshot_rows(snapshot, "territory")),
         len(_snapshot_rows(snapshot, "seats")),
+        len(_snapshot_rows(snapshot, "office_history")),
         time.perf_counter() - started,
     )
     return snapshot
@@ -9197,6 +9251,194 @@ def _snapshot_person_link_text(snapshot: dict[str, object], person_id: object) -
     if not person:
         return "Unknown"
     return f"{_person_name(person)} ({_person_years_label(person)})"
+
+
+def _head_title_id_for_polity_type(world: str, polity_type_id: object) -> str:
+    ptype = str(polity_type_id or "").strip()
+    if not ptype:
+        return ""
+    path = _db_path(world, "Config DB")
+    if not path.exists():
+        return ""
+    try:
+        with _connect_readonly(path) as con:
+            if not _has_table(con, "government_polity_types"):
+                return ""
+            row = con.execute(
+                """
+                SELECT head_title_id
+                FROM government_polity_types
+                WHERE polity_type_id = ?
+                LIMIT 1
+                """,
+                (ptype,),
+            ).fetchone()
+            return str(row["head_title_id"] or "").strip() if row else ""
+    except sqlite3.Error:
+        return ""
+
+
+def _office_history_rows(
+    con: sqlite3.Connection,
+    polity_id: int | None = None,
+) -> list[sqlite3.Row]:
+    if not _has_table(con, "simulation_office_holdings") or not _has_table(
+        con, "simulation_office_seats"
+    ):
+        return []
+    params: list[object] = []
+    where = ""
+    if polity_id is not None:
+        where = "WHERE s.polity_id = ?"
+        params.append(int(polity_id))
+    if _has_relation(con, "simulation_office_history_readable"):
+        try:
+            view_where = "WHERE polity_id = ?" if polity_id is not None else ""
+            rows = con.execute(
+                f"""
+                SELECT *
+                FROM simulation_office_history_readable
+                {view_where}
+                ORDER BY start_sim_year, holding_id
+                """,
+                tuple(params),
+            ).fetchall()
+            return list(rows)
+        except sqlite3.Error:
+            pass
+    people_name_sql = "'Unknown'"
+    if _has_table(con, "simulation_people"):
+        cols = set(_table_columns(con, "simulation_people"))
+        if {"first_name", "last_name"} <= cols:
+            people_name_sql = (
+                "TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, ''))"
+            )
+        elif "person_json" in cols:
+            people_name_sql = (
+                "TRIM(COALESCE(json_extract(p.person_json, '$.first_name'), '') "
+                "|| ' ' || COALESCE(json_extract(p.person_json, '$.last_name'), ''))"
+            )
+    return list(
+        con.execute(
+            f"""
+            SELECT
+                h.holding_id,
+                s.polity_id,
+                COALESCE(pol.name, '') AS polity_name,
+                s.seat_id,
+                s.title_id AS office_id,
+                s.title_id,
+                s.slot_index,
+                s.scope_settlement_id,
+                h.holder_person_id,
+                {people_name_sql} AS holder_name,
+                h.start_sim_year,
+                h.end_sim_year,
+                h.end_reason,
+                CASE
+                    WHEN h.end_sim_year IS NULL THEN 'current'
+                    ELSE 'ended'
+                END AS holding_status
+            FROM simulation_office_holdings h
+            JOIN simulation_office_seats s
+              ON s.seat_id = h.seat_id
+            LEFT JOIN simulation_polities pol
+              ON pol.polity_id = s.polity_id
+            LEFT JOIN simulation_people p
+              ON p.person_id = h.holder_person_id
+            {where}
+            ORDER BY h.start_sim_year, h.holding_id
+            """,
+            tuple(params),
+        ).fetchall()
+    )
+
+
+def _office_span_label(start_year: object, end_year: object) -> str:
+    start = _format_year(start_year, unknown_text="?")
+    if end_year in (None, ""):
+        return f"{start}-present"
+    return f"{start}-{_format_year(end_year, unknown_text='?')}"
+
+
+def _office_holder_label_from_history(
+    con: sqlite3.Connection | None,
+    world: str,
+    row: sqlite3.Row | dict[str, object],
+    snapshot: dict[str, object] | None = None,
+) -> str:
+    holder_id = row["holder_person_id"] if isinstance(row, sqlite3.Row) else row.get("holder_person_id")
+    name = row["holder_name"] if isinstance(row, sqlite3.Row) else row.get("holder_name")
+    if snapshot is not None:
+        person = _snapshot_person(snapshot, holder_id)
+        if person:
+            return f"{_person_name(person)} ({_person_years_label(person)})"
+        return str(name or "Unknown")
+    if con is not None:
+        shown = _person_link_text(con, world, holder_id)
+        return str(name or "Unknown") if shown == "Unknown" else shown
+    return str(name or "Unknown")
+
+
+def _office_history_item(
+    row: sqlite3.Row | dict[str, object],
+    *,
+    holder_label: str,
+    include_office: bool,
+) -> str:
+    getter = row.__getitem__ if isinstance(row, sqlite3.Row) else row.get
+    office = str(getter("title_id") or getter("office_id") or "office")
+    scope = str(getter("scope_settlement_id") or "").strip()
+    span = _office_span_label(getter("start_sim_year"), getter("end_sim_year"))
+    reason = str(getter("end_reason") or "").strip()
+    status = "current" if getter("end_sim_year") in (None, "") else f"ended: {reason or 'unknown'}"
+    office_part = f"{office}: " if include_office else ""
+    scope_part = f" at {scope}" if scope else ""
+    return f"{span}: {office_part}{holder_label}{scope_part} ({status})"
+
+
+def _head_office_history(
+    world: str,
+    polity: sqlite3.Row | dict[str, object],
+    seats: list[sqlite3.Row] | list[dict[str, object]],
+    history: list[sqlite3.Row] | list[dict[str, object]],
+) -> list[sqlite3.Row] | list[dict[str, object]]:
+    getter = polity.__getitem__ if isinstance(polity, sqlite3.Row) else polity.get
+    head_title = _head_title_id_for_polity_type(world, getter("polity_type_id"))
+    if head_title:
+        selected = [
+            row
+            for row in history
+            if str((row["title_id"] if isinstance(row, sqlite3.Row) else row.get("title_id")) or "") == head_title
+        ]
+        if selected:
+            return selected
+    head_seat_ids = {
+        int(seat["seat_id"] if isinstance(seat, sqlite3.Row) else seat.get("seat_id"))
+        for seat in seats
+        if not str(
+            (seat["scope_settlement_id"] if isinstance(seat, sqlite3.Row) else seat.get("scope_settlement_id"))
+            or ""
+        ).strip()
+    }
+    if not head_seat_ids and seats:
+        first = sorted(
+            seats,
+            key=lambda seat: (
+                str(seat["title_id"] if isinstance(seat, sqlite3.Row) else seat.get("title_id") or ""),
+                _safe_int(seat["slot_index"] if isinstance(seat, sqlite3.Row) else seat.get("slot_index"), 0),
+            ),
+        )[0]
+        try:
+            head_seat_ids.add(int(first["seat_id"] if isinstance(first, sqlite3.Row) else first.get("seat_id")))
+        except (TypeError, ValueError):
+            pass
+    return [
+        row
+        for row in history
+        if _safe_int(row["seat_id"] if isinstance(row, sqlite3.Row) else row.get("seat_id"), -1)
+        in head_seat_ids
+    ]
 
 
 def _snapshot_settlement_name(snapshot: dict[str, object], settlement_id: object) -> str:
@@ -10436,6 +10678,57 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
         holder = _snapshot_person_link_text(snapshot, seat.get("holder_person_id")) if seat.get("holder_person_id") else "vacant"
         scope = f" at {_snapshot_settlement_name(snapshot, seat.get('scope_settlement_id'))}" if seat.get("scope_settlement_id") else ""
         seat_items.append(f"{seat.get('title_id')}{scope}: {holder}")
+    office_history = sorted(
+        [
+            row
+            for row in _snapshot_rows(snapshot, "office_history")
+            if str(row.get("polity_id")) == str(pid)
+        ],
+        key=lambda hist: (
+            _safe_int(hist.get("start_sim_year"), 0),
+            _safe_int(hist.get("holding_id"), 0),
+        ),
+    )
+    ruler_history = _head_office_history(
+        str(snapshot.get("world") or ""),
+        row,
+        seats,
+        office_history,
+    )
+    ruler_items = [
+        _office_history_item(
+            hist,
+            holder_label=_office_holder_label_from_history(
+                None,
+                str(snapshot.get("world") or ""),
+                hist,
+                snapshot=snapshot,
+            ),
+            include_office=False,
+        )
+        for hist in ruler_history
+    ]
+    recent_office_items = [
+        _office_history_item(
+            hist,
+            holder_label=_office_holder_label_from_history(
+                None,
+                str(snapshot.get("world") or ""),
+                hist,
+                snapshot=snapshot,
+            ),
+            include_office=True,
+        )
+        for hist in sorted(
+            office_history,
+            key=lambda hist: (
+                _safe_int(hist.get("end_sim_year"), 10**9),
+                _safe_int(hist.get("start_sim_year"), 0),
+                _safe_int(hist.get("holding_id"), 0),
+            ),
+            reverse=True,
+        )[:12]
+    ]
     vassal_items = [f"{v.get('name')} ({v.get('polity_type_id')})" for v in vassals]
     cards = "".join(
         [
@@ -10458,6 +10751,8 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
         f'<section><h3>Territory</h3>{_ul(territory_items)}</section>'
         f'<section><h3>Offices</h3>{_ul(seat_items)}</section>'
         f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
+        f'<section><h3>Ruler Timeline</h3>{_ul(ruler_items)}</section>'
+        f'<section><h3>Office History</h3>{_ul(recent_office_items)}</section>'
         '</div>'
         '</div>'
     )
@@ -10836,7 +11131,7 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
     ).fetchall() if _has_table(con, "simulation_polity_territory") else []
     seats = con.execute(
         """
-        select seat_id, title_id, scope_settlement_id, holder_person_id, term_expires_sim_year
+        select seat_id, title_id, slot_index, scope_settlement_id, holder_person_id, term_expires_sim_year
         from simulation_office_seats
         where polity_id = ? and status = 'active'
         order by title_id, slot_index
@@ -10865,6 +11160,32 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
         holder = _person_link_text(con, world, seat["holder_person_id"]) if seat["holder_person_id"] else "vacant"
         scope = f" at {_settlement_name(con, world, seat['scope_settlement_id'])}" if seat["scope_settlement_id"] else ""
         seat_items.append(f"{seat['title_id']}{scope}: {holder}")
+    office_history = _office_history_rows(con, pid)
+    ruler_history = _head_office_history(world, row, seats, office_history)
+    ruler_items = [
+        _office_history_item(
+            hist,
+            holder_label=_office_holder_label_from_history(con, world, hist),
+            include_office=False,
+        )
+        for hist in ruler_history
+    ]
+    recent_office_items = [
+        _office_history_item(
+            hist,
+            holder_label=_office_holder_label_from_history(con, world, hist),
+            include_office=True,
+        )
+        for hist in sorted(
+            office_history,
+            key=lambda hist: (
+                _safe_int(hist["end_sim_year"], 10**9),
+                _safe_int(hist["start_sim_year"], 0),
+                _safe_int(hist["holding_id"], 0),
+            ),
+            reverse=True,
+        )[:12]
+    ]
     vassal_items = [f"{v['name']} ({v['polity_type_id']})" for v in vassals]
     cards = "".join(
         [
@@ -10887,6 +11208,8 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
         f'<section><h3>Territory</h3>{_ul(territory_items)}</section>'
         f'<section><h3>Offices</h3>{_ul(seat_items)}</section>'
         f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
+        f'<section><h3>Ruler Timeline</h3>{_ul(ruler_items)}</section>'
+        f'<section><h3>Office History</h3>{_ul(recent_office_items)}</section>'
         '</div>'
         '</div>'
     )

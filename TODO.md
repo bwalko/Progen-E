@@ -22,104 +22,6 @@ Future event work should be added as a fresh concrete TODO only when there is a
 specific new generator, consequence ledger, prose/report/browser need, measured
 tuning problem, or performance regression to handle.
 
-## Sanity Checks and Bugfixes
-
-- I see zero evidence of potential serial killer like lives. If anything, the propensity for murder has become much more one-off. I simmed 200 years with not a single person committing more than one murder. Remember that the crime rates (and all other rates) need to take into consideration the full population, which includes all non-detailed people.
-
-- When I looked at the table in SQLite for the non-detailed lightweight people, it had zero records. This may be because it just hasn't been fully implemented yet.
-
-- The non-detailed to detailed person ratio is still very small, it probably needs to be closer to 100-1 than 8-1.
-
-## Paramour Fertility And Out-Of-Wedlock Children
-
-Add support for paramour relationships to produce children.
-
-Completion boundary:
-
-- Confirm how paramour relationships are represented in the current relationship
-  model and fertility/birth logic.
-- Allow paramour pairs to be eligible for conception/birth when biologically and
-  socially appropriate.
-- Enforce the existing invariant that no woman can have more than one birth in
-  a simulation year, even if she has both spouse and paramour relationships.
-- Mark children born from paramour relationships as out of wedlock / bastards in
-  person state, event payloads, and any relevant browser or report surfaces.
-- Add focused regression coverage for:
-  - a paramour relationship producing a child;
-  - spouse and paramour eligibility in the same year producing at most one birth
-    for the woman;
-  - the resulting child carrying an out-of-wedlock/bastard marker.
-
-## Polity Office History And Ruler Timelines
-
-Make it easy to inspect who held polity positions over time, especially the top
-position.
-
-Completion boundary:
-
-- Confirm where current officeholding, succession, abdication, usurpation,
-  vacancy, and death-in-office events are persisted.
-- Add or expose a durable office-history view/table keyed by polity, office,
-  person, start year, end year, and end reason.
-- Ensure the top position for each polity has a simple chronological timeline
-  suitable for browser inspection and future chronicle prose.
-- Add browser/report affordances that answer "who ruled this polity, and when?"
-  without hand-querying event JSON.
-- Add focused regression coverage for normal succession and at least one
-  interrupted tenure path such as death, removal, usurpation, or vacancy.
-
-## Genome Trait Center/Extreme Classification And Impact Module
-
-Create a dedicated trait-impact module that classifies each genome trait's
-center and extremes, then uses those classifications to make meaningful
-behavioral, social, health, economic, and relationship consequences more common
-for people at the center or extremes.
-
-Design intent:
-
-- Do not treat ordinary midpoint values in the middle of the double-bell curve
-  as inherently meaningful.
-- Lean harder into people whose traits are near the ideal center, roughly
-  +/-10 from 0, or in the +/-90 extremes.
-- Make extreme traits matter in practical, real-world ways. Traits such as
-  fixation, domineering behavior, visible deformity, derangement, clinically
-  compulsive behavior, or wastefulness with money should often create serious
-  consequences, including real harm.
-- Keep effects grounded in the simulation's social, medical, household,
-  economic, legal, and reputation systems rather than only in flavor text.
-
-Completion boundary:
-
-- Inventory all genome traits and classify each trait's center, mild bands,
-  strong bands, and extreme bands.
-- Define which traits have beneficial center effects, harmful center effects,
-  harmful extremes, useful extremes, or context-dependent extremes.
-- Add reusable APIs for trait-band lookup and practical consequence generation.
-- Route high-impact trait effects into existing systems where possible:
-  mortality/health, work capacity, household stability, finances, violence,
-  reputation, legal fallout, marriage/paramour dynamics, care burden, and
-  social standing.
-- Add tests that prove ordinary midpoints stay mostly ordinary while center or
-  extreme values measurably affect outcomes.
-
-## Childbirth Mortality
-
-Add death from childbirth as a simulation possibility.
-
-Completion boundary:
-
-- Identify the birth pipeline and determine where maternal mortality can be
-  evaluated without creating duplicate births or broken parent/child links.
-- Model childbirth death risk with age, health/body condition, prior births,
-  settlement care capacity, and relevant trait or prosperity modifiers.
-- Record maternal death in person state, events, family relationships, and any
-  affected household-care or dependent-child logic.
-- Ensure the newborn outcome is handled separately from the mother's outcome,
-  including stillbirth/infant-death hooks only if those are already supported or
-  explicitly added in this workstream.
-- Add regression coverage for mother survives birth, mother dies from
-  childbirth, and parent/child records remaining coherent after the death.
-
 ## Polygonal World Map Generation
 
 Context for completed functionality: polygonal map generation and the current
@@ -239,22 +141,20 @@ utilities are implemented; see `TODONE.md` for details.
 
 Remaining hybrid-population work in this section:
 
-1. Make `simulation_people_nondetailed` the default background-population path
-   for production runs once larger benchmark and smoke results are reviewed.
-2. Calibrate the v1 non-detailed job-family economy and migration effects
-   against longer mixed-mode runs:
+1. Calibrate the v1 non-detailed job-family economy and migration effects
+   against longer mixed-mode runs. Completed context: production
+   nondetailed-directory years now run SQL demographics, job-family economy
+   effects, and set-based migration in sequence; see `TODONE.md`.
+   Remaining work:
    - verify food-deficit, military-burden, craft/trade surplus, care/admin,
      prosperity, market-pull, and stability deltas stay in plausible ranges;
    - verify set-based non-detailed migration follows prosperity, food pressure,
      route access, headroom, stability, and market pull without draining source
      settlements too aggressively.
-3. Route office, marriage, migration-context, focus, outlaw, war, crime,
+2. Route office, marriage, migration-context, focus, outlaw, war, crime,
    disaster, and discovery promotion hooks through non-detailed directory rows
    before falling back to legacy passive cohorts.
-4. Add a maintained command/API for immediate or next-year promotion from the
-   non-detailed directory by person id, settlement, region, job family, or
-   reason.
-5. Continue late-year profiling and optimization toward the 15K active / under
+3. Continue late-year profiling and optimization toward the 15K active / under
    5 minutes target.
 
 ### Detailed Population Fraction
@@ -293,10 +193,11 @@ As non-detailed people expand into the storage layer for normal population mass,
 the detailed-person sample should increasingly represent people with unusual
 importance, variance, or narrative salience.
 
-Completed context needed for the next calibration step: detailed-selection
+Completed context needed for future calibration work: detailed-selection
 variance, serial-predator scoring, report/TSV calibration metrics, resume-safe
-mixed-mode calibration batches, and focused repeat-selection regression coverage
-are implemented. See `TODONE.md` for the full completion record.
+mixed-mode calibration batches, non-detailed city-directory calibration,
+full-population homicide accounting, and focused repeat-selection regression
+coverage are implemented. See `TODONE.md` for the full completion record.
 
 Design intent:
 
@@ -311,64 +212,23 @@ Design intent:
 
 Completion boundary:
 
-- Run and review longer `utils/run_mixed_mode_calibration.py` outputs comparing
-  detailed promoted/founder variance against non-detailed city-directory
-  demographic totals, using `--replicates N` plus the aggregate summary TSV
-  when multiple targets or seeds are generated.
-- For full serial-emergence proof, use a run shape that can reach roughly
-  1.25M detailed person-years at the configured 4 murders per 10K detailed
-  person-years. Current medium probes are useful for rate direction but not
-  enough for the 100-murder guardrail or 500-murder emergence gates.
-- Latest retained calibration chunk:
-  `temp/mixed_mode_rate_gate_chunk.tsv` plus its summary and promotion-reason
-  TSVs now contain two representative bundled-Python scenarios targeting 50,000
+- Latest representative non-detailed-backed probe:
+  `temp/mixed_mode_nondetailed_representative_probe.tsv` plus its summary and
+  promotion-reason TSVs contain one representative scenario targeting 50,000
   population, 50 years, 20 starting couples, `--detailed-fraction 0.05`, and a
-  1,000-2,500 detailed cap. The retained aggregate has 34,998 detailed
-  person-years, 16 murders, murder rate `4.571690` per 10K detailed person-years
-  against the configured target `4.000000`, target ratio `1.142922`,
-  `murder_rate_calibration_status=within_target_band`, 8 serial-predator
-  profiles out of 2,353 scored detailed people
-  (`serial_predator_profile_share_of_scored_detailed=0.003400`), max serial
-  propensity `0.769639`, and
-  `hybrid_calibration_status=needs_more_serial_guardrail_sample`. This proves
-  the 10-murder rate gate for the current run shape; the next gate is the
-  100-murder serial guardrail sample.
-- Next continuation command should resume the retained chunk rather than start
-  over, for example:
-  `python utils/run_mixed_mode_calibration.py --targets 50000 --replicates 20
-  --years 50 --starting-couples 20 --detailed-fraction 0.05
-  --min-detailed-cap 1000 --max-detailed-cap 2500
-  --stop-after-total-murders 100 --write-incremental --resume-existing --output
-  temp\mixed_mode_rate_gate_chunk.tsv`. After the 100-murder serial guardrail
-  gate is reached, inspect `serial_murder_calibration_status` and
-  `serial_murder_event_share_3plus` before deciding whether to proceed to
-  `--stop-after-total-murders 500`.
-- Earlier paused probe: the same representative shape with 6 replicates but
-  without incremental output timed out at 300 seconds before producing row or
-  summary artifacts; use `--write-incremental` for any future long probe.
-- Representative bundled-Python probes can keep birth-settlement spin-off
-  enabled because settlement naming and duplicate-site checks fall back when
-  optional Shapely/world-map geometry is unavailable. Use
-  `--disable-birth-settlement-spinoff` only for deliberate event-rate stress
-  tests, not fully representative settlement-geography runs.
-- Use calibration statuses rather than single small-run rates for retuning:
-  murder-rate status is meaningful after at least 10 observed murders,
-  serial-murder guardrail status after at least 100 observed murders, and
-  serial emergence after at least 500 observed murders. Long probes should use
-  `--write-incremental`, `--resume-existing`, and explicit sample-stop flags so
-  partial evidence is retained and the aggregate summary names the next gate.
-- Tune the numeric values for the reason-specific variance profiles for ruler,
-  officeholder, elite, specialist, criminal/outlaw, religious, migrant/frontier,
-  kinship-link, inspection, and spotlight promotion reasons after real
-  mixed-mode runs show whether any class is too flat or too exaggerated.
-- Verify 3+ murder repeat killers remain under the 1% murder-share guardrail in
-  longer mixed-mode runs while the 500-murder emergence status is
-  `serial_murder_emerged`, not `no_serial_murder_emerged`.
-- If longer representative runs still show `no_serial_murder_emerged`, inspect
-  whether generated repeat-capable profiles are too rarely present in active
-  murder-eligible pools before changing the global homicide rate; the focused
-  selection proof already shows the multiplier can produce guarded emergence
-  when such a profile is present.
+  1,000-2,500 detailed cap. It produced
+  `population_backend=nondetailed_directory`, `report_non_detailed_alive_people=41104`,
+  `mixed_person_years=2354447`, 944 total murder rows,
+  `murder_per_10k_mixed_person_years=4.009434` against target `4.000000`,
+  `murder_rate_calibration_status=within_target_band`,
+  `serial_murder_event_share_3plus=0.009534`,
+  `serial_murder_calibration_status=within_real_life_guardrail`,
+  `serial_murder_emergence_status=serial_murder_emerged`, and
+  `hybrid_calibration_status=within_hybrid_calibration_targets`.
+- Future calibration work should be opened only for a concrete drift or
+  robustness question, such as a multi-seed replicate batch showing the
+  full-population homicide rate, serial guardrail, or detailed-selection
+  variance falling outside target bands.
 - Keep broad demographic totals sourced from aggregate and non-detailed people,
   not from the intentionally biased detailed sample.
 

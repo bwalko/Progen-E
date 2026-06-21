@@ -12,6 +12,11 @@ from pathlib import Path
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
 from library.geography import _population_scale_cache
+from library.government_checkpoint import (
+    append_office_holding,
+    close_office_holding,
+    ensure_government_schema,
+)
 from library.polity import polity_for_region
 from library.simulation_context import SimulationContext
 from library.simulation_government import simulation_government_annual_tick
@@ -26,6 +31,82 @@ def _force_population_scale(cfg_path: Path, scale: float) -> None:
 
 
 class TestSimulationGovernment(unittest.TestCase):
+    def test_office_history_readable_view_tracks_successions_and_death_endings(self) -> None:
+        with closing(sqlite3.connect(":memory:")) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                """
+                CREATE TABLE simulation_people (
+                    person_id INTEGER PRIMARY KEY,
+                    first_name TEXT,
+                    last_name TEXT
+                )
+                """
+            )
+            ensure_government_schema(conn)
+            conn.executemany(
+                "INSERT INTO simulation_people (person_id, first_name, last_name) VALUES (?, ?, ?)",
+                [(1, "Ada", "Forge"), (2, "Bea", "Forge")],
+            )
+            conn.execute(
+                """
+                INSERT INTO simulation_polities (
+                    polity_id, polity_type_id, name, founded_sim_year
+                ) VALUES (1, 'kingdom', 'Northrealm', 1000)
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO simulation_office_seats (
+                    seat_id, polity_id, title_id, slot_index, status
+                ) VALUES (10, 1, 'king', 0, 'active')
+                """
+            )
+            append_office_holding(
+                conn,
+                world="test",
+                seat_id=10,
+                holder_person_id=1,
+                start_sim_year=1000,
+                ensure_schema=False,
+            )
+            close_office_holding(
+                conn,
+                world="test",
+                seat_id=10,
+                holder_person_id=1,
+                end_sim_year=1004,
+                end_reason="death",
+                ensure_schema=False,
+            )
+            append_office_holding(
+                conn,
+                world="test",
+                seat_id=10,
+                holder_person_id=2,
+                start_sim_year=1005,
+                ensure_schema=False,
+            )
+
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM simulation_office_history_readable
+                ORDER BY start_sim_year
+                """
+            ).fetchall()
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(str(rows[0]["polity_name"]), "Northrealm")
+        self.assertEqual(str(rows[0]["office_id"]), "king")
+        self.assertEqual(str(rows[0]["holder_name"]), "Ada Forge")
+        self.assertEqual(int(rows[0]["start_sim_year"]), 1000)
+        self.assertEqual(int(rows[0]["end_sim_year"]), 1004)
+        self.assertEqual(str(rows[0]["end_reason"]), "death")
+        self.assertEqual(str(rows[1]["holder_name"]), "Bea Forge")
+        self.assertIsNone(rows[1]["end_sim_year"])
+        self.assertEqual(str(rows[1]["holding_status"]), "current")
+
     def test_bootstrap_creates_polity_for_inhabited_region(self) -> None:
         random.seed(11)
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

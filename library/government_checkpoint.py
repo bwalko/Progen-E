@@ -75,6 +75,8 @@ def ensure_government_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_gov_holdings_seat
         ON simulation_office_holdings(seat_id);
+        CREATE INDEX IF NOT EXISTS idx_gov_holdings_holder
+        ON simulation_office_holdings(holder_person_id);
 
         CREATE TABLE IF NOT EXISTS simulation_dynasties (
             dynasty_id INTEGER PRIMARY KEY,
@@ -127,6 +129,39 @@ def ensure_government_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_gov_battles_campaign
         ON simulation_battles(campaign_id);
+        """
+    )
+    conn.executescript(
+        """
+        DROP VIEW IF EXISTS simulation_office_history_readable;
+        CREATE VIEW simulation_office_history_readable AS
+        SELECT
+            h.holding_id,
+            s.polity_id,
+            COALESCE(pol.name, '') AS polity_name,
+            s.seat_id,
+            s.title_id AS office_id,
+            s.title_id,
+            s.slot_index,
+            s.scope_settlement_id,
+            h.holder_person_id,
+            TRIM(
+                COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')
+            ) AS holder_name,
+            h.start_sim_year,
+            h.end_sim_year,
+            h.end_reason,
+            CASE
+                WHEN h.end_sim_year IS NULL THEN 'current'
+                ELSE 'ended'
+            END AS holding_status
+        FROM simulation_office_holdings h
+        JOIN simulation_office_seats s
+          ON s.seat_id = h.seat_id
+        LEFT JOIN simulation_polities pol
+          ON pol.polity_id = s.polity_id
+        LEFT JOIN simulation_people p
+          ON p.person_id = h.holder_person_id;
         """
     )
 

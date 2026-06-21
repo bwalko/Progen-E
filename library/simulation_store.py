@@ -53,6 +53,9 @@ class SimulationFileStore:
                 "mother_id",
                 "father_name",
                 "mother_name",
+                "birth_relationship_type",
+                "born_out_of_wedlock",
+                "legitimacy_status",
             ],
         )
         self._ensure_table(
@@ -69,6 +72,11 @@ class SimulationFileStore:
                 "cross_region",
                 "move_reason",
                 "details",
+                "death_cause",
+                "related_child_ids",
+                "birth_relationship_type",
+                "born_out_of_wedlock",
+                "legitimacy_status",
             ],
         )
         self._ensure_table(
@@ -87,6 +95,7 @@ class SimulationFileStore:
                 "mixed_mode_alive_count",
                 "births_count",
                 "deaths_count",
+                "childbirth_maternal_deaths_count",
                 "passive_cohort_births_count",
                 "passive_cohort_deaths_count",
                 "nondetailed_births_count",

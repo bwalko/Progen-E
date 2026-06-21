@@ -36,6 +36,9 @@ class Person:
     partner_person_id: int | None = None
     paramour_person_id: int | None = None
     last_birth_event_year: int | None = None
+    birth_relationship_type: str | None = None
+    born_out_of_wedlock: bool | None = None
+    legitimacy_status: str | None = None
     job: str | None = None
     job_assigned_year: int | None = None
     job_era: str | None = None

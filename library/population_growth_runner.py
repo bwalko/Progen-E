@@ -9,7 +9,7 @@ import secrets
 import sqlite3
 import time
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 from zlib import crc32
@@ -27,7 +27,9 @@ from library.passive_population import (
     promote_passive_candidate_for_settlement_context,
 )
 from library.nondetailed_population import (
+    apply_nondetailed_job_family_economy_effects,
     run_nondetailed_sql_annual_tick_for_save,
+    run_nondetailed_sql_migration,
     seed_nondetailed_from_active_settlements,
 )
 from library.random_names import choose_random_first_last
@@ -50,6 +52,7 @@ from library import simulation_timing
 from library.simulation_context import SimulationContext, SimulationPersonRecord
 from library.simulation_export import people_export_payload, settlements_geo_export_payload
 from library.simulation_mortality import apply_annual_mortality
+from library.trait_impacts import trait_category_benefit, trait_category_pressure
 from library.world_save import ensure_checkpoint_schema
 
 KIN_PAIR_PARENT_CHILD_PROB = 0.000001
@@ -68,6 +71,14 @@ PASSIVE_MIGRATION_CONTEXT_REASONS: frozenset[str] = frozenset(
     {"resource_pressure_migration", "job_seeker_migration"}
 )
 MIN_DETAILED_RESIDENTS_PER_ACTIVE_SETTLEMENT = 2
+BIRTH_RELATIONSHIP_SPOUSE = "spouse"
+BIRTH_RELATIONSHIP_PARAMOUR = "paramour"
+LEGITIMACY_STATUS_LEGITIMATE = "legitimate"
+LEGITIMACY_STATUS_BASTARD = "bastard"
+DEATH_CAUSE_CHILDBIRTH = "childbirth"
+CHILDBIRTH_MORTALITY_BASE_PROBABILITY = 0.006
+CHILDBIRTH_MORTALITY_MAX_PROBABILITY = 0.18
+CHILDBIRTH_MORTALITY_RNG_STREAM = 827_119
 
 _PASSIVE_JOB_FAMILY_SHARES: tuple[tuple[str, float], ...] = (
     ("farm", 0.46),
@@ -81,6 +92,30 @@ _PASSIVE_AGE_MAX = 90
 _PASSIVE_BIRTH_RATE = 0.165
 _PASSIVE_PARTNERSHIP_ADULT_SHARE = 0.72
 _PASSIVE_PARTNERSHIP_ELDER_SHARE = 0.55
+
+
+@dataclass(frozen=True)
+class ChildbirthMortalityAssessment:
+    probability: float
+    maternal_age: int
+    prior_births: int
+    litter_size: int
+    resource_pressure: float
+    settlement_care_01: float
+    prosperity_01: float
+    health_pressure_01: float
+    health_benefit_01: float
+    age_factor: float
+    prior_birth_factor: float
+    litter_factor: float
+    care_factor: float
+    prosperity_factor: float
+    pressure_factor: float
+    health_factor: float
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
 
 
 def resolve_population_sim_seed() -> int:
@@ -112,6 +147,289 @@ def _eligible_for_birth(partner: SimulationPersonRecord, year: int) -> bool:
     if max_fertility_age is not None and age > int(max_fertility_age):
         return False
     return True
+
+
+def _mother_prior_birth_count(
+    ctx: SimulationContext,
+    mother_person_id: int,
+    *,
+    before_year: int,
+) -> int:
+    mid = int(mother_person_id)
+    y = int(before_year)
+    return sum(
+        1
+        for child in ctx.people
+        if child.mother_id == mid and int(child.person.birthyear) < y
+    )
+
+
+def _settlement_birth_care_01(
+    ctx: SimulationContext,
+    mother: SimulationPersonRecord,
+    settlement_id: str | None,
+) -> float:
+    sid = (
+        (settlement_id or "")
+        or mother.person.current_settlement_id
+        or mother.person.birthplace_settlement_id
+        or ""
+    ).strip()
+    if not sid:
+        return 0.45
+    st = ctx.settlements_by_id.get(sid)
+    if st is None:
+        return 0.45
+    try:
+        live_count = int(ctx.alive_census_cache().count_by_settlement.get(sid, 0))
+    except Exception:
+        live_count = 0
+    residents = max(0, int(getattr(st, "resident_count", 0) or 0), live_count)
+    households = max(0, int(getattr(st, "household_cap", 0) or 0))
+    population_component = _clamp01(residents / 150.0)
+    household_component = _clamp01(households / 25.0)
+    stability_component = _clamp01(float(getattr(st, "stability", 0.5) or 0.0))
+    prosperity_component = _clamp01(float(getattr(st, "prosperity_pool", 0.5) or 0.0))
+    return _clamp01(
+        population_component * 0.28
+        + household_component * 0.24
+        + stability_component * 0.24
+        + prosperity_component * 0.24
+    )
+
+
+def _childbirth_maternal_age_factor(age: int) -> float:
+    a = int(age)
+    factor = 1.0
+    if a < 18:
+        factor += min(1.2, (18 - a) * 0.16)
+    elif a < 22:
+        factor += (22 - a) * 0.035
+    if a > 35:
+        factor += min(1.6, (a - 35) * 0.08)
+    return max(0.6, factor)
+
+
+def _childbirth_prior_birth_factor(prior_births: int) -> float:
+    n = max(0, int(prior_births))
+    factor = 1.0
+    if n == 0:
+        factor += 0.08
+    if n >= 5:
+        factor += min(0.75, (n - 4) * 0.08)
+    return factor
+
+
+def _childbirth_litter_factor(litter_size: int) -> float:
+    return 1.0 + max(0, int(litter_size) - 1) * 0.35
+
+
+def assess_childbirth_mortality(
+    ctx: SimulationContext,
+    mother: SimulationPersonRecord,
+    *,
+    year: int,
+    resource_pressure: float | None,
+    litter_size: int,
+    settlement_id: str | None = None,
+) -> ChildbirthMortalityAssessment:
+    age = int(year) - int(mother.person.birthyear)
+    prior_births = _mother_prior_birth_count(
+        ctx, mother.person_id, before_year=int(year)
+    )
+    pressure = max(0.0, float(resource_pressure or 0.0))
+    care = _settlement_birth_care_01(ctx, mother, settlement_id)
+    prosperity = person_prosperity_01(
+        mother.person,
+        resource_pressure=pressure,
+        default=0.35,
+    )
+    health_pressure = trait_category_pressure(mother.person, "mortality_health")
+    health_benefit = trait_category_benefit(mother.person, "mortality_health")
+    age_factor = _childbirth_maternal_age_factor(age)
+    prior_factor = _childbirth_prior_birth_factor(prior_births)
+    litter_factor = _childbirth_litter_factor(litter_size)
+    care_factor = 1.35 - 0.45 * care
+    prosperity_factor = 1.25 - 0.35 * prosperity
+    pressure_factor = 1.0 + 0.35 * _clamp01((pressure - 0.65) / 1.35)
+    health_factor = max(0.35, 1.0 + health_pressure * 1.15 - health_benefit * 0.35)
+    probability = CHILDBIRTH_MORTALITY_BASE_PROBABILITY
+    for factor in (
+        age_factor,
+        prior_factor,
+        litter_factor,
+        care_factor,
+        prosperity_factor,
+        pressure_factor,
+        health_factor,
+    ):
+        probability *= factor
+    probability = min(CHILDBIRTH_MORTALITY_MAX_PROBABILITY, max(0.0, probability))
+    return ChildbirthMortalityAssessment(
+        probability=probability,
+        maternal_age=age,
+        prior_births=prior_births,
+        litter_size=max(1, int(litter_size)),
+        resource_pressure=round(pressure, 5),
+        settlement_care_01=round(care, 5),
+        prosperity_01=round(float(prosperity), 5),
+        health_pressure_01=round(float(health_pressure), 5),
+        health_benefit_01=round(float(health_benefit), 5),
+        age_factor=round(age_factor, 5),
+        prior_birth_factor=round(prior_factor, 5),
+        litter_factor=round(litter_factor, 5),
+        care_factor=round(care_factor, 5),
+        prosperity_factor=round(prosperity_factor, 5),
+        pressure_factor=round(pressure_factor, 5),
+        health_factor=round(health_factor, 5),
+    )
+
+
+def childbirth_mortality_probability(
+    ctx: SimulationContext,
+    mother: SimulationPersonRecord,
+    *,
+    year: int,
+    resource_pressure: float | None,
+    litter_size: int,
+    settlement_id: str | None = None,
+) -> float:
+    return assess_childbirth_mortality(
+        ctx,
+        mother,
+        year=year,
+        resource_pressure=resource_pressure,
+        litter_size=litter_size,
+        settlement_id=settlement_id,
+    ).probability
+
+
+def childbirth_mortality_rng(
+    *,
+    year: int,
+    sim_seed: int,
+    mother_person_id: int,
+    father_person_id: int,
+) -> random.Random:
+    return random.Random(
+        int(year) * CHILDBIRTH_MORTALITY_RNG_STREAM
+        + int(sim_seed) * 29
+        + int(mother_person_id) * 1009
+        + int(father_person_id) * 917
+        + 41_003
+    )
+
+
+def _maybe_apply_childbirth_mortality(
+    ctx: SimulationContext,
+    mother: SimulationPersonRecord,
+    *,
+    father_id: int,
+    year: int,
+    sim_seed: int,
+    resource_pressure: float | None,
+    litter_size: int,
+    settlement_id: str | None,
+    child_ids: list[int],
+    birth_relationship_type: str,
+    newborn_outcome: str,
+) -> ChildbirthMortalityAssessment:
+    assessment = assess_childbirth_mortality(
+        ctx,
+        mother,
+        year=year,
+        resource_pressure=resource_pressure,
+        litter_size=litter_size,
+        settlement_id=settlement_id,
+    )
+    roll = childbirth_mortality_rng(
+        year=year,
+        sim_seed=sim_seed,
+        mother_person_id=mother.person_id,
+        father_person_id=father_id,
+    ).random()
+    if roll >= assessment.probability:
+        return assessment
+    related_child_id = child_ids[0] if child_ids else None
+    ctx.mark_dead(
+        {int(mother.person_id)},
+        deathyear=int(year),
+        cause=DEATH_CAUSE_CHILDBIRTH,
+        details="died from childbirth",
+        event_payload={
+            "mother_person_id": int(mother.person_id),
+            "father_person_id": int(father_id),
+            "related_child_id": related_child_id,
+            "related_child_ids": list(child_ids),
+            "birth_relationship_type": birth_relationship_type,
+            "newborn_outcome": newborn_outcome,
+            "childbirth_mortality_probability": round(assessment.probability, 6),
+            "childbirth_mortality_roll": round(float(roll), 6),
+            "maternal_age": assessment.maternal_age,
+            "prior_births": assessment.prior_births,
+            "litter_size": assessment.litter_size,
+            "resource_pressure": assessment.resource_pressure,
+            "settlement_care_01": assessment.settlement_care_01,
+            "maternal_prosperity_01": assessment.prosperity_01,
+            "maternal_health_pressure_01": assessment.health_pressure_01,
+            "maternal_health_benefit_01": assessment.health_benefit_01,
+        },
+    )
+    ctx.last_childbirth_maternal_deaths_count = (
+        int(ctx.last_childbirth_maternal_deaths_count) + 1
+    )
+    return assessment
+
+
+def _active_relationship_pair(
+    pairs: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+    person_a_id: int,
+    person_b_id: int,
+) -> bool:
+    pair_set = {int(person_a_id), int(person_b_id)}
+    return any({int(a), int(b)} == pair_set for a, b in pairs)
+
+
+def _birth_father_candidates(
+    ctx: SimulationContext,
+    mother: SimulationPersonRecord,
+    year: int,
+) -> list[tuple[int, str]]:
+    """Eligible male fathers for one mother-year, labeled by relationship kind."""
+    mother_id = int(mother.person_id)
+    candidates: list[tuple[int, str]] = []
+
+    def add_candidate(raw_id: int | None, relationship_type: str) -> None:
+        if raw_id is None:
+            return
+        try:
+            father_id = int(raw_id)
+        except (TypeError, ValueError):
+            return
+        if father_id == mother_id or not ctx.is_alive(father_id):
+            return
+        father = ctx.id_to_record.get(father_id)
+        if father is None or not _eligible_for_birth(father, year):
+            return
+        if (father.person.gender or "").strip().lower() != "male":
+            return
+        if relationship_type == BIRTH_RELATIONSHIP_SPOUSE:
+            if not _active_relationship_pair(ctx.couples, mother_id, father_id):
+                return
+            if int(father.person.partner_person_id or 0) != mother_id:
+                return
+        elif relationship_type == BIRTH_RELATIONSHIP_PARAMOUR:
+            if not _active_relationship_pair(ctx.paramours, mother_id, father_id):
+                return
+            if int(father.person.paramour_person_id or 0) != mother_id:
+                return
+        else:
+            return
+        candidates.append((father_id, relationship_type))
+
+    add_candidate(mother.person.partner_person_id, BIRTH_RELATIONSHIP_SPOUSE)
+    add_candidate(mother.person.paramour_person_id, BIRTH_RELATIONSHIP_PARAMOUR)
+    return candidates
 
 
 def _parents_of(rec: SimulationPersonRecord) -> set[int]:
@@ -852,6 +1170,7 @@ def births_by_settlement(
     (``add_couple``) do **not** supply a male genetic parent between spouses; a female
     spouse alone does not enable conception without a separate male partner/paramour.
     """
+    ctx.last_childbirth_maternal_deaths_count = 0
     births_count = 0
     cap = int(detailed_active_soft_cap) if detailed_active_soft_cap else None
     rng = random.Random(year * 1_000_003 + sim_seed)
@@ -892,23 +1211,13 @@ def births_by_settlement(
                     simulation_timing.accumulate("births.eligibility_partner", tpc() - t0)
                 continue
             eligible_mothers += 1
-            candidates: list[int] = []
-            pid = rec.person.partner_person_id
-            mid = rec.person.paramour_person_id
-            if pid is not None and ctx.is_alive(pid):
-                pr = ctx.id_to_record.get(pid)
-                if pr is not None and _eligible_for_birth(pr, year):
-                    candidates.append(pid)
-            if mid is not None and ctx.is_alive(mid):
-                mr = ctx.id_to_record.get(mid)
-                if mr is not None and _eligible_for_birth(mr, year):
-                    candidates.append(mid)
+            candidates = _birth_father_candidates(ctx, rec, year)
             if not candidates:
                 if prof:
                     simulation_timing.accumulate("births.eligibility_partner", tpc() - t0)
                 continue
             partnered_mothers += 1
-            father_id = rng.choice(candidates)
+            father_id, birth_relationship_type = rng.choice(candidates)
             father = ctx.id_to_record[father_id]
             if prof:
                 simulation_timing.accumulate("births.eligibility_partner", tpc() - t0)
@@ -952,6 +1261,19 @@ def births_by_settlement(
                     passive_births_by_place[key] = passive_births_by_place.get(key, 0) + 1
                 rec.person = replace(rec.person, last_birth_event_year=year)
                 passive_births += 1
+                _maybe_apply_childbirth_mortality(
+                    ctx,
+                    rec,
+                    father_id=father.person_id,
+                    year=year,
+                    sim_seed=sim_seed,
+                    resource_pressure=pressure,
+                    litter_size=1,
+                    settlement_id=str(sid_birth),
+                    child_ids=[],
+                    birth_relationship_type=birth_relationship_type,
+                    newborn_outcome="passive_birth_recorded",
+                )
                 if prof:
                     simulation_timing.accumulate("births.passive_births", tpc() - t0)
                 continue
@@ -981,15 +1303,45 @@ def births_by_settlement(
             rec.person = replace(rec.person, last_birth_event_year=year)
             if prof:
                 t0 = tpc()
+            born_out_of_wedlock = (
+                birth_relationship_type == BIRTH_RELATIONSHIP_PARAMOUR
+            )
+            legitimacy_status = (
+                LEGITIMACY_STATUS_BASTARD
+                if born_out_of_wedlock
+                else LEGITIMACY_STATUS_LEGITIMATE
+            )
+            created_child_ids: list[int] = []
             for child in children:
-                ctx.add_person(
+                child = replace(
+                    child,
+                    birth_relationship_type=birth_relationship_type,
+                    born_out_of_wedlock=born_out_of_wedlock,
+                    legitimacy_status=legitimacy_status,
+                )
+                child_rec = ctx.add_person(
                     person=child,
                     is_founder=False,
                     father_id=father.person_id,
                     mother_id=rec.person_id,
                 )
+                created_child_ids.append(int(child_rec.person_id))
                 births_count += 1
                 detailed_births += 1
+            sid_birth = rec.person.current_settlement_id or rec.person.birthplace_settlement_id or sid
+            _maybe_apply_childbirth_mortality(
+                ctx,
+                rec,
+                father_id=father.person_id,
+                year=year,
+                sim_seed=sim_seed,
+                resource_pressure=pressure,
+                litter_size=len(children),
+                settlement_id=str(sid_birth),
+                child_ids=created_child_ids,
+                birth_relationship_type=birth_relationship_type,
+                newborn_outcome="detailed_child_records_created",
+            )
             if prof:
                 simulation_timing.accumulate("births.add_person", tpc() - t0)
     if prof:
@@ -1000,6 +1352,12 @@ def births_by_settlement(
         )
         simulation_timing.record_gauge(year, "births", "passive_births", passive_births)
         simulation_timing.record_gauge(year, "births", "detailed_births", detailed_births)
+        simulation_timing.record_gauge(
+            year,
+            "births",
+            "childbirth_maternal_deaths",
+            int(ctx.last_childbirth_maternal_deaths_count),
+        )
     return births_count
 
 
@@ -1714,6 +2072,12 @@ def _run_population_growth_year_loop(
         mortality_rates = apply_annual_mortality(ctx, year)
         if prof:
             simulation_timing.accumulate("runner.mortality", tpc() - t0)
+        childbirth_maternal_deaths = int(ctx.last_childbirth_maternal_deaths_count)
+        if childbirth_maternal_deaths:
+            mortality_rates = dict(mortality_rates)
+            mortality_rates["childbirth_maternal_deaths_count"] = float(
+                childbirth_maternal_deaths
+            )
 
         if prof:
             t0 = tpc()
@@ -1734,10 +2098,38 @@ def _run_population_growth_year_loop(
                 year=year,
             )
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                economy_result = apply_nondetailed_job_family_economy_effects(
+                    conn,
+                    ctx,
+                    year=year,
+                )
+                migration_result = run_nondetailed_sql_migration(
+                    conn,
+                    ctx,
+                    year=year,
+                )
+                conn.commit()
+            if prof:
+                simulation_timing.record_gauge(
+                    year,
+                    "nondetailed",
+                    "economy_affected_settlements",
+                    economy_result.affected_settlements,
+                )
+                simulation_timing.record_gauge(
+                    year,
+                    "nondetailed",
+                    "migration_moved",
+                    migration_result.moved,
+                )
+            with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                 row = conn.execute(
                     "SELECT COALESCE(MAX(person_id), 0) FROM simulation_people_nondetailed"
                 ).fetchone()
             ctx.next_person_id = max(int(ctx.next_person_id), int(row[0] or 0) + 1)
+            ensure_detailed_floor_for_active_settlements(ctx, year)
         else:
             refresh_passive_background_cohorts(
                 ctx,
@@ -1759,7 +2151,7 @@ def _run_population_growth_year_loop(
         ctx.record_year_summary(
             year=year,
             births_count=births_count,
-            deaths_count=int(mortality_rates["deaths_count"]),
+            deaths_count=int(mortality_rates["deaths_count"]) + childbirth_maternal_deaths,
             mortality_rates=mortality_rates,
             persist_to_save=persist_to_save,
         )

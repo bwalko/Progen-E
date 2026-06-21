@@ -16,6 +16,7 @@ Examples::
     python utils/run_population_simulation.py --resume --years 10 --profile-last-years 10
     python utils/run_population_simulation.py --years 100 --world-id default
     python utils/run_population_simulation.py --years 100 --starting-couples 25 --seed 12345
+    python utils/run_population_simulation.py --years 100 --use-passive-cohorts
 
 Environment (optional):
 
@@ -259,10 +260,19 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help="Shift new births into passive cohorts once detailed alive reaches this target (default: 15000; use 0 to disable).",
     )
-    p.add_argument(
+    backend = p.add_mutually_exclusive_group()
+    backend.add_argument(
         "--use-nondetailed-directory",
+        dest="use_nondetailed_directory",
         action="store_true",
-        help="Use the SQLite city-directory table for non-detailed population instead of aggregate passive cohorts.",
+        default=True,
+        help="Use the SQLite city-directory table for non-detailed population instead of aggregate passive cohorts (default).",
+    )
+    backend.add_argument(
+        "--use-passive-cohorts",
+        dest="use_nondetailed_directory",
+        action="store_false",
+        help="Use the legacy aggregate passive-cohort backend instead of the SQLite city-directory backend.",
     )
     args = p.parse_args()
     if args.years < 1:

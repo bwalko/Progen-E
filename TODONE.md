@@ -2645,3 +2645,303 @@ completion.
   entries for detailed-selection variance, serial-predator diagnostics,
   mixed-mode calibration reports, and hybrid-population support instead of
   duplicating the full history inside `TODO.md`.
+
+## 2026-06-21 Mixed-Population Incident Calibration Fix
+
+### Fixes
+
+- Switched `utils/run_mixed_mode_calibration.py` scenarios to the SQLite
+  non-detailed city-directory backend (`use_nondetailed_directory=True`) so
+  representative calibration no longer reports zero non-detailed people while
+  aggregate cohorts stand in for the background population.
+- Added explicit calibration evidence columns:
+  `population_backend`, `nondetailed_alive`, `nondetailed_births`,
+  `nondetailed_deaths`, `mixed_person_years`,
+  `murder_rate_population_basis`, and `murder_per_10k_mixed_person_years`.
+  Detailed-person-year murder rates remain in the TSV as a comparison field,
+  but calibration status now uses mixed population-years when available.
+- Updated `--resume-existing` hygiene for mixed-mode calibration so rows without
+  the current `population_backend=nondetailed_directory` marker are discarded
+  before new summaries are written. This prevents older aggregate-backed rows
+  from being silently mixed into full-population homicide calibration.
+- Changed murder event caps, settlement trial counts, and murder chance gates to
+  scale from mixed settlement population (detailed residents plus passive,
+  aggregate, and non-detailed population counts) while still choosing actual
+  detailed actors from the detailed sample.
+- Reconnected active-settlement detailed-floor maintenance when the runner is
+  using the non-detailed directory backend, preventing the detailed actor pool
+  from collapsing during long directory-backed runs.
+- Split full-population homicide accounting from detailed actor selection:
+  detailed murder events now represent a bounded narrative sample of mixed-world
+  incidence, while background non-detailed homicide rows record the remaining
+  population-level murder incidence without materializing every non-detailed
+  killer or victim.
+- Updated hybrid calibration status so actual guarded serial emergence in a
+  500+ murder sample can satisfy calibration even when the static
+  serial-predator profile proxy is absent in the final scored detailed sample.
+
+### Validation
+
+- `python -m py_compile library\simulation_incidents.py
+  utils\run_mixed_mode_calibration.py unit_test\test_mixed_mode_calibration.py
+  unit_test\test_simulation_incidents.py`
+- `python -m unittest unit_test.test_mixed_mode_calibration
+  unit_test.test_simulation_incident_helpers`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_murder_population_rate_helpers_scale_above_review_sample_cap`
+- `python -m unittest unit_test.test_mixed_mode_calibration
+  unit_test.test_simulation_incident_helpers
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_murder_population_rate_helpers_scale_above_review_sample_cap
+  unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_detailed_floor_promotes_from_passive_cohorts`
+- Bundled-Python smoke:
+  `utils/run_mixed_mode_calibration.py --targets 1000 --replicates 1 --years 2
+  --starting-couples 2 --detailed-fraction 0.01 --min-detailed-cap 10
+  --max-detailed-cap 20 --write-incremental --output
+  temp\mixed_mode_nondetailed_smoke.tsv`, which produced
+  `population_backend=nondetailed_directory`, `nondetailed_alive=984`,
+  `aggregate_cohort_alive=0`, `mixed_mode_alive=990`,
+  `mixed_person_years=1971`, and
+  `murder_rate_population_basis=mixed_population`.
+- Bundled-Python representative probe:
+  `utils/run_mixed_mode_calibration.py --targets 50000 --replicates 1
+  --years 50 --starting-couples 20 --detailed-fraction 0.05
+  --min-detailed-cap 1000 --max-detailed-cap 2500 --write-incremental --output
+  temp\mixed_mode_nondetailed_representative_probe.tsv`, followed by
+  `--resume-existing` to refresh the aggregate summary after the status-rule
+  update. The final summary has `population_backend=nondetailed_directory`,
+  `report_non_detailed_alive_people=41104`, `mixed_person_years=2354447`,
+  944 total murder rows, `murder_per_10k_mixed_person_years=4.009434`,
+  `murder_rate_calibration_status=within_target_band`,
+  `serial_murder_event_share_3plus=0.009534`,
+  `serial_murder_calibration_status=within_real_life_guardrail`,
+  `serial_murder_emergence_status=serial_murder_emerged`, and
+  `hybrid_calibration_status=within_hybrid_calibration_targets`.
+
+## 2026-06-21 Paramour Fertility And Out-Of-Wedlock Children
+
+### Enhancements
+
+- Formalized main-run birth candidates as spouse or paramour relationships
+  instead of anonymous partner IDs. Candidate fathers must be alive, fertile,
+  male, reciprocal, and present in the active couple/paramour relationship set.
+- Paramour births now produce detailed children through the normal birth
+  pipeline and mark the child with `birth_relationship_type=paramour`,
+  `born_out_of_wedlock=True`, and `legitimacy_status=bastard`.
+- Spouse births now carry `birth_relationship_type=spouse`,
+  `born_out_of_wedlock=False`, and `legitimacy_status=legitimate`, preserving
+  one consistent birth-state vocabulary for future reports.
+- Birth event payloads and file-store CSV rows now include the same relationship
+  and legitimacy markers, while SQLite checkpoints persist the markers inside
+  `person_json`.
+- The browser renders out-of-wedlock birth events as such and shows a child's
+  birth status in the children list.
+
+### Validation
+
+- `python -m py_compile library\person.py library\population_growth_runner.py
+  library\simulation_context.py library\simulation_store.py
+  library\world_save.py utils\gradio_data_browser.py
+  unit_test\test_paramour_fertility.py unit_test\test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_paramour_fertility`
+- `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_birth_event_marks_out_of_wedlock_children`
+- `python -m unittest unit_test.test_paramour_fertility
+  unit_test.test_birth_surname_rule
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_birth_event_marks_out_of_wedlock_children`
+
+## 2026-06-21 Polity Office History And Ruler Timelines
+
+### Enhancements
+
+- Confirmed current government office history is persisted in
+  `simulation_office_holdings`: `assign_holder` appends open holdings and
+  `vacate_seat` closes them with `end_sim_year` and `end_reason` values such as
+  `death`, `term_expiry`, `promotion`, `polity_dissolved`, or `exile`.
+- Added the durable `simulation_office_history_readable` save view, keyed by
+  holding, polity, office/seat, holder, start year, end year, and end reason,
+  with polity and holder labels joined in for inspection.
+- Added office-history helper functions in the browser layer so older saves can
+  still render office history by joining holdings/seats directly if the readable
+  view is unavailable.
+- Extended polity sheets with `Ruler Timeline` and `Office History` sections.
+  The ruler timeline prefers the configured head title for the polity type and
+  falls back to the non-settlement-scoped office seat when config is unavailable.
+- Snapshot-backed place browsing now loads office history and preserves readable
+  holder names even for dead former rulers who are no longer in the alive-person
+  snapshot.
+
+### Validation
+
+- `python -m py_compile library\government_checkpoint.py
+  utils\gradio_data_browser.py unit_test\test_simulation_government.py
+  unit_test\test_gradio_data_browser.py`
+- `python -m unittest
+  unit_test.test_simulation_government.TestSimulationGovernment.test_office_history_readable_view_tracks_successions_and_death_endings
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history`
+- `python -m unittest unit_test.test_simulation_government`
+- `python -m unittest unit_test.test_simulation_government
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history`
+
+## 2026-06-21 Genome Trait Center/Extreme Impact Module
+
+### Enhancements
+
+- Added `library.trait_impacts` as the shared source of truth for genome
+  banding. It classifies signed trait deviations into center, mild deviation,
+  ordinary, strong deviation, and extreme deviation bands while preserving the
+  centered genome invariant that `0` is ideal and ordinary midpoint values near
+  `+/-50` are not inherently meaningful.
+- Inventoried every checked-in `config/genome.csv` trait in
+  `TRAIT_IMPACT_RULES`, with center benefits, harmful extremes, useful or
+  context-dependent extremes, and practical categories for mortality/health,
+  work capacity, household stability, finances, violence, reputation, legal
+  fallout, marriage/paramour dynamics, care burden, and social standing.
+- Added reusable APIs for trait definition loading from config SQLite or CSV,
+  trait-band classification, center/strong/extreme signals, missing-rule
+  detection, and practical consequence profiles with category benefit/pressure
+  lookup.
+- Routed the event-scoring layer through the new strict band signals so
+  `negative_extreme`, `positive_extreme`, and `ideal_strength` no longer treat
+  missing traits or ordinary midpoint values as active signals.
+- Folded practical impact pressures into instability, greed, and jealousy crime
+  pressure. Greed/property-crime scoring now stays strong for genuinely
+  extreme ambition/frugality/generosity profiles without relying on ordinary
+  midpoint justice or honesty.
+
+### Validation
+
+- `python -m py_compile library\trait_impacts.py library\event_scoring.py
+  unit_test\test_trait_impacts.py unit_test\test_event_scoring.py
+  unit_test\test_simulation_incidents.py`
+- `python -m unittest unit_test.test_trait_impacts unit_test.test_event_scoring`
+- `python -m unittest unit_test.test_trait_impacts unit_test.test_event_scoring
+  unit_test.test_simulation_incident_helpers`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_violent_actor_propensity_separates_extreme_and_stable_genomes
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_property_crime_propensity_separates_extreme_and_stable_genomes
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_instability_greed_and_jealousy_raise_crime_propensities
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_scandal_exposure_propensity_separates_extreme_and_stable_genomes
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_public_virtue_propensity_separates_heroic_and_selfish_genomes
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_murder_tick_skips_stable_low_risk_adults
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_property_crime_skips_stable_low_risk_adults
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_affair_scandal_skips_stable_paramours
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_public_virtue_skips_low_prosocial_adults`
+
+## 2026-06-21 Childbirth Mortality
+
+### Enhancements
+
+- Added a detailed childbirth mortality assessment to the birth pipeline after
+  successful conception and newborn generation. Maternal death is evaluated only
+  after newborn records are created, preserving child IDs, parent links, and the
+  one-birth-per-mother-year invariant.
+- Modeled maternal death risk from maternal age, prior births, litter size,
+  resource pressure, settlement care capacity, household/job prosperity, and
+  health-related genome impact pressure/benefit.
+- Added deterministic childbirth-mortality RNG streams keyed by year, sim seed,
+  mother, and father so simulation runs remain reproducible.
+- Added cause-aware `SimulationContext.mark_dead(...)` payload support. Generic
+  deaths keep existing behavior, while childbirth deaths record
+  `death_cause=childbirth`, related child IDs, probability/roll, maternal age,
+  prior births, litter size, care/prosperity, and health modifier values.
+- Childbirth maternal deaths now close active spouse/paramour references through
+  the existing death cleanup path, so household-care/orphan routing sees the
+  mother as dead and children retain their mother/father IDs.
+- Added run-store columns for `death_cause`, `related_child_ids`, and
+  `childbirth_maternal_deaths_count`; annual `deaths_count` now includes
+  childbirth maternal deaths in addition to ordinary annual mortality deaths.
+- Updated event prose and browser event sentences so cause-aware death events
+  can render as, for example, "died from childbirth."
+
+### Validation
+
+- `python -m py_compile library\population_growth_runner.py
+  library\simulation_context.py library\simulation_store.py library\world_save.py
+  utils\gradio_data_browser.py library\event_prose.py
+  unit_test\test_childbirth_mortality.py unit_test\test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_childbirth_mortality
+  unit_test.test_paramour_fertility unit_test.test_birth_surname_rule
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_death_event_shows_childbirth_cause
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_birth_event_marks_out_of_wedlock_children`
+- `python -m unittest unit_test.test_event_prose`
+- `python -m unittest unit_test.test_relationships_residence.TestRelationshipsResidence.test_death_clears_active_relationship_and_career_state
+  unit_test.test_simulation_household_care.TestSimulationHouseholdCare.test_orphan_moves_to_largest_settlement
+  unit_test.test_simulation_household_care.TestSimulationHouseholdCare.test_grandparent_same_settlement_adds_childcare_supply`
+- `python -m unittest unit_test.test_childbirth_mortality
+  unit_test.test_paramour_fertility unit_test.test_birth_surname_rule
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_death_event_shows_childbirth_cause
+  unit_test.test_event_prose
+  unit_test.test_relationships_residence.TestRelationshipsResidence.test_death_clears_active_relationship_and_career_state
+  unit_test.test_simulation_household_care.TestSimulationHouseholdCare.test_orphan_moves_to_largest_settlement
+  unit_test.test_simulation_household_care.TestSimulationHouseholdCare.test_grandparent_same_settlement_adds_childcare_supply`
+
+### Notes
+
+- Broader checkpoint-resume checks that hydrate settlement local geography still
+  fail in this bundled Python environment because optional `shapely` is not
+  installed (`world-map polygon geometry requires the optional 'shapely'
+  package`). The same Shapely issue was observed before this workstream.
+
+## 2026-06-21 Production Population Backend Default
+
+### Enhancements
+
+- Made `utils/run_population_simulation.py` default production runs to the
+  SQLite `simulation_people_nondetailed` city-directory backend.
+- Kept `--use-nondetailed-directory` as an accepted explicit flag for existing
+  commands and added `--use-passive-cohorts` as the opt-in legacy aggregate
+  cohort backend.
+- Left the lower-level `run_population_growth_simulation(...)` default
+  unchanged so focused unit fixtures can still choose their background backend
+  explicitly without a broad test-contract break.
+
+### Validation
+
+- `python -m py_compile utils\run_population_simulation.py
+  unit_test\test_run_population_simulation_cli.py`
+- `python -m unittest unit_test.test_run_population_simulation_cli`
+
+## 2026-06-21 Non-Detailed Economy/Migration Annual Wiring
+
+### Enhancements
+
+- Wired the production non-detailed city-directory branch in
+  `library.population_growth_runner` to run the SQL demographic tick,
+  job-family economy effects, and set-based non-detailed settlement migration
+  in sequence each simulation year.
+- Added profile gauges for affected non-detailed economy settlements and moved
+  non-detailed migrants when profiling is active.
+- Left longer mixed-mode calibration/tuning in `TODO.md`; this change makes the
+  existing v1 effects active in the production branch so future calibration runs
+  measure the real path rather than dormant helper functions.
+
+### Validation
+
+- `python -m py_compile library\population_growth_runner.py
+  library\nondetailed_population.py
+  unit_test\test_population_growth_nondetailed_runner.py
+  unit_test\test_nondetailed_population.py`
+- `python -m unittest unit_test.test_population_growth_nondetailed_runner
+  unit_test.test_nondetailed_population`
+- `python -m unittest unit_test.test_run_population_simulation_cli
+  unit_test.test_population_growth_nondetailed_runner
+  unit_test.test_nondetailed_population`
+
+## 2026-06-21 Non-Detailed Promotion Selector API
+
+### Enhancements
+
+- Added `SimulationContext.promote_nondetailed_people(...)` for bounded
+  immediate materialization from `simulation_people_nondetailed` by person IDs,
+  settlement, region, and/or job family, carrying explicit reason/source
+  metadata.
+- Reused the existing `promote_nondetailed_person(...)` path so variance
+  application, deletion from the directory, alive-census cache updates, event
+  logging, and passive promotion logging stay centralized.
+- Preserved selector source metadata on `nondetailed_person_promoted` events
+  for auditability.
+
+### Validation
+
+- `python -m py_compile library\simulation_context.py
+  unit_test\test_nondetailed_population.py`
+- `python -m unittest unit_test.test_nondetailed_population`

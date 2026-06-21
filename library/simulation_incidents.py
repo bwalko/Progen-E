@@ -48,6 +48,7 @@ INCIDENT_ADULT_MIN_AGE = 16
 MURDER_BASE_SETTLEMENT_CHANCE = 0.00075
 MURDER_TARGET_PER_10K_PER_YEAR = 4.0
 MURDER_ANNUAL_CAP_HEADROOM = 2.0
+MURDER_DETAILED_NARRATIVE_SAMPLE_SHARE = 0.06
 MURDER_RATE_CONTEXT_MULTIPLIER = 0.18
 MURDER_SETTLEMENT_CHANCE_CAP = 0.30
 MURDER_PROPENSITY_THRESHOLD = 0.24
@@ -56,6 +57,7 @@ MURDER_SETTLEMENT_TRIAL_POPULATION = 250
 MURDER_MAX_SETTLEMENT_TRIALS = 24
 MURDER_MAX_EVENTS_PER_YEAR = 24
 MURDER_RNG_STREAM = 610_019
+MURDER_BACKGROUND_RNG_STREAM = 610_023
 MURDER_SAMPLE_STREAM = 610_021
 MURDER_SERIAL_PROPENSITY_WEIGHT = 3.25
 MURDER_PRIOR_KILLER_WEIGHT = 0.42
@@ -254,15 +256,30 @@ def _murder_target_per_10k(rate: IncidentRateParams | None) -> float:
 def _murder_annual_event_cap(
     settlements: list[tuple[str, list["SimulationPersonRecord"]]],
     rate: IncidentRateParams | None = None,
+    population_by_settlement: dict[str, int] | None = None,
 ) -> int:
-    population = sum(len(residents) for _settlement_id, residents in settlements)
-    if population <= 0:
+    detailed_population = sum(len(residents) for _settlement_id, residents in settlements)
+    mixed_population = sum(
+        max(
+            len(residents),
+            int((population_by_settlement or {}).get(str(settlement_id), len(residents))),
+        )
+        for settlement_id, residents in settlements
+    )
+    if detailed_population <= 0 or mixed_population <= 0:
         return 0
     target_per_10k = _murder_target_per_10k(rate)
     cap_multiplier = _incident_cap_multiplier(rate)
     if target_per_10k <= 0.0 or cap_multiplier <= 0.0:
         return 0
-    target = population * target_per_10k / 10_000.0
+    detailed_target = detailed_population * target_per_10k / 10_000.0
+    mixed_narrative_target = (
+        mixed_population
+        * target_per_10k
+        / 10_000.0
+        * max(0.0, float(MURDER_DETAILED_NARRATIVE_SAMPLE_SHARE))
+    )
+    target = max(detailed_target, mixed_narrative_target)
     cap = int(
         target
         * max(0.0, float(MURDER_ANNUAL_CAP_HEADROOM))
@@ -275,12 +292,36 @@ def _murder_annual_event_cap(
     return max(1, min(safety_cap, cap))
 
 
-def _murder_settlement_trial_count(residents: list["SimulationPersonRecord"]) -> int:
+def _murder_settlement_trial_count(
+    residents: list["SimulationPersonRecord"],
+    population_count: int | None = None,
+) -> int:
     if not residents:
         return 0
+    population = max(len(residents), int(population_count or len(residents)))
     pop_per_trial = max(1, int(MURDER_SETTLEMENT_TRIAL_POPULATION))
-    trials = (len(residents) + pop_per_trial - 1) // pop_per_trial
+    trials = (population + pop_per_trial - 1) // pop_per_trial
     return max(1, min(int(MURDER_MAX_SETTLEMENT_TRIALS), trials))
+
+
+def _stochastic_count(expected: float, rng: random.Random) -> int:
+    base = int(max(0.0, float(expected)))
+    fraction = max(0.0, float(expected) - float(base))
+    return base + (1 if rng.random() < fraction else 0)
+
+
+def _murder_worldwide_target_count(
+    population: int,
+    rate: IncidentRateParams | None,
+    rng: random.Random,
+) -> int:
+    target = (
+        max(0, int(population))
+        * _murder_target_per_10k(rate)
+        / 10_000.0
+        * _incident_chance_multiplier(rate)
+    )
+    return _stochastic_count(target, rng)
 
 
 def _murder_chance_from_propensity(
@@ -1002,6 +1043,7 @@ def _maybe_murder_in_settlement(
     already_dead: set[int],
     rate: IncidentRateParams | None = None,
     scoring_facts: IncidentScoringFacts | None = None,
+    population_count: int | None = None,
 ) -> MurderIncident | None:
     sampled = ctx.decision_sample_records(
         residents,
@@ -1021,7 +1063,7 @@ def _maybe_murder_in_settlement(
     scarcity = _clamp((pressure - 0.75) / 0.75)
     chance_roll = rng.random()
     if chance_roll >= _murder_chance_from_propensity(
-        adults_count=len(adults),
+        adults_count=max(len(adults), int(population_count or len(adults))),
         scarcity=scarcity,
         max_propensity=1.0,
         rate=rate,
@@ -1055,7 +1097,7 @@ def _maybe_murder_in_settlement(
     }
     max_propensity = max(propensities.values(), default=0.0)
     chance = _murder_chance_from_propensity(
-        adults_count=len(adults),
+        adults_count=max(len(adults), int(population_count or len(adults))),
         scarcity=scarcity,
         max_propensity=max_propensity,
         rate=rate,
@@ -3088,6 +3130,34 @@ def _record_murder_incident(
     )
 
 
+def _record_background_murder_incident(
+    ctx: "SimulationContext",
+    year: int,
+    *,
+    settlement_id: str,
+    ordinal: int,
+) -> None:
+    st = getattr(ctx, "settlements_by_id", {}).get(settlement_id)
+    ctx._record_simulation_event(
+        int(year),
+        "murder",
+        {
+            "year": int(year),
+            "event_type": "murder",
+            "incident_kind": "background_murder",
+            "background_population_event": True,
+            "population_backend": "non_detailed",
+            "killer_population": "non_detailed_or_unknown",
+            "victim_population": "non_detailed_or_unknown",
+            "settlement_id": settlement_id,
+            "region_id": getattr(st, "region_id", None) if st is not None else None,
+            "background_murder_ordinal": int(ordinal),
+            "serial_predator_candidate": False,
+            "historical_importance": 0.08,
+        },
+    )
+
+
 def _record_property_crime_incident(
     ctx: "SimulationContext", year: int, incident: TheftFraudIncident
 ) -> None:
@@ -3212,6 +3282,11 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     rng = random.Random(
         y * MURDER_RNG_STREAM + int(getattr(ctx, "placename_rng_salt", 0)) + 911
     )
+    background_murder_rng = random.Random(
+        y * MURDER_BACKGROUND_RNG_STREAM
+        + int(getattr(ctx, "placename_rng_salt", 0))
+        + 983
+    )
     theft_rng = random.Random(
         y * THEFT_RNG_STREAM + int(getattr(ctx, "placename_rng_salt", 0)) + 1171
     )
@@ -3231,6 +3306,12 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     public_virtue_count = 0
     knowledge_culture_count = 0
     settlements = sorted(ctx.current_people_by_settlement().items())
+    background_population_by_settlement = ctx.passive_population_counts_by_settlement()
+    murder_population_by_settlement = {
+        str(settlement_id): len(residents)
+        + int(background_population_by_settlement.get(str(settlement_id), 0))
+        for settlement_id, residents in settlements
+    }
     historical_year = ctx.get_historical_year(y)
     murder_rate = incident_rate_for_year(
         db_path=ctx.db_path,
@@ -3262,7 +3343,11 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
         incident_key="knowledge_culture",
         historical_year=historical_year,
     )
-    murder_event_limit = _murder_annual_event_cap(settlements, murder_rate)
+    murder_event_limit = _murder_annual_event_cap(
+        settlements,
+        murder_rate,
+        population_by_settlement=murder_population_by_settlement,
+    )
     property_crime_event_limit = _annual_event_limit(
         THEFT_MAX_EVENTS_PER_YEAR, property_crime_rate
     )
@@ -3278,7 +3363,15 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
         simulation_timing.accumulate("incidents.setup", tpc() - t0)
         t0 = tpc()
     for settlement_id, residents in settlements:
-        for _trial in range(_murder_settlement_trial_count(residents)):
+        murder_population = int(
+            murder_population_by_settlement.get(str(settlement_id), len(residents))
+        )
+        for _trial in range(
+            _murder_settlement_trial_count(
+                residents,
+                population_count=murder_population,
+            )
+        ):
             if murder_count >= murder_event_limit:
                 break
             incident = _maybe_murder_in_settlement(
@@ -3290,6 +3383,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
                 already_dead=dead_ids,
                 rate=murder_rate,
                 scoring_facts=scoring_facts,
+                population_count=murder_population,
             )
             if incident is None:
                 continue
@@ -3348,11 +3442,47 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
             if knowledge is not None:
                 _record_knowledge_culture_incident(ctx, y, knowledge)
                 knowledge_culture_count += 1
+    detailed_murder_count = murder_count
+    population_items = [
+        (sid, max(0, int(population)))
+        for sid, population in sorted(murder_population_by_settlement.items())
+        if int(population) > 0
+    ]
+    worldwide_murder_target = _murder_worldwide_target_count(
+        sum(population for _sid, population in population_items),
+        murder_rate,
+        background_murder_rng,
+    )
+    background_murder_count = max(0, int(worldwide_murder_target) - detailed_murder_count)
+    if background_murder_count > 0 and population_items:
+        settlement_ids = [sid for sid, _population in population_items]
+        weights = [population for _sid, population in population_items]
+        for ordinal, settlement_id in enumerate(
+            background_murder_rng.choices(
+                settlement_ids,
+                weights=weights,
+                k=background_murder_count,
+            ),
+            start=1,
+        ):
+            _record_background_murder_incident(
+                ctx,
+                y,
+                settlement_id=settlement_id,
+                ordinal=ordinal,
+            )
+        murder_count += background_murder_count
     if dead_ids:
         ctx.mark_dead(dead_ids, deathyear=y)
     if prof:
         simulation_timing.accumulate("incidents.generate", tpc() - t0)
         simulation_timing.record_gauge(y, "incidents", "murder_events", murder_count)
+        simulation_timing.record_gauge(
+            y, "incidents", "detailed_murder_events", detailed_murder_count
+        )
+        simulation_timing.record_gauge(
+            y, "incidents", "background_murder_events", background_murder_count
+        )
         simulation_timing.record_gauge(
             y, "incidents", "property_crime_events", property_crime_count
         )

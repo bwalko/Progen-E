@@ -208,6 +208,9 @@ _ADDITIVE_PERSON_CHECKPOINT_COLUMNS: dict[str, str] = {
 _PERSON_EXTENSION_KEYS: tuple[str, ...] = (
     "genome_composite_names",
     "genome_trait_phrases",
+    "birth_relationship_type",
+    "born_out_of_wedlock",
+    "legitimacy_status",
 )
 
 
@@ -1360,6 +1363,7 @@ _EVENT_PERSON_SCALAR_ROLES: dict[str, str] = {
     "person_a_id": "person_a",
     "person_b_id": "person_b",
     "child_id": "child",
+    "related_child_id": "child",
     "father_id": "father",
     "mother_id": "mother",
     "killer_person_id": "killer",
@@ -1386,6 +1390,7 @@ _EVENT_PERSON_LIST_ROLES: dict[str, str] = {
     "dependent_minor_ids": "dependent_minor",
     "moved_person_ids": "moved",
     "child_ids": "child",
+    "related_child_ids": "child",
     "witness_person_ids": "witness",
     "suspect_person_ids": "suspect",
     "betrayed_partner_person_ids": "betrayed_partner",
@@ -7894,6 +7899,21 @@ def _person_from_dict(d: dict) -> Person:
         last_birth_event_year=(
             int(d["last_birth_event_year"])
             if d.get("last_birth_event_year") is not None
+            else None
+        ),
+        birth_relationship_type=(
+            str(d["birth_relationship_type"])
+            if d.get("birth_relationship_type") is not None
+            else None
+        ),
+        born_out_of_wedlock=(
+            _coerce_event_bool(d["born_out_of_wedlock"])
+            if d.get("born_out_of_wedlock") is not None
+            else None
+        ),
+        legitimacy_status=(
+            str(d["legitimacy_status"])
+            if d.get("legitimacy_status") is not None
             else None
         ),
         job=str(d["job"]) if d.get("job") is not None else None,

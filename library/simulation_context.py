@@ -212,6 +212,7 @@ class SimulationContext:
     current_people_ids: set[int] = field(default_factory=set)
     couples: list[tuple[int, int]] = field(default_factory=list)
     paramours: list[tuple[int, int]] = field(default_factory=list)
+    last_childbirth_maternal_deaths_count: int = 0
     surname_conventions_by_pair: dict[tuple[int, int], str] = field(default_factory=dict)
     id_to_record: dict[int, SimulationPersonRecord] = field(default_factory=dict)
     event_queue: list[dict[str, Any]] = field(default_factory=list)
@@ -740,6 +741,20 @@ class SimulationContext:
         self._add_record_to_alive_census_cache(rec)
         self.invalidate_alive_columns_cache()
         event_type = "founder_created" if is_founder else "birth"
+        birth_relationship_type = (
+            (rec.person.birth_relationship_type or "").strip() or None
+        )
+        legitimacy_status = (rec.person.legitimacy_status or "").strip() or None
+        born_out_of_wedlock = rec.person.born_out_of_wedlock
+        birth_details: dict[str, Any] = {}
+        if not is_founder:
+            if birth_relationship_type:
+                birth_details["birth_relationship_type"] = birth_relationship_type
+            if born_out_of_wedlock is not None:
+                birth_details["born_out_of_wedlock"] = bool(born_out_of_wedlock)
+            if legitimacy_status:
+                birth_details["legitimacy_status"] = legitimacy_status
+
         if self.file_store is not None:
             self.file_store.append_person(
                 {
@@ -759,6 +774,11 @@ class SimulationContext:
                     "mother_id": rec.mother_id,
                     "father_name": rec.person.father_name,
                     "mother_name": rec.person.mother_name,
+                    "birth_relationship_type": birth_relationship_type or "",
+                    "born_out_of_wedlock": (
+                        "" if born_out_of_wedlock is None else int(bool(born_out_of_wedlock))
+                    ),
+                    "legitimacy_status": legitimacy_status or "",
                 }
             )
             self.file_store.append_event(
@@ -770,6 +790,7 @@ class SimulationContext:
                     "person_b_id": rec.mother_id,
                     "child_id": rec.person_id if not is_founder else "",
                     "details": "",
+                    **birth_details,
                 }
             )
         self._record_simulation_event(
@@ -783,6 +804,7 @@ class SimulationContext:
                 "person_b_id": rec.mother_id,
                 "child_id": rec.person_id if not is_founder else None,
                 "details": "",
+                **birth_details,
             },
         )
         return rec
@@ -1047,6 +1069,90 @@ class SimulationContext:
             )
         )
         return rec
+
+    def promote_nondetailed_people(
+        self,
+        *,
+        year: int,
+        reason: str,
+        person_ids: Iterable[int] | None = None,
+        settlement_id: str | None = None,
+        region_id: str | None = None,
+        job_family: str | None = None,
+        limit: int = 1,
+        source: dict[str, Any] | None = None,
+    ) -> list[SimulationPersonRecord]:
+        """Materialize bounded non-detailed rows by id, place, job family, or reason."""
+        from library.nondetailed_population import normalize_nondetailed_job_family
+        from library.world_save import ensure_checkpoint_schema
+
+        clean_person_ids: list[int] = []
+        for raw in person_ids or ():
+            try:
+                clean_person_ids.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        settlement_s = str(settlement_id or "").strip()
+        region_s = str(region_id or "").strip()
+        job_s = str(job_family or "").strip()
+        reason_text = str(reason).strip() or "nondetailed_promotion"
+        if not clean_person_ids and not settlement_s and not region_s and not job_s:
+            raise ValueError(
+                "promote_nondetailed_people requires person_ids, settlement_id, region_id, or job_family"
+            )
+        max_rows = max(1, int(limit))
+        clauses = ["p.is_alive = 1"]
+        params: list[object] = []
+        if clean_person_ids:
+            placeholders = ", ".join("?" for _ in clean_person_ids)
+            clauses.append(f"p.person_id IN ({placeholders})")
+            params.extend(clean_person_ids)
+        if settlement_s:
+            clauses.append("cs.settlement_id = ?")
+            params.append(settlement_s)
+        if region_s:
+            clauses.append("COALESCE(cr.region_id, br.region_id) = ?")
+            params.append(region_s)
+        if job_s:
+            clauses.append("COALESCE(NULLIF(p.job_family, ''), 'other') = ?")
+            params.append(normalize_nondetailed_job_family(job_s))
+        params.append(max_rows)
+        sql = f"""
+            SELECT p.person_id
+            FROM simulation_people_nondetailed p
+            LEFT JOIN simulation_settlement_lookup cs
+              ON cs.settlement_key = p.current_settlement_key
+            LEFT JOIN simulation_region_lookup cr
+              ON cr.region_key = cs.region_key
+            LEFT JOIN simulation_region_lookup br
+              ON br.region_key = p.birthplace_region_key
+            WHERE {" AND ".join(clauses)}
+            ORDER BY p.person_id
+            LIMIT ?
+        """
+        with closing(sqlite3.connect(self.save_db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            ensure_checkpoint_schema(conn)
+            ids = [int(row["person_id"]) for row in conn.execute(sql, params).fetchall()]
+        selector_source = {
+            **dict(source or {}),
+            "selector_person_ids": clean_person_ids,
+            "selector_settlement_id": settlement_s,
+            "selector_region_id": region_s,
+            "selector_job_family": normalize_nondetailed_job_family(job_s) if job_s else "",
+            "selector_limit": max_rows,
+        }
+        promoted: list[SimulationPersonRecord] = []
+        for pid in ids:
+            rec = self.promote_nondetailed_person(
+                pid,
+                year=int(year),
+                reason=reason_text,
+                source=selector_source,
+            )
+            if rec is not None:
+                promoted.append(rec)
+        return promoted
 
     @staticmethod
     def _relationship_pair_key(person_a_id: int, person_b_id: int) -> tuple[int, int]:
@@ -1689,9 +1795,20 @@ class SimulationContext:
         self._species_life_stage_rows_cache = (path_s, rows)
         return rows
 
-    def mark_dead(self, dead_ids: set[int], *, deathyear: int) -> None:
+    def mark_dead(
+        self,
+        dead_ids: set[int],
+        *,
+        deathyear: int,
+        cause: str | None = None,
+        details: str | None = None,
+        event_payload: Mapping[str, Any] | None = None,
+    ) -> None:
         if not dead_ids:
             return
+        cause_s = (cause or "").strip()
+        details_s = (details or "").strip()
+        extra_payload = dict(event_payload or {})
         for pid in dead_ids:
             rec = self.id_to_record.get(pid)
             if rec is None:
@@ -1707,66 +1824,74 @@ class SimulationContext:
                             "value": deathyear,
                         }
                     )
-                    self.file_store.append_event(
-                        {
-                            "year": deathyear,
-                            "event_type": "death",
-                            "person_id": pid,
-                            "person_a_id": "",
-                            "person_b_id": "",
-                            "child_id": "",
-                            "details": "",
-                        }
-                    )
-                self._record_simulation_event(
-                    deathyear,
-                    "death",
-                    {
+                    file_event = {
                         "year": deathyear,
                         "event_type": "death",
                         "person_id": pid,
-                        "person_a_id": None,
-                        "person_b_id": None,
-                        "child_id": None,
-                        "details": "cleared active relationship/career/employment state",
-                        "cleared_current_state_fields": [
-                            "current_settlement_id",
-                            "partner_person_id",
-                            "paramour_person_id",
-                            "last_birth_event_year",
-                            "job",
-                            "job_assigned_year",
-                            "job_era",
-                            "job_tier",
-                            "job_market_type",
-                            "housing_status",
-                            "household_role",
-                            "host_person_id",
-                            "employer_person_id",
-                            "social_class_band",
-                            "social_standing_01",
-                            "societal_impact_01",
-                            "perceived_worth_01",
-                            "status_tendency",
-                            "leader_quality",
-                            "leader_tendency",
-                            "outlaw_status",
-                            "outlaw_case_key",
-                            "outlaw_refuge_id",
-                            "outlaw_since_year",
-                            "outlaw_custody_id",
-                            "outlaw_custody_status",
-                            "outlaw_custody_start_year",
-                            "outlaw_custody_expected_release_year",
-                            "outlaw_custody_release_year",
-                            "outlaw_custody_site_settlement_id",
-                            "employment_status",
-                            "job_lost_year",
-                            "unemployment_started_year",
-                            "last_job",
-                            "career_fitness_score",
-                        ],
-                    },
+                        "person_a_id": "",
+                        "person_b_id": "",
+                        "child_id": extra_payload.get("related_child_id", ""),
+                        "details": details_s,
+                        "death_cause": cause_s,
+                        "related_child_ids": json.dumps(
+                            extra_payload.get("related_child_ids", [])
+                        ),
+                    }
+                    self.file_store.append_event(file_event)
+                payload = {
+                    "year": deathyear,
+                    "event_type": "death",
+                    "person_id": pid,
+                    "person_a_id": None,
+                    "person_b_id": None,
+                    "child_id": extra_payload.get("related_child_id"),
+                    "details": details_s
+                    or "cleared active relationship/career/employment state",
+                    "cleared_current_state_fields": [
+                        "current_settlement_id",
+                        "partner_person_id",
+                        "paramour_person_id",
+                        "last_birth_event_year",
+                        "job",
+                        "job_assigned_year",
+                        "job_era",
+                        "job_tier",
+                        "job_market_type",
+                        "housing_status",
+                        "household_role",
+                        "host_person_id",
+                        "employer_person_id",
+                        "social_class_band",
+                        "social_standing_01",
+                        "societal_impact_01",
+                        "perceived_worth_01",
+                        "status_tendency",
+                        "leader_quality",
+                        "leader_tendency",
+                        "outlaw_status",
+                        "outlaw_case_key",
+                        "outlaw_refuge_id",
+                        "outlaw_since_year",
+                        "outlaw_custody_id",
+                        "outlaw_custody_status",
+                        "outlaw_custody_start_year",
+                        "outlaw_custody_expected_release_year",
+                        "outlaw_custody_release_year",
+                        "outlaw_custody_site_settlement_id",
+                        "employment_status",
+                        "job_lost_year",
+                        "unemployment_started_year",
+                        "last_job",
+                        "career_fitness_score",
+                    ],
+                    **extra_payload,
+                }
+                if cause_s:
+                    payload["death_cause"] = cause_s
+                self._record_simulation_event(
+                    deathyear,
+                    "death",
+                    payload,
                 )
             self.current_people_ids.discard(pid)
         self.invalidate_alive_census_cache()
@@ -2599,6 +2724,9 @@ class SimulationContext:
                     ),
                     "births_count": births_count,
                     "deaths_count": deaths_count,
+                    "childbirth_maternal_deaths_count": int(
+                        self.last_childbirth_maternal_deaths_count
+                    ),
                     "passive_cohort_births_count": passive_cohort_births_count,
                     "passive_cohort_deaths_count": passive_cohort_deaths_count,
                     "nondetailed_births_count": int(self.last_nondetailed_tick_result.births),

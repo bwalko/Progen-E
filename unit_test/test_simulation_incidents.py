@@ -262,6 +262,25 @@ class TestSimulationIncidents(unittest.TestCase):
 
         self.assertEqual(_murder_settlement_trial_count(residents), 24)
         self.assertGreaterEqual(_murder_annual_event_cap(settlements), 16)
+        sparse_detailed_residents = [object()] * 2
+        self.assertEqual(
+            _murder_settlement_trial_count(
+                sparse_detailed_residents,
+                population_count=20_000,
+            ),
+            24,
+        )
+        sparse_cap = _murder_annual_event_cap(
+            [("large_city", sparse_detailed_residents)],
+            population_by_settlement={"large_city": 20_000},
+        )
+        self.assertGreaterEqual(sparse_cap, 1)
+        self.assertLess(
+            sparse_cap,
+            _murder_annual_event_cap(
+                [("large_city", residents)],
+            ),
+        )
         rate = IncidentRateParams(
             incident_key="murder",
             target_per_10k_per_year=8.0,
