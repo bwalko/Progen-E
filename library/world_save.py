@@ -1800,7 +1800,10 @@ def _upsert_simulation_domain_state_from_event(
     place_cache: _EventPlaceKeyCache | None = None,
 ) -> None:
     event_type_s = str(event_type or "").strip()
-    if event_type_s != "knowledge_culture" and not event_type_s.startswith("city_state_"):
+    if (
+        event_type_s not in {"knowledge_culture", "religious_cultural_conflict"}
+        and not event_type_s.startswith("city_state_")
+    ):
         return
     primary_state = _knowledge_state_delta_from_payload(payload)
     diffusion_states = _knowledge_state_diffusion_from_payload(payload)
@@ -3217,7 +3220,10 @@ def _upsert_simulation_institution_rows(
             continue
         status = str(item.get("status") or "active").strip() or "active"
         founder_id = _coerce_event_person_id(
-            item.get("founder_person_id") or payload.get("creator_person_id")
+            item.get("founder_person_id")
+            or payload.get("creator_person_id")
+            or payload.get("actor_person_id")
+            or payload.get("person_id")
         )
         patron_id = _coerce_event_person_id(
             item.get("patron_person_id") or payload.get("patron_person_id")
@@ -4146,6 +4152,18 @@ def _event_record_kind_for_type(
         return "outlaw_record", visibility, 0.6
     if et in {"affair_scandal", "affair_exposed", "disputed_parentage"}:
         return "scandal_record", "rumored", 0.55
+    if et in {"status_rise", "elite_job_promoted", "guild_admission"}:
+        return "public_status_record", "public_known", 0.8
+    if et == "patronage_granted":
+        return "household_memory", "rumored", 0.65
+    if et == "elite_household_investment":
+        return "settlement_chronicle", "public_known", 0.8
+    if et == "political_crime":
+        return "court_chronicle", "rumored", 0.55
+    if et == "religious_cultural_conflict":
+        return "temple_chronicle", "rumored", 0.55
+    if et == "private_life":
+        return "household_memory", "private_known", 0.7
     if et in {"public_virtue", "heroic_rescue", "public_mercy"}:
         return "public_virtue_record", "public_known", 0.85
     if et in {"knowledge_culture", "invention", "discovery", "legal_precedent"}:

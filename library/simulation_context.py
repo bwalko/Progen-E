@@ -2641,6 +2641,15 @@ class SimulationContext:
         simulation_incidents_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.incidents", tpc() - t0)
+        from library.simulation_remarkable_archetypes import (
+            simulation_remarkable_archetypes_annual_tick,
+        )
+
+        if prof:
+            t0 = tpc()
+        simulation_remarkable_archetypes_annual_tick(self, year)
+        if prof:
+            simulation_timing.accumulate("summary.remarkable_archetypes", tpc() - t0)
         from library.simulation_outlaws import simulation_outlaws_annual_tick
 
         if prof:

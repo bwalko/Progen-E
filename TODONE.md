@@ -3032,3 +3032,65 @@ completion.
   unit_test.test_save_checkpoint.TestSaveCheckpoint.test_deep_consequence_payloads_persist_factions_and_institutions`
 - `python -m unittest unit_test.test_event_prose`
 - `python utils/util_city_state_pattern_report.py --world default`
+
+## 2026-06-21 Remarkable Archetype Events
+
+### Enhancements
+
+- Added `config/remarkable_archetypes.csv` with 12 rare, ancient-history-inspired
+  archetype buckets, weighted so percentages allocate triggered remarkable
+  opportunities rather than the total detailed population.
+- Added `library.remarkable_archetypes` for config loading, parsing trait /
+  context score recipes, and weighted archetype/event-option selection.
+- Added `library.simulation_remarkable_archetypes` and wired it into annual
+  summaries after ordinary incidents, using mixed detailed/passive/non-detailed
+  settlement population for rare opportunity pacing while scoring detailed
+  adults through the existing event-scoring context.
+- Allowed configured archetypes to emit existing event families including
+  `knowledge_culture`, public virtue/status, patronage, political/religious
+  conflict, private-life, property-crime/outlaw, and `city_state_*` events with
+  `archetype_*`, opportunity-context, historical-importance, and genome-signal
+  payload fields.
+- Added a conservative background-promotion fallback for allowed archetypes,
+  preferring non-detailed directory rows before passive people and cooldowning
+  rare remarkable promotions.
+- Extended save persistence, default event-record classification, institution
+  upserts, event-history metrics, event prose, Gradio event sentences, and
+  config/module documentation so archetype events use existing inspection and
+  report surfaces.
+- Added focused regression coverage for config loading, rare-opportunity
+  pacing, event emission, checkpoint persistence, and report metrics.
+
+### Validation
+
+- `python -m unittest unit_test.test_remarkable_archetypes`
+- `python -m py_compile library/remarkable_archetypes.py
+  library/simulation_remarkable_archetypes.py library/simulation_context.py
+  library/world_save.py library/event_history_report.py library/event_prose.py
+  utils/gradio_data_browser.py unit_test/test_remarkable_archetypes.py`
+- `python -m unittest unit_test.test_event_history_report
+  unit_test.test_event_prose unit_test.test_event_catalog`
+- `python utils/util_load_config.py --world default`
+
+## 2026-06-21 Gradio Navigation And Discovery
+
+### Enhancements
+
+- Added target-aware person links so sheets can open linked people inside the
+  current tab's local person panel instead of always driving the People tab.
+- Added tab-local linked-person receivers for Almanack, Settlements, Outlaws,
+  Regions, Polities, and World Map detail panels.
+- Added a visual Genealogy section to person sheets, showing grandparents when
+  known, parents, the focus person with partner/paramour, and children.
+- Added Recent History sections to settlement, region, and polity sheets using
+  the same event-lens helpers as the History tab.
+- Added an explicit-load Discover tab for interesting people, eventful
+  settlements, eventful regions, and recent history, with underscore/space
+  tolerant search.
+
+### Validation
+
+- `python -m py_compile utils/gradio_data_browser.py
+  unit_test/test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_gradio_data_browser`
+- `python -c "import time; from utils.gradio_data_browser import build_app; t=time.perf_counter(); app=build_app('default'); print('build_app', round(time.perf_counter()-t,3), 'dependencies', len(app.fns))"`

@@ -258,6 +258,13 @@ def render_event_admin_summary(
             f"{year}: battle fought at {place}; outcome "
             f"{_label(payload.get('battle_outcome') or payload.get('outcome'))}."
         )
+    elif payload.get("archetype_key"):
+        actor = rr.person(_archetype_actor_id(payload))
+        prose = (
+            f"{year}: {actor} drew notice as {_archetype_label(payload)} "
+            f"through {_kind(payload)} at {place}; importance "
+            f"{_number(payload.get('historical_importance'))}."
+        )
     elif event_type.startswith("city_state_"):
         prose = f"{year}: {_city_state_focus(event_type, payload)} at {place}."
     else:
@@ -1246,6 +1253,8 @@ def _choose_text(
 
 
 def _event_focus(event_type: str, payload: Mapping[str, Any], rr: EventProseResolver) -> str:
+    if payload.get("archetype_key"):
+        return f"{_archetype_label(payload)} {_kind(payload)} by {rr.person(_archetype_actor_id(payload))}"
     if event_type == "murder":
         return f"the killing of {rr.person(payload.get('victim_person_id'))}"
     if event_type == "property_crime":
@@ -1274,6 +1283,31 @@ def _event_focus(event_type: str, payload: Mapping[str, Any], rr: EventProseReso
     if event_type == "event_rediscovered":
         return f"the rediscovery of event {payload.get('original_event_id')}"
     return _label(event_type)
+
+
+def _archetype_actor_id(payload: Mapping[str, Any]) -> object:
+    for key in (
+        "actor_person_id",
+        "creator_person_id",
+        "benefactor_person_id",
+        "patron_person_id",
+        "perpetrator_person_id",
+        "accused_person_id",
+        "person_id",
+    ):
+        value = payload.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _archetype_label(payload: Mapping[str, Any]) -> str:
+    return _label(
+        payload.get("archetype_display_name")
+        or payload.get("archetype_bucket")
+        or payload.get("archetype_key")
+        or "remarkable figure"
+    )
 
 
 def _witness_clause(payload: Mapping[str, Any], rr: EventProseResolver) -> str:

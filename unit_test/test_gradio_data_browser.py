@@ -239,6 +239,29 @@ def _memory_place_save() -> sqlite3.Connection:
     return con
 
 
+def _add_memory_events_readable_view(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        create view simulation_events_readable as
+        select
+            id,
+            id as event_id,
+            sim_year,
+            event_type,
+            json_extract(payload_json, '$.person_id') as primary_person_id,
+            coalesce(
+                json_extract(payload_json, '$.target_person_id'),
+                json_extract(payload_json, '$.person_b_id')
+            ) as secondary_person_id,
+            json_extract(payload_json, '$.settlement_id') as settlement_id,
+            json_extract(payload_json, '$.region_id') as region_id,
+            'unit_test' as event_origin,
+            payload_json
+        from simulation_events
+        """
+    )
+
+
 def _memory_outlaw_place_save() -> sqlite3.Connection:
     con = _memory_place_save()
     con.execute(
@@ -3362,6 +3385,117 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("miller: 1", html)
         self.assertIn("<svg", html)
 
+    def test_person_sheet_has_targeted_genealogy_visual(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        row, person = gdb._lookup_person(con, "test", 2)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person, open_target="almanack")
+
+        self.assertIn('data-person-open-target="almanack"', sheet)
+        self.assertIn("Genealogy", sheet)
+        self.assertIn("genealogy-graph", sheet)
+        self.assertIn("Father", sheet)
+        self.assertIn("Ada Forge", sheet)
+        self.assertIn("almanack", sheet)
+
+    def test_outlaw_case_selection_keeps_person_links_in_outlaw_tab(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_outlaw_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_render_person_outputs = gdb.render_person_outputs
+            calls: dict[str, object] = {}
+            gdb._db_path = lambda world, db_kind: path
+
+            def fake_render_person_outputs(world: str, person_id: object, **kwargs: object) -> tuple[str, str]:
+                calls["world"] = world
+                calls["person_id"] = person_id
+                calls["open_target"] = kwargs.get("open_target")
+                return f"person {person_id}", f"share {person_id}"
+
+            gdb.render_person_outputs = fake_render_person_outputs
+            try:
+                sheet, share = gdb.select_outlaw_case_from_table(
+                    [json.dumps({"case_key": "property_crime:test", "person_id": 1})],
+                    "test",
+                    types.SimpleNamespace(index=0),
+                )
+            finally:
+                gdb._db_path = original_db_path
+                gdb.render_person_outputs = original_render_person_outputs
+
+        self.assertEqual(sheet, "person 1")
+        self.assertEqual(share, "share 1")
+        self.assertEqual(calls["open_target"], "outlaw")
+
+    def test_place_sheets_include_recent_history(self) -> None:
+        con = _memory_place_save()
+        con.execute(
+            """
+            insert into simulation_events (world, sim_year, event_type, payload_json)
+            values (
+                'test', 42, 'public_virtue',
+                '{"person_id": 1, "target_person_id": 2, "settlement_id": "r1:s1", "region_id": "r1", "virtue_kind": "well_repair"}'
+            )
+            """
+        )
+        _add_memory_events_readable_view(con)
+
+        region_html = _render_region_sheet(con, "test", "r1")
+        town_html = _render_town_sheet(con, "test", "r1:s1")
+
+        self.assertIn("Recent History", region_html)
+        self.assertIn("public virtue", region_html)
+        self.assertIn("Recent History", town_html)
+        self.assertIn("public virtue", town_html)
+
+    def test_discovery_browser_loads_eventful_places_and_recent_history(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_place_save()
+            con.execute(
+                """
+                insert into simulation_events (world, sim_year, event_type, payload_json)
+                values (
+                    'test', 42, 'public_virtue',
+                    '{"person_id": 1, "target_person_id": 2, "settlement_id": "r1:s1", "region_id": "r1", "virtue_kind": "well_repair"}'
+                )
+                """
+            )
+            _add_memory_events_readable_view(con)
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                place_table, place_status = gdb.load_discovery_browser(
+                    "test", "Eventful Settlements", "", 50
+                )
+                history_table, history_status = gdb.load_discovery_browser(
+                    "test", "Recent History", "public_virtue", 50
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        self.assertEqual(place_table["headers"], gdb.DISCOVERY_HEADERS)
+        self.assertIn("eventful settlements", place_status)
+        self.assertEqual(place_table["value"][0][1], "Fordham")
+        self.assertIn("recent history", history_status)
+        self.assertIn("public virtue", history_table["value"][0][1])
+
     def test_generated_region_map_preserves_region_aspect_ratio(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
@@ -3652,7 +3786,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             original_render_person_outputs = gdb.render_person_outputs
             gdb._db_path = lambda world, db_kind: path
             gdb.gr.Dataframe = lambda **kwargs: kwargs
-            gdb.render_person_outputs = lambda world, person_id: (
+            gdb.render_person_outputs = lambda world, person_id, **kwargs: (
                 f"person {person_id}",
                 f"share {person_id}",
             )

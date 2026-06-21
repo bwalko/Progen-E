@@ -16,6 +16,7 @@ This project stores configuration as UTF-8 CSV files under `config/`. There are 
 | `config/genome_save_columns.csv` | One row per genome save slot | Compact checkpoint slot → trait mapping |
 | `config/world_start.csv` | Worlds + mortality + header + **`population_scale`** | One row per `world`. `population_scale` (default `0.05`) is the **shared global** modifier applied to region `carrying_capacity` (see [`library/geography.py`](../library/geography.py)) **and** to `government_polity_types.min_population_to_form` / `max_population_before_split` and to settlement-leadership thresholds in `government_titles.csv`. |
 | `config/incident_rates.csv` | Small + header | Era-tuned detailed-incident knobs per (`world` or `*`, `incident_key`, historical-year band): murder target per 10k/year plus chance/cap multipliers for other incident families. |
+| `config/remarkable_archetypes.csv` | Small + header, human-editable | Rare historically visible archetype opportunity weights, trait/composite score recipes, context weights, and target event families. Percentages apportion triggered rare opportunities, not the detailed population. |
 | `config/event_catalog.csv` | Small + header | Authored event/incident kinds per (`event_type`, `incident_kind`): family, display label, context tags, consequence profile, default memory record type/visibility, and selection weight. |
 | `config/event_ontology.csv` | Small + header | Workstream-level event ontology per `event_key`: required context, trait/precondition/witness signals, consequence hooks, importance range, preservation defaults, and public unknown/rumored/known views. |
 | `config/innovation_source_rows.csv` | Generated + header | Trace rows parsed from `Timeline of historic inventions.wiki`; source line, headings, normalized dates, cleaned source title/summary, wiki links, and parse notes. |
@@ -160,7 +161,7 @@ the latest `history_year_from`. World-specific rows override `*` rows.
 | Column | Type / role | Notes |
 |--------|-------------|-------|
 | `world` | string | `*` for global defaults, or a specific `world_start.world` value. |
-| `incident_key` | string | Current keys: `murder`, `property_crime`, `affair_scandal`, `public_virtue`, `knowledge_culture`. Unknown keys are ignored unless code starts asking for them. |
+| `incident_key` | string | Current keys: `murder`, `property_crime`, `affair_scandal`, `public_virtue`, `knowledge_culture`, `remarkable_archetype`. Unknown keys are ignored unless code starts asking for them. |
 | `history_year_from` | integer | First historical year in the band, inclusive. |
 | `history_year_to` | integer or empty | Last historical year in the band, inclusive; empty means open-ended. |
 | `target_per_10k_per_year` | float or empty | Direct detailed-population target for incidents with calibrated population-rate logic. Currently used by `murder`; blank falls back to the code default for that family. |
@@ -173,6 +174,36 @@ murders per 10,000 detailed people per year** while raising property-crime and
 scandal visibility because the first review samples showed those slices were
 even quieter than the old undercounted murder slice. Re-run
 `utils/util_event_history_report.py` after changing this CSV.
+
+---
+
+## `config/remarkable_archetypes.csv`
+
+**Purpose:** Rare archetype-event authoring for
+`library.simulation_remarkable_archetypes`. The simulator first opens a rare
+mixed-population-scaled opportunity, then uses `share_weight` to choose the
+archetype bucket. These weights are **not** demographic percentages and must not
+be applied to all detailed people.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `archetype_key` | string | Stable key stored in event payloads. |
+| `bucket` / `display_name` | string | Grouping and readable label for reports/browser details. |
+| `share_weight` | float `>=0` | Relative share among triggered remarkable opportunities. The shipped rows sum to 100 for human readability. |
+| `trait_factors` | semicolon list | `trait|mode|weight`; mode is `ideal_strength`, `positive_extreme`, or `negative_extreme` from `library.event_scoring`. |
+| `composite_weights` | semicolon list | `composite name|weight`; names are matched case-insensitively against `Person.genome_composite_names`. |
+| `role_weights` / `pressure_weights` / `opportunity_weights` | semicolon list | `tag|weight`; tags come from role inference plus settlement/court/war/trade/archive/temple/workshop context. |
+| `event_options` | semicolon list | `event_type|incident_kind|weight|domain`; event types reuse existing catalog/save families such as `knowledge_culture`, `public_virtue`, `political_crime`, `religious_cultural_conflict`, `private_life`, `status_rise`, `patronage_granted`, `elite_household_investment`, `outlaw_case_opened`, and `city_state_*`. |
+| `minimum_score` | float | Minimum candidate score in a capped detailed sample. Background promotion uses a lower threshold but is decade-cooldown-limited. |
+| `importance_min` / `importance_max` | float | Historical-importance range for the emitted event. |
+| `promotion_allowed` | bool | Allows one passive/nondetailed promotion when mixed-population pressure has no detailed candidate and the promotion cooldown is clear. |
+| `notes` | string | Human tuning notes only. |
+
+Runtime note: default opportunity count is tiny: expected events per year are
+`min(2, 0.02 + mixed_world_population / 100000)` before incident-rate
+multipliers. Detailed people supply bounded visible candidates; passive and
+nondetailed populations only scale opportunity pressure unless a rare promotion
+fallback is used.
 
 ---
 

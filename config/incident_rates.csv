@@ -16,3 +16,4 @@ world,incident_key,history_year_from,history_year_to,target_per_10k_per_year,cha
 *,affair_scandal,1500,,3.0,3.0,Modern household scandal visibility fallback
 *,public_virtue,-1000000,,,1.0,1.0,Currently unchanged but era-tunable
 *,knowledge_culture,-1000000,,,1.0,1.0,Currently unchanged but era-tunable
+*,remarkable_archetype,-1000000,,,1.0,1.0,Rare archetype-event opportunities; percentages allocate triggered opportunities, not detailed-population shares

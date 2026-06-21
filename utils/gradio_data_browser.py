@@ -204,6 +204,14 @@ REDISCOVERY_DETAIL_HEADERS = [
     "Rediscovery Summary",
     "Admin Summary",
 ]
+PERSON_LINK_TARGET_DEFAULT = "person"
+DISCOVERY_CATEGORY_CHOICES = [
+    "Interesting People",
+    "Eventful Settlements",
+    "Eventful Regions",
+    "Recent History",
+]
+DISCOVERY_HEADERS = ["Kind", "Name", "ID", "Score", "Context"]
 
 from library.world_map_geometry import (  # noqa: E402
     WorldMapGeometry,
@@ -617,6 +625,9 @@ body.dark .place-sheet,
 .world-map-open-controls {
     display: none !important;
 }
+.linked-person-open-controls {
+    display: none !important;
+}
 @media (max-width: 900px) {
     .place-columns {
         grid-template-columns: 1fr;
@@ -831,6 +842,53 @@ body.dark .person-sheet,
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 8px;
 }
+.genealogy-graph {
+    display: grid;
+    gap: 9px;
+    margin: 10px 0 14px;
+}
+.genealogy-row {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 8px;
+    align-items: stretch;
+}
+.genealogy-row-label {
+    color: var(--person-sheet-muted) !important;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding-top: 8px;
+}
+.genealogy-node-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+}
+.genealogy-node {
+    background: var(--person-sheet-relation-bg);
+    border: 1px solid var(--person-sheet-card-border);
+    border-left: 3px solid var(--person-sheet-accent);
+    border-radius: 6px;
+    padding: 8px;
+    min-width: 0;
+}
+.genealogy-node-focus {
+    border-left-color: var(--person-sheet-link);
+    box-shadow: inset 0 0 0 1px rgba(77, 95, 53, .18);
+}
+.genealogy-node-label {
+    color: var(--person-sheet-muted) !important;
+    display: block;
+    font-size: 11px;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+}
+.genealogy-node-name {
+    color: var(--person-sheet-text) !important;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
 .relation {
     border-left: 3px solid var(--person-sheet-accent);
     background: var(--person-sheet-relation-bg);
@@ -1011,6 +1069,10 @@ body.dark .person-sheet,
 }
 .person-link:hover {
     color: var(--person-sheet-link-hover) !important;
+}
+.discovery-status {
+    color: var(--place-muted) !important;
+    margin: 8px 0 0;
 }
 .sr-only {
     position: absolute;
@@ -2206,6 +2268,71 @@ def _history_event_ids_from_polity(
         ).fetchall()
         event_ids.update(int(row["id"]) for row in rows if row["id"] is not None)
     return event_ids
+
+
+def _place_history_event_ids(
+    con: sqlite3.Connection,
+    world: str,
+    place_kind: str,
+    place_id: object,
+) -> set[int]:
+    kind = str(place_kind or "").strip().lower()
+    if kind == "settlement":
+        return _history_event_ids_from_settlement(con, world, str(place_id or ""))
+    if kind == "region":
+        return _history_event_ids_from_region(con, world, str(place_id or ""))
+    if kind == "polity":
+        pid = _coerce_int_or_none(place_id)
+        return _history_event_ids_from_polity(con, world, pid) if pid is not None else set()
+    return set()
+
+
+def _place_recent_history_items(
+    con: sqlite3.Connection,
+    world: str,
+    place_kind: str,
+    place_id: object,
+    *,
+    limit: int = 8,
+) -> list[str]:
+    if not _has_relation(con, "simulation_events_readable"):
+        return []
+    try:
+        event_ids = _place_history_event_ids(con, world, place_kind, place_id)
+    except sqlite3.Error:
+        return []
+    if not event_ids:
+        return []
+    fetch_ids = sorted(event_ids)
+    if len(fetch_ids) > 900:
+        fetch_ids = fetch_ids[-900:]
+    try:
+        summaries = load_admin_event_summaries(
+            con,
+            event_ids=fetch_ids,
+            limit=max(limit, len(fetch_ids)),
+            offset=0,
+        )
+    except sqlite3.Error:
+        return []
+    summaries.sort(key=lambda summary: (summary.sim_year, summary.event_id), reverse=True)
+    return [
+        (
+            f"{_format_year(summary.sim_year)}: "
+            f"{summary.event_type.replace('_', ' ')} - {summary.prose}"
+        )
+        for summary in summaries[:limit]
+    ]
+
+
+def _place_recent_history_section(
+    con: sqlite3.Connection,
+    world: str,
+    place_kind: str,
+    place_id: object,
+) -> str:
+    items = _place_recent_history_items(con, world, place_kind, place_id)
+    return f'<section><h3>Recent History</h3>{_ul(items, "No matching history events yet.")}</section>'
 
 
 def _person_current_settlement_id(
@@ -4089,14 +4216,19 @@ def _settlement_prestige_metrics(
     return metrics
 
 
-def render_settlement_outputs(world: str, settlement_id: object) -> str:
+def render_settlement_outputs(
+    world: str,
+    settlement_id: object,
+    *,
+    open_target: str = "settlement",
+) -> str:
     sid = str(settlement_id or "").strip()
     if not world:
         return '<div class="place-sheet muted">Choose a world.</div>'
     if not sid:
         return '<div class="place-sheet muted">Browse settlements, then click a row to inspect it.</div>'
     if sid.startswith("outlaw_refuge:"):
-        return render_outlaw_refuge_detail(world, sid)
+        return render_outlaw_refuge_detail(world, sid, open_target=open_target)
     path = _db_path(world, "Save DB")
     if not path.exists():
         return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
@@ -4150,8 +4282,9 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
         )
         name_bits = [row["etymology"], row["name_category_primary"], row["name_culture_primary"]]
         name_line = " | ".join(str(x) for x in name_bits if x)
+        history_section = _place_recent_history_section(con, saved_world, "settlement", sid)
         return (
-            '<div class="place-sheet">'
+            f'<div class="place-sheet" data-person-open-target="{_person_open_target_attr(open_target)}">'
             f'<h2>{html.escape(str(row["display_name"] or sid))}</h2>'
             f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(region_name)}</div>'
             f'<div class="place-muted">{html.escape(name_line)}</div>'
@@ -4159,6 +4292,7 @@ def render_settlement_outputs(world: str, settlement_id: object) -> str:
             '<div class="place-columns">'
             f'<section><h3>Top Jobs</h3>{_ul(jobs.split(", ") if jobs else [])}</section>'
             f'<section><h3>Notable Residents</h3>{_ul(residents)}</section>'
+            f'{history_section}'
             '</div>'
             '</div>'
         )
@@ -4341,7 +4475,7 @@ def select_outlaw_case_from_table(
             '<div class="person-sheet muted" role="status">Click an outlaw case row to open the accused person.</div>',
             "Click an outlaw case row to generate share text.",
         )
-    return render_person_outputs(world, person_id)
+    return render_person_outputs(world, person_id, open_target="outlaw")
 
 
 def _outlaw_html_list(items: Iterable[str], empty: str = "None yet.") -> str:
@@ -4351,7 +4485,13 @@ def _outlaw_html_list(items: Iterable[str], empty: str = "None yet.") -> str:
     return "<ul>" + "".join(f"<li>{item}</li>" for item in clean) + "</ul>"
 
 
-def _render_outlaw_refuge_sheet(con: sqlite3.Connection, world: str, refuge_id: object) -> str:
+def _render_outlaw_refuge_sheet(
+    con: sqlite3.Connection,
+    world: str,
+    refuge_id: object,
+    *,
+    open_target: str = "outlaw",
+) -> str:
     rid = str(refuge_id or "").strip()
     if not rid:
         return '<div class="place-sheet muted">Click an outlaw refuge row to inspect it.</div>'
@@ -4448,7 +4588,7 @@ def _render_outlaw_refuge_sheet(con: sqlite3.Connection, world: str, refuge_id: 
     if near_name:
         subtitle_bits.append(f"near {near_name}")
     return (
-        '<div class="place-sheet">'
+        f'<div class="place-sheet" data-person-open-target="{_person_open_target_attr(open_target)}">'
         f'<h2>{html.escape(title)}</h2>'
         f'<div class="place-subtitle">{html.escape(" | ".join(subtitle_bits))}</div>'
         f'<div class="place-grid">{cards}</div>'
@@ -4460,7 +4600,12 @@ def _render_outlaw_refuge_sheet(con: sqlite3.Connection, world: str, refuge_id: 
     )
 
 
-def render_outlaw_refuge_detail(world: str, refuge_id: object) -> str:
+def render_outlaw_refuge_detail(
+    world: str,
+    refuge_id: object,
+    *,
+    open_target: str = "outlaw",
+) -> str:
     rid = str(refuge_id or "").strip()
     if not world:
         return '<div class="place-sheet muted">Choose a world.</div>'
@@ -4471,7 +4616,7 @@ def render_outlaw_refuge_detail(world: str, refuge_id: object) -> str:
         return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
     with _connect_readonly(path) as con:
         saved_world = _resolve_saved_world(con, world)
-        return _render_outlaw_refuge_sheet(con, saved_world, rid)
+        return _render_outlaw_refuge_sheet(con, saved_world, rid, open_target=open_target)
 
 
 def load_outlaw_refuges_browser(
@@ -4552,7 +4697,12 @@ def select_settlement_from_table(settlement_ids: object, world: str, evt: gr.Sel
     return render_settlement_outputs(world, settlement_id)
 
 
-def render_region_outputs(world: str, region_id: object) -> str:
+def render_region_outputs(
+    world: str,
+    region_id: object,
+    *,
+    open_target: str = "region",
+) -> str:
     rid = str(region_id or "").strip()
     if not world:
         return '<div class="place-sheet muted">Choose a world.</div>'
@@ -4563,7 +4713,7 @@ def render_region_outputs(world: str, region_id: object) -> str:
         return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
     with _connect_readonly(path) as con:
         saved_world = _resolve_saved_world(con, world)
-        return _render_region_sheet(con, saved_world, rid)
+        return _render_region_sheet(con, saved_world, rid, open_target=open_target)
 
 
 def select_region_from_fresh_table(region_ids: object, world: str, evt: gr.SelectData) -> str:
@@ -4573,10 +4723,15 @@ def select_region_from_fresh_table(region_ids: object, world: str, evt: gr.Selec
         region_id = region_ids[index]  # type: ignore[index]
     except Exception:
         return '<div class="place-sheet muted">Click a region row to inspect it.</div>'
-    return render_region_outputs(world, region_id)
+    return render_region_outputs(world, region_id, open_target="region")
 
 
-def render_polity_outputs(world: str, polity_id: object) -> str:
+def render_polity_outputs(
+    world: str,
+    polity_id: object,
+    *,
+    open_target: str = "polity",
+) -> str:
     pid = str(polity_id or "").strip()
     if not world:
         return '<div class="place-sheet muted">Choose a world.</div>'
@@ -4587,7 +4742,7 @@ def render_polity_outputs(world: str, polity_id: object) -> str:
         return f'<div class="place-sheet muted">{html.escape(str(path))} is missing.</div>'
     with _connect_readonly(path) as con:
         saved_world = _resolve_saved_world(con, world)
-        return _render_polity_sheet(con, saved_world, pid)
+        return _render_polity_sheet(con, saved_world, pid, open_target=open_target)
 
 
 def select_polity_from_fresh_table(polity_ids: object, world: str, evt: gr.SelectData) -> str:
@@ -4597,7 +4752,23 @@ def select_polity_from_fresh_table(polity_ids: object, world: str, evt: gr.Selec
         polity_id = polity_ids[index]  # type: ignore[index]
     except Exception:
         return '<div class="place-sheet muted">Click a polity row to inspect it.</div>'
-    return render_polity_outputs(world, polity_id)
+    return render_polity_outputs(world, polity_id, open_target="polity")
+
+
+def _person_link_target_id(value: object) -> str:
+    text = re.sub(r"[^a-z0-9_-]+", "", str(value or "").strip().lower())
+    return text or PERSON_LINK_TARGET_DEFAULT
+
+
+def _person_open_control_ids(open_target: object) -> tuple[str, str]:
+    target = _person_link_target_id(open_target)
+    if target == PERSON_LINK_TARGET_DEFAULT:
+        return "person-open-id", "person-open-button"
+    return f"{target}-person-open-id", f"{target}-person-open-button"
+
+
+def _person_open_target_attr(open_target: object) -> str:
+    return html.escape(_person_link_target_id(open_target), quote=True)
 
 
 def _person_link_text(con: sqlite3.Connection, world: str, person_id: object) -> str:
@@ -4607,12 +4778,25 @@ def _person_link_text(con: sqlite3.Connection, world: str, person_id: object) ->
     return f"{_person_name(person)} ({_person_years_label(person)})"
 
 
-def _person_link_onclick(person_id: int) -> str:
+def _person_link_onclick(person_id: int, open_target: str = "") -> str:
+    explicit_target = json.dumps(_person_link_target_id(open_target) if open_target else "")
     return html.escape(
         (
             "event.preventDefault();"
-            "const input=document.querySelector('#person-open-id textarea,#person-open-id input');"
-            "const button=document.querySelector('#person-open-button button,#person-open-button');"
+            f"let target={explicit_target};"
+            "if(!target){"
+            "const host=event.currentTarget&&event.currentTarget.closest?event.currentTarget.closest('[data-person-open-target]'):null;"
+            "target=host?host.getAttribute('data-person-open-target')||'':'';"
+            "}"
+            "target=(target||'person').toLowerCase().replace(/[^a-z0-9_-]+/g,'')||'person';"
+            "const inputId=target==='person'?'person-open-id':`${target}-person-open-id`;"
+            "const buttonId=target==='person'?'person-open-button':`${target}-person-open-button`;"
+            "let input=document.querySelector(`#${inputId} textarea,#${inputId} input`);"
+            "let button=document.querySelector(`#${buttonId} button,#${buttonId}`);"
+            "if((!input||!button)&&target!=='person'){"
+            "input=document.querySelector('#person-open-id textarea,#person-open-id input');"
+            "button=document.querySelector('#person-open-button button,#person-open-button');"
+            "}"
             "if(input&&button){"
             f"const value='{int(person_id)}';"
             "const descriptor=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value');"
@@ -4627,7 +4811,13 @@ def _person_link_onclick(person_id: int) -> str:
     )
 
 
-def _person_link_html(con: sqlite3.Connection, world: str, person_id: object) -> str:
+def _person_link_html(
+    con: sqlite3.Connection,
+    world: str,
+    person_id: object,
+    *,
+    open_target: str = "",
+) -> str:
     row, person = _lookup_person(con, world, person_id)
     if not row:
         return "Unknown"
@@ -4637,7 +4827,7 @@ def _person_link_html(con: sqlite3.Connection, world: str, person_id: object) ->
     return (
         f'<a href="#" class="person-link" '
         f'aria-label="Open person record for {name}" '
-        f'onclick="{_person_link_onclick(int(row["person_id"]))}">{label}</a>'
+        f'onclick="{_person_link_onclick(int(row["person_id"]), open_target)}">{label}</a>'
     )
 
 
@@ -4648,7 +4838,13 @@ def _person_years_label(person: dict[str, object]) -> str:
     return years
 
 
-def _person_link_html_compact(con: sqlite3.Connection, world: str, person_id: object) -> str:
+def _person_link_html_compact(
+    con: sqlite3.Connection,
+    world: str,
+    person_id: object,
+    *,
+    open_target: str = "",
+) -> str:
     row, person = _lookup_person(con, world, person_id)
     if not row:
         return "Unknown"
@@ -4659,7 +4855,7 @@ def _person_link_html_compact(con: sqlite3.Connection, world: str, person_id: ob
         f'<a href="#" class="person-link" '
         f'title="{html.escape(title, quote=True)}" '
         f'aria-label="Open person record for {html.escape(full_name, quote=True)}" '
-        f'onclick="{_person_link_onclick(int(row["person_id"]))}">{html.escape(shown)}</a>'
+        f'onclick="{_person_link_onclick(int(row["person_id"]), open_target)}">{html.escape(shown)}</a>'
     )
 
 
@@ -4839,6 +5035,172 @@ def _person_child_items_html(
     return items
 
 
+def _person_relation_node_html(
+    con: sqlite3.Connection,
+    world: str,
+    person_id: object,
+    label: str,
+    focus_person_id: object,
+    *,
+    open_target: str,
+    fallback: str = "Unknown",
+) -> str:
+    label_html = html.escape(label)
+    if person_id in (None, ""):
+        body = f'<span class="genealogy-node-name muted">{html.escape(fallback)}</span>'
+        focus_class = ""
+    elif _same_person_id(person_id, focus_person_id):
+        row, person = _lookup_person(con, world, person_id)
+        shown = _person_name(person) if row else f"Person {person_id}"
+        body = f'<span class="genealogy-node-name">{html.escape(shown)}</span>'
+        focus_class = " genealogy-node-focus"
+    else:
+        body = (
+            '<span class="genealogy-node-name">'
+            f'{_person_link_html(con, world, person_id, open_target=open_target)}'
+            '</span>'
+        )
+        focus_class = ""
+    return (
+        f'<div class="genealogy-node{focus_class}">'
+        f'<span class="genealogy-node-label">{label_html}</span>'
+        f"{body}"
+        "</div>"
+    )
+
+
+def _genealogy_row_html(label: str, nodes: Iterable[str]) -> str:
+    node_html = "".join(node for node in nodes if node)
+    if not node_html:
+        return ""
+    return (
+        '<div class="genealogy-row">'
+        f'<div class="genealogy-row-label">{html.escape(label)}</div>'
+        f'<div class="genealogy-node-list">{node_html}</div>'
+        '</div>'
+    )
+
+
+def _parent_ids_from_row(row: sqlite3.Row | None) -> tuple[object, object]:
+    if row is None:
+        return None, None
+    keys = set(row.keys())
+    return (
+        row["father_id"] if "father_id" in keys else None,
+        row["mother_id"] if "mother_id" in keys else None,
+    )
+
+
+def _render_genealogy_graph(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row,
+    person: dict[str, object],
+    children: list[sqlite3.Row],
+    *,
+    open_target: str,
+) -> str:
+    focus_id = row["person_id"]
+    father_id, mother_id = _parent_ids_from_row(row)
+    father_row, _father_person = _lookup_person(con, world, father_id) if father_id not in (None, "") else (None, {})
+    mother_row, _mother_person = _lookup_person(con, world, mother_id) if mother_id not in (None, "") else (None, {})
+    paternal_grandfather, paternal_grandmother = _parent_ids_from_row(father_row)
+    maternal_grandfather, maternal_grandmother = _parent_ids_from_row(mother_row)
+    grandparent_nodes: list[str] = []
+    for label, related_id in (
+        ("Father's Father", paternal_grandfather),
+        ("Father's Mother", paternal_grandmother),
+        ("Mother's Father", maternal_grandfather),
+        ("Mother's Mother", maternal_grandmother),
+    ):
+        if related_id not in (None, ""):
+            grandparent_nodes.append(
+                _person_relation_node_html(
+                    con,
+                    world,
+                    related_id,
+                    label,
+                    focus_id,
+                    open_target=open_target,
+                )
+            )
+    parent_nodes = [
+        _person_relation_node_html(
+            con,
+            world,
+            father_id,
+            "Father",
+            focus_id,
+            open_target=open_target,
+        ),
+        _person_relation_node_html(
+            con,
+            world,
+            mother_id,
+            "Mother",
+            focus_id,
+            open_target=open_target,
+        ),
+    ]
+    center_nodes = [
+        _person_relation_node_html(
+            con,
+            world,
+            focus_id,
+            "Focus",
+            focus_id,
+            open_target=open_target,
+        )
+    ]
+    if person.get("partner_person_id") not in (None, ""):
+        center_nodes.append(
+            _person_relation_node_html(
+                con,
+                world,
+                person.get("partner_person_id"),
+                "Partner",
+                focus_id,
+                open_target=open_target,
+            )
+        )
+    if person.get("paramour_person_id") not in (None, ""):
+        center_nodes.append(
+            _person_relation_node_html(
+                con,
+                world,
+                person.get("paramour_person_id"),
+                "Paramour",
+                focus_id,
+                open_target=open_target,
+            )
+        )
+    child_nodes = [
+        _person_relation_node_html(
+            con,
+            world,
+            child["person_id"],
+            "Child",
+            focus_id,
+            open_target=open_target,
+        )
+        for child in children[:12]
+    ]
+    if len(children) > 12:
+        child_nodes.append(
+            '<div class="genealogy-node">'
+            '<span class="genealogy-node-label">More</span>'
+            f'<span class="genealogy-node-name">{len(children) - 12} more children</span>'
+            '</div>'
+        )
+    rows = [
+        _genealogy_row_html("Grandparents", grandparent_nodes),
+        _genealogy_row_html("Parents", parent_nodes),
+        _genealogy_row_html("Household", center_nodes),
+        _genealogy_row_html("Children", child_nodes),
+    ]
+    return '<div class="genealogy-graph">' + "".join(row_html for row_html in rows if row_html) + "</div>"
+
+
 def _short_person(con: sqlite3.Connection, world: str, person_id: object) -> str:
     if person_id in (None, ""):
         return "unknown person"
@@ -4862,7 +5224,13 @@ def _short_person_for_event(
     return _person_first_name(person) if _same_person_id(person_id, focus_person_id) else _person_name(person)
 
 
-def _short_person_html(con: sqlite3.Connection, world: str, person_id: object) -> str:
+def _short_person_html(
+    con: sqlite3.Connection,
+    world: str,
+    person_id: object,
+    *,
+    open_target: str = "",
+) -> str:
     if person_id in (None, ""):
         return "unknown person"
     row, person = _lookup_person(con, world, person_id)
@@ -4872,7 +5240,7 @@ def _short_person_html(con: sqlite3.Connection, world: str, person_id: object) -
     return (
         f'<a href="#" class="person-link" '
         f'aria-label="Open person record for {name}" '
-        f'onclick="{_person_link_onclick(int(row["person_id"]))}">{name}</a>'
+        f'onclick="{_person_link_onclick(int(row["person_id"]), open_target)}">{name}</a>'
     )
 
 
@@ -4881,6 +5249,8 @@ def _short_person_html_for_event(
     world: str,
     person_id: object,
     focus_person_id: object,
+    *,
+    open_target: str = "",
 ) -> str:
     if person_id in (None, ""):
         return "unknown person"
@@ -4896,7 +5266,7 @@ def _short_person_html_for_event(
         f'<a href="#" class="person-link" '
         f'title="{html.escape(title, quote=True)}" '
         f'aria-label="Open person record for {html.escape(full_name, quote=True)}" '
-        f'onclick="{_person_link_onclick(int(row["person_id"]))}">{html.escape(label)}</a>'
+        f'onclick="{_person_link_onclick(int(row["person_id"]), open_target)}">{html.escape(label)}</a>'
     )
 
 
@@ -5321,6 +5691,81 @@ def _event_details_html(*items: tuple[str, object]) -> str:
     )
 
 
+def _archetype_actor_id(payload: dict[str, object]) -> object:
+    for key in (
+        "actor_person_id",
+        "creator_person_id",
+        "benefactor_person_id",
+        "patron_person_id",
+        "perpetrator_person_id",
+        "accused_person_id",
+        "person_id",
+    ):
+        value = payload.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _archetype_label(payload: dict[str, object]) -> str:
+    return str(
+        payload.get("archetype_display_name")
+        or payload.get("archetype_bucket")
+        or payload.get("archetype_key")
+        or "remarkable figure"
+    ).replace("_", " ")
+
+
+def _archetype_event_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> str:
+    actor = _short_person_for_event(con, world, _archetype_actor_id(payload), focus_person_id)
+    label = _archetype_label(payload)
+    kind = str(payload.get("incident_kind") or payload.get("event_type") or "event").replace("_", " ")
+    score = _event_float(payload, "archetype_score")
+    score_tail = f" Archetype score {score:.2f}." if score is not None else ""
+    return f"{actor} drew notice as {label} through {kind}.{score_tail}"
+
+
+def _archetype_event_sentence_html(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+) -> str:
+    actor = _short_person_html_for_event(
+        con,
+        world,
+        _archetype_actor_id(payload),
+        focus_person_id,
+    )
+    label = html.escape(_archetype_label(payload))
+    kind = html.escape(
+        str(payload.get("incident_kind") or payload.get("event_type") or "event").replace(
+            "_", " "
+        )
+    )
+    score = _event_float(payload, "archetype_score")
+    weight = _event_float(payload, "archetype_share_weight")
+    basis = payload.get("candidate_basis")
+    importance = _event_float(payload, "historical_importance")
+    return (
+        f"{actor} drew notice as {label} through {kind}."
+        + _event_details_html(
+            ("archetype score", f"{score:.2f}" if score is not None else ""),
+            ("share weight", f"{weight:.1f}" if weight is not None else ""),
+            ("candidate basis", str(basis).replace("_", " ") if basis else ""),
+            (
+                "historical importance",
+                f"{importance:.2f}" if importance is not None else "",
+            ),
+        )
+    )
+
+
 def _knowledge_focus_text(payload: dict[str, object]) -> tuple[str, bool]:
     specific = next(
         (
@@ -5673,6 +6118,9 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
             bits.append(f"previously {previous}")
         return "; ".join(bits) + "."
 
+    if payload.get("archetype_key"):
+        return _archetype_event_sentence(con, world, payload, focus_person_id)
+
     if event_type in {"elite_job_promoted", "guild_admission", "status_rise"}:
         new_job = payload.get("new_job") or payload.get("target_job")
         previous = payload.get("previous_job")
@@ -5909,6 +6357,9 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             ("previously", previous),
         )
         return "; ".join(bits) + "." + details
+
+    if payload.get("archetype_key"):
+        return _archetype_event_sentence_html(con, world, payload, focus_person_id)
 
     if event_type in {"elite_job_promoted", "guild_admission", "status_rise"}:
         new_job = payload.get("new_job") or payload.get("target_job")
@@ -7836,7 +8287,15 @@ def _person_status_mobility_items_html(
     return "".join(items[:12])
 
 
-def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, person: dict[str, object]) -> str:
+def _render_person_sheet(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row,
+    person: dict[str, object],
+    *,
+    open_target: str = PERSON_LINK_TARGET_DEFAULT,
+) -> str:
+    open_target_id = _person_link_target_id(open_target)
     current_year = _current_year(con, world)
     name = html.escape(_person_name(person))
     birthyear = person.get("birthyear")
@@ -7854,14 +8313,22 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
     mother = _person_link_text(con, world, row["mother_id"]) if row["mother_id"] else "Unknown"
     partner = _person_link_text(con, world, person.get("partner_person_id")) if person.get("partner_person_id") else "None"
     paramour = _person_link_text(con, world, person.get("paramour_person_id")) if person.get("paramour_person_id") else "None"
-    father_html = _person_link_html(con, world, row["father_id"]) if row["father_id"] else "Unknown"
-    mother_html = _person_link_html(con, world, row["mother_id"]) if row["mother_id"] else "Unknown"
-    partner_html = _person_link_html(con, world, person.get("partner_person_id")) if person.get("partner_person_id") else "None"
-    paramour_html = _person_link_html(con, world, person.get("paramour_person_id")) if person.get("paramour_person_id") else "None"
+    father_html = _person_link_html(con, world, row["father_id"], open_target=open_target_id) if row["father_id"] else "Unknown"
+    mother_html = _person_link_html(con, world, row["mother_id"], open_target=open_target_id) if row["mother_id"] else "Unknown"
+    partner_html = _person_link_html(con, world, person.get("partner_person_id"), open_target=open_target_id) if person.get("partner_person_id") else "None"
+    paramour_html = _person_link_html(con, world, person.get("paramour_person_id"), open_target=open_target_id) if person.get("paramour_person_id") else "None"
     trait_slots = _trait_slots_for_world(world)
     children = _person_children_rows(con, world, row["person_id"])
     child_summary = _children_summary_text(children)
     child_items = _person_child_items_html(con, world, children, trait_slots)
+    genealogy_html = _render_genealogy_graph(
+        con,
+        world,
+        row,
+        person,
+        children,
+        open_target=open_target_id,
+    )
 
     events = _person_event_rows(con, world, row["person_id"])
     job_history, partner_history, paramour_history = _history_entries_for_person(
@@ -8052,7 +8519,7 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
 
     sheet_label = f"Person sheet for {_person_name(person)}, person {row['person_id']}"
     return f"""
-    <article class="person-sheet" role="region" aria-label="{html.escape(sheet_label)}">
+    <article class="person-sheet" role="region" aria-label="{html.escape(sheet_label)}" data-person-open-target="{_person_open_target_attr(open_target_id)}">
       <div class="person-title">
         <h2 id="person-{row['person_id']}-title">{name}</h2>
         <span class="badge">#{row['person_id']} · {life}</span>
@@ -8114,6 +8581,10 @@ def _render_person_sheet(con: sqlite3.Connection, world: str, row: sqlite3.Row, 
         <h3 id="person-{row['person_id']}-genome" class="section-title">Genome</h3>
         <p class="sr-only">Genome bars use green at zero for the ideal center and red at both extremes for high deviation.</p>
         <div class="trait-grid">{''.join(trait_rows)}</div>
+      </section>
+      <section aria-labelledby="person-{row['person_id']}-genealogy">
+        <h3 id="person-{row['person_id']}-genealogy" class="section-title">Genealogy</h3>
+        {genealogy_html}
       </section>
       <section aria-labelledby="person-{row['person_id']}-family">
         <h3 id="person-{row['person_id']}-family" class="section-title">Family</h3>
@@ -8326,7 +8797,12 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     )
 
 
-def render_person_from_id(world: str, person_id: object) -> str:
+def render_person_from_id(
+    world: str,
+    person_id: object,
+    *,
+    open_target: str = PERSON_LINK_TARGET_DEFAULT,
+) -> str:
     if not world:
         return '<div class="person-sheet muted" role="status">Choose a world.</div>'
     try:
@@ -8343,7 +8819,7 @@ def render_person_from_id(world: str, person_id: object) -> str:
         row, person = _lookup_person(save_con, saved_world, pid)
         if not row:
             return f'<div class="person-sheet muted" role="status">No person #{html.escape(str(pid))} in {html.escape(world)}.</div>'
-        return _render_person_sheet(save_con, saved_world, row, person)
+        return _render_person_sheet(save_con, saved_world, row, person, open_target=open_target)
 
 
 def render_person_share_text(world: str, person_id: object) -> str:
@@ -8366,8 +8842,41 @@ def render_person_share_text(world: str, person_id: object) -> str:
         return _render_person_share_text(save_con, saved_world, row, person)
 
 
-def render_person_outputs(world: str, person_id: object) -> tuple[str, str]:
-    return render_person_from_id(world, person_id), render_person_share_text(world, person_id)
+def render_person_outputs(
+    world: str,
+    person_id: object,
+    *,
+    open_target: str = PERSON_LINK_TARGET_DEFAULT,
+) -> tuple[str, str]:
+    return (
+        render_person_from_id(world, person_id, open_target=open_target),
+        render_person_share_text(world, person_id),
+    )
+
+
+def render_almanack_linked_person_outputs(world: str, person_id: object) -> tuple[str, str, gr.Dataframe]:
+    sheet, share = render_person_outputs(world, person_id, open_target="almanack")
+    return sheet, share, _almanack_empty_evidence_frame()
+
+
+def render_outlaw_linked_person_outputs(world: str, person_id: object) -> tuple[str, str]:
+    return render_person_outputs(world, person_id, open_target="outlaw")
+
+
+def render_settlement_linked_person_sheet(world: str, person_id: object) -> str:
+    return render_person_from_id(world, person_id, open_target="settlement")
+
+
+def render_region_linked_person_sheet(world: str, person_id: object) -> str:
+    return render_person_from_id(world, person_id, open_target="region")
+
+
+def render_polity_linked_person_sheet(world: str, person_id: object) -> str:
+    return render_person_from_id(world, person_id, open_target="polity")
+
+
+def render_map_linked_person_sheet(world: str, person_id: object) -> str:
+    return render_person_from_id(world, person_id, open_target="map")
 
 
 def select_person_from_table(person_ids: list[int], world: str, evt: gr.SelectData) -> tuple[str, str]:
@@ -8379,7 +8888,7 @@ def select_person_from_table(person_ids: list[int], world: str, evt: gr.SelectDa
             '<div class="person-sheet muted" role="status">Click a person row to open their sheet.</div>',
             "Click a person row to generate share text.",
         )
-    return render_person_outputs(world, person_id)
+    return render_person_outputs(world, person_id, open_target=PERSON_LINK_TARGET_DEFAULT)
 
 
 def _decode_almanack_key(value: object) -> dict[str, object] | None:
@@ -8420,7 +8929,12 @@ def _passive_almanack_home(row: sqlite3.Row) -> str:
     return ""
 
 
-def render_passive_almanack_outputs(world: str, person_id: object) -> tuple[str, str]:
+def render_passive_almanack_outputs(
+    world: str,
+    person_id: object,
+    *,
+    open_target: str = "almanack",
+) -> tuple[str, str]:
     try:
         pid = int(person_id)
     except (TypeError, ValueError):
@@ -8476,7 +8990,7 @@ def render_passive_almanack_outputs(world: str, person_id: object) -> tuple[str,
         else ""
     )
     html_out = (
-        '<article class="person-sheet">'
+        f'<article class="person-sheet" data-person-open-target="{_person_open_target_attr(open_target)}">'
         f'<h2>{html.escape(name)}</h2>'
         f'<div class="person-subtitle">Passive person #{pid}</div>'
         f'<div class="place-grid">{cards}</div>'
@@ -8525,9 +9039,9 @@ def render_almanack_outputs(world: str, key: object) -> tuple[str, str, gr.Dataf
     source_kind = str(decoded.get("source_kind") or "detailed")
     person_id = int(decoded.get("person_id") or 0)
     if source_kind == "passive":
-        sheet, share = render_passive_almanack_outputs(world, person_id)
+        sheet, share = render_passive_almanack_outputs(world, person_id, open_target="almanack")
     else:
-        sheet, share = render_person_outputs(world, person_id)
+        sheet, share = render_person_outputs(world, person_id, open_target="almanack")
     return sheet, share, _almanack_evidence_for_key(world, decoded)
 
 
@@ -8644,6 +9158,215 @@ def load_almanack_duel(world: str, person_a: object, person_b: object) -> tuple[
     with _connect_readonly(path) as con:
         result = query_person_almanack_duel(con, a_id, b_id)
     return _almanack_duel_html(result), _almanack_duel_text(result)
+
+
+def _empty_discovery_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=DISCOVERY_HEADERS)
+
+
+def _discovery_row_matches(row: dict[str, object], search: str) -> bool:
+    needle = str(search or "").strip().lower()
+    if not needle:
+        return True
+    needle_variants = {needle, needle.replace("_", " ")}
+    haystacks = []
+    for value in row.values():
+        text = str(value or "").lower()
+        haystacks.append(text)
+        haystacks.append(text.replace("_", " "))
+    return any(variant in haystack for variant in needle_variants for haystack in haystacks)
+
+
+def _discovery_person_rows(
+    con: sqlite3.Connection,
+    world: str,
+    *,
+    search: str,
+    limit: int,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    fetch_limit = min(250, max(limit * 4, limit))
+    if _has_table(con, "simulation_person_archive_scores"):
+        columns = set(_table_columns(con, "simulation_person_archive_scores"))
+        score_sql = "narrative_heat_total" if "narrative_heat_total" in columns else "0"
+        ari_sql = "archive_recognition_index" if "archive_recognition_index" in columns else "0"
+        hidden_sql = "hidden_heat" if "hidden_heat" in columns else "0"
+        narrative_bucket_sql = "narrative_bucket" if "narrative_bucket" in columns else "''"
+        recognition_bucket_sql = "recognition_bucket" if "recognition_bucket" in columns else "''"
+        for score_row in con.execute(
+            f"""
+            SELECT person_id,
+                   {score_sql} AS narrative_heat_total,
+                   {ari_sql} AS archive_recognition_index,
+                   {hidden_sql} AS hidden_heat,
+                   {narrative_bucket_sql} AS narrative_bucket,
+                   {recognition_bucket_sql} AS recognition_bucket
+            FROM simulation_person_archive_scores
+            ORDER BY narrative_heat_total DESC, archive_recognition_index DESC, person_id
+            LIMIT ?
+            """,
+            (fetch_limit,),
+        ).fetchall():
+            person_row, person = _lookup_person(con, world, score_row["person_id"])
+            name = _person_name(person) if person_row else f"Person {score_row['person_id']}"
+            context = (
+                f"Narrative {score_row['narrative_heat_total']:.1f}; "
+                f"ARI {score_row['archive_recognition_index']:.1f}; "
+                f"hidden {score_row['hidden_heat']:.1f}"
+            )
+            buckets = ", ".join(
+                str(score_row[key] or "").replace("_", " ")
+                for key in ("narrative_bucket", "recognition_bucket")
+                if str(score_row[key] or "").strip()
+            )
+            if buckets:
+                context += f" ({buckets})"
+            rows.append(
+                {
+                    "Kind": "Person",
+                    "Name": name,
+                    "ID": score_row["person_id"],
+                    "Score": _fmt_number(score_row["narrative_heat_total"]),
+                    "Context": context,
+                }
+            )
+    elif _has_table(con, "simulation_event_people"):
+        for event_row in con.execute(
+            """
+            SELECT ep.person_id, count(*) AS c, max(e.sim_year) AS latest_year
+            FROM simulation_event_people ep
+            JOIN simulation_events e ON e.id = ep.event_id
+            GROUP BY ep.person_id
+            ORDER BY c DESC, latest_year DESC, ep.person_id
+            LIMIT ?
+            """,
+            (fetch_limit,),
+        ).fetchall():
+            person_row, person = _lookup_person(con, world, event_row["person_id"])
+            name = _person_name(person) if person_row else f"Person {event_row['person_id']}"
+            rows.append(
+                {
+                    "Kind": "Person",
+                    "Name": name,
+                    "ID": event_row["person_id"],
+                    "Score": event_row["c"],
+                    "Context": f"{event_row['c']} linked events; latest {_format_year(event_row['latest_year'])}",
+                }
+            )
+    return [row for row in rows if _discovery_row_matches(row, search)][:limit]
+
+
+def _discovery_eventful_place_rows(
+    con: sqlite3.Connection,
+    world: str,
+    *,
+    place_kind: str,
+    search: str,
+    limit: int,
+) -> list[dict[str, object]]:
+    if not _has_relation(con, "simulation_events_readable"):
+        return []
+    column = "settlement_id" if place_kind == "settlement" else "region_id"
+    rows = con.execute(
+        f"""
+        SELECT {column} AS place_id, count(*) AS c, max(sim_year) AS latest_year
+        FROM simulation_events_readable
+        WHERE {column} IS NOT NULL AND {column} != ''
+        GROUP BY {column}
+        ORDER BY c DESC, latest_year DESC, {column}
+        LIMIT ?
+        """,
+        (min(250, max(limit * 4, limit)),),
+    ).fetchall()
+    values: list[dict[str, object]] = []
+    for row in rows:
+        place_id = str(row["place_id"] or "")
+        if place_kind == "settlement":
+            name = _history_settlement_label(con, world, place_id)
+            kind = "Settlement"
+        else:
+            name = _history_region_label(con, world, place_id)
+            kind = "Region"
+        values.append(
+            {
+                "Kind": kind,
+                "Name": name,
+                "ID": place_id,
+                "Score": row["c"],
+                "Context": f"{row['c']} linked events; latest {_format_year(row['latest_year'])}",
+            }
+        )
+    return [row for row in values if _discovery_row_matches(row, search)][:limit]
+
+
+def _discovery_recent_history_rows(
+    con: sqlite3.Connection,
+    *,
+    search: str,
+    limit: int,
+) -> list[dict[str, object]]:
+    if not _has_relation(con, "simulation_events_readable"):
+        return []
+    summaries = load_admin_event_summaries(
+        con,
+        search=search,
+        limit=min(250, max(limit * 4, limit)),
+        offset=0,
+    )
+    summaries.sort(key=lambda summary: (summary.sim_year, summary.event_id), reverse=True)
+    rows = [
+        {
+            "Kind": "Event",
+            "Name": summary.event_type.replace("_", " "),
+            "ID": summary.event_id,
+            "Score": _format_year(summary.sim_year),
+            "Context": summary.prose,
+        }
+        for summary in summaries
+    ]
+    return [row for row in rows if _discovery_row_matches(row, search)][:limit]
+
+
+def load_discovery_browser(
+    world: str,
+    category: str,
+    search: str,
+    limit: object,
+) -> tuple[gr.Dataframe, str]:
+    selected = category if category in DISCOVERY_CATEGORY_CHOICES else DISCOVERY_CATEGORY_CHOICES[0]
+    if not world:
+        return _empty_discovery_frame(), "Choose a world."
+    row_limit = _safe_int(limit, 50, 1, 250)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _empty_discovery_frame(), f"{path} is missing. Run a simulation first."
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        if selected == "Interesting People":
+            rows = _discovery_person_rows(con, saved_world, search=search or "", limit=row_limit)
+        elif selected == "Eventful Settlements":
+            rows = _discovery_eventful_place_rows(
+                con,
+                saved_world,
+                place_kind="settlement",
+                search=search or "",
+                limit=row_limit,
+            )
+        elif selected == "Eventful Regions":
+            rows = _discovery_eventful_place_rows(
+                con,
+                saved_world,
+                place_kind="region",
+                search=search or "",
+                limit=row_limit,
+            )
+        else:
+            rows = _discovery_recent_history_rows(con, search=search or "", limit=row_limit)
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = f"{path.name}: showing {len(rows)} {selected.lower()}{saved_world_note}."
+    if selected == "Interesting People" and not rows:
+        status += " Refresh archive scores or run a simulation with event people for richer person discovery."
+    return _dataframe(rows, DISCOVERY_HEADERS), status
 
 
 def _fmt_number(value: object, digits: int = 2) -> str:
@@ -9769,7 +10492,13 @@ def _config_region_display_name(world: str, region_id: str) -> str:
     return str(row["region_name"] or "").strip() if row else ""
 
 
-def _render_empty_region_sheet(con: sqlite3.Connection, world: str, region_id: str) -> str:
+def _render_empty_region_sheet(
+    con: sqlite3.Connection,
+    world: str,
+    region_id: str,
+    *,
+    open_target: str = "region",
+) -> str:
     name = _history_region_label(con, world, region_id)
     cards = "".join(
         [
@@ -9784,7 +10513,7 @@ def _render_empty_region_sheet(con: sqlite3.Connection, world: str, region_id: s
         ]
     )
     return (
-        '<div class="place-sheet">'
+        f'<div class="place-sheet" data-person-open-target="{_person_open_target_attr(open_target)}">'
         f'<h2>{html.escape(name)}</h2>'
         '<div class="place-subtitle">Region</div>'
         f'<div class="place-muted">No settlements are recorded for {html.escape(name)} in the current save yet.</div>'
@@ -11002,7 +11731,13 @@ def _places_browser_data_and_state(
     return values, headers, status, state, selected
 
 
-def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) -> str:
+def _render_region_sheet(
+    con: sqlite3.Connection,
+    world: str,
+    region_id: str,
+    *,
+    open_target: str = "region",
+) -> str:
     region_table = _place_read_relation(con, "simulation_regions")
     if _saved_table_has_world(con, region_table):
         row = con.execute(
@@ -11017,7 +11752,7 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
     if not row:
         if not _has_table(con, "simulation_settlements"):
             if _config_region_display_name(world, region_id):
-                return _render_empty_region_sheet(con, world, region_id)
+                return _render_empty_region_sheet(con, world, region_id, open_target=open_target)
             return f'<div class="place-sheet muted">No region named {html.escape(region_id)}.</div>'
         if _has_table(con, "simulation_settlements"):
             settlement_table = _place_read_relation(con, "simulation_settlements")
@@ -11032,7 +11767,7 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
                 (*params, region_id),
             )
             if settlement_count == 0:
-                return _render_empty_region_sheet(con, world, region_id)
+                return _render_empty_region_sheet(con, world, region_id, open_target=open_target)
         return f'<div class="place-sheet muted">No region named {html.escape(region_id)}.</div>'
     birth_region_sql = _person_birth_region_sql(con)
     alive_counts, top_jobs = _alive_counts_and_top_jobs_by_place(
@@ -11077,8 +11812,9 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
             _detail_card("Polities", _polity_names_for_region(con, region_id) or "None"),
         ]
     )
+    history_section = _place_recent_history_section(con, world, "region", region_id)
     return (
-        '<div class="place-sheet">'
+        f'<div class="place-sheet" data-person-open-target="{_person_open_target_attr(open_target)}">'
         f'<h2>{html.escape(region_name)}</h2>'
         '<div class="place-subtitle">Region</div>'
         f'<div class="place-grid">{cards}</div>'
@@ -11087,12 +11823,19 @@ def _render_region_sheet(con: sqlite3.Connection, world: str, region_id: str) ->
         f'<section><h3>Settlements</h3>{_ul(settlement_items)}</section>'
         f'<section><h3>Top Jobs</h3>{_ul(jobs)}</section>'
         f'<section><h3>Notable Residents</h3>{_ul(people)}</section>'
+        f'{history_section}'
         '</div>'
         '</div>'
     )
 
 
-def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) -> str:
+def _render_town_sheet(
+    con: sqlite3.Connection,
+    world: str,
+    settlement_id: str,
+    *,
+    open_target: str = "settlement",
+) -> str:
     settlement_table = _place_read_relation(con, "simulation_settlements")
     if _saved_table_has_world(con, settlement_table):
         row = con.execute(
@@ -11155,8 +11898,9 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
     )
     name_bits = [row["etymology"], row["name_category_primary"], row["name_culture_primary"]]
     name_line = " | ".join(str(x) for x in name_bits if x)
+    history_section = _place_recent_history_section(con, world, "settlement", sid)
     return (
-        '<div class="place-sheet">'
+        f'<div class="place-sheet" data-person-open-target="{_person_open_target_attr(open_target)}">'
         f'<h2>{html.escape(str(row["display_name"] or sid))}</h2>'
         f'<div class="place-subtitle">{html.escape(str(row["level"] or "settlement"))} in {html.escape(region_name)}</div>'
         f'<div class="place-muted">{html.escape(name_line)}</div>'
@@ -11165,12 +11909,19 @@ def _render_town_sheet(con: sqlite3.Connection, world: str, settlement_id: str) 
         '<div class="place-columns">'
         f'<section><h3>Top Jobs</h3>{_ul(jobs)}</section>'
         f'<section><h3>Notable Residents</h3>{_ul(residents)}</section>'
+        f'{history_section}'
         '</div>'
         '</div>'
     )
 
 
-def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) -> str:
+def _render_polity_sheet(
+    con: sqlite3.Connection,
+    world: str,
+    polity_id: str,
+    *,
+    open_target: str = "polity",
+) -> str:
     try:
         pid = int(polity_id)
     except (TypeError, ValueError):
@@ -11272,8 +12023,9 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
             _detail_card("Founded", _format_year(row["founded_sim_year"], unknown_text="Unknown")),
         ]
     )
+    history_section = _place_recent_history_section(con, world, "polity", pid)
     return (
-        '<div class="place-sheet">'
+        f'<div class="place-sheet" data-person-open-target="{_person_open_target_attr(open_target)}">'
         f'<h2>{html.escape(str(row["name"] or f"Polity {pid}"))}</h2>'
         f'<div class="place-subtitle">Polity #{pid}</div>'
         f'<div class="place-grid">{cards}</div>'
@@ -11284,12 +12036,19 @@ def _render_polity_sheet(con: sqlite3.Connection, world: str, polity_id: str) ->
         f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
         f'<section><h3>Ruler Timeline</h3>{_ul(ruler_items)}</section>'
         f'<section><h3>Office History</h3>{_ul(recent_office_items)}</section>'
+        f'{history_section}'
         '</div>'
         '</div>'
     )
 
 
-def render_place_detail(world: str, view: str, key: object) -> str:
+def render_place_detail(
+    world: str,
+    view: str,
+    key: object,
+    *,
+    open_target: str = "place",
+) -> str:
     selected = (view or "Regions").strip()
     if not key:
         return '<div class="place-sheet muted">Click a region, town, or polity row to inspect it.</div>'
@@ -11301,20 +12060,20 @@ def render_place_detail(world: str, view: str, key: object) -> str:
         saved_world = key_saved_world or _resolve_saved_world(con, path_world)
         if selected == "Towns":
             if str(item_id or "").startswith("outlaw_refuge:"):
-                html_out = _render_outlaw_refuge_sheet(con, saved_world, item_id)
+                html_out = _render_outlaw_refuge_sheet(con, saved_world, item_id, open_target=open_target)
             else:
-                html_out = _render_town_sheet(con, saved_world, item_id)
+                html_out = _render_town_sheet(con, saved_world, item_id, open_target=open_target)
         elif selected == "Polities":
-            html_out = _render_polity_sheet(con, saved_world, item_id)
+            html_out = _render_polity_sheet(con, saved_world, item_id, open_target=open_target)
         else:
-            html_out = _render_region_sheet(con, saved_world, item_id)
+            html_out = _render_region_sheet(con, saved_world, item_id, open_target=open_target)
     return html_out
 
 
 def render_places_html_selection(world: str, view: str, key: object) -> str:
     started = time.perf_counter()
     try:
-        detail = render_place_detail(world, view, key)
+        detail = render_place_detail(world, view, key, open_target="place")
         _log_info(
             "places_html_select_done view=%r world=%r key=%r detail_bytes=%s elapsed=%.4fs",
             view,
@@ -11361,7 +12120,7 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
     view = str(selection.get("view") or "Regions")
     item_id = str(selection.get("id") or "").strip()
     if view == "Outlaw Refuges" and item_id:
-        return render_outlaw_refuge_detail(world, item_id)
+        return render_outlaw_refuge_detail(world, item_id, open_target="map")
     if view == "Map Routes" and item_id:
         layer = str(selection.get("layer") or "").strip()
         layer_title = {
@@ -11404,7 +12163,7 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
         if river_id:
             cards.append(_detail_card("River ID", river_id))
         return (
-            '<div class="place-sheet">'
+            f'<div class="place-sheet" data-person-open-target="{_person_open_target_attr("map")}">'
             f"<h2>{html.escape(layer_title)}</h2>"
             f'<div class="place-subtitle">{html.escape(route_label)}</div>'
             f'<div class="place-grid">{"".join(cards)}</div>'
@@ -11432,7 +12191,7 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
             ]
         )
         return (
-            '<div class="place-sheet">'
+            f'<div class="place-sheet" data-person-open-target="{_person_open_target_attr("map")}">'
             f'<h2>{html.escape(title)}</h2>'
             f'<div class="place-subtitle">{subtitle}'
             f'{(" in " + html.escape(region_name)) if region_name else ""}</div>'
@@ -11442,7 +12201,7 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
         )
     if view not in {"Regions", "Towns"} or not item_id:
         return '<div class="place-sheet muted">Click a region, settlement, outlaw refuge, or named feature on the map to inspect it.</div>'
-    return render_place_detail(world, view, _encode_place_key(world, "", item_id))
+    return render_place_detail(world, view, _encode_place_key(world, "", item_id), open_target="map")
 
 
 def render_world_map_with_detail_reset(
@@ -11945,6 +12704,16 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                     )
                     almanack_keys_state = gr.State([])
                 with gr.Column(scale=5):
+                    with gr.Row(elem_classes=["linked-person-open-controls"]):
+                        almanack_person_open_id = gr.Textbox(
+                            value="",
+                            label="Open Linked Person ID",
+                            elem_id="almanack-person-open-id",
+                        )
+                        almanack_person_open_button = gr.Button(
+                            "Open Linked Person",
+                            elem_id="almanack-person-open-button",
+                        )
                     almanack_sheet = gr.HTML(
                         value='<div class="person-sheet muted">Load The Almanack, then click a row.</div>',
                         label="Almanack Detail",
@@ -11981,6 +12750,30 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         buttons=["copy"],
                     )
 
+        with gr.Tab("Discover"):
+            with gr.Row(elem_classes=["world-browser"]):
+                discovery_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                discovery_category = gr.Radio(
+                    DISCOVERY_CATEGORY_CHOICES,
+                    value=DISCOVERY_CATEGORY_CHOICES[0],
+                    label="Find",
+                )
+                discovery_limit = gr.Number(value=50, label="Limit", precision=0)
+            discovery_search = gr.Textbox(
+                label="Search Discoveries",
+                placeholder="Name, id, event type, place, context...",
+            )
+            discovery_load = gr.Button("Load Discoveries", variant="primary")
+            discovery_status = gr.Textbox(label="Status", interactive=False)
+            discovery_table = gr.Dataframe(
+                value=[],
+                headers=DISCOVERY_HEADERS,
+                label="Discoveries",
+                interactive=False,
+                wrap=True,
+                elem_id="discovery-table",
+            )
+
         with gr.Tab("Settlements") as settlements_tab:
             with gr.Row(elem_classes=["world-browser"]):
                 with gr.Column(scale=5):
@@ -12006,6 +12799,20 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         value='<div class="place-sheet muted">Browse settlements, then click a row to inspect it.</div>',
                         label="Settlement Sheet",
                     )
+                    with gr.Row(elem_classes=["linked-person-open-controls"]):
+                        settlement_person_open_id = gr.Textbox(
+                            value="",
+                            label="Open Linked Person ID",
+                            elem_id="settlement-person-open-id",
+                        )
+                        settlement_person_open_button = gr.Button(
+                            "Open Linked Person",
+                            elem_id="settlement-person-open-button",
+                        )
+                    settlement_person_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Click a person link in the settlement sheet to inspect them here.</div>',
+                        label="Linked Person",
+                    )
 
         with gr.Tab("Outlaws"):
             with gr.Row(elem_classes=["world-browser"]):
@@ -12028,6 +12835,16 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                     )
                     outlaw_case_keys_state = gr.State([])
                 with gr.Column(scale=5):
+                    with gr.Row(elem_classes=["linked-person-open-controls"]):
+                        outlaw_person_open_id = gr.Textbox(
+                            value="",
+                            label="Open Linked Person ID",
+                            elem_id="outlaw-person-open-id",
+                        )
+                        outlaw_person_open_button = gr.Button(
+                            "Open Linked Person",
+                            elem_id="outlaw-person-open-button",
+                        )
                     outlaw_person_sheet = gr.HTML(
                         value='<div class="person-sheet muted">Browse outlaw cases, then click a row to open the accused person.</div>',
                         label="Outlaw Person Sheet",
@@ -12088,6 +12905,20 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         value='<div class="place-sheet muted">Browse regions, then click a row to inspect it.</div>',
                         label="Region Sheet",
                     )
+                    with gr.Row(elem_classes=["linked-person-open-controls"]):
+                        region_person_open_id = gr.Textbox(
+                            value="",
+                            label="Open Linked Person ID",
+                            elem_id="region-person-open-id",
+                        )
+                        region_person_open_button = gr.Button(
+                            "Open Linked Person",
+                            elem_id="region-person-open-button",
+                        )
+                    region_person_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Click a person link in the region sheet to inspect them here.</div>',
+                        label="Linked Person",
+                    )
 
         with gr.Tab("Polities") as polities_tab:
             with gr.Row(elem_classes=["world-browser"]):
@@ -12113,6 +12944,20 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                     polity_sheet = gr.HTML(
                         value='<div class="place-sheet muted">Browse polities, then click a row to inspect it.</div>',
                         label="Polity Sheet",
+                    )
+                    with gr.Row(elem_classes=["linked-person-open-controls"]):
+                        polity_person_open_id = gr.Textbox(
+                            value="",
+                            label="Open Linked Person ID",
+                            elem_id="polity-person-open-id",
+                        )
+                        polity_person_open_button = gr.Button(
+                            "Open Linked Person",
+                            elem_id="polity-person-open-button",
+                        )
+                    polity_person_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Click a person link in the polity sheet to inspect them here.</div>',
+                        label="Linked Person",
                     )
 
         with gr.Tab("World Map") as world_map_tab:
@@ -12142,6 +12987,20 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                     map_sheet = gr.HTML(
                         value='<div class="place-sheet muted">Click a region or settlement on the map to inspect it.</div>',
                         label="Map Detail Sheet",
+                    )
+                    with gr.Row(elem_classes=["linked-person-open-controls"]):
+                        map_person_open_id = gr.Textbox(
+                            value="",
+                            label="Open Linked Person ID",
+                            elem_id="map-person-open-id",
+                        )
+                        map_person_open_button = gr.Button(
+                            "Open Linked Person",
+                            elem_id="map-person-open-button",
+                        )
+                    map_person_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Click a person link in map details to inspect them here.</div>',
+                        label="Linked Person",
                     )
 
         with gr.Tab("History"):
@@ -12358,11 +13217,29 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             [almanack_keys_state, almanack_world],
             [almanack_sheet, almanack_share_text, almanack_evidence_table],
         )
+        almanack_person_open_button.click(
+            render_almanack_linked_person_outputs,
+            [almanack_world, almanack_person_open_id],
+            [almanack_sheet, almanack_share_text, almanack_evidence_table],
+        )
+        almanack_person_open_id.submit(
+            render_almanack_linked_person_outputs,
+            [almanack_world, almanack_person_open_id],
+            [almanack_sheet, almanack_share_text, almanack_evidence_table],
+        )
         almanack_duel_button.click(
             load_almanack_duel,
             [almanack_world, almanack_duel_a, almanack_duel_b],
             [almanack_duel_sheet, almanack_duel_text],
         )
+        discovery_inputs = [
+            discovery_world,
+            discovery_category,
+            discovery_search,
+            discovery_limit,
+        ]
+        discovery_load.click(load_discovery_browser, discovery_inputs, [discovery_table, discovery_status])
+        discovery_search.submit(load_discovery_browser, discovery_inputs, [discovery_table, discovery_status])
         settlement_browser_inputs = [
             settlement_world,
             settlement_search,
@@ -12375,6 +13252,16 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             settlement_input.change(load_settlements_browser, settlement_browser_inputs, settlement_browser_outputs)
         settlement_search.submit(load_settlements_browser, settlement_browser_inputs, settlement_browser_outputs)
         settlement_table.select(select_settlement_from_table, [settlement_ids_state, settlement_world], settlement_sheet)
+        settlement_person_open_button.click(
+            render_settlement_linked_person_sheet,
+            [settlement_world, settlement_person_open_id],
+            settlement_person_sheet,
+        )
+        settlement_person_open_id.submit(
+            render_settlement_linked_person_sheet,
+            [settlement_world, settlement_person_open_id],
+            settlement_person_sheet,
+        )
         outlaw_case_inputs = [
             outlaw_world,
             outlaw_case_status_filter,
@@ -12389,6 +13276,16 @@ def build_app(default_world: str = "default") -> gr.Blocks:
         outlaw_case_table.select(
             select_outlaw_case_from_table,
             [outlaw_case_keys_state, outlaw_world],
+            [outlaw_person_sheet, outlaw_share_text],
+        )
+        outlaw_person_open_button.click(
+            render_outlaw_linked_person_outputs,
+            [outlaw_world, outlaw_person_open_id],
+            [outlaw_person_sheet, outlaw_share_text],
+        )
+        outlaw_person_open_id.submit(
+            render_outlaw_linked_person_outputs,
+            [outlaw_world, outlaw_person_open_id],
             [outlaw_person_sheet, outlaw_share_text],
         )
         outlaw_refuge_inputs = [
@@ -12414,6 +13311,16 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             region_input.change(load_regions_browser_fresh, region_browser_inputs, region_browser_outputs)
         region_search.submit(load_regions_browser_fresh, region_browser_inputs, region_browser_outputs)
         region_table.select(select_region_from_fresh_table, [region_ids_state, region_world], region_sheet)
+        region_person_open_button.click(
+            render_region_linked_person_sheet,
+            [region_world, region_person_open_id],
+            region_person_sheet,
+        )
+        region_person_open_id.submit(
+            render_region_linked_person_sheet,
+            [region_world, region_person_open_id],
+            region_person_sheet,
+        )
         polity_browser_inputs = [
             polity_world,
             polity_search,
@@ -12426,6 +13333,16 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             polity_input.change(load_polities_browser_fresh, polity_browser_inputs, polity_browser_outputs)
         polity_search.submit(load_polities_browser_fresh, polity_browser_inputs, polity_browser_outputs)
         polity_table.select(select_polity_from_fresh_table, [polity_ids_state, polity_world], polity_sheet)
+        polity_person_open_button.click(
+            render_polity_linked_person_sheet,
+            [polity_world, polity_person_open_id],
+            polity_person_sheet,
+        )
+        polity_person_open_id.submit(
+            render_polity_linked_person_sheet,
+            [polity_world, polity_person_open_id],
+            polity_person_sheet,
+        )
         map_inputs = [
             map_world,
             map_include_overlays,
@@ -12439,6 +13356,16 @@ def build_app(default_world: str = "default") -> gr.Blocks:
         for map_input in map_inputs:
             map_input.change(render_world_map_with_detail_reset, map_inputs, map_outputs)
         map_open_button.click(render_world_map_selection_detail, [map_world, map_open_selection], map_sheet)
+        map_person_open_button.click(
+            render_map_linked_person_sheet,
+            [map_world, map_person_open_id],
+            map_person_sheet,
+        )
+        map_person_open_id.submit(
+            render_map_linked_person_sheet,
+            [map_world, map_person_open_id],
+            map_person_sheet,
+        )
         history_inputs = [
             history_world,
             history_view,

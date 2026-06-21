@@ -30,6 +30,26 @@ Future event work should be added as a fresh concrete TODO only when there is a
 specific new generator, consequence ledger, prose/report/browser need, measured
 tuning problem, or performance regression to handle.
 
+## Completed Context: Remarkable Archetype Events
+
+The rare remarkable-archetype event layer for ancient-history-inspired
+individual types is complete; see `TODONE.md` for config, generation,
+persistence, browser/report, and validation evidence. The configured
+percentages apportion triggered rare opportunities, not the total detailed
+population.
+
+Future archetype work should be added as a fresh concrete TODO only when there
+is a specific tuning drift, missing archetype/event-family mapping, prose/report
+gap, browser inspection need, or measured performance problem.
+
+## Completed Context: Gradio Navigation And Discovery
+
+The Gradio navigation/discovery enhancement pass is complete; see `TODONE.md`
+for tab-local person lookup, genealogy, place-history, Discover-tab, and
+validation evidence. Future Gradio work should be added as a fresh concrete TODO
+only when there is a specific navigation bug, missing detail surface, lookup
+workflow, visual genealogy requirement, or measured browser performance problem.
+
 ## Polygonal World Map Generation
 
 Context for completed functionality: polygonal map generation and the current

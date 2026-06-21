@@ -13,6 +13,34 @@ from library.detailed_population_variance import HIGH_VARIANCE_DETAIL_COMPOSITE
 from library.event_scoring import serial_predator_propensity
 
 
+REMARKABLE_ARCHETYPE_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "status_rise",
+        "patronage_granted",
+        "elite_household_investment",
+        "political_crime",
+        "religious_cultural_conflict",
+        "private_life",
+        "city_state_urban_consolidation",
+        "city_state_public_works",
+        "city_state_resource_dispute",
+        "city_state_league_formed",
+        "city_state_hegemony_declared",
+        "city_state_colony_status_changed",
+        "city_state_autonomy_changed",
+        "city_state_civic_crisis",
+        "city_state_civic_reform",
+        "city_state_occupation_imposed",
+        "city_state_liberated",
+        "city_state_tribute_imposed",
+        "city_state_garrison_installed",
+        "city_state_league_broken",
+        "city_state_tyranny_usurpation",
+        "city_state_exile_decreed",
+        "city_state_debt_relief",
+    }
+)
+
 INCIDENT_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "murder",
@@ -31,7 +59,7 @@ INCIDENT_EVENT_TYPES: frozenset[str] = frozenset(
         "outlaw_returned",
         "outlaw_forgotten",
     }
-)
+) | REMARKABLE_ARCHETYPE_EVENT_TYPES
 
 SERIAL_MURDER_TARGET_SHARE_MAX = 0.01
 SERIAL_MURDER_MIN_MURDER_SAMPLE = 100
@@ -453,7 +481,30 @@ def _metric_summaries(conn: sqlite3.Connection) -> list[MetricSummary]:
             'property_crime',
             'affair_scandal',
             'public_virtue',
-            'knowledge_culture'
+            'knowledge_culture',
+            'status_rise',
+            'patronage_granted',
+            'elite_household_investment',
+            'political_crime',
+            'religious_cultural_conflict',
+            'private_life',
+            'city_state_urban_consolidation',
+            'city_state_public_works',
+            'city_state_resource_dispute',
+            'city_state_league_formed',
+            'city_state_hegemony_declared',
+            'city_state_colony_status_changed',
+            'city_state_autonomy_changed',
+            'city_state_civic_crisis',
+            'city_state_civic_reform',
+            'city_state_occupation_imposed',
+            'city_state_liberated',
+            'city_state_tribute_imposed',
+            'city_state_garrison_installed',
+            'city_state_league_broken',
+            'city_state_tyranny_usurpation',
+            'city_state_exile_decreed',
+            'city_state_debt_relief'
         )
         """
     ):
@@ -465,6 +516,8 @@ def _metric_summaries(conn: sqlite3.Connection) -> list[MetricSummary]:
             "loss_value",
             "relief_value",
             "novelty_value",
+            "archetype_score",
+            "archetype_share_weight",
         ):
             value = _float(payload.get(metric))
             if value is None:
