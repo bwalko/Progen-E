@@ -1162,7 +1162,9 @@ class SimulationContext:
         job_family: str | None = None,
         gender: str | None = None,
         min_age: int | None = None,
-        max_age: int | None = 120,
+        max_age: int | None = 70,
+        preferred_min_age: int | None = 22,
+        preferred_max_age: int | None = 55,
         require_unpartnered: bool = False,
         limit: int = 1,
         source: dict[str, Any] | None = None,
@@ -1189,6 +1191,16 @@ class SimulationContext:
             )
         min_age_i = max(0, int(min_age)) if min_age is not None else 0
         max_age_i = max(0, int(max_age)) if max_age is not None else None
+        preferred_min_i = (
+            max(0, int(preferred_min_age))
+            if preferred_min_age is not None
+            else max(18, min_age_i)
+        )
+        preferred_max_i = (
+            max(0, int(preferred_max_age))
+            if preferred_max_age is not None
+            else min(max_age_i if max_age_i is not None else 70, 55)
+        )
         exact_person_id_selector = (
             bool(clean_person_ids)
             and not settlement_s
@@ -1234,16 +1246,16 @@ class SimulationContext:
         if require_unpartnered:
             clauses.append("p.is_partnered = 0")
             clauses.append("p.partner_person_id IS NULL")
-        fallback_max_age = max_age_i if max_age_i is not None else 120
-        preferred_min_age = max(18, min_age_i)
-        preferred_max_age = min(fallback_max_age, 65)
-        if preferred_max_age < preferred_min_age:
-            preferred_min_age = min_age_i
-            preferred_max_age = fallback_max_age
+        fallback_max_age = max_age_i if max_age_i is not None else 70
+        preferred_min_i = max(min_age_i, preferred_min_i)
+        preferred_max_i = min(fallback_max_age, preferred_max_i)
+        if preferred_max_i < preferred_min_i:
+            preferred_min_i = min_age_i
+            preferred_max_i = fallback_max_age
         order_params = [
             int(year),
-            preferred_min_age,
-            preferred_max_age,
+            preferred_min_i,
+            preferred_max_i,
             int(year),
             min_age_i,
             fallback_max_age,
@@ -1292,6 +1304,12 @@ class SimulationContext:
             "selector_gender": gender_s,
             "selector_min_age": int(min_age) if min_age is not None else None,
             "selector_max_age": int(max_age) if max_age is not None else None,
+            "selector_preferred_min_age": (
+                int(preferred_min_age) if preferred_min_age is not None else None
+            ),
+            "selector_preferred_max_age": (
+                int(preferred_max_age) if preferred_max_age is not None else None
+            ),
             "selector_require_unpartnered": bool(require_unpartnered),
             "selector_limit": max_rows,
         }

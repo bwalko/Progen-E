@@ -219,7 +219,7 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertEqual(job_payload["job"], "care worker")
             self.assertEqual(job_payload["job_family"], "care")
 
-    def test_automatic_nondetailed_promotion_skips_implausibly_old_rows(self) -> None:
+    def test_automatic_nondetailed_promotion_skips_non_prime_elder_rows(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
             cfg = root / "config.sqlite"
@@ -247,7 +247,7 @@ class TestNondetailedPopulation(unittest.TestCase):
                 add_nondetailed_person(
                     conn,
                     NondetailedPersonSeed(
-                        birthyear=828,
+                        birthyear=885,
                         gender="Female",
                         region_id="r1",
                         settlement_id=sid,
@@ -277,6 +277,78 @@ class TestNondetailedPopulation(unittest.TestCase):
 
             self.assertEqual([rec.person_id for rec in promoted], [2])
             self.assertEqual(promoted[0].person.birthyear, 970)
+            event_payload = next(
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "nondetailed_person_promoted"
+            )
+            self.assertEqual(event_payload["source"]["selector_max_age"], 70)
+            self.assertEqual(event_payload["source"]["selector_preferred_min_age"], 22)
+            self.assertEqual(event_payload["source"]["selector_preferred_max_age"], 55)
+
+    def test_marriage_nondetailed_promotion_uses_tighter_adult_window(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_marriage_age_window",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            sid = "r1:s1"
+            ctx.settlements_by_id[sid] = SettlementState(
+                settlement_id=sid,
+                region_id="r1",
+                resident_count=10,
+                household_cap=3,
+            )
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=885,
+                        gender="Male",
+                        region_id="r1",
+                        settlement_id=sid,
+                        job_family="admin",
+                        is_partnered=False,
+                    ),
+                    person_id=1,
+                )
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=965,
+                        gender="Male",
+                        region_id="r1",
+                        settlement_id=sid,
+                        job_family="craft",
+                        is_partnered=False,
+                    ),
+                    person_id=2,
+                )
+                conn.commit()
+
+            spouse = promote_passive_candidate_for_marriage(
+                ctx,
+                year=1000,
+                gender="Male",
+                settlement_id=sid,
+                region_id="r1",
+                min_age=18,
+            )
+
+            self.assertIsNotNone(spouse)
+            self.assertEqual(spouse.person_id, 2)
+            self.assertEqual(1000 - spouse.person.birthyear, 35)
 
     def test_context_promotes_nondetailed_people_by_selector(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -358,9 +430,9 @@ class TestNondetailedPopulation(unittest.TestCase):
             )
 
             self.assertEqual([rec.person_id for rec in promoted], [60])
-            self.assertEqual([rec.person_id for rec in region_promoted], [61])
+            self.assertEqual([rec.person_id for rec in region_promoted], [62])
             self.assertIn(60, ctx.current_people_ids)
-            self.assertIn(61, ctx.current_people_ids)
+            self.assertIn(62, ctx.current_people_ids)
             self.assertEqual(ctx.nondetailed_population_count(), 1)
             event_payload = next(
                 payload

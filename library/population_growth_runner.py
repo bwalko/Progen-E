@@ -19,6 +19,7 @@ import numpy as np
 from library.generator import generate_person_random
 from library.detailed_population_variance import apply_detailed_selection_variance
 from library.passive_population import (
+    NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE,
     PassiveCohort,
     build_passive_marriage_candidate_index,
     build_passive_office_candidate_index,
@@ -71,6 +72,8 @@ PASSIVE_MIGRATION_CONTEXT_REASONS: frozenset[str] = frozenset(
     {"resource_pressure_migration", "job_seeker_migration"}
 )
 MIN_DETAILED_RESIDENTS_PER_ACTIVE_SETTLEMENT = 2
+PARTNER_FORMATION_MAX_AGE = 70
+PARTNER_FORMATION_MAX_AGE_GAP = 35
 BIRTH_RELATIONSHIP_SPOUSE = "spouse"
 BIRTH_RELATIONSHIP_PARAMOUR = "paramour"
 LEGITIMACY_STATUS_LEGITIMATE = "legitimate"
@@ -135,6 +138,27 @@ def _is_mature(partner: SimulationPersonRecord, year: int) -> bool:
     if min_fertility_age is None:
         return True
     return age >= int(min_fertility_age)
+
+
+def _partner_formation_age(partner: SimulationPersonRecord, year: int) -> int:
+    return int(year) - int(partner.person.birthyear)
+
+
+def _eligible_for_partner_formation(partner: SimulationPersonRecord, year: int) -> bool:
+    if not _is_mature(partner, int(year)):
+        return False
+    return _partner_formation_age(partner, int(year)) <= PARTNER_FORMATION_MAX_AGE
+
+
+def _partner_age_gap_allowed(
+    a: SimulationPersonRecord,
+    b: SimulationPersonRecord,
+    year: int,
+) -> bool:
+    return (
+        abs(_partner_formation_age(a, int(year)) - _partner_formation_age(b, int(year)))
+        <= PARTNER_FORMATION_MAX_AGE_GAP
+    )
 
 
 def _eligible_for_birth(partner: SimulationPersonRecord, year: int) -> bool:
@@ -907,7 +931,7 @@ def _pair_from_records(
         if (not r.is_founder)
         and r.person.gender == "Male"
         and r.person_id not in paired_ids
-        and _is_mature(r, year)
+        and _eligible_for_partner_formation(r, year)
     ]
     eligible_females = [
         r
@@ -915,7 +939,7 @@ def _pair_from_records(
         if (not r.is_founder)
         and r.person.gender == "Female"
         and r.person_id not in paired_ids
-        and _is_mature(r, year)
+        and _eligible_for_partner_formation(r, year)
     ]
     if prof:
         simulation_timing.accumulate("pairing.collect_eligible", tpc() - t0)
@@ -946,6 +970,8 @@ def _pair_from_records(
             tuple[float, float, int, SimulationPersonRecord, str | None, float | None]
         ] = []
         for female in candidates:
+            if not _partner_age_gap_allowed(male, female, int(year)):
+                continue
             allowed, relation, probability = _pairing_allowed_by_kinship(
                 ctx, year, male, female
             )
@@ -1049,7 +1075,11 @@ def _promote_passive_spouses_for_unpaired_detailed(
                 if prof:
                     simulation_timing.accumulate("pairing.passive_promote.scan", tpc() - t0)
                 return
-            if rec.is_founder or rec.person_id in paired_ids or not _is_mature(rec, year):
+            if (
+                rec.is_founder
+                or rec.person_id in paired_ids
+                or not _eligible_for_partner_formation(rec, year)
+            ):
                 continue
             offer_probability, attraction_score = _passive_marriage_offer_probability(
                 ctx,
@@ -1070,6 +1100,11 @@ def _promote_passive_spouses_for_unpaired_detailed(
             if spouse_gender is None:
                 continue
             min_age = int(rec.person.min_fertility_age or 16)
+            source_age = _partner_formation_age(rec, int(year))
+            spouse_max_age = min(
+                NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE,
+                source_age + PARTNER_FORMATION_MAX_AGE_GAP,
+            )
             promoted = promote_passive_candidate_for_marriage(
                 ctx,
                 year=int(year),
@@ -1077,6 +1112,7 @@ def _promote_passive_spouses_for_unpaired_detailed(
                 settlement_id=sid,
                 region_id=rid or None,
                 min_age=min_age,
+                max_age=spouse_max_age,
                 source={
                     "detailed_person_id": int(rec.person_id),
                     "detailed_settlement_id": sid,
@@ -1506,7 +1542,7 @@ def ensure_detailed_floor_for_active_settlements(
                 ctx,
                 year=int(year),
                 settlement_id=sid,
-                min_age=0,
+                min_age=18,
                 reason="settlement_detail_floor",
                 source={"settlement_id": sid, "minimum": minimum},
             )

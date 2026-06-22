@@ -510,7 +510,9 @@ def _promotion_candidate(
                 year=int(year),
                 reason=REMARKABLE_PROMOTION_REASON,
                 settlement_id=opportunity.settlement_id,
-                max_age=120,
+                max_age=70,
+                preferred_min_age=22,
+                preferred_max_age=55,
                 limit=1,
                 source=source,
             )

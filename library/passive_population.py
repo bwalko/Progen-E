@@ -72,8 +72,11 @@ class PassiveCohort:
 PassiveMarriageCandidateIndex = dict[tuple[str, str], list[tuple[int, int, PassiveCohort]]]
 PassiveOfficeCandidateIndex = dict[tuple[str, str], list[tuple[int, int, PassiveCohort]]]
 
-NONDETAILED_PROMOTION_MAX_AGE = 120
-NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE = 55
+NONDETAILED_PROMOTION_MAX_AGE = 70
+NONDETAILED_PROMOTION_PREFERRED_MIN_AGE = 22
+NONDETAILED_PROMOTION_PREFERRED_MAX_AGE = 55
+NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE = 50
+NONDETAILED_MARRIAGE_PREFERRED_MAX_AGE = 42
 
 _JOB_FAMILY_LABELS: dict[str, str] = {
     "food": "food worker",
@@ -179,6 +182,8 @@ def _try_promote_nondetailed_candidate(
     gender: str | None = None,
     min_age: int | None = None,
     max_age: int | None = NONDETAILED_PROMOTION_MAX_AGE,
+    preferred_min_age: int | None = NONDETAILED_PROMOTION_PREFERRED_MIN_AGE,
+    preferred_max_age: int | None = NONDETAILED_PROMOTION_PREFERRED_MAX_AGE,
     require_unpartnered: bool = False,
     source: dict[str, Any] | None = None,
     save_conn: Any | None = None,
@@ -209,6 +214,8 @@ def _try_promote_nondetailed_candidate(
             gender=gender,
             min_age=min_age,
             max_age=max_age,
+            preferred_min_age=preferred_min_age,
+            preferred_max_age=preferred_max_age,
             require_unpartnered=bool(require_unpartnered),
             limit=1,
             source={
@@ -231,6 +238,7 @@ def promote_passive_candidate_for_office(
     settlement_id: str | None = None,
     region_id: str | None = None,
     min_age: int = 16,
+    max_age: int | None = NONDETAILED_PROMOTION_MAX_AGE,
     reason: str = "office_selection",
     source: dict[str, Any] | None = None,
     candidate_index: PassiveOfficeCandidateIndex | None = None,
@@ -239,6 +247,7 @@ def promote_passive_candidate_for_office(
     """Promote one adult from the latest aggregate cohort snapshot for an office."""
     sid = (settlement_id or "").strip()
     rid = (region_id or "").strip()
+    max_age_i = max(0, int(max_age)) if max_age is not None else None
     nondetailed = _try_promote_nondetailed_candidate(
         ctx,
         year=int(year),
@@ -246,7 +255,9 @@ def promote_passive_candidate_for_office(
         settlement_id=sid or None,
         region_id=rid or None,
         min_age=int(min_age),
-        max_age=NONDETAILED_PROMOTION_MAX_AGE,
+        max_age=max_age_i,
+        preferred_min_age=NONDETAILED_PROMOTION_PREFERRED_MIN_AGE,
+        preferred_max_age=NONDETAILED_PROMOTION_PREFERRED_MAX_AGE,
         source=source,
         save_conn=save_conn,
         selector="office",
@@ -273,6 +284,8 @@ def promote_passive_candidate_for_office(
                 continue
             if age < int(min_age):
                 continue
+            if max_age_i is not None and age > max_age_i:
+                continue
             candidates.append((age, idx, cohort))
     else:
         latest_year = max((int(c.sim_year) for c in ctx.passive_cohorts), default=None)
@@ -289,6 +302,8 @@ def promote_passive_candidate_for_office(
                 continue
             age = _age_from_band(cohort.age_band)
             if age < int(min_age):
+                continue
+            if max_age_i is not None and age > max_age_i:
                 continue
             candidates.append((age, idx, cohort))
     if not candidates:
@@ -359,6 +374,7 @@ def promote_passive_candidate_for_settlement_context(
     year: int,
     settlement_id: str,
     min_age: int = 16,
+    max_age: int | None = NONDETAILED_PROMOTION_MAX_AGE,
     reason: str = "settlement_context",
     source: dict[str, Any] | None = None,
     candidate_index: PassiveOfficeCandidateIndex | None = None,
@@ -373,6 +389,7 @@ def promote_passive_candidate_for_settlement_context(
         year=int(year),
         settlement_id=sid,
         min_age=int(min_age),
+        max_age=max_age,
         reason=reason,
         source=source,
         candidate_index=candidate_index,
@@ -413,6 +430,8 @@ def promote_passive_person_for_focus(
                 region_id=rid or None,
                 person_ids=(pid,),
                 max_age=None,
+                preferred_min_age=None,
+                preferred_max_age=None,
                 source={
                     **source_payload,
                     "focus": focus_kind,
@@ -438,6 +457,8 @@ def promote_passive_person_for_focus(
             settlement_id=sid or None,
             region_id=rid or None,
             max_age=NONDETAILED_PROMOTION_MAX_AGE,
+            preferred_min_age=NONDETAILED_PROMOTION_PREFERRED_MIN_AGE,
+            preferred_max_age=NONDETAILED_PROMOTION_PREFERRED_MAX_AGE,
             source={
                 **source_payload,
                 "focus": focus_kind,
@@ -622,6 +643,7 @@ def promote_passive_candidate_for_marriage(
     settlement_id: str | None = None,
     region_id: str | None = None,
     min_age: int = 16,
+    max_age: int | None = NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE,
     reason: str = "marriage_into_detailed_family",
     source: dict[str, Any] | None = None,
     candidate_index: PassiveMarriageCandidateIndex | None = None,
@@ -630,6 +652,7 @@ def promote_passive_candidate_for_marriage(
     wanted_gender = normalize_passive_gender(gender)
     sid = (settlement_id or "").strip()
     rid = (region_id or "").strip()
+    max_age_i = max(0, int(max_age)) if max_age is not None else None
     nondetailed = _try_promote_nondetailed_candidate(
         ctx,
         year=int(year),
@@ -638,7 +661,9 @@ def promote_passive_candidate_for_marriage(
         region_id=rid or None,
         gender=wanted_gender,
         min_age=int(min_age),
-        max_age=NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE,
+        max_age=max_age_i,
+        preferred_min_age=max(int(min_age), NONDETAILED_PROMOTION_PREFERRED_MIN_AGE),
+        preferred_max_age=NONDETAILED_MARRIAGE_PREFERRED_MAX_AGE,
         require_unpartnered=True,
         source=source,
         selector="marriage",
@@ -653,6 +678,8 @@ def promote_passive_candidate_for_marriage(
             if rid and (cohort.region_id or "").strip() != rid:
                 continue
             if age < int(min_age):
+                continue
+            if max_age_i is not None and age > max_age_i:
                 continue
             candidates.append((age, idx, cohort))
         latest_year = int(
@@ -678,6 +705,8 @@ def promote_passive_candidate_for_marriage(
                 continue
             age = _age_from_band(cohort.age_band)
             if age < int(min_age):
+                continue
+            if max_age_i is not None and age > max_age_i:
                 continue
             candidates.append((age, idx, cohort))
     if not candidates:

@@ -3182,3 +3182,33 @@ completion.
 - `python -m unittest unit_test.test_nondetailed_population`
 - `python -m unittest unit_test.test_population_growth_nondetailed_runner unit_test.test_remarkable_archetypes unit_test.test_simulation_mortality`
 - `C:\Users\bryan\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m unittest unit_test.test_nondetailed_population unit_test.test_simulation_mortality`
+
+## 2026-06-22 Prime-Age Promotion And Pairing Windows
+
+### Fixes
+
+- Traced an Asbjorn/Aline case where a 115-year-old non-detailed row was
+  promoted by the migration-context `office` selector, then immediately entered
+  ordinary detailed couple formation with a 33-year-old partner.
+- Tightened automatic city-directory promotion from a permissive 120-year max
+  to a default 70-year max with a 22-55 preferred adult window. Exact person-id
+  inspection remains able to promote a specific row deliberately.
+- Added a tighter marriage-promotion window and carried the same age filters to
+  passive-cohort fallbacks, so fallback promotion cannot reintroduce elderly
+  spouse candidates.
+- Added ordinary detailed partner-formation gates: new couples require people
+  inside a partner-formation age window and within a bounded age gap.
+- Changed settlement detail-floor promotion to request adult candidates rather
+  than allowing children or very old residents before falling back to generated
+  adult detail-floor people.
+- Added regression coverage for non-detailed prime-age promotion, marriage
+  promotion age windows, and detailed pairing that skips an extreme elderly
+  candidate in favor of a normal adult.
+
+### Validation
+
+- `python -m py_compile library/passive_population.py library/simulation_context.py library/population_growth_runner.py library/simulation_remarkable_archetypes.py unit_test/test_nondetailed_population.py unit_test/test_population_growth_determinism.py`
+- `python -m unittest unit_test.test_nondetailed_population`
+- `python -m unittest unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_pairing_skips_extreme_elderly_new_partner_candidate unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_pairing_skips_parent_child_when_other_partner_exists unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_passive_office_promotion_materializes_full_person unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_migration_arrival_promotes_passive_context_person`
+- `python -m unittest unit_test.test_population_growth_nondetailed_runner unit_test.test_remarkable_archetypes unit_test.test_simulation_mortality`
+- `C:\Users\bryan\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m unittest unit_test.test_nondetailed_population unit_test.test_simulation_mortality`

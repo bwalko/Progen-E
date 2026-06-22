@@ -701,6 +701,43 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
         self.assertNotIn((son.person_id, mother.person_id), ctx.couples)
         self.assertIn((son.person_id, other.person_id), ctx.couples)
 
+    def test_pairing_skips_extreme_elderly_new_partner_candidate(self) -> None:
+        ctx = SimulationContext(
+            db_path=Path("unused-config.sqlite"),
+            save_db_path=Path("unused-save.sqlite"),
+            world="default",
+            simulation_start_year=START_YEAR,
+            current_year=START_YEAR,
+            settlements_by_id={
+                "region:s1": SettlementState(region_id="region", settlement_id="region:s1"),
+            },
+        )
+
+        def person(first: str, gender: str, age: int) -> Person:
+            return Person(
+                first_name=first,
+                last_name="Window",
+                gender=gender,
+                ethnic="Human",
+                species="Human",
+                birthyear=START_YEAR - age,
+                birthplace_region_id="region",
+                birthplace_settlement_id="region:s1",
+                current_settlement_id="region:s1",
+                min_fertility_age=18,
+            )
+
+        elder = ctx.add_person(person=person("Elder", "Male", 115), is_founder=False)
+        young = ctx.add_person(person=person("Young", "Male", 30), is_founder=False)
+        candidate = ctx.add_person(person=person("Candidate", "Female", 33), is_founder=False)
+
+        pair_people_by_settlement_then_region(
+            ctx, START_YEAR, ctx.current_people_by_settlement()
+        )
+
+        self.assertNotIn(elder.person_id, {pid for pair in ctx.couples for pid in pair})
+        self.assertIn((young.person_id, candidate.person_id), ctx.couples)
+
     def test_pairing_gate_leaves_severe_pariah_unpaired(self) -> None:
         ctx = SimulationContext(
             db_path=Path("unused-config.sqlite"),
