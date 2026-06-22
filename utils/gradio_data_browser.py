@@ -4859,6 +4859,14 @@ def _person_link_html_compact(
     )
 
 
+def _person_history_event_visible(event: sqlite3.Row, person_id: object) -> bool:
+    event_type = str(_row_value(event, "event_type") or "").strip()
+    if event_type == "job_assigned":
+        payload = _load_json_object(_row_value(event, "payload_json"))
+        return _same_person_id(payload.get("person_id"), person_id)
+    return True
+
+
 def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -> list[sqlite3.Row]:
     events_has_world = "world" in _table_columns(con, "simulation_events")
     event_people_exists = _has_table(con, "simulation_event_people")
@@ -4869,7 +4877,7 @@ def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -
         event_people_params: list[object] = [person_id]
         if events_has_world:
             event_people_params.append(world)
-        return con.execute(
+        rows = con.execute(
             f"""
             select e.id as event_id, e.sim_year, e.event_type, e.payload_json
             from simulation_events e
@@ -4884,7 +4892,8 @@ def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -
             """,
             tuple(event_people_params),
         ).fetchall()
-    return con.execute(
+        return [row for row in rows if _person_history_event_visible(row, person_id)]
+    rows = con.execute(
         f"""
         select id as event_id, sim_year, event_type, payload_json
         from simulation_events
@@ -4933,6 +4942,7 @@ def _person_event_rows(con: sqlite3.Connection, world: str, person_id: object) -
             person_id,
         ),
     ).fetchall()
+    return [row for row in rows if _person_history_event_visible(row, person_id)]
 
 
 def _person_children_rows(
@@ -5490,10 +5500,16 @@ def _event_readable_place_payload(
     if not row:
         return payload
     merged = dict(payload)
-    if merged.get("to_settlement_id") in (None, "") and row["settlement_id"]:
-        merged["to_settlement_id"] = row["settlement_id"]
-    if merged.get("to_region_id") in (None, "") and row["region_id"]:
-        merged["to_region_id"] = row["region_id"]
+    if row["settlement_id"]:
+        if merged.get("settlement_id") in (None, ""):
+            merged["settlement_id"] = row["settlement_id"]
+        if merged.get("to_settlement_id") in (None, ""):
+            merged["to_settlement_id"] = row["settlement_id"]
+    if row["region_id"]:
+        if merged.get("region_id") in (None, ""):
+            merged["region_id"] = row["region_id"]
+        if merged.get("to_region_id") in (None, ""):
+            merged["to_region_id"] = row["region_id"]
     return merged
 
 
@@ -5639,6 +5655,7 @@ def _event_place_text(con: sqlite3.Connection, world: str, payload: dict[str, ob
         or payload.get("near_settlement_id")
         or payload.get("custody_site_settlement_id")
         or payload.get("from_settlement_id")
+        or payload.get("to_settlement_id")
     )
     settlement_table = _place_read_relation(con, "simulation_settlements")
     if settlement_id and _has_relation(con, settlement_table):
@@ -5647,7 +5664,7 @@ def _event_place_text(con: sqlite3.Connection, world: str, payload: dict[str, ob
             return settlement
     if settlement_id:
         return str(settlement_id)
-    region = str(payload.get("region_id") or "").strip()
+    region = str(payload.get("region_id") or payload.get("from_region_id") or payload.get("to_region_id") or "").strip()
     if region:
         return _safe_region_label(con, world, region)
     return "an unrecorded place"
@@ -5689,6 +5706,49 @@ def _event_details_html(*items: tuple[str, object]) -> str:
         f'<span>{html.escape("; ".join(bits))}</span>'
         '</details>'
     )
+
+
+def _household_service_event_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+    focus_person_id: object,
+    *,
+    html_mode: bool,
+) -> str:
+    worker_id = payload.get("worker_person_id") or payload.get("person_id")
+    employer_id = payload.get("employer_person_id") or payload.get("host_person_id")
+    service_kind = _event_label_text(
+        payload.get("service_kind") or payload.get("household_role") or payload.get("job"),
+        "servant",
+    )
+    if html_mode:
+        worker = _short_person_html_for_event(con, world, worker_id, focus_person_id)
+        service = html.escape(service_kind)
+        if employer_id not in (None, "") and _same_person_id(employer_id, focus_person_id):
+            employer = _short_person_html_for_event(con, world, employer_id, focus_person_id)
+            visible = f"{worker} entered {employer}'s household service as {service}."
+        else:
+            visible = f"{worker} entered household service as {service}."
+        cash_wage = _event_float(payload, "cash_wage_01")
+        board = payload.get("board_included")
+        board_text = (
+            "yes"
+            if _truthy_marker(board)
+            else "no"
+            if board not in (None, "")
+            else ""
+        )
+        return visible + _event_details_html(
+            ("employer", _short_person_for_event(con, world, employer_id, focus_person_id)),
+            ("board included", board_text),
+            ("cash wage", f"{cash_wage:.2f}" if cash_wage is not None else ""),
+        )
+    worker = _short_person_for_event(con, world, worker_id, focus_person_id)
+    if employer_id not in (None, "") and _same_person_id(employer_id, focus_person_id):
+        employer = _short_person_for_event(con, world, employer_id, focus_person_id)
+        return f"{worker} entered {employer}'s household service as {service_kind}."
+    return f"{worker} entered household service as {service_kind}."
 
 
 def _archetype_actor_id(payload: dict[str, object]) -> object:
@@ -6056,7 +6116,7 @@ def _outlaw_event_sentence_html(
 
 
 def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, focus_person_id: object) -> str:
-    payload = _load_json_object(event["payload_json"])
+    payload = _event_readable_place_payload(con, event, _load_json_object(event["payload_json"]))
     event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
     person = _short_person_for_event(con, world, payload.get("person_id") or focus_person_id, focus_person_id)
     event_label = event_type.replace("_", " ")
@@ -6117,6 +6177,15 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
         if previous:
             bits.append(f"previously {previous}")
         return "; ".join(bits) + "."
+
+    if event_type == "household_service_started":
+        return _household_service_event_sentence(
+            con,
+            world,
+            payload,
+            focus_person_id,
+            html_mode=False,
+        )
 
     if payload.get("archetype_key"):
         return _archetype_event_sentence(con, world, payload, focus_person_id)
@@ -6295,7 +6364,7 @@ def _event_sentence(con: sqlite3.Connection, world: str, event: sqlite3.Row, foc
 
 
 def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row, focus_person_id: object) -> str:
-    payload = _load_json_object(event["payload_json"])
+    payload = _event_readable_place_payload(con, event, _load_json_object(event["payload_json"]))
     event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
     person = _short_person_html_for_event(con, world, payload.get("person_id") or focus_person_id, focus_person_id)
     event_label = html.escape(event_type.replace("_", " "))
@@ -6323,22 +6392,23 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             "same_sex_couple_formed": "formed a same-sex household partnership with",
         }[event_type]
         tail = ""
+        details = ""
         if event_type == "couple_dissolved":
             reasons = payload.get("breakup_reasons") or []
             if isinstance(reasons, list) and reasons:
-                shown = html.escape(", ".join(str(r).replace("_", " ") for r in reasons))
-                tail = f" Reasons: {shown}."
+                shown = ", ".join(str(r).replace("_", " ") for r in reasons)
+                details = _event_details_html(("reasons", shown))
         elif event_type == "paramour_ended":
             reasons = payload.get("end_reasons") or []
             if isinstance(reasons, list) and reasons:
-                shown = html.escape(", ".join(str(r).replace("_", " ") for r in reasons))
-                tail = f" Reasons: {shown}."
+                shown = ", ".join(str(r).replace("_", " ") for r in reasons)
+                details = _event_details_html(("reasons", shown))
         elif event_type == "couple_formed" and payload.get("kinship_exception"):
             relation = html.escape(str(payload.get("kinship_exception")).replace("_", " "))
             probability = _event_float(payload, "kinship_exception_probability")
             odds = f" at annual exception probability {probability:.6f}" if probability is not None else ""
             tail = f" Rare kinship exception: {relation}{odds}."
-        return f"{a} {verb} {b}.{tail}"
+        return f"{a} {verb} {b}.{tail}" + details
 
     if event_type == "job_assigned":
         job = html.escape(str(payload.get("job") or "a job"))
@@ -6357,6 +6427,15 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             ("previously", previous),
         )
         return "; ".join(bits) + "." + details
+
+    if event_type == "household_service_started":
+        return _household_service_event_sentence(
+            con,
+            world,
+            payload,
+            focus_person_id,
+            html_mode=True,
+        )
 
     if payload.get("archetype_key"):
         return _archetype_event_sentence_html(con, world, payload, focus_person_id)
@@ -6392,12 +6471,9 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
     if event_type in {"status_fall", "bankruptcy", "elite_scandal"}:
         old_standing = _event_float(payload, "previous_social_standing_01")
         new_standing = _event_float(payload, "new_social_standing_01")
-        reason = payload.get("fall_reason") or event_type
-        bits = [
-            f"{person}'s standing fell",
-            f"reason {html.escape(str(reason).replace('_', ' '))}",
-        ]
+        reason = str(payload.get("fall_reason") or event_type).replace("_", " ")
         details = _event_details_html(
+            ("reason", reason),
             (
                 "standing",
                 f"{old_standing:.2f} -> {new_standing:.2f}"
@@ -6405,7 +6481,7 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
                 else "",
             )
         )
-        return "; ".join(bits) + "." + details
+        return f"{person}'s standing fell." + details
 
     if event_type == "elite_household_investment":
         kind = html.escape(str(payload.get("investment_kind") or "investment").replace("_", " "))
@@ -6433,10 +6509,10 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
         return f"{person} lost {old_job}." + details
 
     if event_type == "unemployment_started":
-        reason = html.escape(str(payload.get("reason") or "unknown reason").replace("_", " "))
+        reason = str(payload.get("reason") or "unknown reason").replace("_", " ")
         last_job = payload.get("last_job")
         last = f" after {html.escape(str(last_job))}" if last_job else ""
-        return f"{person} became unemployed{last}; reason: {reason}."
+        return f"{person} became unemployed{last}." + _event_details_html(("reason", reason))
 
     if event_type == "unemployment_ended":
         new_job = html.escape(str(payload.get("new_job") or payload.get("job") or "work"))
@@ -6465,7 +6541,7 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             payload = _event_job_seeker_move_payload(con, event, payload, focus_person_id)
         from_place = html.escape(_settlement_name(con, world, payload.get("from_settlement_id")) or str(payload.get("from_settlement_id") or ""))
         to_place = html.escape(_settlement_name(con, world, payload.get("to_settlement_id")) or str(payload.get("to_settlement_id") or ""))
-        reason = html.escape(str(payload.get("move_reason") or event_type).replace("_", " "))
+        reason = str(payload.get("move_reason") or event_type).replace("_", " ")
         action = "moved" if event_type == "settlement_moved" else "planned a job seeker move"
         movement = _movement_phrase(action, from_place, to_place)
         moved_ids = payload.get("moved_person_ids")
@@ -6476,8 +6552,8 @@ def _event_sentence_html(con: sqlite3.Connection, world: str, event: sqlite3.Row
             )
             if len(moved_ids) > 6:
                 moved += f", and {len(moved_ids) - 6} more"
-            return f"{moved} {movement}; reason: {reason}."
-        return f"{person} {movement}; reason: {reason}."
+            return f"{moved} {movement}." + _event_details_html(("reason", reason))
+        return f"{person} {movement}." + _event_details_html(("reason", reason))
 
     if event_type == "partner_residence_reconciled":
         moved = _short_person_html_for_event(con, world, payload.get("moved_person_id") or focus_person_id, focus_person_id)

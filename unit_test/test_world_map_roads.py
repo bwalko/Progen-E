@@ -7,8 +7,16 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from library.world_map_geometry import MicroRegionCell, RegionCell, RegionEdge, WorldMapGeometry
+from library.world_map_geometry import (
+    MicroRegionCell,
+    RegionCell,
+    RegionEdge,
+    RiverPath,
+    RiverSegment,
+    WorldMapGeometry,
+)
 from library.world_map_svg import (
+    SettlementMapOverlay,
     WorldMapOverlays,
     _soften_polyline_corners,
     build_world_map_overlay_debug_data,
@@ -866,8 +874,8 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertIn('class="sea-route sea-route-line"', svg)
         self.assertIn('class="sea-route-harbor"', svg)
         self.assertIn('data-map-layer="sea-route"', svg)
-        self.assertIn("<title>Sea route a to b</title>", svg)
-        self.assertIn("<title>Sea route harbor a</title>", svg)
+        self.assertIn("<title>Sea route A to B</title>", svg)
+        self.assertIn("<title>Sea route harbor A</title>", svg)
         self.assertIn('data-sea-route-harbor-settlement-id="a"', svg)
         self.assertIn('data-sea-route-actual="4.0000"', svg)
         sea_layer = svg.split('<g class="sea-route-layer settlement-sea-routes">', 1)[1].split("</g>", 1)[0]
@@ -1194,6 +1202,54 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertIn("L 487.2 114.4", road_d)
         self.assertIn("<title>Road route a to b</title>", svg)
 
+    def test_river_title_uses_nearby_settlement_name(self) -> None:
+        geometry = WorldMapGeometry(
+            world="test",
+            version="unit",
+            width=1.0,
+            height=1.0,
+            cells=[_region_cell()],
+            micro_cells=[],
+            features=[],
+            edges=[],
+            rivers=[
+                RiverPath(
+                    river_id="r1:river:1",
+                    from_region_id="r1",
+                    to_region_id="r1",
+                    points=[(0.20, 0.48), (0.52, 0.50), (0.80, 0.52)],
+                    segments=[
+                        RiverSegment(
+                            points=[(0.20, 0.48), (0.52, 0.50), (0.80, 0.52)],
+                            micro_ids=[],
+                            region_ids=["r1"],
+                        )
+                    ],
+                    flow=0.55,
+                    river_class="minor",
+                )
+            ],
+        )
+        overlays = WorldMapOverlays(
+            settlements=[
+                SettlementMapOverlay(
+                    settlement_id="r1:s1",
+                    region_id="r1",
+                    display_name="Fordham",
+                    x=0.52,
+                    y=0.50,
+                    population=120,
+                    status="active",
+                )
+            ],
+            polities_by_region_id={},
+        )
+
+        svg = render_world_map_svg(geometry, overlays=overlays)
+
+        self.assertIn("<title>Fordham River</title>", svg)
+        self.assertIn("<title>Fordham River mouth</title>", svg)
+
     def test_direct_road_when_indirect_circuity_is_high(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             save = _make_save(
@@ -1251,7 +1307,7 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertIn(".road-underlay{stroke:#fffdf3", svg)
         self.assertIn(".road-line{stroke:#b21f3a}", svg)
         self.assertIn('data-map-layer="road"', svg)
-        self.assertIn("<title>Road route a to c</title>", svg)
+        self.assertIn("<title>Road route A to C</title>", svg)
         road_layer = svg.split('<g class="road-layer settlement-roads">', 1)[1].split("</g>", 1)[0]
         self.assertNotIn(" Q ", road_layer)
         self.assertNotIn(" T ", road_layer)

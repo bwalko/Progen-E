@@ -46,6 +46,7 @@ if str(_ROOT) not in sys.path:
 
 import library.simulation_context as sc  # noqa: E402
 from library import simulation_timing  # noqa: E402
+from library.geography import list_regions  # noqa: E402
 from library.population_growth_runner import (  # noqa: E402
     continue_population_growth_simulation,
     resolve_population_sim_seed,
@@ -54,6 +55,7 @@ from library.population_growth_runner import (  # noqa: E402
 )
 
 _FLUSH_DEFAULT = 10
+_DEFAULT_TARGET_NONDETAILED_DETAILED_RATIO = 50.0
 
 # Match ``unit_test/test_population_growth_100_years.py`` scenario parameters.
 _START_YEAR = 1000
@@ -165,6 +167,54 @@ def _elapsed_hhmmss(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+def _detailed_soft_cap_from_ratio(
+    target_nondetailed_count: int,
+    target_ratio: float,
+) -> int | None:
+    if int(target_nondetailed_count) <= 0:
+        return None
+    if float(target_ratio) <= 0.0:
+        return None
+    return max(1, int(round(int(target_nondetailed_count) / float(target_ratio))))
+
+
+def _estimated_target_nondetailed_count(
+    ctx: sc.SimulationContext,
+    passive_population_scale: float,
+) -> int:
+    if float(passive_population_scale) <= 0.0:
+        return 0
+    try:
+        regions = list_regions(world=ctx.world, db_path=ctx.db_path)
+    except Exception:
+        regions = []
+    base_capacity = sum(
+        max(1, int(ctx.effective_regional_population_cap(region.region_id)))
+        for region in regions
+    )
+    return max(0, int(round(base_capacity * float(passive_population_scale))))
+
+
+def _resolve_detailed_soft_cap(
+    args: argparse.Namespace,
+    ctx: sc.SimulationContext,
+) -> tuple[int | None, str, int]:
+    target_nondetailed_count = _estimated_target_nondetailed_count(
+        ctx,
+        float(args.passive_population_scale),
+    )
+    if args.detailed_active_soft_cap is not None:
+        explicit_cap = int(args.detailed_active_soft_cap)
+        if explicit_cap == 0:
+            return None, "disabled", target_nondetailed_count
+        return explicit_cap, "explicit", target_nondetailed_count
+    auto_cap = _detailed_soft_cap_from_ratio(
+        target_nondetailed_count,
+        float(args.target_nondetailed_detailed_ratio),
+    )
+    return auto_cap, "auto_ratio", target_nondetailed_count
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -256,9 +306,20 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--detailed-active-soft-cap",
         type=int,
-        default=15000,
+        default=None,
         metavar="N",
-        help="Shift new births into passive cohorts once detailed alive reaches this target (default: 15000; use 0 to disable).",
+        help=(
+            "Shift new births into non-detailed population once detailed alive "
+            "reaches this target. Omit to auto-target the non-detailed:detailed "
+            "ratio; use 0 to disable."
+        ),
+    )
+    p.add_argument(
+        "--target-nondetailed-detailed-ratio",
+        type=float,
+        default=_DEFAULT_TARGET_NONDETAILED_DETAILED_RATIO,
+        metavar="N",
+        help="Default auto-cap target for non-detailed:detailed population ratio (default: 50).",
     )
     backend = p.add_mutually_exclusive_group()
     backend.add_argument(
@@ -287,8 +348,10 @@ def _parse_args() -> argparse.Namespace:
         p.error("--passive-population-scale must be >= 0")
     if args.profile_last_years is not None and args.profile_last_years < 1:
         p.error("--profile-last-years must be >= 1")
-    if args.detailed_active_soft_cap < 0:
+    if args.detailed_active_soft_cap is not None and args.detailed_active_soft_cap < 0:
         p.error("--detailed-active-soft-cap must be >= 0")
+    if args.target_nondetailed_detailed_ratio <= 0:
+        p.error("--target-nondetailed-detailed-ratio must be > 0")
     return args
 
 
@@ -343,10 +406,13 @@ def main() -> None:
         placename_rng_salt=sim_seed,
         verbose_event_logging=bool(args.verbose_event_logging),
     ) as ctx:
-        soft_cap = (
-            int(args.detailed_active_soft_cap)
-            if int(args.detailed_active_soft_cap) > 0
-            else None
+        (
+            soft_cap,
+            soft_cap_mode,
+            target_nondetailed_count,
+        ) = _resolve_detailed_soft_cap(
+            args,
+            ctx,
         )
         if args.resume:
             actual_start_year = (
@@ -404,6 +470,18 @@ def main() -> None:
         for c in ctx.passive_cohorts
         if latest_cohort_year is not None and int(c.sim_year) == latest_cohort_year
     )
+    passive_person_alive = sum(
+        1
+        for rec in ctx.passive_people.values()
+        if rec.person.deathyear is None or int(rec.person.deathyear) > int(end_year)
+    )
+    nondetailed_alive = int(ctx.nondetailed_population_count())
+    observed_non_detailed_count = nondetailed_alive + passive_person_alive + passive_cohort_alive
+    observed_ratio = (
+        observed_non_detailed_count / float(alive_end)
+        if alive_end > 0
+        else 0.0
+    )
     iso_ts = datetime.now(timezone.utc).isoformat()
     if os.environ.get("POPULATION_SIM_SKIP_TIMING_LOG", "").strip().lower() not in (
         "1",
@@ -459,9 +537,15 @@ def main() -> None:
         f"store_flush_batch_years={flush} | mode={mode} | years={args.years} | "
         f"start_year={actual_start_year} | "
         f"starting_couples={0 if args.resume else args.starting_couples} | "
-        f"detailed_active_soft_cap={args.detailed_active_soft_cap} | "
+        f"detailed_active_soft_cap={soft_cap if soft_cap is not None else 0} | "
+        f"detailed_active_soft_cap_mode={soft_cap_mode} | "
+        f"target_nondetailed_detailed_ratio={float(args.target_nondetailed_detailed_ratio):.2f} | "
+        f"target_nondetailed_count={target_nondetailed_count} | "
         f"nondetailed_directory={bool(args.use_nondetailed_directory)} | "
-        f"detailed_alive={alive_end} | passive_cohort_alive={passive_cohort_alive} | "
+        f"detailed_alive={alive_end} | nondetailed_alive={nondetailed_alive} | "
+        f"passive_person_alive={passive_person_alive} | passive_cohort_alive={passive_cohort_alive} | "
+        f"observed_non_detailed_count={observed_non_detailed_count} | "
+        f"observed_nondetailed_detailed_ratio={observed_ratio:.2f} | "
         f"report_files={'skipped' if args.skip_report_files else _OUTPUT_PATH} | "
         f"elapsed={elapsed:.2f}s"
     )

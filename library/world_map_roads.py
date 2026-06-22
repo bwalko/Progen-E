@@ -51,6 +51,8 @@ class RoadMapEdge:
     actual_usage: float
     implied_usage: float
     opacity: float
+    from_settlement_name: str = ""
+    to_settlement_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,8 @@ class SeaRouteMapEdge:
     actual_usage: float
     implied_usage: float
     opacity: float
+    from_settlement_name: str = ""
+    to_settlement_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,8 @@ class _RoadSegment:
     points: list[Point]
     cost: float
     length: float
+    from_settlement_name: str = ""
+    to_settlement_name: str = ""
     actual_usage: float = 0.0
     implied_usage: float = 0.0
 
@@ -2450,6 +2456,8 @@ def _ensure_segment(
         points=route.points,
         cost=route.cost,
         length=route.length,
+        from_settlement_name=nodes[key[0]].display_name or key[0],
+        to_settlement_name=nodes[key[1]].display_name or key[1],
     )
     return key
 
@@ -2559,6 +2567,8 @@ def _finalize_edges(segments: dict[tuple[str, str], _RoadSegment]) -> list[RoadM
                 actual_usage=round(segment.actual_usage, 4),
                 implied_usage=round(segment.implied_usage, 4),
                 opacity=round(opacity, 3),
+                from_settlement_name=segment.from_settlement_name,
+                to_settlement_name=segment.to_settlement_name,
             )
         )
     return sorted(out, key=lambda e: (-e.usage, e.from_settlement_id, e.to_settlement_id))
@@ -2736,6 +2746,8 @@ def build_settlement_sea_route_overlays(
                 actual_usage=round(demand.actual_usage, 4),
                 implied_usage=round(demand.implied_usage, 4),
                 opacity=round(opacity, 3),
+                from_settlement_name=nodes[key[0]].display_name or key[0],
+                to_settlement_name=nodes[key[1]].display_name or key[1],
             )
         )
     return sorted(out, key=lambda e: (-e.usage, e.from_settlement_id, e.to_settlement_id))

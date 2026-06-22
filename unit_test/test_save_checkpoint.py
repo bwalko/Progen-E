@@ -296,6 +296,83 @@ class TestSaveCheckpoint(unittest.TestCase):
                     str(event["settlement_id"]), "aeria_north:settlement:1"
                 )
 
+    def test_job_assigned_backfill_links_worker_not_employer_context(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            sav = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute(
+                    """
+                    CREATE TABLE save_metadata (
+                        meta_key TEXT PRIMARY KEY,
+                        meta_value TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO save_metadata (meta_key, meta_value)
+                    VALUES ('save_schema_version', '3')
+                    """
+                )
+                conn.execute("PRAGMA user_version = 3")
+                conn.execute(
+                    """
+                    CREATE TABLE simulation_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sim_year INTEGER,
+                        event_type TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_events (
+                        sim_year, event_type, payload_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        1067,
+                        "job_assigned",
+                        json.dumps(
+                            {
+                                "person_id": 1,
+                                "job": "servant",
+                                "employer_person_id": 2,
+                                "host_person_id": 3,
+                            },
+                            separators=(",", ":"),
+                        ),
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+                ensure_checkpoint_schema(conn)
+
+                links = {
+                    (int(r["person_id"]), str(r["role"]))
+                    for r in conn.execute(
+                        """
+                        SELECT person_id, role
+                        FROM simulation_event_people
+                        ORDER BY person_id, role
+                        """
+                    )
+                }
+                self.assertIn((1, "subject"), links)
+                self.assertFalse(any(pid in {2, 3} for pid, _role in links))
+                event = conn.execute(
+                    """
+                    SELECT primary_person_id, secondary_person_id
+                    FROM simulation_events_readable
+                    WHERE event_type = 'job_assigned'
+                    """
+                ).fetchone()
+                self.assertEqual(int(event["primary_person_id"]), 1)
+                self.assertIsNone(event["secondary_person_id"])
+
     def test_appended_events_create_default_memory_records(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             sav = Path(td) / "save.sqlite"

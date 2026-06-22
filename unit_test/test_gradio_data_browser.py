@@ -2111,6 +2111,214 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("motive: scarcity", html)
         self.assertNotIn("property crime: Ada", html.lower())
 
+    def test_compact_property_crime_uses_readable_place_columns(self) -> None:
+        con = _memory_place_save()
+        con.execute("drop view simulation_events_readable")
+        con.execute(
+            """
+            insert into simulation_events (id, world, sim_year, event_type, payload_json)
+            values (?, 'test', 42, 'property_crime', ?)
+            """,
+            (
+                99,
+                json.dumps(
+                    {
+                        "perpetrator_person_id": 1,
+                        "target_person_id": 2,
+                        "incident_kind": "storehouse_robbery",
+                    }
+                ),
+            ),
+        )
+        con.execute(
+            """
+            insert into simulation_events (id, world, sim_year, event_type, payload_json)
+            values (?, 'test', 43, 'murder', ?)
+            """,
+            (
+                100,
+                json.dumps(
+                    {
+                        "killer_person_id": 1,
+                        "victim_person_id": 2,
+                        "incident_kind": "feud_murder",
+                    }
+                ),
+            ),
+        )
+        con.execute(
+            """
+            create view simulation_events_readable as
+            select
+                id,
+                world,
+                sim_year,
+                event_type,
+                json_extract(payload_json, '$.person_id') as primary_person_id,
+                json_extract(payload_json, '$.target_person_id') as secondary_person_id,
+                'r1:s1' as settlement_id,
+                'r1' as region_id,
+                'unit_test' as event_origin,
+                payload_json
+            from simulation_events
+            """
+        )
+        event = con.execute("select * from simulation_events where id = 99").fetchone()
+        murder_event = con.execute("select * from simulation_events where id = 100").fetchone()
+
+        text = _event_sentence(con, "test", event, 1)
+        shown_html = _event_sentence_html(con, "test", event, 1)
+        murder_html = _event_sentence_html(con, "test", murder_event, 1)
+
+        self.assertIn("Fordham", text)
+        self.assertIn("Fordham", shown_html)
+        self.assertIn("Fordham", murder_html)
+        self.assertNotIn("an unrecorded place", text)
+        self.assertNotIn("an unrecorded place", shown_html)
+        self.assertNotIn("an unrecorded place", murder_html)
+
+    def test_person_history_household_service_uses_focus_role_context(self) -> None:
+        con = _memory_save()
+        con.execute(
+            "update simulation_people set person_json = ? where person_id = 1",
+            (json.dumps({"first_name": "Anita", "last_name": "Reed", "birthyear": 0}),),
+        )
+        con.execute(
+            "update simulation_people set person_json = ? where person_id = 2",
+            (json.dumps({"first_name": "Pieter", "last_name": "Vale", "birthyear": 8}),),
+        )
+        con.execute(
+            """
+            insert into simulation_people (
+                person_id, world, is_founder, father_id, mother_id, is_alive, person_json
+            )
+            values (3, 'test', 0, null, null, 1, ?)
+            """,
+            (json.dumps({"first_name": "Cato", "last_name": "Vale", "birthyear": 9}),),
+        )
+        con.execute(
+            """
+            create table simulation_event_people (
+                event_id integer,
+                person_id integer,
+                role text
+            )
+            """
+        )
+        con.execute(
+            """
+            insert into simulation_events (id, world, sim_year, event_type, payload_json)
+            values (?, 'test', 1067, 'job_assigned', ?)
+            """,
+            (
+                6,
+                json.dumps(
+                    {
+                        "person_id": 2,
+                        "job": "servant",
+                        "employer_person_id": 1,
+                        "host_person_id": 1,
+                    }
+                ),
+            ),
+        )
+        con.execute(
+            """
+            insert into simulation_events (id, world, sim_year, event_type, payload_json)
+            values (?, 'test', 1067, 'household_service_started', ?)
+            """,
+            (
+                7,
+                json.dumps(
+                    {
+                        "person_id": 2,
+                        "worker_person_id": 2,
+                        "employer_person_id": 1,
+                        "service_kind": "servant",
+                        "board_included": True,
+                        "cash_wage_01": 0.25,
+                        "details": "Pieter entered household service as servant.",
+                    }
+                ),
+            ),
+        )
+        con.executemany(
+            "insert into simulation_event_people values (?, ?, ?)",
+            [
+                (6, 2, "subject"),
+                (6, 1, "employer"),
+                (7, 2, "worker"),
+                (7, 1, "employer"),
+            ],
+        )
+
+        worker_rows = _person_event_rows(con, "test", 2)
+        employer_rows = _person_event_rows(con, "test", 1)
+        unrelated_rows = _person_event_rows(con, "test", 3)
+        worker_service_row = [
+            r for r in worker_rows if r["event_type"] == "household_service_started"
+        ][0]
+        employer_service_row = [
+            r for r in employer_rows if r["event_type"] == "household_service_started"
+        ][0]
+        worker_html = _event_sentence_html(con, "test", worker_service_row, 2)
+        employer_html = _event_sentence_html(con, "test", employer_service_row, 1)
+
+        self.assertEqual(
+            [r["event_type"] for r in worker_rows],
+            ["job_assigned", "household_service_started"],
+        )
+        self.assertEqual([r["event_type"] for r in employer_rows], ["household_service_started"])
+        self.assertEqual(unrelated_rows, [])
+        self.assertIn("Pieter", worker_html)
+        self.assertIn("entered household service as servant", worker_html)
+        self.assertNotIn("Anita", worker_html.split("<details", 1)[0])
+        self.assertIn("Pieter", employer_html)
+        self.assertIn("Anita", employer_html)
+        self.assertIn("household service as servant", employer_html)
+
+    def test_history_card_reasons_are_collapsed_into_details(self) -> None:
+        con = _memory_save()
+        dissolved = _event_row(
+            con,
+            "couple_dissolved",
+            {
+                "person_a_id": 1,
+                "person_b_id": 2,
+                "breakup_reasons": ["left_for_paramour"],
+            },
+        )
+        status = _event_row(
+            con,
+            "bankruptcy",
+            {
+                "person_id": 1,
+                "fall_reason": "bankruptcy",
+                "previous_social_standing_01": 0.72,
+                "new_social_standing_01": 0.31,
+            },
+        )
+        unemployment = _event_row(
+            con,
+            "unemployment_started",
+            {"person_id": 1, "last_job": "steward", "reason": "bankruptcy"},
+        )
+
+        for shown_html in (
+            _event_sentence_html(con, "test", dissolved, 1),
+            _event_sentence_html(con, "test", status, 1),
+            _event_sentence_html(con, "test", unemployment, 1),
+        ):
+            visible_html = shown_html.split("<details", 1)[0]
+            self.assertNotIn("Reasons:", visible_html)
+            self.assertNotIn("reason bankruptcy", visible_html)
+            self.assertNotIn("left for paramour", visible_html)
+            self.assertIn("event-card-details", shown_html)
+
+        self.assertIn("reasons: left for paramour", _event_sentence_html(con, "test", dissolved, 1))
+        self.assertIn("reason: bankruptcy", _event_sentence_html(con, "test", status, 1))
+        self.assertIn("reason: bankruptcy", _event_sentence_html(con, "test", unemployment, 1))
+
     def test_knowledge_event_cards_prefer_specific_focus_and_flavor_sparse_records(self) -> None:
         con = _memory_save()
         specific_event = _event_row(
@@ -4470,6 +4678,9 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual([f.display_name for f in overlays.features], ["Bluewater"])
         self.assertEqual(overlays.features[0].kind, "river")
         self.assertEqual(overlays.features[0].region_id, "r1")
+        self.assertEqual(overlays.features[0].name_ethnic, "Middle English")
+        self.assertEqual(overlays.features[0].naming_settlement_id, "r1:s1")
+        self.assertEqual(overlays.features[0].naming_settlement_name, "Fordham")
 
     def test_world_map_overlays_read_keyed_place_schema_through_readable_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

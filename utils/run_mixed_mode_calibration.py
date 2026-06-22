@@ -42,6 +42,7 @@ _DEFAULT_START_YEAR = 1000
 _DEFAULT_YEARS = 10
 _DEFAULT_STARTING_COUPLES = 10
 _DEFAULT_DETAILED_FRACTION = 0.001
+_DEFAULT_TARGET_NONDETAILED_DETAILED_RATIO = 50.0
 _DEFAULT_MIN_DETAILED_CAP = 200
 _DEFAULT_MAX_DETAILED_CAP = 2_000
 _DEFAULT_OUTPUT = _ROOT / "temp" / "mixed_mode_calibration.tsv"
@@ -84,6 +85,32 @@ def _detailed_cap_for_target(
 ) -> int:
     estimated = int(round(int(target) * float(fraction)))
     return max(int(min_cap), min(int(max_cap), max(1, estimated)))
+
+
+def _detailed_cap_for_target_ratio(
+    target: int,
+    *,
+    ratio: float,
+    min_cap: int,
+    max_cap: int,
+) -> int:
+    estimated = int(round(int(target) / max(0.000001, float(ratio))))
+    return max(int(min_cap), min(int(max_cap), max(1, estimated)))
+
+
+def _non_detailed_count_from_counts(counts: dict[str, int]) -> int:
+    return (
+        int(counts.get("passive_person_alive", 0))
+        + int(counts.get("nondetailed_alive", 0))
+        + int(counts.get("aggregate_cohort_alive", 0))
+    )
+
+
+def _observed_nondetailed_detailed_ratio(counts: dict[str, int]) -> float:
+    detailed_alive = int(counts.get("detailed_alive", 0))
+    if detailed_alive <= 0:
+        return 0.0
+    return _non_detailed_count_from_counts(counts) / float(detailed_alive)
 
 
 def _scenario_plan(
@@ -1214,7 +1241,8 @@ def run_calibration(
     target_population: int,
     years: int,
     starting_couples: int,
-    detailed_fraction: float,
+    detailed_fraction: float | None = None,
+    target_nondetailed_detailed_ratio: float = _DEFAULT_TARGET_NONDETAILED_DETAILED_RATIO,
     min_detailed_cap: int,
     max_detailed_cap: int,
     sim_seed: int,
@@ -1228,12 +1256,22 @@ def run_calibration(
         raise LookupError(f"No regions found for world={world!r}")
     base_capacity = sum(max(1, int(r.carrying_capacity)) for r in regions)
     passive_scale = float(target_population) / float(max(1, base_capacity))
-    detailed_cap = _detailed_cap_for_target(
-        target_population,
-        fraction=detailed_fraction,
-        min_cap=min_detailed_cap,
-        max_cap=max_detailed_cap,
-    )
+    if detailed_fraction is None:
+        detailed_cap = _detailed_cap_for_target_ratio(
+            target_population,
+            ratio=target_nondetailed_detailed_ratio,
+            min_cap=min_detailed_cap,
+            max_cap=max_detailed_cap,
+        )
+        detailed_cap_mode = "target_ratio"
+    else:
+        detailed_cap = _detailed_cap_for_target(
+            target_population,
+            fraction=detailed_fraction,
+            min_cap=min_detailed_cap,
+            max_cap=max_detailed_cap,
+        )
+        detailed_cap_mode = "fraction"
     t0 = time.perf_counter()
     with SimulationContext.create(
         db_path=cfg_path,
@@ -1274,6 +1312,8 @@ def run_calibration(
         detailed_person_years = _detailed_person_years_from_file_store(ctx.file_store)
         mixed_person_years = _mixed_person_years_from_file_store(ctx.file_store)
     elapsed = time.perf_counter() - t0
+    observed_non_detailed_count = _non_detailed_count_from_counts(counts)
+    observed_ratio = _observed_nondetailed_detailed_ratio(counts)
     hybrid_fields = _hybrid_calibration_fields(
         save_path,
         trait_slots=_trait_slots_from_config(cfg_path),
@@ -1291,12 +1331,16 @@ def run_calibration(
         "base_capacity": int(base_capacity),
         "passive_population_scale": f"{passive_scale:.8f}",
         "detailed_active_soft_cap": int(detailed_cap),
+        "detailed_active_soft_cap_mode": detailed_cap_mode,
+        "target_nondetailed_detailed_ratio": f"{float(target_nondetailed_detailed_ratio):.6f}",
         "population_backend": _CALIBRATION_POPULATION_BACKEND,
         "birth_settlement_spinoff_disabled": (
             "yes" if disable_birth_settlement_spinoff else "no"
         ),
         "elapsed_s": f"{elapsed:.6f}",
         **counts,
+        "observed_non_detailed_count": int(observed_non_detailed_count),
+        "observed_nondetailed_detailed_ratio": f"{observed_ratio:.6f}",
         **hybrid_fields,
     }
 
@@ -1316,6 +1360,8 @@ def _write_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "base_capacity",
         "passive_population_scale",
         "detailed_active_soft_cap",
+        "detailed_active_soft_cap_mode",
+        "target_nondetailed_detailed_ratio",
         "population_backend",
         "birth_settlement_spinoff_disabled",
         "elapsed_s",
@@ -1329,6 +1375,8 @@ def _write_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "aggregate_cohort_deaths",
         "aggregate_cohort_partnered",
         "mixed_mode_alive",
+        "observed_non_detailed_count",
+        "observed_nondetailed_detailed_ratio",
         "cohort_rows",
         "promotion_count",
         "report_detailed_people",
@@ -1390,7 +1438,21 @@ def _parse_args() -> argparse.Namespace:
         help="Number of seed replicates to run for each target population.",
     )
     p.add_argument("--world", default="default")
-    p.add_argument("--detailed-fraction", type=float, default=_DEFAULT_DETAILED_FRACTION)
+    p.add_argument(
+        "--detailed-fraction",
+        type=float,
+        default=None,
+        help=(
+            "Legacy explicit detailed cap fraction of target population. "
+            "When omitted, the cap uses --target-nondetailed-detailed-ratio."
+        ),
+    )
+    p.add_argument(
+        "--target-nondetailed-detailed-ratio",
+        type=float,
+        default=_DEFAULT_TARGET_NONDETAILED_DETAILED_RATIO,
+        help="Default detailed cap target as non-detailed:detailed ratio (default: 50).",
+    )
     p.add_argument("--min-detailed-cap", type=int, default=_DEFAULT_MIN_DETAILED_CAP)
     p.add_argument("--max-detailed-cap", type=int, default=_DEFAULT_MAX_DETAILED_CAP)
     p.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT)
@@ -1483,8 +1545,10 @@ def _parse_args() -> argparse.Namespace:
         p.error("--stop-after-total-murders must be >= 0")
     if args.stop_after_detailed_person_years < 0:
         p.error("--stop-after-detailed-person-years must be >= 0")
-    if args.detailed_fraction < 0:
+    if args.detailed_fraction is not None and args.detailed_fraction < 0:
         p.error("--detailed-fraction must be >= 0")
+    if args.target_nondetailed_detailed_ratio <= 0:
+        p.error("--target-nondetailed-detailed-ratio must be > 0")
     if args.min_detailed_cap < 1 or args.max_detailed_cap < 1:
         p.error("--min-detailed-cap and --max-detailed-cap must be >= 1")
     if args.max_detailed_cap < args.min_detailed_cap:
@@ -1557,7 +1621,14 @@ def main() -> None:
                 target_population=int(scenario["target_population"]),
                 years=int(args.years),
                 starting_couples=int(args.starting_couples),
-                detailed_fraction=float(args.detailed_fraction),
+                detailed_fraction=(
+                    float(args.detailed_fraction)
+                    if args.detailed_fraction is not None
+                    else None
+                ),
+                target_nondetailed_detailed_ratio=float(
+                    args.target_nondetailed_detailed_ratio
+                ),
                 min_detailed_cap=int(args.min_detailed_cap),
                 max_detailed_cap=int(args.max_detailed_cap),
                 sim_seed=int(scenario["sim_seed"]),
@@ -1659,7 +1730,10 @@ def main() -> None:
                     f"seed={row['sim_seed']}",
                     f"mixed={row['mixed_mode_alive']}",
                     f"detailed={row['detailed_alive']}/{row['detailed_active_soft_cap']}",
+                    f"cap_mode={row.get('detailed_active_soft_cap_mode', 'unknown')}",
                     f"nondetailed={row.get('nondetailed_alive', 0)}",
+                    f"observed_ratio={row.get('observed_nondetailed_detailed_ratio') or 'n/a'}",
+                    f"target_ratio={row.get('target_nondetailed_detailed_ratio') or 'n/a'}",
                     f"aggregate={row['aggregate_cohort_alive']}",
                     f"rows={row['cohort_rows']}",
                     f"promotions={row['promotion_count']}",

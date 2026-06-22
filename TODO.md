@@ -196,7 +196,14 @@ missing backfill anchor, or scale regression.
 
 ### Detailed Population Fraction
 
-Idea: model 0.1% of the population or less in full detail.
+Current default: when no explicit detailed cap is supplied, production and
+mixed-mode calibration helpers auto-target about `50:1`
+non-detailed:detailed population. Explicit detailed caps still override the
+auto mode, and an explicit cap of `0` still disables the cap.
+
+Research note: modeling 0.1% of the population or less in full detail may be
+useful later for broad society-level probes, but that is not the current
+default sampling target.
 
 Challenge / calibration:
 
@@ -233,8 +240,9 @@ importance, variance, or narrative salience.
 Completed context needed for future calibration work: detailed-selection
 variance, serial-predator scoring, report/TSV calibration metrics, resume-safe
 mixed-mode calibration batches, non-detailed city-directory calibration,
-full-population homicide accounting, and focused repeat-selection regression
-coverage are implemented. See `TODONE.md` for the full completion record.
+full-population homicide accounting, default 50:1 auto cap/report fields, and
+focused repeat-selection regression coverage are implemented. See `TODONE.md`
+for the full completion record.
 
 Design intent:
 

@@ -3303,3 +3303,55 @@ completion.
   unit_test.test_simulation_careers.TestSimulationCareers.test_non_masculine_mother_with_childcare_duty_prefers_home_role
   unit_test.test_simulation_careers.TestSimulationCareers.test_job_market_favors_simple_jobs_in_small_settlements
   unit_test.test_simulation_government.TestSimulationGovernment.test_government_scored_pool_skips_cheap_ineligible_candidates_before_composites`
+
+## 2026-06-22 Map Naming, Mixed Population Ratio, And History Card Cleanup
+
+### Enhancements
+
+- Route overlays now carry endpoint display names, and SVG road/sea-route titles
+  use settlement names while preserving internal settlement IDs in `data-*`
+  attributes.
+- Local named feature overlays now retain the naming settlement and settlement
+  culture/ethnicity that drove the feature name; duplicate feature names prefer
+  the more prominent nearby settlement.
+- River SVG titles now use nearby named river features, or a nearby settlement
+  fallback, so unnamed river popups no longer stay generic when a settlement is
+  clearly responsible for the name.
+- Production and mixed-mode calibration CLIs now default to an auto detailed cap
+  targeting about `50:1` non-detailed:detailed population when no explicit cap
+  is supplied; explicit caps and explicit `0` disabled-cap mode remain
+  available.
+- Mixed-population reports now expose cap mode, target ratio, observed
+  non-detailed count, detailed count, and observed ratio fields.
+
+### Fixes
+
+- Compact crime/event rendering now rehydrates canonical `settlement_id` and
+  `region_id` from `simulation_events_readable`, fixing crime cards that fell
+  back to `an unrecorded place`.
+- Household-service history cards now render employer-context wording when the
+  focus person is the employer, while worker timelines keep the worker-focused
+  sentence and unrelated people do not receive the event.
+- Worker-only `job_assigned` events no longer link `employer_person_id` or
+  `host_person_id` into the employer's personal history during normalized
+  event-person extraction/backfill.
+- Gradio history-card HTML now moves relationship/status/unemployment/move
+  reasons into the expandable Details block instead of showing `Reasons:` or
+  `reason ...` in the visible card sentence.
+- Updated `TODO.md` detailed-population context so the current default is the
+  `50:1` auto cap, with 0.1% retained only as a future research note.
+
+### Validation
+
+- Added focused regression coverage in `unit_test.test_world_map_roads`,
+  `unit_test.test_gradio_data_browser`,
+  `unit_test.test_run_population_simulation_cli`, and
+  `unit_test.test_mixed_mode_calibration`, plus
+  `unit_test.test_save_checkpoint` for route titles, river titles, feature
+  naming provenance, compact crime places, household-service history context,
+  worker-only job history links, collapsed card reasons, cap override modes,
+  and observed ratio math.
+- `git diff --check`
+- Python compile/tests were attempted, but the local Windows sandbox launcher
+  returned `CreateProcessAsUserW failed: 5`; the unsandboxed retry request was
+  rejected by the current usage-limit approval gate.

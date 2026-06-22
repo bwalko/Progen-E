@@ -57,6 +57,10 @@ class FeatureMapOverlay:
     y: float
     etymology: str | None = None
     source_region_feature_id: str | None = None
+    name_ethnic: str | None = None
+    naming_settlement_id: str | None = None
+    naming_settlement_name: str | None = None
+    naming_priority: int = 0
 
 
 @dataclass(frozen=True)
@@ -1647,6 +1651,10 @@ def _named_feature_overlays_from_local_geography(
     region_id: str,
     local_geography_json: object,
     anchored_feature_points: dict[str, Point] | None = None,
+    naming_settlement_id: str | None = None,
+    naming_settlement_name: str | None = None,
+    naming_ethnic: str | None = None,
+    naming_priority: int = 0,
 ) -> list[FeatureMapOverlay]:
     if not local_geography_json:
         return []
@@ -1704,9 +1712,28 @@ def _named_feature_overlays_from_local_geography(
                 source_region_feature_id=(
                     str(feature.get("source_region_feature_id") or "").strip() or None
                 ),
+                name_ethnic=(
+                    str(feature.get("name_ethnic") or naming_ethnic or "").strip() or None
+                ),
+                naming_settlement_id=naming_settlement_id,
+                naming_settlement_name=naming_settlement_name,
+                naming_priority=max(0, _to_int(naming_priority, 0)),
             )
         )
     return out
+
+
+def _prefer_named_feature_overlay(
+    existing: FeatureMapOverlay | None,
+    candidate: FeatureMapOverlay,
+) -> bool:
+    if existing is None:
+        return True
+    if candidate.naming_priority != existing.naming_priority:
+        return candidate.naming_priority > existing.naming_priority
+    if candidate.naming_settlement_id and not existing.naming_settlement_id:
+        return True
+    return False
 
 
 def load_world_map_overlays(
@@ -1773,14 +1800,25 @@ def load_world_map_overlays(
             else "simulation_settlements"
         )
         if "simulation_settlements" in relations and settlement_limit > 0 and cells:
+            settlement_columns = {
+                str(r["name"])
+                for r in conn.execute(f"PRAGMA table_info({settlement_source})").fetchall()
+            }
+            optional_columns = [
+                col
+                for col in ("name_culture_primary",)
+                if col in settlement_columns
+            ]
+            optional_select = "".join(f", {col}" for col in optional_columns)
             region_ids = sorted(cells)
             placeholders = ", ".join("?" for _ in region_ids)
             select_sql = f"""
                 SELECT settlement_id, region_id, display_name, population_cap, status,
-                       site_slot, local_geography_json
+                       site_slot, local_geography_json{optional_select}
                 FROM {settlement_source}
                 WHERE region_id IN ({placeholders})
                   AND {{status_clause}}
+                ORDER BY coalesce(population_cap, 0) DESC, settlement_id
                 LIMIT ?
                 """
             rows = conn.execute(
@@ -1838,11 +1876,13 @@ def load_world_map_overlays(
                     region_id=rid,
                     local_geography_json=row["local_geography_json"],
                     anchored_feature_points=anchored_feature_points,
+                    naming_settlement_id=str(row["settlement_id"] or "") or None,
+                    naming_settlement_name=str(row["display_name"] or row["settlement_id"] or "") or None,
+                    naming_ethnic=str(_sqlite_row_value(row, "name_culture_primary", "") or "") or None,
+                    naming_priority=max(0, _to_int(row["population_cap"], 0)),
                 ):
-                    if feature.feature_id in anchored_feature_points:
+                    if _prefer_named_feature_overlay(features_by_id.get(feature.feature_id), feature):
                         features_by_id[feature.feature_id] = feature
-                    else:
-                        features_by_id.setdefault(feature.feature_id, feature)
         if {"simulation_polity_territory", "simulation_polities"}.issubset(relations):
             rows = conn.execute(
                 """
@@ -2527,7 +2567,54 @@ def render_world_map_svg(
                 f'd="{_poly_path(scaled)}" fill="{_cell_fill(cell, overlays)}" opacity="0.82" />'
             )
 
-    rendered_rivers: list[tuple[RiverPath, list[tuple[float, float]], str, float, set[str], str]] = []
+    overlay_settlements = overlays.settlements if overlays is not None else []
+    named_feature_overlays = overlays.features if overlays is not None else []
+    settlement_name_by_id = {
+        settlement.settlement_id: settlement.display_name
+        for settlement in overlay_settlements
+        if settlement.display_name
+    }
+
+    def _route_settlement_name(settlement_id: object, explicit_name: object = "") -> str:
+        explicit = str(explicit_name or "").strip()
+        if explicit:
+            return explicit
+        sid = str(settlement_id or "").strip()
+        return settlement_name_by_id.get(sid, sid)
+
+    def _polyline_distance(point: Point, points: list[Point]) -> float:
+        if not points:
+            return float("inf")
+        if len(points) == 1:
+            return math.hypot(point[0] - points[0][0], point[1] - points[0][1])
+        return min(
+            _point_segment_distance(point, a, b)
+            for a, b in zip(points, points[1:])
+        )
+
+    def _river_display_title(river: RiverPath) -> str:
+        river_features = [
+            feature
+            for feature in named_feature_overlays
+            if feature.kind.strip().lower() in {"river", "stream", "creek", "brook"}
+        ]
+        best_feature: tuple[float, FeatureMapOverlay] | None = None
+        for feature in river_features:
+            distance = _polyline_distance((feature.x, feature.y), river.points)
+            if best_feature is None or distance < best_feature[0]:
+                best_feature = (distance, feature)
+        if best_feature is not None and best_feature[0] <= 0.10:
+            return best_feature[1].display_name
+        best_settlement: tuple[float, SettlementMapOverlay] | None = None
+        for settlement in overlay_settlements:
+            distance = _polyline_distance((settlement.x, settlement.y), river.points)
+            if best_settlement is None or distance < best_settlement[0]:
+                best_settlement = (distance, settlement)
+        if best_settlement is not None and best_settlement[0] <= 0.10:
+            return f"{best_settlement[1].display_name} River"
+        return "River"
+
+    rendered_rivers: list[tuple[RiverPath, list[tuple[float, float]], str, float, set[str], str, str]] = []
     for river in geometry.rivers:
         if river.river_id in channel_by_river_id:
             continue
@@ -2543,7 +2630,8 @@ def render_world_map_svg(
         line_d = _smooth_line_path(pts)
         river_micro_ids = {mid for segment in river.segments for mid in segment.micro_ids}
         corridor_color = _river_corridor_fill(river_micro_ids, micro_by_id, overlays)
-        rendered_rivers.append((river, pts, line_d, water_width, river_micro_ids, corridor_color))
+        river_title = _river_display_title(river)
+        rendered_rivers.append((river, pts, line_d, water_width, river_micro_ids, corridor_color, river_title))
         channel = channel_by_river_id.get(river.river_id)
         if channel is None:
             corridor_poly = _tapered_river_polygon(
@@ -2556,7 +2644,7 @@ def render_world_map_svg(
                 f'd="{_open_poly_path(corridor_poly)}" fill="{corridor_color}" filter="url(#river-corridor-soften)" opacity="0.46" />'
             )
 
-    for river_obj, pts, line_d, water_width, _river_micro_ids, _corridor_color in rendered_rivers:
+    for river_obj, pts, line_d, water_width, _river_micro_ids, _corridor_color, river_title in rendered_rivers:
         river = river_obj
         channel = channel_by_river_id.get(river.river_id)
         bank_fill = _mix_color(_corridor_color, "#2e88a6", 0.42)
@@ -2584,7 +2672,7 @@ def render_world_map_svg(
         )
         parts.append(
             f'<path class="river-water {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
-            f'd="{_open_poly_path(water_poly)}" fill="#2f8dab">{_svg_title("River")}</path>'
+            f'd="{_open_poly_path(water_poly)}" fill="#2f8dab">{_svg_title(river_title)}</path>'
         )
         if len(pts) >= 3:
             highlight_width = max(0.24, water_width * 0.12)
@@ -2607,9 +2695,10 @@ def render_world_map_svg(
                 f'<path class="river-mouth-bank {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
                 f'd="{_open_poly_path(mouth_bank)}" fill="{_mix_color(_corridor_color, "#2f8dab", 0.34)}" />'
             )
+            mouth_title = f"{river_title} mouth" if river_title != "River" else "River mouth"
             parts.append(
                 f'<path class="river-mouth {html.escape(river.river_class)}" data-map-layer="river" data-river-id="{html.escape(river.river_id)}" '
-                f'd="{_open_poly_path(mouth_water)}" fill="#3f95ad">{_svg_title("River mouth")}</path>'
+                f'd="{_open_poly_path(mouth_water)}" fill="#3f95ad">{_svg_title(mouth_title)}</path>'
             )
 
     overlay_sea_routes = overlays.sea_routes if overlays is not None else []
@@ -2632,9 +2721,9 @@ def render_world_map_svg(
                 f'data-sea-route-actual="{route.actual_usage:.4f}" '
                 f'data-sea-route-implied="{route.implied_usage:.4f}"'
             )
-            route_title = _svg_title(
-                f"Sea route {route.from_settlement_id} to {route.to_settlement_id}"
-            )
+            from_name = _route_settlement_name(route.from_settlement_id, getattr(route, "from_settlement_name", ""))
+            to_name = _route_settlement_name(route.to_settlement_id, getattr(route, "to_settlement_name", ""))
+            route_title = _svg_title(f"Sea route {from_name} to {to_name}")
             parts.append(
                 f'<path class="sea-route sea-route-underlay" {attrs} d="{path_d}" '
                 f'stroke-width="{stroke_width + 1.55:.2f}" opacity="{min(0.30, route.opacity * 0.46):.3f}">{route_title}</path>'
@@ -2644,16 +2733,16 @@ def render_world_map_svg(
                 f'stroke-width="{stroke_width:.2f}" opacity="{route.opacity:.3f}">{route_title}</path>'
             )
             harbor_radius = min(3.2, max(1.8, stroke_width + 0.85))
-            for point, settlement_id in (
-                (scaled[0], route.from_settlement_id),
-                (scaled[-1], route.to_settlement_id),
+            for point, settlement_id, settlement_name in (
+                (scaled[0], route.from_settlement_id, from_name),
+                (scaled[-1], route.to_settlement_id, to_name),
             ):
                 parts.append(
                     f'<circle class="sea-route-harbor" {attrs} '
                     f'data-sea-route-harbor-settlement-id="{html.escape(settlement_id)}" '
                     f'cx="{point[0]:.1f}" cy="{point[1]:.1f}" r="{harbor_radius:.2f}" '
                     f'opacity="{min(0.96, route.opacity + 0.10):.3f}">'
-                    f'{_svg_title(f"Sea route harbor {settlement_id}")}</circle>'
+                    f'{_svg_title(f"Sea route harbor {settlement_name}")}</circle>'
                 )
         parts.append("</g>")
 
@@ -2679,9 +2768,9 @@ def render_world_map_svg(
                 f'data-road-actual="{road.actual_usage:.4f}" '
                 f'data-road-implied="{road.implied_usage:.4f}"'
             )
-            road_title = _svg_title(
-                f"Road route {road.from_settlement_id} to {road.to_settlement_id}"
-            )
+            from_name = _route_settlement_name(road.from_settlement_id, getattr(road, "from_settlement_name", ""))
+            to_name = _route_settlement_name(road.to_settlement_id, getattr(road, "to_settlement_name", ""))
+            road_title = _svg_title(f"Road route {from_name} to {to_name}")
             parts.append(
                 f'<path class="road road-underlay" {attrs} d="{path_d}" '
                 f'stroke-width="{stroke_width + 1.65:.2f}" opacity="{casing_opacity:.3f}">{road_title}</path>'
@@ -2914,6 +3003,9 @@ def render_world_map_svg(
             f'data-region-id="{html.escape(named.region_id)}" data-feature-name="{html.escape(named.display_name)}" '
             f'data-feature-kind="{html.escape(named.kind)}" data-feature-etymology="{html.escape(named.etymology or "")}" '
             f'data-source-region-feature-id="{html.escape(named.source_region_feature_id or "")}" '
+            f'data-feature-name-ethnic="{html.escape(named.name_ethnic or "")}" '
+            f'data-feature-naming-settlement-id="{html.escape(named.naming_settlement_id or "")}" '
+            f'data-feature-naming-settlement-name="{html.escape(named.naming_settlement_name or "")}" '
             'data-feature-named="1" '
         )
         parts.append(

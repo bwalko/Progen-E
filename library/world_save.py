@@ -1476,8 +1476,16 @@ def _coerce_event_person_id_list(value: object) -> list[int]:
     return out
 
 
-def _event_person_links_from_payload(payload: dict) -> list[tuple[int, str]]:
+def _event_person_links_from_payload(
+    payload: dict,
+    *,
+    event_type: object = "",
+) -> list[tuple[int, str]]:
     """Extract person timeline links from common event payload fields."""
+    event_type_s = str(event_type or payload.get("event_type") or "").strip()
+    context_only_keys: set[str] = set()
+    if event_type_s == "job_assigned":
+        context_only_keys.update({"employer_person_id", "host_person_id"})
     links: list[tuple[int, str]] = []
     seen: set[tuple[int, str]] = set()
 
@@ -1504,6 +1512,8 @@ def _event_person_links_from_payload(payload: dict) -> list[tuple[int, str]]:
     for key, value in payload.items():
         if key in _EVENT_PERSON_SCALAR_ROLES or key in _EVENT_PERSON_LIST_ROLES:
             continue
+        if key in context_only_keys:
+            continue
         if key.endswith("_person_id"):
             add(value, key[: -len("_person_id")] or "related")
         elif key.endswith("_person_ids"):
@@ -1525,10 +1535,14 @@ def _first_payload_text(payload: dict, keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _event_common_columns(payload: dict) -> tuple[int | None, int | None, str | None, str | None]:
+def _event_common_columns(
+    payload: dict,
+    *,
+    event_type: object = "",
+) -> tuple[int | None, int | None, str | None, str | None]:
     return _event_common_columns_from_links(
         payload,
-        _event_person_links_from_payload(payload),
+        _event_person_links_from_payload(payload, event_type=event_type),
     )
 
 
@@ -5065,7 +5079,11 @@ def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
             payload = {}
         if not isinstance(payload, dict):
             payload = {}
-        primary, secondary, settlement_id, region_id = _event_common_columns(payload)
+        links = _event_person_links_from_payload(payload, event_type=row["event_type"])
+        primary, secondary, settlement_id, region_id = _event_common_columns_from_links(
+            payload,
+            links,
+        )
         updates: dict[str, object] = {}
         if row["primary_person_id"] is None and primary is not None:
             updates["primary_person_id"] = primary
@@ -5086,7 +5104,7 @@ def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
                 f"UPDATE simulation_events SET {assignments} WHERE id = ?",
                 (*updates.values(), row["id"]),
             )
-        for person_id, role in _event_person_links_from_payload(payload):
+        for person_id, role in links:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO simulation_event_people (event_id, person_id, role)
@@ -7217,7 +7235,7 @@ def append_simulation_event_rows(
         ]
     ] = []
     for sim_year, event_type, payload in rows:
-        links = _event_person_links_from_payload(payload)
+        links = _event_person_links_from_payload(payload, event_type=event_type)
         primary, secondary, settlement_id, region_id = _event_common_columns_from_links(
             payload,
             links,

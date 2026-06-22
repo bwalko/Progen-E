@@ -13,10 +13,12 @@ from library.world_save import append_simulation_event_rows, ensure_checkpoint_s
 from utils.run_mixed_mode_calibration import (
     _aggregate_calibration_summary,
     _aggregate_reason_variance_rows,
+    _detailed_cap_for_target_ratio,
     _detailed_person_years_from_rows,
     _hybrid_calibration_fields,
     _hybrid_reason_variance_rows,
     _murder_rate_calibration_status,
+    _observed_nondetailed_detailed_ratio,
     _overall_hybrid_calibration_status,
     _completed_matching_scenario_indexes,
     _completed_scenario_indexes,
@@ -91,6 +93,32 @@ class TestMixedModeCalibration(unittest.TestCase):
         self.assertEqual(scenarios[3]["target_population"], 2000)
         self.assertEqual(scenarios[3]["target_index"], 1)
         self.assertEqual(scenarios[5]["sim_seed"], 905)
+
+    def test_detailed_cap_ratio_helper_targets_fifty_to_one_with_clamps(self) -> None:
+        self.assertEqual(
+            _detailed_cap_for_target_ratio(50_000, ratio=50.0, min_cap=100, max_cap=5_000),
+            1000,
+        )
+        self.assertEqual(
+            _detailed_cap_for_target_ratio(2_000, ratio=50.0, min_cap=100, max_cap=5_000),
+            100,
+        )
+        self.assertEqual(
+            _detailed_cap_for_target_ratio(1_000_000, ratio=50.0, min_cap=100, max_cap=5_000),
+            5_000,
+        )
+
+    def test_observed_ratio_counts_all_non_detailed_backends(self) -> None:
+        ratio = _observed_nondetailed_detailed_ratio(
+            {
+                "detailed_alive": 100,
+                "nondetailed_alive": 4_000,
+                "passive_person_alive": 500,
+                "aggregate_cohort_alive": 500,
+            }
+        )
+
+        self.assertEqual(ratio, 50.0)
 
     def test_hybrid_stop_statuses_support_aliases_and_minimum_scenarios(self) -> None:
         self.assertEqual(
@@ -262,6 +290,9 @@ class TestMixedModeCalibration(unittest.TestCase):
             text = out.read_text(encoding="utf-8")
 
         self.assertIn("scenario_index\ttarget_index\treplicate_index", text)
+        self.assertIn("detailed_active_soft_cap_mode", text)
+        self.assertIn("target_nondetailed_detailed_ratio", text)
+        self.assertIn("observed_nondetailed_detailed_ratio", text)
         self.assertNotIn("future_column", text)
 
     def test_hybrid_fields_are_read_from_event_history_report(self) -> None:
