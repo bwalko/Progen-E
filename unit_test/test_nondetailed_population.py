@@ -13,7 +13,9 @@ from library.nondetailed_population import (
     nondetailed_job_counts_by_settlement,
     run_nondetailed_sql_migration,
     run_nondetailed_sql_annual_tick,
+    seed_nondetailed_from_active_settlements,
 )
+from library.person import Person
 from library.settlements import SettlementState
 from library.simulation_context import SimulationContext
 from library.passive_population import (
@@ -123,6 +125,43 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertGreater(result.births, 0)
             self.assertGreater(food_workers, 0)
 
+    def test_sql_tick_births_respect_start_person_id_minimum(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            save = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=980,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id="r1:s1",
+                        job_family="care",
+                        is_partnered=True,
+                    ),
+                    person_id=4,
+                )
+                conn.commit()
+                result = run_nondetailed_sql_annual_tick(
+                    conn,
+                    year=1000,
+                    start_person_id=100,
+                )
+                conn.commit()
+                newborn = conn.execute(
+                    """
+                    SELECT person_id, birthyear
+                    FROM simulation_people_nondetailed
+                    WHERE birthyear = 1000
+                    """
+                ).fetchone()
+
+            self.assertEqual(result.births, 1)
+            self.assertIsNotNone(newborn)
+            self.assertEqual(int(newborn["person_id"]), 100)
+
     def test_sql_tick_extreme_old_age_mortality_is_probabilistic_but_steep(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             save = Path(td) / "save.sqlite"
@@ -153,6 +192,107 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertGreater(result.deaths, 850)
             self.assertGreater(alive_after, 0)
             self.assertLess(alive_after, 150)
+
+    def test_seed_top_up_refills_existing_directory_and_uses_global_ids(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_topup",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            ctx.effective_regional_population_cap = lambda region_id: 40
+            ctx.settlements_by_id["r1:s1"] = SettlementState(
+                settlement_id="r1:s1",
+                region_id="r1",
+                resident_count=15,
+                household_cap=4,
+            )
+            ctx.settlements_by_id["r1:s2"] = SettlementState(
+                settlement_id="r1:s2",
+                region_id="r1",
+                resident_count=10,
+                household_cap=3,
+            )
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=900,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id="r1:s1",
+                    ),
+                    person_id=700,
+                )
+                conn.execute(
+                    """
+                    UPDATE simulation_people_nondetailed
+                    SET is_alive = 0, deathyear = 999
+                    WHERE person_id = 700
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_people_light (
+                        person_id, name, birthyear, is_alive, gender
+                    )
+                    VALUES (900, 'Passive Highwater', 950, 1, 'Female')
+                    """
+                )
+                inserted = seed_nondetailed_from_active_settlements(
+                    conn,
+                    ctx,
+                    year=1000,
+                    population_scale=1.0,
+                    start_person_id=10,
+                )
+                conn.commit()
+                alive_after = nondetailed_alive_count(conn)
+                counts = conn.execute(
+                    """
+                    SELECT sl.settlement_id, COUNT(*) AS c
+                    FROM simulation_people_nondetailed p
+                    JOIN simulation_settlement_lookup sl
+                      ON sl.settlement_key = p.current_settlement_key
+                    WHERE p.is_alive = 1
+                    GROUP BY sl.settlement_id
+                    """
+                ).fetchall()
+                min_alive_id = conn.execute(
+                    """
+                    SELECT MIN(person_id) AS m
+                    FROM simulation_people_nondetailed
+                    WHERE is_alive = 1
+                    """
+                ).fetchone()["m"]
+                prime_age = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM simulation_people_nondetailed
+                    WHERE is_alive = 1 AND (? - birthyear) BETWEEN 22 AND 55
+                    """,
+                    (1000,),
+                ).fetchone()["c"]
+
+            self.assertEqual(inserted, 40)
+            self.assertEqual(alive_after, 40)
+            self.assertGreaterEqual(int(min_alive_id), 901)
+            self.assertGreaterEqual(ctx.next_person_id, 941)
+            self.assertEqual(
+                {str(row["settlement_id"]): int(row["c"]) for row in counts},
+                {"r1:s1": 20, "r1:s2": 20},
+            )
+            self.assertGreaterEqual(int(prime_age), 10)
 
     def test_context_counts_and_promotion_use_nondetailed_directory(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -218,6 +358,100 @@ class TestNondetailedPopulation(unittest.TestCase):
             )
             self.assertEqual(job_payload["job"], "care worker")
             self.assertEqual(job_payload["job_family"], "care")
+
+    def test_nondetailed_promotion_rekeys_collision_before_materializing(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_collision",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            ctx.settlements_by_id["r1:s1"] = SettlementState(
+                settlement_id="r1:s1",
+                region_id="r1",
+                resident_count=10,
+                household_cap=3,
+            )
+            detailed = ctx.add_person(
+                person=Person(
+                    first_name="Original",
+                    last_name="Detailed",
+                    gender="Female",
+                    ethnic="Human",
+                    species="Human",
+                    birthyear=980,
+                    birthplace_region_id="r1",
+                    birthplace_settlement_id="r1:s1",
+                    current_settlement_id="r1:s1",
+                    min_fertility_age=18,
+                ),
+                is_founder=False,
+            )
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=960,
+                        gender="Male",
+                        region_id="r1",
+                        settlement_id="r1:s1",
+                        job_family="admin",
+                    ),
+                    person_id=detailed.person_id,
+                )
+                conn.commit()
+
+            promoted = ctx.promote_nondetailed_person(
+                detailed.person_id,
+                year=1000,
+                reason="collision_regression",
+            )
+
+            self.assertIsNotNone(promoted)
+            assert promoted is not None
+            self.assertNotEqual(promoted.person_id, detailed.person_id)
+            self.assertEqual(
+                ctx.id_to_record[detailed.person_id].person.first_name,
+                "Original",
+            )
+            self.assertIn(promoted.person_id, ctx.id_to_record)
+            promotion_births = [
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "promotion_backfill_birth"
+            ]
+            self.assertTrue(
+                any(payload.get("person_id") == promoted.person_id for payload in promotion_births)
+            )
+            self.assertFalse(
+                any(payload.get("person_id") == detailed.person_id for payload in promotion_births)
+            )
+            generated_births = [
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "birth" and payload.get("child_id") == detailed.person_id
+            ]
+            self.assertEqual(len(generated_births), 1)
+            with closing(sqlite3.connect(save)) as conn:
+                remaining_collision = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM simulation_people_nondetailed
+                    WHERE person_id = ?
+                    """,
+                    (detailed.person_id,),
+                ).fetchone()[0]
+            self.assertEqual(int(remaining_collision), 0)
 
     def test_automatic_nondetailed_promotion_skips_non_prime_elder_rows(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

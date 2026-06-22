@@ -29,6 +29,7 @@ from library.passive_population import (
 )
 from library.nondetailed_population import (
     apply_nondetailed_job_family_economy_effects,
+    next_global_person_id,
     run_nondetailed_sql_annual_tick_for_save,
     run_nondetailed_sql_migration,
     seed_nondetailed_from_active_settlements,
@@ -2132,6 +2133,7 @@ def _run_population_growth_year_loop(
             ctx.last_nondetailed_tick_result = run_nondetailed_sql_annual_tick_for_save(
                 ctx.save_db_path,
                 year=year,
+                start_person_id=int(ctx.next_person_id),
             )
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                 conn.row_factory = sqlite3.Row
@@ -2161,10 +2163,10 @@ def _run_population_growth_year_loop(
                     migration_result.moved,
                 )
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
-                row = conn.execute(
-                    "SELECT COALESCE(MAX(person_id), 0) FROM simulation_people_nondetailed"
-                ).fetchone()
-            ctx.next_person_id = max(int(ctx.next_person_id), int(row[0] or 0) + 1)
+                ctx.next_person_id = max(
+                    int(ctx.next_person_id),
+                    next_global_person_id(conn, minimum=int(ctx.next_person_id)),
+                )
             ensure_detailed_floor_for_active_settlements(ctx, year)
         else:
             refresh_passive_background_cohorts(

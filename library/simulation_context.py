@@ -972,8 +972,13 @@ class SimulationContext:
         conn: sqlite3.Connection | None = None,
     ) -> SimulationPersonRecord | None:
         """Materialize one SQLite city-directory person into detailed simulation."""
+        from library.nondetailed_population import (
+            next_global_person_id,
+            repair_nondetailed_person_id_collisions,
+        )
         from library.world_save import ensure_checkpoint_schema
 
+        requested_id = int(nondetailed_id)
         reason_text = str(reason).strip() or "nondetailed_promotion"
         source_payload = dict(source or {})
         own_conn: sqlite3.Connection | None = None
@@ -984,13 +989,35 @@ class SimulationContext:
         db_conn.row_factory = sqlite3.Row
         try:
             ensure_checkpoint_schema(db_conn)
+            repair_map = repair_nondetailed_person_id_collisions(
+                db_conn,
+                person_ids=(requested_id,),
+                start_person_id=int(self.next_person_id),
+                reserved_person_ids=(
+                    set(self.id_to_record)
+                    | set(self.current_people_ids)
+                    | set(self.passive_people)
+                ),
+            )
+            promote_id = int(repair_map.get(requested_id, requested_id))
+            if promote_id != requested_id:
+                source_payload = {
+                    **source_payload,
+                    "requested_nondetailed_person_id": requested_id,
+                    "reassigned_nondetailed_person_id": promote_id,
+                    "person_id_collision_repaired": True,
+                }
+                self.next_person_id = max(
+                    int(self.next_person_id),
+                    next_global_person_id(db_conn, minimum=int(self.next_person_id)),
+                )
             row = db_conn.execute(
                 """
                 SELECT *
                 FROM simulation_people_nondetailed_readable
                 WHERE person_id = ?
                 """,
-                (int(nondetailed_id),),
+                (promote_id,),
             ).fetchone()
             if row is None:
                 return None
@@ -1034,7 +1061,7 @@ class SimulationContext:
             )
             db_conn.execute(
                 "DELETE FROM simulation_people_nondetailed WHERE person_id = ?",
-                (int(nondetailed_id),),
+                (promote_id,),
             )
             if own_conn is not None:
                 db_conn.commit()
@@ -1049,7 +1076,7 @@ class SimulationContext:
         )
         person = apply_detailed_selection_variance(
             person,
-            person_id=int(nondetailed_id),
+            person_id=promote_id,
             year=int(year),
             reason=reason_text,
             source={
@@ -1058,7 +1085,7 @@ class SimulationContext:
             },
         )
         rec = SimulationPersonRecord(
-            person_id=int(nondetailed_id),
+            person_id=promote_id,
             person=person,
             is_founder=False,
             father_id=passive.father_id,

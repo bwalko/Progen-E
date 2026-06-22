@@ -106,7 +106,7 @@ class TestPopulationGrowthNondetailedRunner(unittest.TestCase):
                 )
 
         seed.assert_called_once()
-        tick.assert_called_once_with(save, year=1000)
+        tick.assert_called_once_with(save, year=1000, start_person_id=1)
         economy.assert_called_once()
         migration.assert_called_once()
         self.assertEqual(ctx.last_nondetailed_tick_result.alive_after, 25)

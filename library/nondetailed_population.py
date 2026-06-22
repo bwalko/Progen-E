@@ -40,6 +40,12 @@ _ADULT_JOB_FAMILIES: tuple[str, ...] = (
     "other",
 )
 
+_PERSON_ID_TABLES: tuple[str, ...] = (
+    "simulation_people",
+    "simulation_people_light",
+    "simulation_people_nondetailed",
+)
+
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(float(lo), min(float(hi), float(value)))
@@ -113,6 +119,148 @@ def normalize_nondetailed_job_family(value: object) -> str:
     return raw if raw in NONDETAILED_JOB_FAMILIES else "other"
 
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = ?
+        """,
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def max_global_person_id(conn: sqlite3.Connection) -> int:
+    """Return the highest person id used by detailed, passive, or non-detailed stores."""
+    max_id = 0
+    for table in _PERSON_ID_TABLES:
+        if not _table_exists(conn, table):
+            continue
+        row = conn.execute(f"SELECT MAX(person_id) AS m FROM {table}").fetchone()
+        value = row["m"] if isinstance(row, sqlite3.Row) else row[0]
+        if value is not None:
+            max_id = max(max_id, int(value))
+    return max_id
+
+
+def next_global_person_id(
+    conn: sqlite3.Connection, *, minimum: int | None = None
+) -> int:
+    """Return a person id above every detailed, passive, and non-detailed row."""
+    max_id = max_global_person_id(conn)
+    if minimum is not None:
+        max_id = max(max_id, int(minimum) - 1)
+    return max_id + 1
+
+
+def _person_id_exists_anywhere(conn: sqlite3.Connection, person_id: int) -> bool:
+    pid = int(person_id)
+    for table in _PERSON_ID_TABLES:
+        if not _table_exists(conn, table):
+            continue
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE person_id = ? LIMIT 1",
+            (pid,),
+        ).fetchone()
+        if row is not None:
+            return True
+    return False
+
+
+def _colliding_nondetailed_ids(
+    conn: sqlite3.Connection, person_ids: Iterable[int] | None = None
+) -> list[int]:
+    if not _table_exists(conn, "simulation_people_nondetailed"):
+        return []
+    collision_checks: list[str] = []
+    if _table_exists(conn, "simulation_people"):
+        collision_checks.append(
+            "EXISTS (SELECT 1 FROM simulation_people d WHERE d.person_id = p.person_id)"
+        )
+    if _table_exists(conn, "simulation_people_light"):
+        collision_checks.append(
+            "EXISTS (SELECT 1 FROM simulation_people_light l WHERE l.person_id = p.person_id)"
+        )
+    if not collision_checks:
+        return []
+    params: list[object] = []
+    id_filter = ""
+    clean_ids = [int(pid) for pid in (person_ids or ()) if int(pid) > 0]
+    if clean_ids:
+        id_filter = f" AND p.person_id IN ({', '.join('?' for _ in clean_ids)})"
+        params.extend(clean_ids)
+    rows = conn.execute(
+        f"""
+        SELECT p.person_id
+        FROM simulation_people_nondetailed p
+        WHERE ({" OR ".join(collision_checks)})
+          {id_filter}
+        ORDER BY p.person_id
+        """,
+        params,
+    ).fetchall()
+    return [int(row["person_id"] if isinstance(row, sqlite3.Row) else row[0]) for row in rows]
+
+
+def repair_nondetailed_person_id_collisions(
+    conn: sqlite3.Connection,
+    *,
+    person_ids: Iterable[int] | None = None,
+    start_person_id: int | None = None,
+    reserved_person_ids: Iterable[int] | None = None,
+) -> dict[int, int]:
+    """Rekey non-detailed rows that reuse detailed/passive person ids."""
+    collisions = set(_colliding_nondetailed_ids(conn, person_ids))
+    reserved = {int(pid) for pid in (reserved_person_ids or ()) if int(pid) > 0}
+    if reserved and _table_exists(conn, "simulation_people_nondetailed"):
+        ids_to_check = reserved
+        if person_ids is not None:
+            requested = {int(pid) for pid in person_ids if int(pid) > 0}
+            ids_to_check = reserved.intersection(requested)
+        if ids_to_check:
+            rows = conn.execute(
+                f"""
+                SELECT person_id
+                FROM simulation_people_nondetailed
+                WHERE person_id IN ({", ".join("?" for _ in ids_to_check)})
+                """,
+                tuple(sorted(ids_to_check)),
+            ).fetchall()
+            collisions.update(
+                int(row["person_id"] if isinstance(row, sqlite3.Row) else row[0])
+                for row in rows
+            )
+    if not collisions:
+        return {}
+    next_id = next_global_person_id(conn, minimum=start_person_id)
+    repaired: dict[int, int] = {}
+    for old_id in sorted(collisions):
+        while _person_id_exists_anywhere(conn, next_id):
+            next_id += 1
+        new_id = next_id
+        next_id += 1
+        conn.execute(
+            """
+            UPDATE simulation_people_nondetailed
+            SET person_id = ?
+            WHERE person_id = ?
+            """,
+            (new_id, old_id),
+        )
+        for ref_col in ("partner_person_id", "father_id", "mother_id"):
+            conn.execute(
+                f"""
+                UPDATE simulation_people_nondetailed
+                SET {ref_col} = ?
+                WHERE {ref_col} = ?
+                """,
+                (new_id, old_id),
+            )
+        repaired[int(old_id)] = int(new_id)
+    return repaired
+
+
 def _region_key(conn: sqlite3.Connection, region_id: object) -> int | None:
     rid = str(region_id or "").strip()
     if not rid:
@@ -167,6 +315,9 @@ def add_nondetailed_person(
     person_id: int | None = None,
 ) -> int:
     """Insert one non-detailed directory row and return its person id."""
+    assigned_person_id = (
+        next_global_person_id(conn) if person_id is None else int(person_id)
+    )
     region_key = _region_key(conn, seed.region_id)
     settlement_key = _settlement_key(conn, seed.settlement_id, seed.region_id)
     job_family = normalize_nondetailed_job_family(seed.job_family or "other")
@@ -206,19 +357,12 @@ def add_nondetailed_person(
         int(seed.child_count),
         seed.name_key,
     )
-    if person_id is None:
-        sql = f"""
-            INSERT INTO simulation_people_nondetailed ({", ".join(cols)})
-            VALUES ({", ".join("?" for _ in cols)})
-        """
-        cur = conn.execute(sql, values)
-        return int(cur.lastrowid)
     sql = f"""
         INSERT INTO simulation_people_nondetailed (person_id, {", ".join(cols)})
         VALUES (?, {", ".join("?" for _ in cols)})
     """
-    conn.execute(sql, (int(person_id), *values))
-    return int(person_id)
+    conn.execute(sql, (assigned_person_id, *values))
+    return assigned_person_id
 
 
 def nondetailed_alive_count(conn: sqlite3.Connection) -> int:
@@ -549,13 +693,18 @@ def seed_nondetailed_from_active_settlements(
     population_scale: float,
     start_person_id: int | None = None,
 ) -> int:
-    """Seed city-directory rows from currently active settlements only."""
+    """Seed or top up city-directory rows from currently active settlements."""
     scale = max(0.0, float(population_scale))
     if scale <= 0.0:
         return 0
-    existing = nondetailed_total_count(conn)
-    if existing > 0:
-        return 0
+    repaired = repair_nondetailed_person_id_collisions(
+        conn,
+        start_person_id=(
+            int(start_person_id)
+            if start_person_id is not None
+            else int(getattr(ctx, "next_person_id", 1))
+        ),
+    )
     settlements = [
         st
         for st in getattr(ctx, "settlements_by_id", {}).values()
@@ -566,11 +715,15 @@ def seed_nondetailed_from_active_settlements(
     by_region: dict[str, list[object]] = {}
     for st in settlements:
         by_region.setdefault(str(getattr(st, "region_id", "") or ""), []).append(st)
-    next_id = (
-        int(start_person_id)
-        if start_person_id is not None
-        else int(getattr(ctx, "next_person_id", 1))
+    next_id = next_global_person_id(
+        conn,
+        minimum=(
+            int(start_person_id)
+            if start_person_id is not None
+            else int(getattr(ctx, "next_person_id", 1))
+        ),
     )
+    current_by_settlement = nondetailed_counts_by_settlement(conn)
     rows: list[tuple[object, ...]] = []
     chunk = 50_000
     inserted = 0
@@ -604,6 +757,9 @@ def seed_nondetailed_from_active_settlements(
             continue
         weights: list[tuple[object, float]] = []
         for st in region_settlements:
+            sid = str(getattr(st, "settlement_id", "") or "").strip()
+            if not sid:
+                continue
             stability = max(0.0, min(1.0, float(getattr(st, "stability", 0.5) or 0.5)))
             market = max(0.0, min(1.0, float(getattr(st, "market_pull", 0.5) or 0.5)))
             prosperity = max(0.0, float(getattr(st, "prosperity_pool", 1.0) or 1.0))
@@ -611,19 +767,28 @@ def seed_nondetailed_from_active_settlements(
             weight = (0.60 + stability) * (0.70 + market) * (0.70 + min(2.0, prosperity) / 2.0)
             weight *= 1.0 + min(0.35, resident**0.5 / 40.0)
             weights.append((st, max(0.01, weight)))
+        if not weights:
+            continue
         total_weight = sum(weight for _, weight in weights)
+        settlement_floor = 0
+        if target >= len(weights):
+            settlement_floor = min(25, max(1, int(round(target * 0.002))))
         remaining = target
         for pos, (st, weight) in enumerate(weights):
             if pos == len(weights) - 1:
-                count = remaining
+                target_count = max(0, remaining)
             else:
-                count = int(round(target * weight / total_weight))
-                remaining -= count
+                target_count = max(0, int(round(target * weight / total_weight)))
+                remaining -= target_count
+            target_count = max(target_count, settlement_floor)
+            sid = str(getattr(st, "settlement_id", "") or "").strip()
+            existing_alive = int(current_by_settlement.get(sid, 0))
+            count = max(0, target_count - existing_alive)
             if count <= 0:
                 continue
             region_key = _region_key(conn, getattr(st, "region_id", None))
             settlement_key = _settlement_key(
-                conn, getattr(st, "settlement_id", None), getattr(st, "region_id", None)
+                conn, sid, getattr(st, "region_id", None)
             )
             species = "Human"
             culture = str(getattr(st, "name_culture_primary", "") or "") or None
@@ -653,8 +818,15 @@ def seed_nondetailed_from_active_settlements(
                 if len(rows) >= chunk:
                     flush()
     flush()
-    if inserted:
-        setattr(ctx, "next_person_id", max(int(getattr(ctx, "next_person_id", 1)), next_id))
+    if inserted or repaired:
+        setattr(
+            ctx,
+            "next_person_id",
+            max(
+                int(getattr(ctx, "next_person_id", 1)),
+                next_global_person_id(conn, minimum=next_id),
+            ),
+        )
     return inserted
 
 
@@ -663,12 +835,14 @@ def run_nondetailed_sql_annual_tick(
     *,
     year: int,
     max_new_partnerships: int = 25_000,
+    start_person_id: int | None = None,
 ) -> NondetailedTickResult:
     """Apply one annual set-based directory tick inside an existing transaction."""
     started = time.perf_counter()
     y = int(year)
     prof = simulation_timing.active_for_year(y)
     t0 = time.perf_counter()
+    repair_nondetailed_person_id_collisions(conn)
 
     conn.execute(
         """
@@ -765,10 +939,7 @@ def run_nondetailed_sql_annual_tick(
         simulation_timing.accumulate("nondetailed_sql.partnerships", time.perf_counter() - t0)
         t0 = time.perf_counter()
 
-    max_row = conn.execute(
-        "SELECT COALESCE(MAX(person_id), 0) AS m FROM simulation_people_nondetailed"
-    ).fetchone()
-    max_person_id = int(max_row["m"] if isinstance(max_row, sqlite3.Row) else max_row[0])
+    next_person_id = next_global_person_id(conn, minimum=start_person_id)
     conn.execute("DROP TABLE IF EXISTS temp_nondetailed_birth_mothers")
     conn.execute(
         """
@@ -801,7 +972,7 @@ def run_nondetailed_sql_annual_tick(
                 job_family, is_partnered, partner_person_id, father_id, mother_id,
                 child_count, name_key
             )
-            SELECT ? + rn,
+            SELECT ? + rn - 1,
                    ?,
                    NULL,
                    1,
@@ -820,7 +991,7 @@ def run_nondetailed_sql_annual_tick(
                    NULL
             FROM temp_nondetailed_birth_mothers
             """,
-            (max_person_id, y),
+            (next_person_id, y),
         )
         conn.execute(
             """
@@ -861,6 +1032,7 @@ def run_nondetailed_sql_annual_tick_for_save(
     *,
     year: int,
     max_new_partnerships: int = 25_000,
+    start_person_id: int | None = None,
 ) -> NondetailedTickResult:
     from library.world_save import ensure_checkpoint_schema
 
@@ -871,6 +1043,7 @@ def run_nondetailed_sql_annual_tick_for_save(
             conn,
             year=int(year),
             max_new_partnerships=int(max_new_partnerships),
+            start_person_id=start_person_id,
         )
         conn.commit()
         return result

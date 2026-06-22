@@ -3212,3 +3212,35 @@ completion.
 - `python -m unittest unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_pairing_skips_extreme_elderly_new_partner_candidate unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_pairing_skips_parent_child_when_other_partner_exists unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_passive_office_promotion_materializes_full_person unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_migration_arrival_promotes_passive_context_person`
 - `python -m unittest unit_test.test_population_growth_nondetailed_runner unit_test.test_remarkable_archetypes unit_test.test_simulation_mortality`
 - `C:\Users\bryan\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m unittest unit_test.test_nondetailed_population unit_test.test_simulation_mortality`
+
+## 2026-06-22 Non-Detailed Directory Refill And ID Collision Fixes
+
+### Fixes
+
+- Replaced one-shot city-directory seeding with yearly settlement/region
+  reconciliation, so `simulation_people_nondetailed` refills after deaths,
+  promotions, and settlement activation instead of returning early once any
+  historical row exists.
+- Added a global person-ID allocator for detailed, passive, and non-detailed
+  stores. Non-detailed seeding, direct inserts, and SQL births now allocate
+  above the shared high-water mark, with the yearly runner passing its in-RAM
+  `ctx.next_person_id` into SQL births before the next detailed checkpoint.
+- Added non-detailed ID collision repair before annual SQL ticks, seeding, and
+  promotion. Promotion rekeys a colliding directory row before materialization,
+  preserves the existing detailed person, and emits `promotion_backfill_birth`
+  only for the repaired/promoted ID.
+
+### Validation
+
+- `python -m py_compile library\nondetailed_population.py
+  library\population_growth_runner.py library\simulation_context.py
+  unit_test\test_nondetailed_population.py
+  unit_test\test_population_growth_nondetailed_runner.py`
+- `python -m unittest unit_test.test_nondetailed_population
+  unit_test.test_population_growth_nondetailed_runner`
+- `python utils/run_mixed_mode_calibration.py --targets 1000 --replicates 1
+  --years 2 --starting-couples 2 --min-detailed-cap 10 --max-detailed-cap 20
+  --output temp\mixed_mode_bugfix_smoke.tsv`, which produced a fresh
+  non-detailed-directory save with `mixed_mode_alive=1057`,
+  `detailed_alive=68`, `nondetailed_alive=989`, and
+  `murder_per_10k_mixed_person_years=4.882812`.

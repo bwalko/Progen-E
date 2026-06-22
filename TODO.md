@@ -172,41 +172,13 @@ promotion, migration-arrival promotion, focus promotion for user inspection and
 narrative spotlighting, yearly mixed-mode summaries, and scale/calibration smoke
 utilities are implemented. The latest pass also added non-detailed-first shared
 promotion routing, v1 inferred backfill anchors for promoted city-directory
-people, economy/migration calibration bounds, and a measured government scoring
-optimization; see `TODONE.md` for validation details.
+people, economy/migration calibration bounds, city-directory scale
+reconciliation, global person-ID collision repair, and a measured government
+scoring optimization; see `TODONE.md` for validation details.
 
 Add a new concrete hybrid-population TODO only when a longer mixed-mode
 replicate or UI/reporting pass shows a specific drift, promotion-source bias,
 missing backfill anchor, or scale regression.
-
-### Concrete Hybrid Follow-up: Reconcile City-Directory Scale
-
-- Current-save evidence from `worlds/default/save.sqlite` at year 1099 shows the
-  city-directory ratio has inverted: 268 alive detailed people versus 112 alive
-  `simulation_people_nondetailed` rows, or 0.42 non-detailed people per detailed
-  person. A 50-100x background target would imply roughly 13,400-26,800 alive
-  non-detailed people for the same detailed count.
-- The imbalance is not just a browser-display artifact: only 760
-  non-detailed rows exist historically, 648 are already dead, and 99 of the 112
-  living rows are older than 70 while only 6 are in the 22-55 prime-age band.
-  Several active settlements also have detailed residents but zero living
-  non-detailed rows.
-- Likely cause to verify and fix: `seed_nondetailed_from_active_settlements()`
-  currently returns early once any city-directory rows exist, so annual calls do
-  not reconcile toward a target after deaths, promotions, settlement growth, or
-  new settlement activation.
-- Implement a yearly reconciliation/top-up pass by region and settlement that
-  targets the intended background scale, refreshes a plausible age pyramid, and
-  avoids overreacting to one detailed family moving into a settlement.
-- Add focused calibration/reporting metrics for detailed alive, non-detailed
-  alive, non-detailed-per-detailed ratio, prime-age share, and settlements with
-  detailed residents but no non-detailed directory rows. Make the browser label
-  alive detailed, alive non-detailed, ratio, and historical row totals clearly so
-  the display cannot confuse dead rows with current population.
-- Completion boundary: a short fresh save and a focused unit/integration test
-  both demonstrate that the non-detailed directory refills after deaths and
-  promotions, keeps a plausible prime-age share, and lands near the selected
-  background-population target without exploding detailed-person counts.
 
 ### Concrete Hybrid Follow-up: Persist Directory Names Before Promotion
 
@@ -311,37 +283,6 @@ records inferred birth, partnership, and child anchors where those facts are
 available. Add a new TODO for promotion backfill v2 only when a concrete
 workflow needs grandparents, exact partner synthesis, or richer inferred past
 event reconstruction.
-
-### Concrete Hybrid Follow-up: Prevent Promotion ID Collisions
-
-- Current-save evidence from `worlds/default/save.sqlite`: Agnes Chartres
-  `#1159` has a generated `birth` event in 1007 with `child_id=1159`, generated
-  marriages, jobs, moves, children, and relationship events through the 1000s,
-  but later receives an inferred `nondetailed_person_promoted` event in 1089 and
-  a `promotion_backfill_birth` event in 1061. Her checkpoint row now reports
-  `birthyear=1061`, even though her detailed history proves that ID was already
-  an active detailed person.
-- Likely failure mode: the non-detailed city-directory ID space is not globally
-  exclusive with detailed `simulation_people` IDs, and
-  `promote_nondetailed_person()` materializes the non-detailed row using that
-  same numeric ID without first rejecting or reconciling an existing detailed
-  record. Agnes's source directory row was deleted during promotion, but the
-  current save still has dozens of IDs that exist in both
-  `simulation_people` and `simulation_people_nondetailed`, so more collisions
-  are possible.
-- Fix direction: enforce a single global person-ID allocator or a reserved ID
-  range across detailed, passive, and non-detailed stores; make promotion refuse
-  or safely merge when the target ID already exists in `ctx.id_to_record`,
-  `ctx.current_people_ids`, or `simulation_people`; and never emit
-  `promotion_backfill_birth` for a person ID that already has a generated birth
-  or pre-promotion detailed event history.
-- Add a repair/reporting pass that flags existing saves where one person ID has
-  conflicting generated and inferred birth years, especially where generated
-  events precede `nondetailed_person_promoted`.
-- Completion boundary: focused tests create an overlapping detailed and
-  non-detailed person ID, prove promotion does not overwrite the detailed
-  person or add a second birth, and verify fresh non-detailed seeding allocates
-  IDs above every detailed/passive/non-detailed person already in the save.
 
 ### Data Model Direction
 
