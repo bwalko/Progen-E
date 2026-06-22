@@ -175,6 +175,14 @@ def _government_scored_candidate_pool(
     for rec in records:
         if rec is None or rec.person.deathyear is not None:
             continue
+        age = y - int(rec.person.birthyear)
+        if age < min_age:
+            _gov_profile_count(ctx, y, "scored_pool_age_skips")
+            continue
+        cf = _cfs_safe(rec.person)
+        if cf < min_cf:
+            _gov_profile_count(ctx, y, "scored_pool_cfs_skips")
+            continue
         li, mi, cf, age, male_code, duty = _government_candidate_facts(
             ctx, rec, composite_rows=composite_rows, year=y
         )
@@ -854,6 +862,7 @@ def _fill_merit_or_election(
                 "polity_id": int(seat.polity_id),
             },
             candidate_index=passive_office_index,
+            save_conn=conn,
         )
         if promoted is None:
             if prof:

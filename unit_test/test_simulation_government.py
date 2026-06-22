@@ -8,10 +8,13 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from library.config_import import load_all_csvs_into_sqlite
 from library.generator import generate_person_random
 from library.geography import _population_scale_cache
+from library.government_catalog import TitleRow
 from library.government_checkpoint import (
     append_office_holding,
     close_office_holding,
@@ -19,7 +22,10 @@ from library.government_checkpoint import (
 )
 from library.polity import polity_for_region
 from library.simulation_context import SimulationContext
-from library.simulation_government import simulation_government_annual_tick
+from library.simulation_government import (
+    _government_scored_candidate_pool,
+    simulation_government_annual_tick,
+)
 
 
 def _force_population_scale(cfg_path: Path, scale: float) -> None:
@@ -31,6 +37,82 @@ def _force_population_scale(cfg_path: Path, scale: float) -> None:
 
 
 class TestSimulationGovernment(unittest.TestCase):
+    def test_government_scored_pool_skips_cheap_ineligible_candidates_before_composites(self) -> None:
+        ctx = SimpleNamespace(
+            _gov_candidate_fact_cache={},
+            _gov_scored_candidate_cache={},
+            _gov_care_indexes=SimpleNamespace(childcare_duty_factor_by_adult={}),
+        )
+        title = TitleRow(
+            title_id="councilor",
+            title_names_by_era={},
+            polity_type_id="city_state",
+            role="council",
+            selection_rule="election",
+            max_holders=1,
+            term_years=None,
+            min_age=16,
+            min_leadership_index=0.0,
+            min_military_quality_index=0.0,
+            min_career_fitness=0.5,
+            male_weight=0.5,
+            can_be_usurped=False,
+            usurp_base_chance=0.0,
+            eligibility_kinship="none",
+        )
+        records = [
+            SimpleNamespace(
+                person_id=1,
+                person=SimpleNamespace(
+                    marker="underage",
+                    birthyear=990,
+                    deathyear=None,
+                    gender="Male",
+                    career_fitness_score=1.0,
+                ),
+            ),
+            SimpleNamespace(
+                person_id=2,
+                person=SimpleNamespace(
+                    marker="low_cfs",
+                    birthyear=970,
+                    deathyear=None,
+                    gender="Female",
+                    career_fitness_score=0.2,
+                ),
+            ),
+            SimpleNamespace(
+                person_id=3,
+                person=SimpleNamespace(
+                    marker="eligible",
+                    birthyear=970,
+                    deathyear=None,
+                    gender="Male",
+                    career_fitness_score=0.9,
+                ),
+            ),
+        ]
+        scored_people: list[str] = []
+
+        def fake_indexes(person, *, composite_rows):
+            scored_people.append(person.marker)
+            return (0.8, 0.2)
+
+        with patch(
+            "library.simulation_government.leadership_and_military_indexes",
+            side_effect=fake_indexes,
+        ):
+            scored = _government_scored_candidate_pool(
+                ctx,
+                records,
+                title=title,
+                composite_rows=(),
+                year=1000,
+            )
+
+        self.assertEqual(scored_people, ["eligible"])
+        self.assertEqual([pid for _score, pid in scored], [3])
+
     def test_office_history_readable_view_tracks_successions_and_death_endings(self) -> None:
         with closing(sqlite3.connect(":memory:")) as conn:
             conn.row_factory = sqlite3.Row

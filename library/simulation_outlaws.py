@@ -1017,7 +1017,29 @@ def promote_passive_outlaw_accused(
             return existing
         prec = getattr(ctx, "passive_people", {}).get(pid)
         if prec is None:
-            return None
+            promote = getattr(ctx, "promote_nondetailed_people", None)
+            if not callable(promote):
+                return None
+            try:
+                promoted = promote(
+                    year=int(year),
+                    reason=PASSIVE_OUTLAW_PROMOTION_REASON,
+                    person_ids=(pid,),
+                    settlement_id=sid or None,
+                    region_id=rid or None,
+                    min_age=int(min_age),
+                    limit=1,
+                    source={
+                        **source_payload,
+                        "selector": "nondetailed_person_id",
+                        "requested_person_id": pid,
+                        "requested_settlement_id": sid or None,
+                        "requested_region_id": rid or None,
+                    },
+                )
+            except (TypeError, ValueError):
+                return None
+            return promoted[0] if promoted else None
         if not _passive_person_matches_outlaw_scope(
             prec.person,
             year=int(year),

@@ -953,16 +953,22 @@ class SimulationContext:
         year: int,
         reason: str,
         source: dict[str, Any] | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> SimulationPersonRecord | None:
         """Materialize one SQLite city-directory person into detailed simulation."""
         from library.world_save import ensure_checkpoint_schema
 
         reason_text = str(reason).strip() or "nondetailed_promotion"
         source_payload = dict(source or {})
-        with closing(sqlite3.connect(self.save_db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            ensure_checkpoint_schema(conn)
-            row = conn.execute(
+        own_conn: sqlite3.Connection | None = None
+        db_conn = conn
+        if db_conn is None:
+            own_conn = sqlite3.connect(self.save_db_path)
+            db_conn = own_conn
+        db_conn.row_factory = sqlite3.Row
+        try:
+            ensure_checkpoint_schema(db_conn)
+            row = db_conn.execute(
                 """
                 SELECT *
                 FROM simulation_people_nondetailed_readable
@@ -1010,11 +1016,15 @@ class SimulationContext:
                 ),
                 prosperity_bucket="common",
             )
-            conn.execute(
+            db_conn.execute(
                 "DELETE FROM simulation_people_nondetailed WHERE person_id = ?",
                 (int(nondetailed_id),),
             )
-            conn.commit()
+            if own_conn is not None:
+                db_conn.commit()
+        finally:
+            if own_conn is not None:
+                own_conn.close()
 
         person = passive_person_to_detailed_person(
             passive,
@@ -1068,6 +1078,45 @@ class SimulationContext:
                 synthesized=payload,
             )
         )
+        if passive.partner_person_id is not None or passive.status_bucket == "partnered":
+            self._record_inferred_simulation_event(
+                year,
+                "promotion_backfill_partnership",
+                {
+                    "person_id": int(rec.person_id),
+                    "partner_person_id": passive.partner_person_id,
+                    "partner_name": passive.partner_name,
+                    "partner_birthyear": passive.partner_birthyear,
+                    "partner_deathyear": passive.partner_deathyear,
+                    "partnership_start_year": passive.partnership_start_year,
+                    "partnership_end_year": passive.partnership_end_year,
+                    "partnered_state": passive.status_bucket == "partnered",
+                    "reason": reason_text,
+                },
+            )
+        if passive.child_count or passive.child_birthyears or passive.child_person_ids:
+            self._record_inferred_simulation_event(
+                year,
+                "promotion_backfill_children",
+                {
+                    "person_id": int(rec.person_id),
+                    "child_count": int(passive.child_count),
+                    "child_ids": list(passive.child_person_ids),
+                    "child_birthyears": list(passive.child_birthyears),
+                    "reason": reason_text,
+                },
+            )
+        self._record_inferred_simulation_event(
+            person.birthyear,
+            "promotion_backfill_birth",
+            {
+                "person_id": int(rec.person_id),
+                "birthyear": int(person.birthyear),
+                "father_id": rec.father_id,
+                "mother_id": rec.mother_id,
+                "reason": reason_text,
+            },
+        )
         return rec
 
     def promote_nondetailed_people(
@@ -1079,10 +1128,14 @@ class SimulationContext:
         settlement_id: str | None = None,
         region_id: str | None = None,
         job_family: str | None = None,
+        gender: str | None = None,
+        min_age: int | None = None,
+        require_unpartnered: bool = False,
         limit: int = 1,
         source: dict[str, Any] | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> list[SimulationPersonRecord]:
-        """Materialize bounded non-detailed rows by id, place, job family, or reason."""
+        """Materialize bounded non-detailed rows by id, place, job family, or traits."""
         from library.nondetailed_population import normalize_nondetailed_job_family
         from library.world_save import ensure_checkpoint_schema
 
@@ -1095,6 +1148,7 @@ class SimulationContext:
         settlement_s = str(settlement_id or "").strip()
         region_s = str(region_id or "").strip()
         job_s = str(job_family or "").strip()
+        gender_s = str(gender or "").strip().lower()
         reason_text = str(reason).strip() or "nondetailed_promotion"
         if not clean_person_ids and not settlement_s and not region_s and not job_s:
             raise ValueError(
@@ -1116,6 +1170,20 @@ class SimulationContext:
         if job_s:
             clauses.append("COALESCE(NULLIF(p.job_family, ''), 'other') = ?")
             params.append(normalize_nondetailed_job_family(job_s))
+        if gender_s:
+            if gender_s.startswith("f"):
+                clauses.append("lower(COALESCE(p.gender, '')) LIKE 'f%'")
+            elif gender_s.startswith("m"):
+                clauses.append("lower(COALESCE(p.gender, '')) LIKE 'm%'")
+            else:
+                clauses.append("lower(COALESCE(p.gender, '')) = ?")
+                params.append(gender_s)
+        if min_age is not None:
+            clauses.append("(? - p.birthyear) >= ?")
+            params.extend([int(year), max(0, int(min_age))])
+        if require_unpartnered:
+            clauses.append("p.is_partnered = 0")
+            clauses.append("p.partner_person_id IS NULL")
         params.append(max_rows)
         sql = f"""
             SELECT p.person_id
@@ -1130,28 +1198,48 @@ class SimulationContext:
             ORDER BY p.person_id
             LIMIT ?
         """
-        with closing(sqlite3.connect(self.save_db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            ensure_checkpoint_schema(conn)
-            ids = [int(row["person_id"]) for row in conn.execute(sql, params).fetchall()]
+        own_conn: sqlite3.Connection | None = None
+        db_conn = conn
+        if db_conn is None:
+            own_conn = sqlite3.connect(self.save_db_path)
+            db_conn = own_conn
+        db_conn.row_factory = sqlite3.Row
+        ids: list[int] = []
+        try:
+            ensure_checkpoint_schema(db_conn)
+            ids = [int(row["person_id"]) for row in db_conn.execute(sql, params).fetchall()]
+        except Exception:
+            if own_conn is not None:
+                own_conn.close()
+            raise
         selector_source = {
             **dict(source or {}),
             "selector_person_ids": clean_person_ids,
             "selector_settlement_id": settlement_s,
             "selector_region_id": region_s,
             "selector_job_family": normalize_nondetailed_job_family(job_s) if job_s else "",
+            "selector_gender": gender_s,
+            "selector_min_age": int(min_age) if min_age is not None else None,
+            "selector_require_unpartnered": bool(require_unpartnered),
             "selector_limit": max_rows,
         }
         promoted: list[SimulationPersonRecord] = []
-        for pid in ids:
-            rec = self.promote_nondetailed_person(
-                pid,
-                year=int(year),
-                reason=reason_text,
-                source=selector_source,
-            )
-            if rec is not None:
-                promoted.append(rec)
+        try:
+            for pid in ids:
+                rec = self.promote_nondetailed_person(
+                    pid,
+                    year=int(year),
+                    reason=reason_text,
+                    source=selector_source,
+                    conn=db_conn,
+                )
+                if rec is not None:
+                    promoted.append(rec)
+            if own_conn is not None:
+                db_conn.commit()
+        finally:
+            if own_conn is not None:
+                own_conn.close()
         return promoted
 
     @staticmethod

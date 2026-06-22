@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+from pathlib import Path
 import random
 from typing import Any
 
@@ -140,6 +141,61 @@ def _prosperity_bucket_value(bucket: str | None) -> float | None:
     return None
 
 
+def _try_promote_nondetailed_candidate(
+    ctx: Any,
+    *,
+    year: int,
+    reason: str,
+    settlement_id: str | None = None,
+    region_id: str | None = None,
+    person_ids: tuple[int, ...] | None = None,
+    job_family: str | None = None,
+    gender: str | None = None,
+    min_age: int | None = None,
+    require_unpartnered: bool = False,
+    source: dict[str, Any] | None = None,
+    save_conn: Any | None = None,
+    selector: str,
+) -> Any | None:
+    """Prefer real city-directory rows before falling back to aggregate cohorts."""
+    promote = getattr(ctx, "promote_nondetailed_people", None)
+    if not callable(promote):
+        return None
+    if save_conn is None:
+        save_db_path = getattr(ctx, "save_db_path", None)
+        if not save_db_path or not Path(save_db_path).exists():
+            return None
+    clean_ids = tuple(int(pid) for pid in (person_ids or ()) if pid is not None)
+    sid = (settlement_id or "").strip()
+    rid = (region_id or "").strip()
+    job = (job_family or "").strip()
+    if not clean_ids and not sid and not rid and not job:
+        return None
+    try:
+        promoted = promote(
+            year=int(year),
+            reason=reason,
+            person_ids=clean_ids or None,
+            settlement_id=sid or None,
+            region_id=rid or None,
+            job_family=job or None,
+            gender=gender,
+            min_age=min_age,
+            require_unpartnered=bool(require_unpartnered),
+            limit=1,
+            source={
+                **(source or {}),
+                "preferred_source_kind": "nondetailed_directory",
+                "fallback_source_kind": "passive_cohort",
+                "promotion_selector": selector,
+            },
+            conn=save_conn,
+        )
+    except (TypeError, ValueError):
+        return None
+    return promoted[0] if promoted else None
+
+
 def promote_passive_candidate_for_office(
     ctx: Any,
     *,
@@ -150,10 +206,24 @@ def promote_passive_candidate_for_office(
     reason: str = "office_selection",
     source: dict[str, Any] | None = None,
     candidate_index: PassiveOfficeCandidateIndex | None = None,
+    save_conn: Any | None = None,
 ) -> Any | None:
     """Promote one adult from the latest aggregate cohort snapshot for an office."""
     sid = (settlement_id or "").strip()
     rid = (region_id or "").strip()
+    nondetailed = _try_promote_nondetailed_candidate(
+        ctx,
+        year=int(year),
+        reason=reason,
+        settlement_id=sid or None,
+        region_id=rid or None,
+        min_age=int(min_age),
+        source=source,
+        save_conn=save_conn,
+        selector="office",
+    )
+    if nondetailed is not None:
+        return nondetailed
     candidates: list[tuple[int, int, PassiveCohort]] = []
     if candidate_index is not None:
         if sid:
@@ -263,6 +333,7 @@ def promote_passive_candidate_for_settlement_context(
     reason: str = "settlement_context",
     source: dict[str, Any] | None = None,
     candidate_index: PassiveOfficeCandidateIndex | None = None,
+    save_conn: Any | None = None,
 ) -> Any | None:
     """Promote one adult aggregate resident because a settlement needs detail."""
     sid = (settlement_id or "").strip()
@@ -276,6 +347,7 @@ def promote_passive_candidate_for_settlement_context(
         reason=reason,
         source=source,
         candidate_index=candidate_index,
+        save_conn=save_conn,
     )
 
 
@@ -304,7 +376,23 @@ def promote_passive_person_for_focus(
             return None
         rec = getattr(ctx, "passive_people", {}).get(pid)
         if rec is None:
-            return None
+            return _try_promote_nondetailed_candidate(
+                ctx,
+                year=int(year),
+                reason=reason,
+                settlement_id=sid or None,
+                region_id=rid or None,
+                person_ids=(pid,),
+                source={
+                    **source_payload,
+                    "focus": focus_kind,
+                    "selector": "person_id",
+                    "requested_person_id": pid,
+                    "requested_settlement_id": sid or None,
+                    "requested_region_id": rid or None,
+                },
+                selector="focus_person_id",
+            )
         if sid and _passive_person_settlement_id(rec.person) != sid:
             return None
         if rid and _passive_person_region_id(rec.person) != rid:
@@ -313,6 +401,24 @@ def promote_passive_person_for_focus(
     else:
         if not sid and not rid:
             return None
+        nondetailed = _try_promote_nondetailed_candidate(
+            ctx,
+            year=int(year),
+            reason=reason,
+            settlement_id=sid or None,
+            region_id=rid or None,
+            source={
+                **source_payload,
+                "focus": focus_kind,
+                "selector": "settlement_id" if sid else "region_id",
+                "requested_person_id": None,
+                "requested_settlement_id": sid or None,
+                "requested_region_id": rid or None,
+            },
+            selector="focus_scope",
+        )
+        if nondetailed is not None:
+            return nondetailed
         candidates = [
             candidate
             for candidate in getattr(ctx, "passive_people", {}).values()
@@ -493,6 +599,20 @@ def promote_passive_candidate_for_marriage(
     wanted_gender = normalize_passive_gender(gender)
     sid = (settlement_id or "").strip()
     rid = (region_id or "").strip()
+    nondetailed = _try_promote_nondetailed_candidate(
+        ctx,
+        year=int(year),
+        reason=reason,
+        settlement_id=sid or None,
+        region_id=rid or None,
+        gender=wanted_gender,
+        min_age=int(min_age),
+        require_unpartnered=True,
+        source=source,
+        selector="marriage",
+    )
+    if nondetailed is not None:
+        return nondetailed
     candidates: list[tuple[int, int, PassiveCohort]] = []
     if candidate_index is not None and sid:
         for age, idx, cohort in candidate_index.get((sid, wanted_gender), ()):

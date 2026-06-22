@@ -120,11 +120,16 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 
 ### Immediate Performance Work
 
-- Use the latest 250-year profile row
-  (`2026-06-06T02:33:21.528152+00:00`) to choose the next measured hot path.
-  The largest late-year buckets are currently incident generation, career
-  reassignment, innovation, checkpoint event flushing, household-care indexes,
-  job migration, government scoring, and trade networks.
+- Latest 250-year profile row reviewed:
+  `2026-06-06T02:33:21.528152+00:00`, 10 profiled late years,
+  13,598 alive, 254.574 profiled seconds. The largest current buckets are
+  incident generation, career reassignment, innovation, checkpoint event
+  flushing, household-care indexes, job migration, government scoring, and
+  trade networks.
+
+- Next concrete performance pass: profile/optimize incident generation or
+  career reassignment as the next measured hot path. The government candidate
+  scoring cheap-filter pass from this batch is complete; see `TODONE.md`.
 
 - Run another fresh full 250-year / 250-couple production-scale timing
   comparison only after the next meaningful performance changes; use the
@@ -160,30 +165,19 @@ Candidate passive-person fields:
 
 Avoid storing genome, full trait maps, detailed annual events, extensive relationship state, and full career/economy state for passive people.
 
-Context for completed functionality needed by remaining hybrid-population work:
+Context for completed hybrid-population functionality:
 passive people, aggregate cohorts, the new `simulation_people_nondetailed`
 city-directory table, save/readable tables, office promotion, marriage
 promotion, migration-arrival promotion, focus promotion for user inspection and
 narrative spotlighting, yearly mixed-mode summaries, and scale/calibration smoke
-utilities are implemented; see `TODONE.md` for details.
+utilities are implemented. The latest pass also added non-detailed-first shared
+promotion routing, v1 inferred backfill anchors for promoted city-directory
+people, economy/migration calibration bounds, and a measured government scoring
+optimization; see `TODONE.md` for validation details.
 
-Remaining hybrid-population work in this section:
-
-1. Calibrate the v1 non-detailed job-family economy and migration effects
-   against longer mixed-mode runs. Completed context: production
-   nondetailed-directory years now run SQL demographics, job-family economy
-   effects, and set-based migration in sequence; see `TODONE.md`.
-   Remaining work:
-   - verify food-deficit, military-burden, craft/trade surplus, care/admin,
-     prosperity, market-pull, and stability deltas stay in plausible ranges;
-   - verify set-based non-detailed migration follows prosperity, food pressure,
-     route access, headroom, stability, and market pull without draining source
-     settlements too aggressively.
-2. Route office, marriage, migration-context, focus, outlaw, war, crime,
-   disaster, and discovery promotion hooks through non-detailed directory rows
-   before falling back to legacy passive cohorts.
-3. Continue late-year profiling and optimization toward the 15K active / under
-   5 minutes target.
+Add a new concrete hybrid-population TODO only when a longer mixed-mode
+replicate or UI/reporting pass shows a specific drift, promotion-source bias,
+missing backfill anchor, or scale regression.
 
 ### Detailed Population Fraction
 
@@ -260,31 +254,20 @@ Completion boundary:
 - Keep broad demographic totals sourced from aggregate and non-detailed people,
   not from the intentionally biased detailed sample.
 
-### Passive-To-Detailed Promotion
+### Completed Context: Passive-To-Detailed Promotion V1
 
-Passive people can be promoted into detailed simulation by an event:
+Passive and non-detailed people can now be promoted into detailed simulation by
+office selection, marriage into a detailed family, migration/focal-settlement
+context, user inspection, narrative spotlighting, outlaw/crime context, and rare
+remarkable-archetype discovery. Shared helper paths prefer
+`simulation_people_nondetailed` rows before legacy passive cohorts where the
+selector has enough place/person/job/gender context.
 
-- inheritance or succession
-- office selection
-- marriage into a detailed family
-- migration into a focal settlement
-- war, crime, disaster, discovery, or scandal
-- becoming economically or socially important
-- user inspection
-- random spotlight selection for narrative richness
-
-When promoted:
-
-- Generate a genome and full `Person` state conditioned on known facts.
-- Fill in plausible current traits, career fitness, household prosperity, and social state.
-- Backfill parents, grandparents, partner, and children as needed.
-- Generate plausible past events only where useful, and mark them as inferred/backfilled.
-- Do not replay "did they / did they not" yearly logic. The known facts are constraints: they were born, partnered, had children, migrated, held a job, or died because the passive model already established those outcomes.
-
-This is almost a reverse generator:
-
-- Current simulator: genome/person + yearly events produce life history.
-- Promotion generator: known life-history anchors produce plausible genome/person + missing events.
+V1 promotion generates a full `Person` state conditioned on known facts and
+records inferred birth, partnership, and child anchors where those facts are
+available. Add a new TODO for promotion backfill v2 only when a concrete
+workflow needs grandparents, exact partner synthesis, or richer inferred past
+event reconstruction.
 
 ### Data Model Direction
 

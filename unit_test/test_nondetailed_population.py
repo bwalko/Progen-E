@@ -16,6 +16,11 @@ from library.nondetailed_population import (
 )
 from library.settlements import SettlementState
 from library.simulation_context import SimulationContext
+from library.passive_population import (
+    promote_passive_candidate_for_marriage,
+    promote_passive_candidate_for_office,
+    promote_passive_person_for_focus,
+)
 from library.world_save import ensure_checkpoint_schema
 
 
@@ -280,6 +285,107 @@ class TestNondetailedPopulation(unittest.TestCase):
         with self.assertRaises(ValueError):
             ctx.promote_nondetailed_people(year=1000, reason="missing_selector")
 
+    def test_shared_promotion_helpers_prefer_nondetailed_directory(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_shared_promotions",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            sid = "r1:s1"
+            ctx.settlements_by_id[sid] = SettlementState(
+                settlement_id=sid,
+                region_id="r1",
+                resident_count=30,
+                household_cap=8,
+            )
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=960,
+                        gender="Male",
+                        region_id="r1",
+                        settlement_id=sid,
+                        job_family="admin",
+                    ),
+                    person_id=70,
+                )
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=970,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id=sid,
+                        job_family="craft",
+                        is_partnered=True,
+                        partner_person_id=700,
+                        father_id=10,
+                        mother_id=11,
+                        child_count=2,
+                    ),
+                    person_id=71,
+                )
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=975,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id=sid,
+                        job_family="care",
+                        is_partnered=False,
+                    ),
+                    person_id=72,
+                )
+                conn.commit()
+
+            office = promote_passive_candidate_for_office(
+                ctx,
+                year=1000,
+                settlement_id=sid,
+                min_age=16,
+                reason="office_selection",
+            )
+            focus = promote_passive_person_for_focus(
+                ctx,
+                year=1000,
+                focus="inspection",
+                settlement_id=sid,
+            )
+            spouse = promote_passive_candidate_for_marriage(
+                ctx,
+                year=1000,
+                gender="Female",
+                settlement_id=sid,
+                region_id="r1",
+                min_age=16,
+            )
+
+            self.assertEqual([office.person_id, focus.person_id, spouse.person_id], [70, 71, 72])
+            self.assertEqual(ctx.nondetailed_population_count(), 0)
+            event_types = [event_type for _year, event_type, _payload in ctx._pending_simulation_events]
+            self.assertEqual(event_types.count("nondetailed_person_promoted"), 3)
+            self.assertEqual(event_types.count("promotion_backfill_birth"), 3)
+            self.assertIn("promotion_backfill_partnership", event_types)
+            self.assertIn("promotion_backfill_children", event_types)
+            promoted_sources = [
+                entry.synthesized["source"]["source_kind"]
+                for entry in ctx.passive_promotion_log
+            ]
+            self.assertEqual(promoted_sources, ["nondetailed_directory"] * 3)
+
     def test_job_family_counts_affect_settlement_economy(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
@@ -331,6 +437,15 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertEqual(result.affected_settlements, 1)
             self.assertGreater(updated.food_pressure, 0.2)
             self.assertGreater(updated.market_pull, 0.2)
+            payload = next(
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "nondetailed_job_family_economy_effect"
+            )
+            self.assertLessEqual(abs(float(payload["food_pressure_delta"])), 0.08)
+            self.assertLessEqual(abs(float(payload["prosperity_pool_delta"])), 0.04)
+            self.assertLessEqual(abs(float(payload["market_pull_delta"])), 0.03)
+            self.assertLessEqual(abs(float(payload["stability_delta"])), 0.04)
 
     def test_set_based_nondetailed_migration_moves_to_attractive_existing_settlement(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -410,6 +525,7 @@ class TestNondetailedPopulation(unittest.TestCase):
                 ).fetchone()["c"]
 
             self.assertGreater(result.moved, 0)
+            self.assertLessEqual(result.moved, 7)
             self.assertGreater(dest_count, 1)
 
 

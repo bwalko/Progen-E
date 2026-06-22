@@ -3094,3 +3094,45 @@ completion.
   unit_test/test_gradio_data_browser.py`
 - `python -m unittest unit_test.test_gradio_data_browser`
 - `python -c "import time; from utils.gradio_data_browser import build_app; t=time.perf_counter(); app=build_app('default'); print('build_app', round(time.perf_counter()-t,3), 'dependencies', len(app.fns))"`
+
+## 2026-06-21 Hybrid Population Promotion And Profiling
+
+### Enhancements
+
+- Reviewed the latest late-year profile group
+  (`2026-06-06T02:33:21.528152+00:00`): 10 profiled years,
+  13,598 alive, 254.574 profiled seconds. Incident generation remains the
+  largest next hot path; government scoring was a bounded measured target in
+  this pass.
+- Added non-detailed selector filters for gender, minimum age, unpartnered
+  status, and borrowed save-DB connections so city-directory promotion can run
+  inside existing save transactions.
+- Routed shared office, settlement-context/migration, focus/inspection,
+  narrative spotlight, and marriage promotion helpers through
+  `simulation_people_nondetailed` before falling back to passive cohorts.
+- Added direct non-detailed accused promotion for explicit outlaw person IDs;
+  scope-based outlaw/crime promotion inherits the shared settlement/office
+  helper path.
+- Added v1 inferred backfill events for promoted non-detailed people:
+  `promotion_backfill_birth`, `promotion_backfill_partnership`, and
+  `promotion_backfill_children` where the city-directory row has those facts.
+- Locked in v1 economy/migration calibration checks for bounded
+  food/prosperity/market/stability deltas and non-detailed migration that moves
+  toward attractive settlements without draining source settlements too hard.
+- Optimized the measured government candidate-scoring path by applying cheap
+  age and career-fitness filters before expensive leadership/military composite
+  scoring, with profile counters for skipped candidates.
+
+### Validation
+
+- `python -m py_compile library/simulation_context.py
+  library/passive_population.py library/simulation_outlaws.py
+  library/simulation_government.py`
+- `python -m unittest unit_test.test_nondetailed_population`
+- `python -m unittest unit_test.test_simulation_government`
+- `python -m unittest unit_test.test_simulation_outlaws`
+- `python -m unittest unit_test.test_save_checkpoint.TestSaveCheckpoint.test_promote_passive_person_backfills_family_events
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_focus_promotion_selectors_persist_reason_and_backfilled_events`
+- `python -m unittest unit_test.test_population_growth_nondetailed_runner`
+- `python -m unittest unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_passive_office_promotion_materializes_full_person
+  unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_legacy_generic_passive_species_ethnic_promotes_as_human`
