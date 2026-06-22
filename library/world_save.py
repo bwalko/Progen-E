@@ -207,7 +207,9 @@ _ADDITIVE_PERSON_CHECKPOINT_COLUMNS: dict[str, str] = {
 
 _PERSON_EXTENSION_KEYS: tuple[str, ...] = (
     "genome_composite_names",
+    "genome_composite_scores",
     "genome_trait_phrases",
+    "paramour_person_ids",
     "birth_relationship_type",
     "born_out_of_wedlock",
     "legitimacy_status",
@@ -272,6 +274,8 @@ def prune_ancient_dead_from_ram(ctx: "SimulationContext") -> None:
     ctx.paramours = [
         (a, b) for (a, b) in ctx.paramours if a in keep_ids and b in keep_ids
     ]
+    if hasattr(ctx, "sync_all_paramour_fields"):
+        ctx.sync_all_paramour_fields()
     if hasattr(ctx, "surname_conventions_by_pair"):
         ctx.surname_conventions_by_pair = {
             pair: convention
@@ -286,7 +290,12 @@ def prune_ancient_dead_from_ram(ctx: "SimulationContext") -> None:
         if p.partner_person_id is not None and p.partner_person_id not in keep_ids:
             np = replace(np, partner_person_id=None)
         if p.paramour_person_id is not None and p.paramour_person_id not in keep_ids:
-            np = replace(np, paramour_person_id=None)
+            ids = tuple(pid for pid in getattr(p, "paramour_person_ids", ()) if pid in keep_ids)
+            np = replace(
+                np,
+                paramour_person_id=(ids[0] if ids else None),
+                paramour_person_ids=ids,
+            )
         if np is not p:
             rec.person = np
     from library.simulation_government import vacate_government_holders_not_in_ram
@@ -7683,6 +7692,41 @@ def _parse_genome_composite_names(raw: object) -> tuple[str, ...]:
     return ()
 
 
+def _parse_genome_composite_scores(raw: object) -> dict[str, float]:
+    if raw is None or not isinstance(raw, dict):
+        return {}
+    scores: dict[str, float] = {}
+    for key, value in raw.items():
+        rid = str(key).strip()
+        if not rid:
+            continue
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            continue
+        scores[rid] = max(0.0, min(1.0, score))
+    return scores
+
+
+def _parse_person_id_tuple(raw: object) -> tuple[int, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    out: list[int] = []
+    seen: set[int] = set()
+    for value in raw:
+        try:
+            pid = int(value)
+        except (TypeError, ValueError):
+            continue
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return tuple(out)
+
+
 def _parse_genome_trait_phrases(raw: object) -> tuple[str, ...]:
     if raw is None:
         return ()
@@ -7969,6 +8013,7 @@ def _person_from_dict(d: dict) -> Person:
             if d.get("paramour_person_id") is not None
             else None
         ),
+        paramour_person_ids=_parse_person_id_tuple(d.get("paramour_person_ids")),
         last_birth_event_year=(
             int(d["last_birth_event_year"])
             if d.get("last_birth_event_year") is not None
@@ -8152,6 +8197,9 @@ def _person_from_dict(d: dict) -> Person:
             d.get("genome_composite_names")
             if d.get("genome_composite_names") is not None
             else d.get("genome_composite_descriptions")
+        ),
+        genome_composite_scores=_parse_genome_composite_scores(
+            d.get("genome_composite_scores")
         ),
         genome_trait_phrases=_parse_genome_trait_phrases(
             d.get("genome_trait_phrases")
@@ -8862,6 +8910,10 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                     settlement_ids_by_key=settlement_ids_by_key,
                 )
             )
+            if not person.genome_composite_scores:
+                from library.genome_composites import refresh_genome_composite_profile
+
+                person = refresh_genome_composite_profile(person, ctx.db_path)
             if not person_belongs_in_working_ram(
                 person,
                 reference_year=reference_year,
@@ -9393,7 +9445,12 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             if p.partner_person_id is not None and p.partner_person_id not in id_to:
                 np = replace(np, partner_person_id=None)
             if p.paramour_person_id is not None and p.paramour_person_id not in id_to:
-                np = replace(np, paramour_person_id=None)
+                ids = tuple(pid for pid in p.paramour_person_ids if pid in id_to)
+                np = replace(
+                    np,
+                    paramour_person_id=(ids[0] if ids else None),
+                    paramour_person_ids=ids,
+                )
             if np is not p:
                 rec.person = np
 
@@ -9418,13 +9475,8 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
             ra.person = replace(ra.person, partner_person_id=b_id)
         if rb is not None:
             rb.person = replace(rb.person, partner_person_id=a_id)
-    for a_id, b_id in paramours:
-        ra = id_to.get(a_id)
-        rb = id_to.get(b_id)
-        if ra is not None:
-            ra.person = replace(ra.person, paramour_person_id=b_id)
-        if rb is not None:
-            rb.person = replace(rb.person, paramour_person_id=a_id)
+    if hasattr(ctx, "sync_all_paramour_fields"):
+        ctx.sync_all_paramour_fields(include_legacy_scalars=True)
     ctx.settlements_by_id = _enrich_settlements_region_display_names(
         ctx, settlements_by_id, merged_region_labels
     )

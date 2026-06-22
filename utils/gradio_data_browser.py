@@ -2378,6 +2378,7 @@ def _history_family_person_ids(
         related = _coerce_int_or_none(person.get(key))
         if related is not None:
             ids.add(related)
+    ids.update(_person_paramour_ids(person))
     if _has_table(con, "simulation_people"):
         people_where, people_params = _world_where(con, "simulation_people", world)
         rows = con.execute(
@@ -2967,6 +2968,50 @@ def _person_name(person: dict[str, object]) -> str:
 
 def _person_first_name(person: dict[str, object]) -> str:
     return str(person.get("first_name") or "").strip() or _person_name(person)
+
+
+def _person_paramour_ids(person: dict[str, object]) -> tuple[int, ...]:
+    raw = person.get("paramour_person_ids")
+    ids: list[int] = []
+    seen: set[int] = set()
+    values = raw if isinstance(raw, (list, tuple)) else ()
+    for value in values:
+        pid = _coerce_int_or_none(value)
+        if pid is not None and pid not in seen:
+            seen.add(pid)
+            ids.append(pid)
+    scalar = _coerce_int_or_none(person.get("paramour_person_id"))
+    if scalar is not None and scalar not in seen:
+        ids.append(scalar)
+    return tuple(ids)
+
+
+def _person_links_text(
+    con: sqlite3.Connection,
+    world: str,
+    person_ids: tuple[int, ...] | list[int],
+    *,
+    empty: str = "None",
+) -> str:
+    links = [_person_link_text(con, world, pid) for pid in person_ids]
+    links = [s for s in links if s and s.lower() != "unknown"]
+    return ", ".join(links) if links else empty
+
+
+def _person_links_html(
+    con: sqlite3.Connection,
+    world: str,
+    person_ids: tuple[int, ...] | list[int],
+    *,
+    open_target: str = "",
+    empty: str = "None",
+) -> str:
+    links = [
+        _person_link_html(con, world, pid, open_target=open_target)
+        for pid in person_ids
+    ]
+    links = [s for s in links if s and s != "Unknown"]
+    return ", ".join(links) if links else empty
 
 
 def _same_person_id(a: object, b: object) -> bool:
@@ -4864,6 +4909,10 @@ def _person_history_event_visible(event: sqlite3.Row, person_id: object) -> bool
     if event_type == "job_assigned":
         payload = _load_json_object(_row_value(event, "payload_json"))
         return _same_person_id(payload.get("person_id"), person_id)
+    if event_type == "outlaw_flight":
+        payload = _load_json_object(_row_value(event, "payload_json"))
+        if str(payload.get("flight_reason") or "").strip() == "escaped_custody":
+            return False
     return True
 
 
@@ -5173,12 +5222,12 @@ def _render_genealogy_graph(
                 open_target=open_target,
             )
         )
-    if person.get("paramour_person_id") not in (None, ""):
+    for paramour_id in _person_paramour_ids(person):
         center_nodes.append(
             _person_relation_node_html(
                 con,
                 world,
-                person.get("paramour_person_id"),
+                paramour_id,
                 "Paramour",
                 focus_id,
                 open_target=open_target,
@@ -6004,6 +6053,8 @@ def _outlaw_event_sentence(
     if event_type == "outlaw_case_opened":
         return f"{accused} became wanted for {offense} at {place}{pressure_tail}."
     if event_type == "outlaw_flight":
+        if str(payload.get("flight_reason") or "").strip() == "escaped_custody":
+            return f"{accused} escaped custody and fled to {refuge}{pressure_tail}."
         return f"{accused} fled ordinary settlement life for {refuge}{pressure_tail}."
     if event_type == "outlaw_refuge_joined":
         band = payload.get("band_size")
@@ -6063,6 +6114,11 @@ def _outlaw_event_sentence_html(
             + _event_details_html(("pursuit pressure", f"{pressure:.2f}" if pressure is not None else ""))
         )
     if event_type == "outlaw_flight":
+        if str(payload.get("flight_reason") or "").strip() == "escaped_custody":
+            return (
+                f"{accused} escaped custody and fled to {refuge}."
+                + _event_details_html(("pursuit pressure", f"{pressure:.2f}" if pressure is not None else ""))
+            )
         return (
             f"{accused} fled ordinary settlement life for {refuge}."
             + _event_details_html(("pursuit pressure", f"{pressure:.2f}" if pressure is not None else ""))
@@ -6783,6 +6839,7 @@ def _relationship_history_entries(
     formed_types: set[str],
     ended_types: set[str],
     current_person_key: str,
+    exclusive: bool = True,
 ) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     open_entries: dict[str, dict[str, object]] = {}
@@ -6807,8 +6864,9 @@ def _relationship_history_entries(
             continue
         year = _event_year(event)
         if event_type in formed_types:
-            for existing_id in list(open_entries):
-                close_entry(existing_id, year)
+            if exclusive:
+                for existing_id in list(open_entries):
+                    close_entry(existing_id, year)
             open_entries[str(other_id)] = {
                 "start_year": year,
                 "end_year": None,
@@ -6823,9 +6881,16 @@ def _relationship_history_entries(
     if entries:
         return _merge_adjacent_relationship_entries(entries)
 
-    current_other_id = person.get(current_person_key)
-    if current_other_id not in (None, ""):
-        return [{"start_year": None, "end_year": open_end_year, "person_id": current_other_id}]
+    if current_person_key == "paramour_person_ids":
+        current_ids = _person_paramour_ids(person)
+    else:
+        current_other_id = person.get(current_person_key)
+        current_ids = () if current_other_id in (None, "") else (current_other_id,)
+    if current_ids:
+        return [
+            {"start_year": None, "end_year": open_end_year, "person_id": current_other_id}
+            for current_other_id in current_ids
+        ]
     return []
 
 
@@ -6852,7 +6917,8 @@ def _history_entries_for_person(
         current_year,
         formed_types={"paramour_formed"},
         ended_types={"paramour_ended"},
-        current_person_key="paramour_person_id",
+        current_person_key="paramour_person_ids",
+        exclusive=False,
     )
     return jobs, partners, paramours
 
@@ -8388,11 +8454,12 @@ def _render_person_sheet(
     father = _person_link_text(con, world, row["father_id"]) if row["father_id"] else "Unknown"
     mother = _person_link_text(con, world, row["mother_id"]) if row["mother_id"] else "Unknown"
     partner = _person_link_text(con, world, person.get("partner_person_id")) if person.get("partner_person_id") else "None"
-    paramour = _person_link_text(con, world, person.get("paramour_person_id")) if person.get("paramour_person_id") else "None"
+    paramour_ids = _person_paramour_ids(person)
+    paramour = _person_links_text(con, world, paramour_ids)
     father_html = _person_link_html(con, world, row["father_id"], open_target=open_target_id) if row["father_id"] else "Unknown"
     mother_html = _person_link_html(con, world, row["mother_id"], open_target=open_target_id) if row["mother_id"] else "Unknown"
     partner_html = _person_link_html(con, world, person.get("partner_person_id"), open_target=open_target_id) if person.get("partner_person_id") else "None"
-    paramour_html = _person_link_html(con, world, person.get("paramour_person_id"), open_target=open_target_id) if person.get("paramour_person_id") else "None"
+    paramour_html = _person_links_html(con, world, paramour_ids, open_target=open_target_id)
     trait_slots = _trait_slots_for_world(world)
     children = _person_children_rows(con, world, row["person_id"])
     child_summary = _children_summary_text(children)
@@ -8704,7 +8771,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     father = _person_link_text(con, world, row["father_id"]) if row["father_id"] else "unknown"
     mother = _person_link_text(con, world, row["mother_id"]) if row["mother_id"] else "unknown"
     partner = _person_link_text(con, world, person.get("partner_person_id")) if person.get("partner_person_id") else "none"
-    paramour = _person_link_text(con, world, person.get("paramour_person_id")) if person.get("paramour_person_id") else "none"
+    paramour = _person_links_text(con, world, _person_paramour_ids(person), empty="none")
 
     labels = _genome_labels(con)
     genome = person.get("mind_body") or person.get("genome") or {}

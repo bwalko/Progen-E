@@ -446,14 +446,15 @@ def _birth_father_candidates(
         elif relationship_type == BIRTH_RELATIONSHIP_PARAMOUR:
             if not _active_relationship_pair(ctx.paramours, mother_id, father_id):
                 return
-            if int(father.person.paramour_person_id or 0) != mother_id:
+            if mother_id not in ctx.paramour_ids_for_person(father_id):
                 return
         else:
             return
         candidates.append((father_id, relationship_type))
 
     add_candidate(mother.person.partner_person_id, BIRTH_RELATIONSHIP_SPOUSE)
-    add_candidate(mother.person.paramour_person_id, BIRTH_RELATIONSHIP_PARAMOUR)
+    for paramour_id in ctx.paramour_ids_for_person(mother_id):
+        add_candidate(paramour_id, BIRTH_RELATIONSHIP_PARAMOUR)
     return candidates
 
 
@@ -1203,7 +1204,7 @@ def births_by_settlement(
     """Run birth attempts by settlement id, then mother person id.
 
     Genetic births require a **female** mother with a **male** ``partner_person_id`` or
-    ``paramour_person_id`` who passes the same fertility gate. Same-sex marriages
+    active paramour edge who passes the same fertility gate. Same-sex marriages
     (``add_couple``) do **not** supply a male genetic parent between spouses; a female
     spouse alone does not enable conception without a separate male partner/paramour.
     """

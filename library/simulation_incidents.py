@@ -32,6 +32,8 @@ from library.event_scoring import (
 from library.geography import get_region, list_routes_from
 from library.incident_rates import IncidentRateParams, incident_rate_for_year
 from library.simulation_outlaws import (
+    OUTLAW_STATUS_FUGITIVE,
+    OUTLAW_STATUS_WANTED,
     is_outlaw_absent,
     outlaw_case_from_murder,
     outlaw_case_from_property_crime,
@@ -130,6 +132,8 @@ class TheftFraudIncident:
     historical_importance: float
     loss_value: float
     genome_signals: dict[str, float]
+    outlaw_case_key: str | None = None
+    outlaw_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -384,6 +388,7 @@ def _scored_family_chance_from_propensity(
 
 
 def _relationship_motive(
+    ctx: "SimulationContext",
     killer: "SimulationPersonRecord", victim: "SimulationPersonRecord"
 ) -> tuple[str, float]:
     kp = killer.person
@@ -394,8 +399,8 @@ def _relationship_motive(
     ):
         return "partner_conflict", 4.0
     if (
-        kp.paramour_person_id == victim.person_id
-        or vp.paramour_person_id == killer.person_id
+        int(victim.person_id) in ctx.paramour_ids_for_person(killer.person_id)
+        or int(killer.person_id) in ctx.paramour_ids_for_person(victim.person_id)
     ):
         return "paramour_conflict", 3.0
     if killer.father_id == victim.person_id or killer.mother_id == victim.person_id:
@@ -846,7 +851,7 @@ def _incident_pressure_tags(
         tags.add("status_fall")
     if pressure >= 1.05 or stability < 0.34:
         tags.update({"social_stress", "civic_need"})
-    if rec.person.paramour_person_id is not None or (
+    if ctx.paramour_count_for_person(rec.person_id) > 0 or (
         event_family == "affair_scandal" and rec.person.partner_person_id is not None
     ):
         tags.add("relationship_strain")
@@ -877,7 +882,7 @@ def _incident_opportunity_tags(
     job = _job_tokens(rec)
     has_household_tie = (
         rec.person.partner_person_id is not None
-        or rec.person.paramour_person_id is not None
+        or bool(rec.person.paramour_person_ids or (() if rec.person.paramour_person_id is None else (rec.person.paramour_person_id,)))
         or _person_has_household_tie(facts, pid)
     )
     if has_household_tie:
@@ -1132,7 +1137,7 @@ def _maybe_murder_in_settlement(
     victim_weights: list[float] = []
     motives: list[str] = []
     for victim in victim_pool:
-        motive, rel_weight = _relationship_motive(killer, victim)
+        motive, rel_weight = _relationship_motive(ctx, killer, victim)
         motives.append(motive)
         vulnerability = 1.0 + _negative_extreme(victim, "physical") * 0.35
         victim_weights.append(rel_weight * vulnerability)
@@ -1886,8 +1891,8 @@ def _close_murder_victim_relationships(
             )
             closures.append({"relationship": "partner", "payload": payload})
     paramours = (
-        incident.killer.person.paramour_person_id == victim_id
-        or incident.victim.person.paramour_person_id == killer_id
+        int(victim_id) in ctx.paramour_ids_for_person(killer_id)
+        or int(killer_id) in ctx.paramour_ids_for_person(victim_id)
         or any({int(a), int(b)} == pair_set for a, b in ctx.paramours)
     )
     if paramours:
@@ -1986,9 +1991,14 @@ def _apply_property_crime_consequences(
             )
         ],
     }
-    outlaw_case = outlaw_case_from_property_crime(ctx, int(year), incident)
-    if outlaw_case is not None:
-        consequences["outlaw_case"] = outlaw_case
+    if incident.outlaw_case_key:
+        consequences["outlaw_case"] = _refresh_existing_outlaw_case_after_property_crime(
+            ctx, int(year), incident
+        )
+    else:
+        outlaw_case = outlaw_case_from_property_crime(ctx, int(year), incident)
+        if outlaw_case is not None:
+            consequences["outlaw_case"] = outlaw_case
     return consequences
 
 
@@ -3096,6 +3106,262 @@ def _maybe_property_crime_in_settlement(
     )
 
 
+def _eligible_outlaw_property_crime_actor(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+) -> bool:
+    if rec.person.deathyear is not None and int(rec.person.deathyear) <= int(year):
+        return False
+    if int(year) - int(rec.person.birthyear) < INCIDENT_ADULT_MIN_AGE:
+        return False
+    status = str(rec.person.outlaw_status or "").strip().lower()
+    if status not in {OUTLAW_STATUS_WANTED, OUTLAW_STATUS_FUGITIVE}:
+        return False
+    if str(rec.person.outlaw_custody_status or "").strip():
+        return False
+    case_key = str(rec.person.outlaw_case_key or "").strip()
+    if not case_key:
+        return False
+    case = getattr(ctx, "outlaw_cases", {}).get(case_key)
+    if case is None or str(case.status or "").strip().lower() != "active":
+        return False
+    return True
+
+
+def _outlaw_property_crime_settlement_id(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+) -> str | None:
+    status = str(rec.person.outlaw_status or "").strip().lower()
+    case = getattr(ctx, "outlaw_cases", {}).get(str(rec.person.outlaw_case_key or ""))
+    candidates: list[str | None] = []
+    if status == OUTLAW_STATUS_FUGITIVE:
+        refuge = getattr(ctx, "outlaw_refuges", {}).get(
+            rec.person.outlaw_refuge_id or getattr(case, "refuge_id", None)
+        )
+        candidates.extend(
+            [
+                getattr(refuge, "near_settlement_id", None) if refuge is not None else None,
+                rec.person.last_free_settlement_id,
+                getattr(case, "settlement_id", None) if case is not None else None,
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                rec.person.current_settlement_id,
+                rec.person.last_free_settlement_id,
+                getattr(case, "settlement_id", None) if case is not None else None,
+            ]
+        )
+    for raw in candidates:
+        sid = str(raw or "").strip()
+        if sid and sid in ctx.settlements_by_id:
+            return sid
+    return None
+
+
+def _outlaw_property_crime_status_multiplier(status: str) -> float:
+    s = str(status or "").strip().lower()
+    if s == OUTLAW_STATUS_FUGITIVE:
+        return 4.0
+    if s == OUTLAW_STATUS_WANTED:
+        return 2.0
+    return 1.0
+
+
+def _outlaw_property_crime_attempt_chance(
+    actor_propensity: float,
+    *,
+    outlaw_status: str,
+    pressure: float,
+    rate: IncidentRateParams | None = None,
+) -> float:
+    scarcity = _clamp((float(pressure) - 0.65) / 0.85)
+    status_multiplier = _outlaw_property_crime_status_multiplier(outlaw_status)
+    raw = (
+        THEFT_BASE_SETTLEMENT_CHANCE
+        * status_multiplier
+        * (1.35 + scarcity * 2.5)
+        * (0.45 + _clamp(actor_propensity) * 2.3)
+    )
+    cap = 0.34 if str(outlaw_status or "").strip().lower() == OUTLAW_STATUS_FUGITIVE else 0.20
+    return min(_scaled_chance_cap(cap, rate), raw * _incident_chance_multiplier(rate))
+
+
+def _outlaw_property_crime_event_limit(
+    outlaw_count: int,
+    rate: IncidentRateParams | None = None,
+) -> int:
+    if int(outlaw_count) <= 0:
+        return 0
+    base = max(1, min(8, (int(outlaw_count) + 14) // 15))
+    return max(1, _annual_event_limit(base, rate))
+
+
+def _outlaw_survival_motive(rec: "SimulationPersonRecord") -> bool:
+    return (
+        str(rec.person.employment_status or "").strip().lower() == "outlaw"
+        or str(rec.person.housing_status or "").strip().lower() == "outlaw_refuge"
+        or str(rec.person.household_role or "").strip().lower() == "fugitive"
+    )
+
+
+def _refresh_existing_outlaw_case_after_property_crime(
+    ctx: "SimulationContext",
+    year: int,
+    incident: TheftFraudIncident,
+) -> dict[str, object]:
+    case_key = str(incident.outlaw_case_key or "").strip()
+    case = getattr(ctx, "outlaw_cases", {}).get(case_key)
+    if case is None:
+        return {
+            "case_key": case_key,
+            "existing_case": True,
+            "outlaw_status": incident.outlaw_status,
+        }
+    expected = max(int(case.expected_forget_year or year + 3), int(year) + 3)
+    case = replace(
+        case,
+        last_seen_year=int(year),
+        expected_forget_year=expected,
+        details={
+            **(case.details or {}),
+            "last_property_crime_year": int(year),
+            "last_property_crime_kind": incident.incident_kind,
+        },
+    )
+    ctx.outlaw_cases[case.case_key] = case
+    refuge_id = str(case.refuge_id or incident.perpetrator.person.outlaw_refuge_id or "").strip()
+    if refuge_id:
+        refuge = getattr(ctx, "outlaw_refuges", {}).get(refuge_id)
+        if refuge is not None:
+            ctx.outlaw_refuges[refuge_id] = replace(refuge, last_activity_year=int(year))
+    return {
+        "case_key": case.case_key,
+        "existing_case": True,
+        "outlaw_status": incident.outlaw_status,
+        "last_seen_year": int(year),
+    }
+
+
+def _maybe_outlaw_property_crime(
+    ctx: "SimulationContext",
+    year: int,
+    rec: "SimulationPersonRecord",
+    *,
+    rng: random.Random,
+    rate: IncidentRateParams | None = None,
+    scoring_facts: IncidentScoringFacts | None = None,
+    already_dead: set[int] | None = None,
+) -> TheftFraudIncident | None:
+    if already_dead and int(rec.person_id) in already_dead:
+        return None
+    if not _eligible_outlaw_property_crime_actor(ctx, rec, year):
+        return None
+    settlement_id = _outlaw_property_crime_settlement_id(ctx, rec)
+    if not settlement_id:
+        return None
+    residents = ctx.current_people_by_settlement().get(settlement_id, [])
+    target_pool = [
+        r
+        for r in residents
+        if int(r.person_id) != int(rec.person_id)
+        and (not already_dead or int(r.person_id) not in already_dead)
+        and _adult_alive(r, year)
+    ]
+    if not target_pool:
+        return None
+    pressure = _settlement_pressure(ctx, year, settlement_id)
+    facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
+    records = [rec, *target_pool]
+    contexts = _incident_context_map(
+        ctx,
+        facts,
+        year=year,
+        settlement_id=settlement_id,
+        records=records,
+        event_family="property_crime",
+        pressure=pressure,
+    )
+    propensities = contextual_propensity_by_person_id(
+        records, property_crime_propensity, contexts
+    )
+    status = str(rec.person.outlaw_status or "").strip().lower()
+    raw_propensity = float(propensities.get(int(rec.person_id), 0.0))
+    actor_propensity = _clamp(
+        raw_propensity * _outlaw_property_crime_status_multiplier(status)
+    )
+    if rng.random() >= _outlaw_property_crime_attempt_chance(
+        raw_propensity,
+        outlaw_status=status,
+        pressure=pressure,
+        rate=rate,
+    ):
+        return None
+    target_weights = [
+        1.0
+        + float(target.person.job_prosperity_01 or 0.35) * 0.75
+        + min(1.0, float(target.person.household_prosperity or 0.0) / 5.0) * 0.65
+        + float(target.person.social_standing_01 or 0.0) * 0.45
+        + _ideal_strength(target, "perception") * 0.15
+        for target in target_pool
+    ]
+    target = _weighted_choice(target_pool, target_weights, rng)
+    if target is None:
+        return None
+    motive = "survival" if _outlaw_survival_motive(rec) else _property_crime_motive(rec, pressure)
+    incident_kind = _property_crime_kind(ctx, rec, target, motive, rng)
+    witness_ids = _choose_witnesses(
+        target_pool,
+        actor_id=int(rec.person_id),
+        target_id=int(target.person_id),
+        rng=rng,
+    )
+    st = ctx.settlements_by_id.get(settlement_id)
+    region_id = (
+        str(getattr(st, "region_id", "") or "").strip()
+        or str(rec.person.birthplace_region_id or "").strip()
+    )
+    loss_value = _property_crime_loss(rec, target, rng)
+    return TheftFraudIncident(
+        perpetrator=rec,
+        target=target,
+        incident_kind=incident_kind,
+        motive=motive,
+        witness_person_ids=witness_ids,
+        settlement_id=settlement_id,
+        region_id=region_id,
+        actor_propensity=actor_propensity,
+        resource_pressure=pressure,
+        historical_importance=_property_crime_importance(
+            rec,
+            target,
+            len(witness_ids),
+            loss_value,
+        ),
+        loss_value=loss_value,
+        genome_signals=_genome_signal_payload(
+            rec,
+            (
+                "justice",
+                "honesty",
+                "empathy",
+                "persuasion",
+                "perception",
+                "ambition",
+                "frugality",
+                "generosity",
+                "neurochemical",
+                "adaptability",
+            ),
+        ),
+        outlaw_case_key=str(rec.person.outlaw_case_key or "").strip() or None,
+        outlaw_status=status,
+    )
+
+
 def _record_murder_incident(
     ctx: "SimulationContext", year: int, incident: MurderIncident
 ) -> None:
@@ -3162,27 +3428,28 @@ def _record_property_crime_incident(
     ctx: "SimulationContext", year: int, incident: TheftFraudIncident
 ) -> None:
     consequences = _apply_property_crime_consequences(ctx, int(year), incident)
-    ctx._record_simulation_event(
-        int(year),
-        "property_crime",
-        {
-            "year": int(year),
-            "event_type": "property_crime",
-            "incident_kind": incident.incident_kind,
-            "motive": incident.motive,
-            "perpetrator_person_id": int(incident.perpetrator.person_id),
-            "target_person_id": int(incident.target.person_id),
-            "witness_person_ids": list(incident.witness_person_ids),
-            "settlement_id": incident.settlement_id,
-            "region_id": incident.region_id,
-            "actor_property_crime_propensity": round(incident.actor_propensity, 5),
-            "resource_pressure": round(incident.resource_pressure, 5),
-            "historical_importance": round(incident.historical_importance, 5),
-            "loss_value": incident.loss_value,
-            "consequences": consequences,
-            "genome_signals": incident.genome_signals,
-        },
-    )
+    payload = {
+        "year": int(year),
+        "event_type": "property_crime",
+        "incident_kind": incident.incident_kind,
+        "motive": incident.motive,
+        "perpetrator_person_id": int(incident.perpetrator.person_id),
+        "target_person_id": int(incident.target.person_id),
+        "witness_person_ids": list(incident.witness_person_ids),
+        "settlement_id": incident.settlement_id,
+        "region_id": incident.region_id,
+        "actor_property_crime_propensity": round(incident.actor_propensity, 5),
+        "resource_pressure": round(incident.resource_pressure, 5),
+        "historical_importance": round(incident.historical_importance, 5),
+        "loss_value": incident.loss_value,
+        "consequences": consequences,
+        "genome_signals": incident.genome_signals,
+    }
+    if incident.outlaw_case_key:
+        payload["outlaw_case_key"] = incident.outlaw_case_key
+    if incident.outlaw_status:
+        payload["outlaw_status"] = incident.outlaw_status
+    ctx._record_simulation_event(int(year), "property_crime", payload)
 
 
 def _record_affair_scandal_incident(
@@ -3290,6 +3557,9 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     theft_rng = random.Random(
         y * THEFT_RNG_STREAM + int(getattr(ctx, "placename_rng_salt", 0)) + 1171
     )
+    outlaw_theft_rng = random.Random(
+        y * (THEFT_RNG_STREAM + 17) + int(getattr(ctx, "placename_rng_salt", 0)) + 1291
+    )
     scandal_rng = random.Random(
         y * SCANDAL_RNG_STREAM + int(getattr(ctx, "placename_rng_salt", 0)) + 1409
     )
@@ -3302,6 +3572,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     dead_ids: set[int] = set()
     murder_count = 0
     property_crime_count = 0
+    outlaw_property_crime_count = 0
     scandal_count = 0
     public_virtue_count = 0
     knowledge_culture_count = 0
@@ -3442,6 +3713,31 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
             if knowledge is not None:
                 _record_knowledge_culture_incident(ctx, y, knowledge)
                 knowledge_culture_count += 1
+    outlaw_crime_candidates = [
+        rec
+        for rec in ctx.iter_current_people(sorted_by_id=True)
+        if _eligible_outlaw_property_crime_actor(ctx, rec, y)
+    ]
+    outlaw_crime_limit = _outlaw_property_crime_event_limit(
+        len(outlaw_crime_candidates), property_crime_rate
+    )
+    for rec in outlaw_crime_candidates:
+        if outlaw_property_crime_count >= outlaw_crime_limit:
+            break
+        property_crime = _maybe_outlaw_property_crime(
+            ctx,
+            y,
+            rec,
+            rng=outlaw_theft_rng,
+            rate=property_crime_rate,
+            scoring_facts=scoring_facts,
+            already_dead=dead_ids,
+        )
+        if property_crime is None:
+            continue
+        _record_property_crime_incident(ctx, y, property_crime)
+        property_crime_count += 1
+        outlaw_property_crime_count += 1
     detailed_murder_count = murder_count
     population_items = [
         (sid, max(0, int(population)))
@@ -3485,6 +3781,9 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
         )
         simulation_timing.record_gauge(
             y, "incidents", "property_crime_events", property_crime_count
+        )
+        simulation_timing.record_gauge(
+            y, "incidents", "outlaw_property_crime_events", outlaw_property_crime_count
         )
         simulation_timing.record_gauge(
             y, "incidents", "affair_scandal_events", scandal_count

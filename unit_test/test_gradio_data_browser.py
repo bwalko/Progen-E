@@ -4174,6 +4174,51 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("1014.", share)
         self.assertIn("captured into custody", captured_line)
 
+    def test_outlaw_flight_escape_reason_renders_plainly(self) -> None:
+        con = _memory_outlaw_place_save()
+        try:
+            con.execute(
+                """
+                insert into simulation_events (world, sim_year, event_type, payload_json)
+                values (?, ?, ?, ?)
+                """,
+                (
+                    "test",
+                    1006,
+                    "outlaw_flight",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "accused_person_id": 1,
+                            "case_key": "property_crime:test",
+                            "offense_type": "property_crime",
+                            "flight_reason": "escaped_custody",
+                            "outlaw_refuge_id": "outlaw_refuge:r1:1",
+                            "outlaw_refuge_display_name": "The Blackthorn Crag",
+                            "settlement_id": "r1:s1",
+                            "from_settlement_id": "r1:s1",
+                        }
+                    ),
+                ),
+            )
+            event = con.execute(
+                """
+                select *
+                from simulation_events
+                where event_type = 'outlaw_flight'
+                order by sim_year desc
+                limit 1
+                """
+            ).fetchone()
+            line = gdb._event_sentence(con, "test", event, 1)
+            html = gdb._event_sentence_html(con, "test", event, 1)
+        finally:
+            con.close()
+
+        self.assertIn("escaped custody and fled to The Blackthorn Crag", line)
+        self.assertIn("escaped custody and fled to The Blackthorn Crag", html)
+        self.assertNotIn("fled ordinary settlement life", line)
+
     def test_place_browsers_read_keyed_place_schema_through_readable_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "save.sqlite"

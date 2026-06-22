@@ -3355,3 +3355,66 @@ completion.
 - Python compile/tests were attempted, but the local Windows sandbox launcher
   returned `CreateProcessAsUserW failed: 5`; the unsandboxed retry request was
   rejected by the current usage-limit approval gate.
+
+## 2026-06-22 Genome Profiles, Paramours, Outlaw Crime, And Job Catalog Cleanup
+
+### Enhancements
+
+- Added `config/genome_composite_ratings.csv` and a durable
+  `refresh_genome_composite_profile(...)` path that preserves legacy composite
+  labels while adding 21 numeric 0..1 genome composite ratings to detailed
+  people.
+- `Person` now persists `genome_composite_scores` and tuple-backed
+  `paramour_person_ids` through `person_json`, while keeping the old scalar
+  `paramour_person_id` cache for compatibility.
+- Detailed creation, passive promotion, non-detailed promotion, career
+  assignment, and checkpoint load now refresh or backfill genome profile scores.
+- Paramours now use canonical many-edge storage with helper APIs, allow up to
+  three active paramours per person, steeply reduce second/third formation
+  probability, and keep birth-father selection aware of all active male
+  paramours.
+- Wanted and fugitive outlaws now get an individual property-crime pass after
+  normal settlement crimes; fugitive crimes resolve through refuge-near,
+  last-free, then case settlements and update the existing outlaw case.
+- Custody escape flight events now carry `flight_reason="escaped_custody"` and
+  Gradio prose says the outlaw escaped custody and fled to the refuge.
+- Cleaned `genome_jobs.csv` so scarce town/area authority roles such as mayor,
+  sheriff, judge, magistrate, guild master, captain, officer, diplomat,
+  ambassador, and similar one/few-per-town titles live in premium columns, with
+  common replacements left in normal job slots.
+
+### Fixes
+
+- Save/load now rebuilds scalar and tuple paramour caches from
+  `simulation_paramours` without the old last-paramour-wins overwrite.
+- Death, pruning, outlaw flight, relationship timelines, person sheets,
+  genealogy, and share text now handle multiple paramours consistently.
+- Outlaw property crimes include `outlaw_case_key` and `outlaw_status` payload
+  fields and no longer open duplicate cases for active outlaws committing
+  survival crimes.
+
+### Validation
+
+- `python -m py_compile library\person.py library\genome_composites.py
+  library\simulation_context.py library\world_save.py
+  library\simulation_careers.py library\simulation_social.py
+  library\population_growth_runner.py library\simulation_incidents.py
+  library\simulation_outlaws.py utils\gradio_data_browser.py
+  unit_test\test_genome_composite_profiles.py
+  unit_test\test_genome_jobs_catalog.py unit_test\test_paramour_fertility.py
+  unit_test\test_simulation_outlaws.py unit_test\test_gradio_data_browser.py`
+- CSV width checks for `config/genome_composite_ratings.csv` and
+  `config/genome_jobs.csv`.
+- `python utils\util_load_config.py --world default`
+- `python utils\util_check_config_sqlite_vs_csv.py --world default`
+- `python -m unittest unit_test.test_genome_composite_profiles
+  unit_test.test_genome_jobs_catalog unit_test.test_paramour_fertility`
+- `python -m unittest
+  unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_outlaw_property_crime_chance_uses_wanted_and_fugitive_multipliers
+  unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_fugitive_property_crime_uses_existing_case_and_real_location
+  unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_custody_can_end_in_death_or_escape_before_release`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_outlaw_flight_escape_reason_renders_plainly`
+- The full `unit_test.test_simulation_outlaws` module was attempted, but it
+  exceeded the 240 second local timeout on this laptop; the targeted changed
+  outlaw regressions passed.
