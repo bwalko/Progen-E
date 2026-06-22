@@ -887,6 +887,22 @@ class SimulationContext:
             "source": source_payload,
         }
         self._record_inferred_simulation_event(year, "passive_person_promoted", payload)
+        if person.job:
+            self._record_inferred_simulation_event(
+                person.job_assigned_year or year,
+                "job_assigned",
+                {
+                    "year": int(person.job_assigned_year or year),
+                    "person_id": int(rec.person_id),
+                    "job": person.job,
+                    "job_family": prec.person.job_family,
+                    "reason": reason_text,
+                    "source": {
+                        **source_payload,
+                        "source_kind": "passive_promotion",
+                    },
+                },
+            )
         source_event_raw = source_payload.get("source_event_id")
         try:
             source_event_id = int(source_event_raw) if source_event_raw is not None else None
@@ -1070,6 +1086,22 @@ class SimulationContext:
         self._record_inferred_simulation_event(
             year, "nondetailed_person_promoted", payload
         )
+        if person.job:
+            self._record_inferred_simulation_event(
+                person.job_assigned_year or year,
+                "job_assigned",
+                {
+                    "year": int(person.job_assigned_year or year),
+                    "person_id": int(rec.person_id),
+                    "job": person.job,
+                    "job_family": passive.job_family,
+                    "reason": reason_text,
+                    "source": {
+                        **source_payload,
+                        "source_kind": "nondetailed_directory",
+                    },
+                },
+            )
         self.passive_promotion_log.append(
             PassivePromotionLogEntry(
                 person_id=int(rec.person_id),
@@ -1130,6 +1162,7 @@ class SimulationContext:
         job_family: str | None = None,
         gender: str | None = None,
         min_age: int | None = None,
+        max_age: int | None = 120,
         require_unpartnered: bool = False,
         limit: int = 1,
         source: dict[str, Any] | None = None,
@@ -1154,6 +1187,20 @@ class SimulationContext:
             raise ValueError(
                 "promote_nondetailed_people requires person_ids, settlement_id, region_id, or job_family"
             )
+        min_age_i = max(0, int(min_age)) if min_age is not None else 0
+        max_age_i = max(0, int(max_age)) if max_age is not None else None
+        exact_person_id_selector = (
+            bool(clean_person_ids)
+            and not settlement_s
+            and not region_s
+            and not job_s
+            and not gender_s
+            and min_age is None
+            and not require_unpartnered
+        )
+        apply_max_age = max_age_i is not None and not exact_person_id_selector
+        if apply_max_age and max_age_i is not None and max_age_i < min_age_i:
+            return []
         max_rows = max(1, int(limit))
         clauses = ["p.is_alive = 1"]
         params: list[object] = []
@@ -1180,10 +1227,28 @@ class SimulationContext:
                 params.append(gender_s)
         if min_age is not None:
             clauses.append("(? - p.birthyear) >= ?")
-            params.extend([int(year), max(0, int(min_age))])
+            params.extend([int(year), min_age_i])
+        if apply_max_age and max_age_i is not None:
+            clauses.append("(? - p.birthyear) <= ?")
+            params.extend([int(year), max_age_i])
         if require_unpartnered:
             clauses.append("p.is_partnered = 0")
             clauses.append("p.partner_person_id IS NULL")
+        fallback_max_age = max_age_i if max_age_i is not None else 120
+        preferred_min_age = max(18, min_age_i)
+        preferred_max_age = min(fallback_max_age, 65)
+        if preferred_max_age < preferred_min_age:
+            preferred_min_age = min_age_i
+            preferred_max_age = fallback_max_age
+        order_params = [
+            int(year),
+            preferred_min_age,
+            preferred_max_age,
+            int(year),
+            min_age_i,
+            fallback_max_age,
+        ]
+        params.extend(order_params)
         params.append(max_rows)
         sql = f"""
             SELECT p.person_id
@@ -1195,7 +1260,13 @@ class SimulationContext:
             LEFT JOIN simulation_region_lookup br
               ON br.region_key = p.birthplace_region_key
             WHERE {" AND ".join(clauses)}
-            ORDER BY p.person_id
+            ORDER BY
+              CASE
+                WHEN (? - p.birthyear) BETWEEN ? AND ? THEN 0
+                WHEN (? - p.birthyear) BETWEEN ? AND ? THEN 1
+                ELSE 2
+              END,
+              p.person_id
             LIMIT ?
         """
         own_conn: sqlite3.Connection | None = None
@@ -1220,6 +1291,7 @@ class SimulationContext:
             "selector_job_family": normalize_nondetailed_job_family(job_s) if job_s else "",
             "selector_gender": gender_s,
             "selector_min_age": int(min_age) if min_age is not None else None,
+            "selector_max_age": int(max_age) if max_age is not None else None,
             "selector_require_unpartnered": bool(require_unpartnered),
             "selector_limit": max_rows,
         }

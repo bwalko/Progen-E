@@ -179,6 +179,20 @@ Add a new concrete hybrid-population TODO only when a longer mixed-mode
 replicate or UI/reporting pass shows a specific drift, promotion-source bias,
 missing backfill anchor, or scale regression.
 
+### Concrete Hybrid Follow-up: Persist Directory Names Before Promotion
+
+- Persist lightweight display names for newly seeded and SQL-born
+  `simulation_people_nondetailed` rows, then use that stored name during
+  promotion instead of generating the visible name only when a row becomes
+  detailed.
+- Keep the implementation compatible with scale: use cached culture-specific
+  name pools or another bounded deterministic strategy rather than invoking the
+  full detailed-person generator for every city-directory row.
+- Completion boundary: readable non-detailed views show non-empty names for
+  seeded and SQL-born rows, promoted people keep the same stored name in their
+  backfilled history, and focused tests cover both seeded rows and annual SQL
+  births without a material seeding slowdown.
+
 ### Detailed Population Fraction
 
 Idea: model 0.1% of the population or less in full detail.

@@ -679,13 +679,35 @@ def run_nondetailed_sql_annual_tick(
             is_partnered = 0
         WHERE is_alive = 1
           AND (
-            (? - birthyear >= 70 AND ((person_id * 1103515245 + ?) % 100) < 12)
+            (? - birthyear >= 117 AND ((person_id * 1103515245 + ?) % 10000) < 9200)
+            OR (? - birthyear BETWEEN 112 AND 116 AND ((person_id * 1103515245 + ?) % 10000) < 7800)
+            OR (? - birthyear BETWEEN 105 AND 111 AND ((person_id * 1103515245 + ?) % 10000) < 5200)
+            OR (? - birthyear BETWEEN 100 AND 104 AND ((person_id * 1103515245 + ?) % 10000) < 2400)
+            OR (? - birthyear BETWEEN 70 AND 99 AND ((person_id * 1103515245 + ?) % 100) < 12)
             OR (? - birthyear BETWEEN 45 AND 69 AND ((person_id * 1103515245 + ?) % 1000) < 18)
             OR (? - birthyear BETWEEN 14 AND 44 AND ((person_id * 1103515245 + ?) % 1000) < 5)
             OR (? - birthyear < 14 AND ((person_id * 1103515245 + ?) % 1000) < 10)
           )
         """,
-        (y, y, y, y, y + 1, y, y + 2, y, y + 3),
+        (
+            y,
+            y,
+            y,
+            y,
+            y + 1,
+            y,
+            y + 2,
+            y,
+            y + 3,
+            y,
+            y + 4,
+            y,
+            y + 5,
+            y,
+            y + 6,
+            y,
+            y + 7,
+        ),
     )
     deaths = int(conn.execute("SELECT changes()").fetchone()[0])
     if prof:

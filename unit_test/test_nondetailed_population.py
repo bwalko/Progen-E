@@ -123,6 +123,37 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertGreater(result.births, 0)
             self.assertGreater(food_workers, 0)
 
+    def test_sql_tick_extreme_old_age_mortality_is_probabilistic_but_steep(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            save = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                for i in range(1000):
+                    add_nondetailed_person(
+                        conn,
+                        NondetailedPersonSeed(
+                            birthyear=883,
+                            gender="Female" if i % 2 else "Male",
+                            region_id="r1",
+                            settlement_id="r1:s1",
+                            species="Human",
+                            culture="Test",
+                            job_family="other",
+                            is_partnered=False,
+                        ),
+                        person_id=10000 + i,
+                    )
+                conn.commit()
+                result = run_nondetailed_sql_annual_tick(conn, year=1000)
+                conn.commit()
+                alive_after = nondetailed_alive_count(conn)
+
+            self.assertEqual(result.alive_after, alive_after)
+            self.assertGreater(result.deaths, 850)
+            self.assertGreater(alive_after, 0)
+            self.assertLess(alive_after, 150)
+
     def test_context_counts_and_promotion_use_nondetailed_directory(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
@@ -177,8 +208,75 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertEqual(promoted.person_id, 50)
             self.assertEqual(promoted.person.birthyear, 980)
             self.assertEqual(promoted.person.current_settlement_id, "r1:s1")
+            self.assertEqual(promoted.person.job, "care worker")
             self.assertIn(50, ctx.current_people_ids)
             self.assertEqual(ctx.nondetailed_population_count(), 0)
+            job_payload = next(
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "job_assigned" and payload.get("person_id") == 50
+            )
+            self.assertEqual(job_payload["job"], "care worker")
+            self.assertEqual(job_payload["job_family"], "care")
+
+    def test_automatic_nondetailed_promotion_skips_implausibly_old_rows(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_age_window",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            sid = "r1:s1"
+            ctx.settlements_by_id[sid] = SettlementState(
+                settlement_id=sid,
+                region_id="r1",
+                resident_count=10,
+                household_cap=3,
+            )
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=828,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id=sid,
+                        job_family="care",
+                    ),
+                    person_id=1,
+                )
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=970,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id=sid,
+                        job_family="care",
+                    ),
+                    person_id=2,
+                )
+                conn.commit()
+
+            promoted = ctx.promote_nondetailed_people(
+                year=1000,
+                reason="settlement_detail_floor",
+                settlement_id=sid,
+                limit=1,
+            )
+
+            self.assertEqual([rec.person_id for rec in promoted], [2])
+            self.assertEqual(promoted[0].person.birthyear, 970)
 
     def test_context_promotes_nondetailed_people_by_selector(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

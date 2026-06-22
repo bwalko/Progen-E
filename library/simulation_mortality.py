@@ -16,10 +16,12 @@ TRIPLET_INFANT_MORTALITY_SURCHARGE = 0.06
 
 DEFAULT_LIFESPAN_YEARS = 100
 LIFESPAN_MORTALITY_RAMP_START_MULTIPLIER = 0.85
-LIFESPAN_MORTALITY_HARD_CAP_MULTIPLIER = 1.15
+LIFESPAN_MORTALITY_HARD_CAP_MULTIPLIER = 1.16
 LIFESPAN_MORTALITY_RAMP_MAX_PROBABILITY = 0.92
 LIFESPAN_MORTALITY_RAMP_POWER = 2.2
-LIFESPAN_MORTALITY_HARD_CAP_PROBABILITY = 0.999999
+# Annual probability once the ramp is saturated. This is intentionally not 1.0:
+# extreme old age should be vanishingly rare, not an absolute ceiling.
+LIFESPAN_MORTALITY_HARD_CAP_PROBABILITY = 0.92
 
 # In the current simulation, war/crime mortality is not explicitly modeled.
 # Apply a small peace-time offset to historical all-cause mortality rates.

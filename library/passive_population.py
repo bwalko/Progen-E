@@ -72,6 +72,21 @@ class PassiveCohort:
 PassiveMarriageCandidateIndex = dict[tuple[str, str], list[tuple[int, int, PassiveCohort]]]
 PassiveOfficeCandidateIndex = dict[tuple[str, str], list[tuple[int, int, PassiveCohort]]]
 
+NONDETAILED_PROMOTION_MAX_AGE = 120
+NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE = 55
+
+_JOB_FAMILY_LABELS: dict[str, str] = {
+    "food": "food worker",
+    "military": "soldier",
+    "craft": "craft worker",
+    "trade": "trader",
+    "care": "care worker",
+    "admin": "administrator",
+    "religious": "religious worker",
+    "criminal": "criminal associate",
+    "other": "worker",
+}
+
 
 def normalize_passive_gender(gender: str | None, *, fallback: str = "Male") -> str:
     raw = (gender or "").strip().lower()
@@ -109,6 +124,7 @@ def passive_person_to_detailed_person(
         world=simulation_context.world,
         db_path=simulation_context.db_path,
     )
+    job_label = _job_label_from_family(passive.job_family)
     first, _, last = (passive.name or "").strip().partition(" ")
     if not first:
         first = generated.first_name
@@ -125,9 +141,19 @@ def passive_person_to_detailed_person(
             or generated.current_settlement_id
         ),
         partner_person_id=passive.partner_person_id,
+        job=job_label,
+        job_assigned_year=int(simulation_year) if job_label else generated.job_assigned_year,
         job_tier=passive.status_bucket,
+        employment_status="employed" if job_label else generated.employment_status,
         household_prosperity=_prosperity_bucket_value(passive.prosperity_bucket),
     )
+
+
+def _job_label_from_family(job_family: str | None) -> str | None:
+    family = (job_family or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not family or family == "dependent":
+        return None
+    return _JOB_FAMILY_LABELS.get(family, f"{family.replace('_', ' ')} worker")
 
 
 def _prosperity_bucket_value(bucket: str | None) -> float | None:
@@ -152,6 +178,7 @@ def _try_promote_nondetailed_candidate(
     job_family: str | None = None,
     gender: str | None = None,
     min_age: int | None = None,
+    max_age: int | None = NONDETAILED_PROMOTION_MAX_AGE,
     require_unpartnered: bool = False,
     source: dict[str, Any] | None = None,
     save_conn: Any | None = None,
@@ -181,6 +208,7 @@ def _try_promote_nondetailed_candidate(
             job_family=job or None,
             gender=gender,
             min_age=min_age,
+            max_age=max_age,
             require_unpartnered=bool(require_unpartnered),
             limit=1,
             source={
@@ -218,6 +246,7 @@ def promote_passive_candidate_for_office(
         settlement_id=sid or None,
         region_id=rid or None,
         min_age=int(min_age),
+        max_age=NONDETAILED_PROMOTION_MAX_AGE,
         source=source,
         save_conn=save_conn,
         selector="office",
@@ -383,6 +412,7 @@ def promote_passive_person_for_focus(
                 settlement_id=sid or None,
                 region_id=rid or None,
                 person_ids=(pid,),
+                max_age=None,
                 source={
                     **source_payload,
                     "focus": focus_kind,
@@ -407,6 +437,7 @@ def promote_passive_person_for_focus(
             reason=reason,
             settlement_id=sid or None,
             region_id=rid or None,
+            max_age=NONDETAILED_PROMOTION_MAX_AGE,
             source={
                 **source_payload,
                 "focus": focus_kind,
@@ -607,6 +638,7 @@ def promote_passive_candidate_for_marriage(
         region_id=rid or None,
         gender=wanted_gender,
         min_age=int(min_age),
+        max_age=NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE,
         require_unpartnered=True,
         source=source,
         selector="marriage",

@@ -3136,3 +3136,49 @@ completion.
 - `python -m unittest unit_test.test_population_growth_nondetailed_runner`
 - `python -m unittest unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_passive_office_promotion_materializes_full_person
   unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_legacy_generic_passive_species_ethnic_promotes_as_human`
+
+## 2026-06-22 Mortality Tail Tuning
+
+### Fixes
+
+- Replaced the detailed-person lifespan saturation behavior with a steep
+  probabilistic tail instead of an effective ceiling: lifespan-100 people now
+  reach about 92% annual mortality from age 116 onward, allowing rare exceptional
+  survivors without normal runs drifting into the 150s.
+- Added extreme-age mortality bands to the non-detailed city-directory SQL tick
+  so background people no longer stay at the same modest 70+ annual risk forever.
+- Updated mortality regression coverage to lock in the no-ceiling tail shape,
+  vectorized/scalar parity, long-lived species windows, and steep-but-probabilistic
+  non-detailed mortality at age 117.
+
+### Validation
+
+- `python -m unittest unit_test.test_simulation_mortality unit_test.test_nondetailed_population`
+- `python -m py_compile library/simulation_mortality.py library/nondetailed_population.py unit_test/test_simulation_mortality.py unit_test/test_nondetailed_population.py`
+- `C:\Users\bryan\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m unittest unit_test.test_simulation_mortality unit_test.test_nondetailed_population`
+
+## 2026-06-22 Non-Detailed Promotion Age Window
+
+### Fixes
+
+- Added an automatic-promotion age window for city-directory people so stale or
+  exceptionally ancient non-detailed rows are not chosen for settlement floors,
+  offices, focus pulls, marriage candidates, or archetype background promotion.
+  Exact person-id inspection can still promote a requested row deliberately.
+- Made non-detailed promotion order age-aware while preserving stable person-id
+  order inside the preferred adult window.
+- Preserved the city-directory `job_family` as a coarse detailed job on
+  promotion and emitted an inferred `job_assigned` event so person sheets no
+  longer show an empty job history for newly promoted directory residents.
+- Added regression coverage for skipping an implausibly old low-id row in favor
+  of a plausible same-settlement candidate, and for preserving a promoted
+  directory person's coarse job.
+- Added a bounded TODO follow-up for persisting lightweight directory names
+  before promotion.
+
+### Validation
+
+- `python -m py_compile library/passive_population.py library/simulation_context.py library/simulation_remarkable_archetypes.py unit_test/test_nondetailed_population.py`
+- `python -m unittest unit_test.test_nondetailed_population`
+- `python -m unittest unit_test.test_population_growth_nondetailed_runner unit_test.test_remarkable_archetypes unit_test.test_simulation_mortality`
+- `C:\Users\bryan\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m unittest unit_test.test_nondetailed_population unit_test.test_simulation_mortality`
