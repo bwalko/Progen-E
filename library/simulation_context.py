@@ -18,6 +18,7 @@ import numpy as np
 from library import simulation_timing
 from library.config_import import refresh_world_config_from_csv
 from library.detailed_population_variance import apply_detailed_selection_variance
+from library.genome_composites import refresh_genome_composite_profile
 from library.passive_population import (
     PassiveCohort,
     PassivePerson,
@@ -93,6 +94,7 @@ from library.world_save import (
 # treasury/food/resource totals, or any code where every person must be counted.
 # Groups at or below the cap should always use the full group.
 DEFAULT_DECISION_SAMPLE_SIZE = 1_000
+MAX_ACTIVE_PARAMOURS_PER_PERSON = 3
 
 
 @dataclass
@@ -130,6 +132,7 @@ class AlivePersonColumns:
     is_founder: np.ndarray
     has_partner: np.ndarray
     has_paramour: np.ndarray
+    paramour_counts: np.ndarray
     attractiveness_01: np.ndarray
     job_prosperity_01: np.ndarray
     settlement_code_by_id: dict[str, int]
@@ -657,6 +660,7 @@ class SimulationContext:
         is_founder: list[bool] = []
         has_partner: list[bool] = []
         has_paramour: list[bool] = []
+        paramour_counts: list[int] = []
         attractiveness: list[float] = []
         job_prosperity: list[float] = []
         for rec in records:
@@ -681,7 +685,9 @@ class SimulationContext:
             )
             is_founder.append(bool(rec.is_founder))
             has_partner.append(rec.person.partner_person_id is not None)
-            has_paramour.append(rec.person.paramour_person_id is not None)
+            p_count = self.paramour_count_for_person(rec.person_id)
+            has_paramour.append(p_count > 0)
+            paramour_counts.append(p_count)
             attractiveness.append(float(rec.person.attractiveness_01 or 0.0))
             job_prosperity.append(float(rec.person.job_prosperity_01 or 0.0))
 
@@ -696,6 +702,7 @@ class SimulationContext:
             is_founder=np.asarray(is_founder, dtype=bool),
             has_partner=np.asarray(has_partner, dtype=bool),
             has_paramour=np.asarray(has_paramour, dtype=bool),
+            paramour_counts=np.asarray(paramour_counts, dtype=np.int8),
             attractiveness_01=np.asarray(attractiveness, dtype=float),
             job_prosperity_01=np.asarray(job_prosperity, dtype=float),
             settlement_code_by_id=settlement_code_by_id,
@@ -727,6 +734,7 @@ class SimulationContext:
         p = person
         if p.current_settlement_id is None and p.birthplace_settlement_id:
             p = replace(p, current_settlement_id=p.birthplace_settlement_id)
+        p = refresh_genome_composite_profile(p, self.db_path)
         rec = SimulationPersonRecord(
             person_id=self.next_person_id,
             person=p,
@@ -845,6 +853,7 @@ class SimulationContext:
             reason=reason_text,
             source=source_payload,
         )
+        person = refresh_genome_composite_profile(person, self.db_path)
         rec = SimulationPersonRecord(
             person_id=int(prec.person_id),
             person=person,
@@ -1084,6 +1093,7 @@ class SimulationContext:
                 "source_kind": "nondetailed_directory",
             },
         )
+        person = refresh_genome_composite_profile(person, self.db_path)
         rec = SimulationPersonRecord(
             person_id=promote_id,
             person=person,
@@ -1398,6 +1408,78 @@ class SimulationContext:
         self.surname_conventions_by_pair[key] = convention
         return convention
 
+    def _ordered_paramour_pair(self, person_a_id: int, person_b_id: int) -> tuple[int, int]:
+        """Store opposite-sex paramours in father/mother order for birth conventions."""
+        ra = self.id_to_record.get(int(person_a_id))
+        rb = self.id_to_record.get(int(person_b_id))
+        if ra is not None and rb is not None:
+            ga = (ra.person.gender or "").strip().lower()
+            gb = (rb.person.gender or "").strip().lower()
+            if ga == "male" and gb == "female":
+                return (int(person_a_id), int(person_b_id))
+            if ga == "female" and gb == "male":
+                return (int(person_b_id), int(person_a_id))
+        return (int(person_a_id), int(person_b_id))
+
+    def paramour_ids_for_person(self, person_id: int) -> tuple[int, ...]:
+        """Active paramour ids for one person, sourced from canonical pair storage."""
+        pid = int(person_id)
+        ids: list[int] = []
+        seen: set[int] = set()
+        for a_id, b_id in self.paramours:
+            other: int | None = None
+            if int(a_id) == pid:
+                other = int(b_id)
+            elif int(b_id) == pid:
+                other = int(a_id)
+            if other is not None and other not in seen:
+                seen.add(other)
+                ids.append(other)
+        return tuple(ids)
+
+    def paramour_count_for_person(self, person_id: int) -> int:
+        return len(self.paramour_ids_for_person(int(person_id)))
+
+    def _sync_person_paramour_fields(self, person_id: int) -> None:
+        rec = self.id_to_record.get(int(person_id))
+        if rec is None:
+            return
+        ids = self.paramour_ids_for_person(int(person_id))
+        rec.person = replace(
+            rec.person,
+            paramour_person_id=(ids[0] if ids else None),
+            paramour_person_ids=ids,
+        )
+
+    def sync_all_paramour_fields(self, *, include_legacy_scalars: bool = False) -> None:
+        """De-dupe canonical paramour pairs and refresh scalar/list person caches."""
+        pairs: list[tuple[int, int]] = []
+        seen: set[tuple[int, int]] = set()
+
+        def add_pair(a_raw: int | None, b_raw: int | None) -> None:
+            if a_raw is None or b_raw is None:
+                return
+            a = int(a_raw)
+            b = int(b_raw)
+            if a == b or a not in self.id_to_record or b not in self.id_to_record:
+                return
+            key = self._relationship_pair_key(a, b)
+            if key in seen:
+                return
+            seen.add(key)
+            pairs.append(self._ordered_paramour_pair(a, b))
+
+        for a_id, b_id in self.paramours:
+            add_pair(a_id, b_id)
+        if include_legacy_scalars:
+            for rec in self.people:
+                add_pair(rec.person_id, rec.person.paramour_person_id)
+
+        self.paramours = pairs
+        for rec in self.people:
+            self._sync_person_paramour_fields(rec.person_id)
+        self.invalidate_alive_columns_cache()
+
     def add_couple(self, person_a_id: int, person_b_id: int) -> None:
         ra = self.id_to_record.get(person_a_id)
         rb = self.id_to_record.get(person_b_id)
@@ -1496,19 +1578,17 @@ class SimulationContext:
             raise ValueError(
                 "add_paramour_relationship: pair fails minimum age or close-kin rules"
             )
-        ra.person = replace(ra.person, paramour_person_id=person_b_id)
-        rb.person = replace(rb.person, paramour_person_id=person_a_id)
-        if (ra.person.gender or "").strip() == "Male" and (
-            rb.person.gender or ""
-        ).strip() == "Female":
-            pair = (person_a_id, person_b_id)
-        elif (ra.person.gender or "").strip() == "Female" and (
-            rb.person.gender or ""
-        ).strip() == "Male":
-            pair = (person_b_id, person_a_id)
-        else:
-            pair = (person_a_id, person_b_id)
+        key = self._relationship_pair_key(person_a_id, person_b_id)
+        if any(self._relationship_pair_key(a, b) == key for a, b in self.paramours):
+            raise ValueError("add_paramour_relationship: duplicate active paramour pair")
+        if self.paramour_count_for_person(person_a_id) >= MAX_ACTIVE_PARAMOURS_PER_PERSON:
+            raise ValueError("add_paramour_relationship: first person is at paramour cap")
+        if self.paramour_count_for_person(person_b_id) >= MAX_ACTIVE_PARAMOURS_PER_PERSON:
+            raise ValueError("add_paramour_relationship: second person is at paramour cap")
+        pair = self._ordered_paramour_pair(person_a_id, person_b_id)
         self.paramours.append(pair)
+        self._sync_person_paramour_fields(person_a_id)
+        self._sync_person_paramour_fields(person_b_id)
         surname_convention = self.surname_convention_for_parents(*pair)
         self.invalidate_alive_columns_cache()
         if self.file_store is not None:
@@ -1545,10 +1625,8 @@ class SimulationContext:
         self.surname_conventions_by_pair.pop(
             self._relationship_pair_key(person_a_id, person_b_id), None
         )
-        for pid in (person_a_id, person_b_id):
-            rec = self.id_to_record.get(pid)
-            if rec is not None and rec.person.paramour_person_id in pair_set:
-                rec.person = replace(rec.person, paramour_person_id=None)
+        self._sync_person_paramour_fields(person_a_id)
+        self._sync_person_paramour_fields(person_b_id)
         self.invalidate_alive_columns_cache()
         if self.file_store is not None:
             self.file_store.append_event(
@@ -1888,6 +1966,10 @@ class SimulationContext:
         self.invalidate_alive_census_cache()
 
     def _clear_relationship_refs_to(self, dead_ids: set[int]) -> None:
+        self.paramours = [
+            (a, b) for (a, b) in self.paramours if a not in dead_ids and b not in dead_ids
+        ]
+        self.sync_all_paramour_fields()
         for rec in self.people:
             if rec.person_id not in self.current_people_ids:
                 continue
@@ -1895,8 +1977,15 @@ class SimulationContext:
             np = p
             if p.partner_person_id is not None and p.partner_person_id in dead_ids:
                 np = replace(np, partner_person_id=None)
-            if p.paramour_person_id is not None and p.paramour_person_id in dead_ids:
-                np = replace(np, paramour_person_id=None)
+            if any(pid in dead_ids for pid in self.paramour_ids_for_person(rec.person_id)):
+                ids = tuple(
+                    pid for pid in self.paramour_ids_for_person(rec.person_id) if pid not in dead_ids
+                )
+                np = replace(
+                    np,
+                    paramour_person_id=(ids[0] if ids else None),
+                    paramour_person_ids=ids,
+                )
             if np is not p:
                 rec.person = np
 
@@ -1912,6 +2001,7 @@ class SimulationContext:
             current_settlement_id=None,
             partner_person_id=None,
             paramour_person_id=None,
+            paramour_person_ids=(),
             last_birth_event_year=None,
             job=None,
             job_assigned_year=None,

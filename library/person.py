@@ -92,7 +92,9 @@ class Person:
     # Cached 0..1; includes elderly penalty on the rating only (symmetry value unchanged).
     attractiveness_01: float | None = None
     genome_composite_names: tuple[str, ...] = ()
+    genome_composite_scores: dict[str, float] = field(default_factory=dict)
     genome_trait_phrases: tuple[str, ...] = ()
+    paramour_person_ids: tuple[int, ...] = ()
     sexual_nature: str | None = None
     gender_mind: str | None = None
     father_name: str | None = None

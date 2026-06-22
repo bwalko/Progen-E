@@ -20,6 +20,7 @@ from library.relationship_attraction import (
     relationship_pair_score_01,
 )
 from library.reproduction import pair_prosperity_01
+from library.simulation_context import MAX_ACTIVE_PARAMOURS_PER_PERSON
 from library.simulation_outlaws import is_outlaw_absent
 from library.simulation_careers import resource_pressure_for_person
 
@@ -40,6 +41,7 @@ PARAMOUR_CONTACT_TRIAL_BASE = 64
 # detailed candidate sample, not passive/cohort population.
 PARAMOUR_CONTACT_TRIAL_SHARE_OF_ELIGIBLE = 0.75
 PARAMOUR_CONTACT_TRIAL_ABSOLUTE_CAP = 5_000
+PARAMOUR_CAPACITY_FACTORS: tuple[float, ...] = (1.0, 0.12, 0.025)
 # With ``min_fertility_age`` set, paramour age floor is ``min(PARAMOUR_MIN_SIM_AGE, mf)``; if unset,
 # only ``PARAMOUR_MIN_SIM_AGE`` applies.
 PARAMOUR_MIN_SIM_AGE = 18
@@ -272,6 +274,15 @@ def _paramour_pair_probability_from_impulses(
     )
 
 
+def _paramour_capacity_factor(active_count: int) -> float:
+    n = max(0, int(active_count))
+    if n >= MAX_ACTIVE_PARAMOURS_PER_PERSON:
+        return 0.0
+    if n < len(PARAMOUR_CAPACITY_FACTORS):
+        return float(PARAMOUR_CAPACITY_FACTORS[n])
+    return 0.0
+
+
 def _paramour_bond_score_01(
     ctx: SimulationContext, ra, rb, year: int, resource_facts=None
 ) -> float:
@@ -303,9 +314,8 @@ def _paramour_bond_score_01(
     return _clamp01(0.35 * attraction_fit + 0.25 * prosperity + 0.25 * stability + 0.15 * patience)
 
 
-def _has_outside_paramour(person: Person, partner_id: int) -> bool:
-    pid = person.paramour_person_id
-    return pid is not None and int(pid) != int(partner_id)
+def _has_outside_paramour(ctx: SimulationContext, person_id: int, partner_id: int) -> bool:
+    return any(int(pid) != int(partner_id) for pid in ctx.paramour_ids_for_person(person_id))
 
 
 def _person_breakup_stress_01(
@@ -328,7 +338,7 @@ def _person_breakup_stress_01(
         stress += 0.11 + 0.15 * neuro
         reasons.append("mental_instability")
 
-    if _has_outside_paramour(p, partner_id):
+    if _has_outside_paramour(ctx, rec.person_id, partner_id):
         stress += 0.24
         reasons.append("paramour")
 
@@ -755,11 +765,22 @@ def _maybe_form_paramour_pair(
     if ia not in ctx.current_people_ids or ib not in ctx.current_people_ids:
         return
     pa, pb = ra.person, rb.person
-    if pa.paramour_person_id is not None or pb.paramour_person_id is not None:
+    pair_key = ctx._relationship_pair_key(ia, ib)
+    if any(ctx._relationship_pair_key(a, b) == pair_key for a, b in ctx.paramours):
+        return
+    count_a = ctx.paramour_count_for_person(ia)
+    count_b = ctx.paramour_count_for_person(ib)
+    if count_a >= MAX_ACTIVE_PARAMOURS_PER_PERSON or count_b >= MAX_ACTIVE_PARAMOURS_PER_PERSON:
         return
     if pa.partner_person_id == ib or pb.partner_person_id == ia:
         return
     if not paramour_pair_eligible(ra, rb, int(year)):
+        return
+    capacity_multiplier = min(
+        _paramour_capacity_factor(count_a),
+        _paramour_capacity_factor(count_b),
+    )
+    if capacity_multiplier <= 0.0:
         return
     if impulse_cache is None:
         pressure_a = resource_pressure_for_person(ctx, ra, resource_facts=resource_facts)
@@ -774,6 +795,7 @@ def _maybe_form_paramour_pair(
             prosperity_a_01=prosperity_a,
             prosperity_b_01=prosperity_b,
         )
+        formation_probability *= capacity_multiplier
     else:
         if ia not in impulse_cache:
             impulse_cache[ia] = _paramour_impulse_01(pa)
@@ -793,6 +815,7 @@ def _maybe_form_paramour_pair(
             prosperity_a_01=prosperity_a,
             prosperity_b_01=prosperity_b,
         )
+        formation_probability *= capacity_multiplier
     if rng.random() > formation_probability:
         return
     try:
@@ -800,6 +823,9 @@ def _maybe_form_paramour_pair(
         ctx._pending_simulation_events[-1][2].update(
             {
                 "formation_probability": round(formation_probability, 5),
+                "paramour_count_a_before": int(count_a),
+                "paramour_count_b_before": int(count_b),
+                "capacity_multiplier": round(float(capacity_multiplier), 5),
                 "same_gender": _same_gender(pa, pb),
                 "orientation_multiplier": round(
                     _paramour_orientation_multiplier(ctx, pa, pb), 4
@@ -829,7 +855,9 @@ def maybe_form_paramours(
     ctx: SimulationContext, year: int, rng: random.Random, resource_facts=None
 ) -> None:
     cols = ctx.alive_person_columns(year)
-    candidate_mask = (cols.ages >= PARAMOUR_MIN_SIM_AGE) & (~cols.has_paramour)
+    candidate_mask = (cols.ages >= PARAMOUR_MIN_SIM_AGE) & (
+        cols.paramour_counts < MAX_ACTIVE_PARAMOURS_PER_PERSON
+    )
     impulse_cache: dict[int, float] = {}
     for code in sorted(int(c) for c in set(cols.settlement_codes[candidate_mask]) if int(c) != 0):
         sid = cols.settlement_id_by_code.get(code, "")

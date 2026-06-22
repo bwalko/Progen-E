@@ -851,7 +851,7 @@ def _escape_outlaw_custody(
                 **_custody_event_payload(custody),
             },
         )
-        flee_to_refuge(ctx, case.case_key, year=int(year))
+        flee_to_refuge(ctx, case.case_key, year=int(year), flight_reason="escaped_custody")
     ctx.invalidate_alive_census_cache()
     ctx.invalidate_annual_indexes()
 
@@ -1479,7 +1479,11 @@ def _spouse_breaks_after_outlaw_flight(
 
 
 def flee_to_refuge(
-    ctx: "SimulationContext", case_key: str, *, year: int
+    ctx: "SimulationContext",
+    case_key: str,
+    *,
+    year: int,
+    flight_reason: str | None = None,
 ) -> SimulationOutlawRefuge | None:
     case = (getattr(ctx, "outlaw_cases", {}) or {}).get(case_key)
     if case is None or str(case.status or "").strip().lower() != "active":
@@ -1492,13 +1496,14 @@ def flee_to_refuge(
         or rec.person.last_free_settlement_id
         or case.settlement_id
     )
-    if rec.person.paramour_person_id is not None:
+    for paramour_id in list(ctx.paramour_ids_for_person(int(rec.person_id))):
         try:
-            ctx.end_paramour_relationship(int(rec.person_id), int(rec.person.paramour_person_id))
+            ctx.end_paramour_relationship(int(rec.person_id), int(paramour_id))
             ctx._pending_simulation_events[-1][2].update(
                 {
                     "end_reason": "outlaw_flight",
                     "end_reasons": ["outlaw_flight"],
+                    "flight_reason": flight_reason or "ordinary_flight",
                 }
             )
         except (LookupError, ValueError):
@@ -1569,7 +1574,12 @@ def flee_to_refuge(
             "from_settlement_id": last_free,
             "outlaw_refuge_id": refuge.refuge_id,
             "outlaw_refuge_display_name": refuge.display_name,
-            "details": "fled from ordinary settlement residence",
+            "flight_reason": flight_reason or "ordinary_flight",
+            "details": (
+                "escaped custody before fleeing to outlaw refuge"
+                if flight_reason == "escaped_custody"
+                else "fled from ordinary settlement residence"
+            ),
         },
     )
     ctx._record_simulation_event(

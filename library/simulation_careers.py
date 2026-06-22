@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from library import simulation_timing
-from library.genome_composites import significant_composite_names_for_traits
+from library.genome_composites import refresh_genome_composite_profile
 from library.job_economics import (
     JobEconomicsCatalog,
     JobEconomicsParams,
@@ -2564,15 +2564,16 @@ def assign_career_if_eligible(
     was_unemployed = rec.person.employment_status == "unemployed"
     unemployment_started = rec.person.unemployment_started_year
     unemployment_years = _unemployment_years(rec.person, year)
-    comp_labels = tuple(rec.person.genome_composite_names or ())
-    if not comp_labels:
-        comp_rows = _genome_composite_rows(str(Path(ctx.db_path).resolve()))
-        comp_labels = significant_composite_names_for_traits(
-            traits, comp_rows
-        )
-    trait_phrases = tuple(rec.person.genome_trait_phrases or ())
+    profiled_person = refresh_genome_composite_profile(
+        rec.person,
+        ctx.db_path,
+        trait_values=traits,
+    )
+    comp_labels = tuple(profiled_person.genome_composite_names or ())
+    comp_scores = dict(profiled_person.genome_composite_scores or {})
+    trait_phrases = tuple(profiled_person.genome_trait_phrases or ())
     if not trait_phrases:
-        trait_notes = interpret_genome_personality(rec.person, db_path=ctx.db_path)
+        trait_notes = interpret_genome_personality(profiled_person, db_path=ctx.db_path)
         trait_phrases = tuple(n.phrase for n in trait_notes if n.phrase)
     job_fit_score, job_trait_match_score = job_category_fitness_score(
         rec.person,
@@ -2582,7 +2583,7 @@ def assign_career_if_eligible(
         trait_values=traits,
     )
     rec.person = replace(
-        rec.person,
+        profiled_person,
         job=assignment.job,
         job_assigned_year=int(year),
         job_era=assignment.job_era,
@@ -2594,6 +2595,7 @@ def assign_career_if_eligible(
         unemployment_started_year=None,
         career_fitness_score=fitness.score,
         genome_composite_names=comp_labels,
+        genome_composite_scores=comp_scores,
         genome_trait_phrases=trait_phrases,
     )
     archetype = JobArchetypeCatalog.load(ctx.db_path).lookup(assignment.job)
@@ -2647,6 +2649,7 @@ def assign_career_if_eligible(
             "resource_pressure": pressure,
             "childcare_duty_factor": round(_clamp(duty, 0.0, 1.0), 4),
             "genome_composite_names": list(comp_labels),
+            "genome_composite_scores": comp_scores,
             "genome_trait_phrases": list(trait_phrases),
         },
     )
@@ -2924,15 +2927,16 @@ def _assign_special_household_job(
     unemployment_started = rec.person.unemployment_started_year
     unemployment_years = _unemployment_years(rec.person, year)
     traits = trait_values if trait_values is not None else work_trait_values(rec.person)
-    comp_labels = tuple(rec.person.genome_composite_names or ())
-    if not comp_labels:
-        comp_labels = significant_composite_names_for_traits(
-            traits,
-            _genome_composite_rows(str(Path(ctx.db_path).resolve())),
-        )
-    trait_phrases = tuple(rec.person.genome_trait_phrases or ())
+    profiled_person = refresh_genome_composite_profile(
+        rec.person,
+        ctx.db_path,
+        trait_values=traits,
+    )
+    comp_labels = tuple(profiled_person.genome_composite_names or ())
+    comp_scores = dict(profiled_person.genome_composite_scores or {})
+    trait_phrases = tuple(profiled_person.genome_trait_phrases or ())
     if not trait_phrases:
-        trait_notes = interpret_genome_personality(rec.person, db_path=ctx.db_path)
+        trait_notes = interpret_genome_personality(profiled_person, db_path=ctx.db_path)
         trait_phrases = tuple(n.phrase for n in trait_notes if n.phrase)
     era = resolve_job_era(ctx.get_historical_year(year))
     fitness_score = fitness.score if fitness is not None else career_fitness_score(rec.person)
@@ -2947,7 +2951,7 @@ def _assign_special_household_job(
         trait_values=traits,
     )
     rec.person = replace(
-        rec.person,
+        profiled_person,
         job=job,
         job_assigned_year=int(year),
         job_era=era,
@@ -2956,6 +2960,7 @@ def _assign_special_household_job(
         unemployment_started_year=None,
         career_fitness_score=fitness_score,
         genome_composite_names=comp_labels,
+        genome_composite_scores=comp_scores,
         genome_trait_phrases=trait_phrases,
     )
     rec.person = _apply_job_archetype_state(
@@ -3010,6 +3015,7 @@ def _assign_special_household_job(
             "resource_pressure": pressure,
             "non_graphic": archetype.job_market_type == "vice",
             "genome_composite_names": list(comp_labels),
+            "genome_composite_scores": comp_scores,
             "genome_trait_phrases": list(trait_phrases),
         },
     )

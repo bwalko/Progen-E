@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+import random
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +17,11 @@ from library.passive_population import PassiveCohort, PassivePerson
 from library.polity import PolityState, TerritoryOpenRow
 from library.simulation_context import SimulationContext
 from library.simulation_careers import simulation_careers_annual_tick
+from library.simulation_incidents import (
+    _maybe_outlaw_property_crime,
+    _outlaw_property_crime_attempt_chance,
+    _record_property_crime_incident,
+)
 from library.simulation_outlaws import (
     OUTLAW_STATUS_CLEARED,
     OUTLAW_STATUS_FUGITIVE,
@@ -84,6 +90,11 @@ class _FixedRandom:
 
     def random(self) -> float:
         return self.value
+
+
+class _ZeroChoiceRandom(random.Random):
+    def random(self) -> float:
+        return 0.0
 
 
 class TestSimulationOutlaws(unittest.TestCase):
@@ -213,6 +224,83 @@ class TestSimulationOutlaws(unittest.TestCase):
                     )
                 },
             )
+
+    def test_outlaw_property_crime_chance_uses_wanted_and_fugitive_multipliers(self) -> None:
+        normal = _outlaw_property_crime_attempt_chance(
+            0.45,
+            outlaw_status="",
+            pressure=1.0,
+        )
+        wanted = _outlaw_property_crime_attempt_chance(
+            0.45,
+            outlaw_status="wanted",
+            pressure=1.0,
+        )
+        fugitive = _outlaw_property_crime_attempt_chance(
+            0.45,
+            outlaw_status="fugitive",
+            pressure=1.0,
+        )
+
+        self.assertGreater(wanted, normal)
+        self.assertGreater(fugitive, wanted)
+
+    def test_fugitive_property_crime_uses_existing_case_and_real_location(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            accused = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Male",
+                genome=_genome(honesty=-50, justice=-50, ambition=50, persuasion=50),
+            )
+            target = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Female",
+            )
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=accused,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.70,
+                knownness_01=0.65,
+                source_event_key="test:outlaw:property",
+                target_person_id=target.person_id,
+            )
+            self.assertIsNotNone(case)
+            refuge = flee_to_refuge(ctx, case.case_key, year=1001)
+            self.assertIsNotNone(refuge)
+            before_cases = len(ctx.outlaw_cases)
+
+            incident = _maybe_outlaw_property_crime(
+                ctx,
+                1002,
+                accused,
+                rng=_ZeroChoiceRandom(),
+            )
+            self.assertIsNotNone(incident)
+            _record_property_crime_incident(ctx, 1002, incident)
+
+        self.assertEqual(incident.settlement_id, refuge.near_settlement_id)
+        self.assertNotEqual(incident.settlement_id, "")
+        self.assertEqual(incident.outlaw_case_key, case.case_key)
+        self.assertEqual(incident.outlaw_status, "fugitive")
+        self.assertEqual(len(ctx.outlaw_cases), before_cases)
+        payload = next(
+            payload
+            for _year, event_type, payload in ctx._pending_simulation_events
+            if event_type == "property_crime"
+            and payload.get("outlaw_case_key") == case.case_key
+        )
+        self.assertEqual(payload["settlement_id"], refuge.near_settlement_id)
+        self.assertEqual(payload["motive"], "survival")
+        self.assertTrue(payload["consequences"]["outlaw_case"]["existing_case"])
 
     def test_outlaw_flight_can_break_disloyal_spouse_relationship(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -1088,6 +1176,17 @@ class TestSimulationOutlaws(unittest.TestCase):
             ]
             self.assertIn("outlaw_escape", event_types)
             self.assertIn("outlaw_flight", event_types)
+            flight_payload = next(
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "outlaw_flight"
+                and payload.get("case_key") == escape_case.case_key
+                and payload.get("flight_reason") == "escaped_custody"
+            )
+            self.assertEqual(
+                flight_payload["details"],
+                "escaped custody before fleeing to outlaw refuge",
+            )
 
 
 if __name__ == "__main__":
