@@ -15,6 +15,7 @@ from library.simulation_household_care import (
     CHILD_DUTY_FACTOR_CAP,
     build_year_indexes,
     childcare_duty_factor,
+    childcare_kinship_bonus_01,
     dependent_minors_in_implicit_household,
     gate_a_co_resident_parent,
     gate_b_extended_family_in_settlement,
@@ -205,6 +206,104 @@ class TestSimulationHouseholdCare(unittest.TestCase):
                 self.assertTrue(
                     gate_b_extended_family_in_settlement(ctx, cr, sid, idx),
                 )
+
+    def test_childcare_kinship_bonus_scores_parent_grandparent_and_aunt(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=121,
+            ) as ctx:
+                from dataclasses import replace
+
+                st = ctx.ensure_active_settlement_for_region("aeria_north")
+                sid = st.settlement_id
+                grandmother = replace(
+                    generate_person_random(
+                        gender="Female",
+                        age=65,
+                        simulation_year=1000,
+                        simulation_context=ctx,
+                    ),
+                    birthyear=1935,
+                    birthplace_settlement_id=sid,
+                    current_settlement_id=sid,
+                    gender_mind="feminine",
+                )
+                grand_rec = ctx.add_person(person=grandmother, is_founder=False)
+                mother = replace(
+                    generate_person_random(
+                        gender="Female",
+                        age=30,
+                        simulation_year=1000,
+                        simulation_context=ctx,
+                    ),
+                    birthyear=1970,
+                    birthplace_settlement_id=sid,
+                    current_settlement_id=sid,
+                    gender_mind="feminine",
+                )
+                mother_rec = ctx.add_person(
+                    person=mother,
+                    is_founder=False,
+                    mother_id=grand_rec.person_id,
+                    father_id=None,
+                )
+                aunt = replace(
+                    generate_person_random(
+                        gender="Female",
+                        age=28,
+                        simulation_year=1000,
+                        simulation_context=ctx,
+                    ),
+                    birthyear=1972,
+                    birthplace_settlement_id=sid,
+                    current_settlement_id=sid,
+                    gender_mind="feminine",
+                )
+                aunt_rec = ctx.add_person(
+                    person=aunt,
+                    is_founder=False,
+                    mother_id=grand_rec.person_id,
+                    father_id=None,
+                )
+                child = replace(
+                    generate_person_random(
+                        gender="Female",
+                        age=5,
+                        simulation_year=1000,
+                        simulation_context=ctx,
+                    ),
+                    birthyear=1995,
+                    birthplace_settlement_id=sid,
+                    current_settlement_id=sid,
+                    min_fertility_age=18,
+                )
+                ctx.add_person(
+                    person=child,
+                    is_founder=False,
+                    mother_id=mother_rec.person_id,
+                    father_id=None,
+                )
+                idx = build_year_indexes(ctx, 2000)
+
+                parent_bonus = childcare_kinship_bonus_01(ctx, mother_rec, 2000, idx)
+                grand_bonus = childcare_kinship_bonus_01(ctx, grand_rec, 2000, idx)
+                aunt_bonus = childcare_kinship_bonus_01(ctx, aunt_rec, 2000, idx)
+
+        self.assertEqual(parent_bonus, 1.0)
+        self.assertGreaterEqual(grand_bonus, 0.70)
+        self.assertGreaterEqual(aunt_bonus, 0.60)
+        self.assertGreater(parent_bonus, grand_bonus)
+        self.assertGreater(grand_bonus, aunt_bonus)
 
     def test_orphan_moves_to_largest_settlement(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

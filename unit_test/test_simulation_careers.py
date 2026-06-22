@@ -65,6 +65,7 @@ from library.simulation_careers import (
 )
 from library.simulation_context import SimulationContext, SimulationPersonRecord
 from library.world_save import checkpoint_simulation_to_save, try_load_simulation_checkpoint
+from library.work_body_fit import body_demand_fit_for_person
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -228,6 +229,153 @@ def _create_config_db(path: Path) -> None:
                 'courage', 'coward', 'courageous', 'reckless', 'male', 'female',
                 'cowardly', 'brave', 'reckless'
             )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _install_body_demand_job_fixture(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            UPDATE genome_jobs
+            SET prehistoric_jobs = ?, prehistoric_premium_jobs = NULL,
+                modern_jobs = ?, modern_premium_jobs = NULL
+            WHERE trait = 'focus'
+            """,
+            ("stone carrier; bead sorter", "stone carrier; bead sorter"),
+        )
+        conn.execute(
+            """
+            CREATE TABLE job_archetypes (
+                job_key_pattern TEXT,
+                match_type TEXT,
+                job_market_type TEXT,
+                role_family TEXT,
+                workplace TEXT,
+                skill_level TEXT,
+                manuality TEXT,
+                supervision_level TEXT,
+                class_band TEXT,
+                personal_prosperity_01 REAL,
+                societal_impact_01 REAL,
+                public_prestige_01 REAL,
+                perceived_worth_01 REAL,
+                care_intensity_01 REAL,
+                home_compatible INTEGER,
+                domestic_service_kind TEXT,
+                female_mindset_affinity_01 REAL,
+                adult_only INTEGER,
+                board_compensation_01 REAL,
+                cash_wage_multiplier REAL,
+                physical_demand_01 REAL,
+                force_authority_01 REAL,
+                leveling_affinity_01 REAL,
+                informal_role_01 REAL
+            )
+            """
+        )
+        rows = [
+            (
+                "*",
+                "default",
+                "settlement_market",
+                "labor",
+                "settlement",
+                "ordinary",
+                "mixed",
+                "peer",
+                "commoner",
+                0.32,
+                0.42,
+                0.32,
+                0.38,
+                0.0,
+                0,
+                "",
+                0.5,
+                0,
+                0.0,
+                1.0,
+                0.30,
+                0.0,
+                0.50,
+                0.0,
+            ),
+            (
+                "stone carrier",
+                "exact",
+                "settlement_market",
+                "labor",
+                "worksite",
+                "ordinary",
+                "manual",
+                "peer",
+                "commoner",
+                0.34,
+                0.56,
+                0.24,
+                0.38,
+                0.0,
+                0,
+                "",
+                0.40,
+                0,
+                0.0,
+                1.0,
+                0.90,
+                0.05,
+                0.80,
+                0.0,
+            ),
+            (
+                "bead sorter",
+                "exact",
+                "settlement_market",
+                "craft",
+                "home",
+                "ordinary",
+                "mixed",
+                "peer",
+                "commoner",
+                0.24,
+                0.34,
+                0.20,
+                0.30,
+                0.0,
+                1,
+                "",
+                0.55,
+                0,
+                0.0,
+                1.0,
+                0.05,
+                0.0,
+                0.70,
+                0.0,
+            ),
+        ]
+        conn.executemany(
+            """
+            INSERT INTO job_archetypes VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            rows,
+        )
+        conn.execute(
+            """
+            INSERT INTO job_economics (job_key, era, row_kind, pool_draw, wage_yield, value_add, tax_rate)
+            VALUES ('stone carrier', 'prehistoric', 'deviation', '', '0.95', '', '')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO job_economics (job_key, era, row_kind, pool_draw, wage_yield, value_add, tax_rate)
+            VALUES ('bead sorter', 'prehistoric', 'deviation', '', '0.20', '', '')
             """
         )
         conn.commit()
@@ -1012,6 +1160,101 @@ class TestSimulationCareers(unittest.TestCase):
         self.assertEqual(resolve_job_era(2020), "modern")
         self.assertLess(job_eligibility_age(18, "prehistoric"), job_eligibility_age(18, "modern"))
         self.assertEqual(job_eligibility_age(18, "modern"), 18)
+
+    def test_pretech_body_demand_favors_fit_workers_without_hard_bans(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            cfg = Path(td) / "config.sqlite"
+            _create_config_db(cfg)
+            _install_body_demand_job_fixture(cfg)
+
+            fit_male = _person(birthyear=-5020, genome={"focus": 0.0, "physical": 0.0})
+            frail_female = replace(
+                _person(birthyear=-5020, genome={"focus": 0.0, "physical": -90.0}),
+                gender="Female",
+                gender_mind="feminine",
+            )
+            fit_female = replace(
+                _person(birthyear=-5020, genome={"focus": 0.0, "physical": 0.0}),
+                gender="Female",
+                gender_mind="feminine",
+            )
+
+            fit_male_assignment = choose_career_assignment(
+                fit_male,
+                person_id=1,
+                db_path=cfg,
+                era="prehistoric",
+                year=-5000,
+                historical_year=-5000,
+                salt=1,
+                top_n=1,
+            )
+            frail_assignment = choose_career_assignment(
+                frail_female,
+                person_id=2,
+                db_path=cfg,
+                era="prehistoric",
+                year=-5000,
+                historical_year=-5000,
+                salt=1,
+                top_n=1,
+            )
+            fit_female_assignment = choose_career_assignment(
+                fit_female,
+                person_id=3,
+                db_path=cfg,
+                era="prehistoric",
+                year=-5000,
+                historical_year=-5000,
+                salt=1,
+                top_n=1,
+            )
+
+        self.assertIsNotNone(fit_male_assignment)
+        self.assertIsNotNone(frail_assignment)
+        self.assertIsNotNone(fit_female_assignment)
+        assert fit_male_assignment is not None
+        assert frail_assignment is not None
+        assert fit_female_assignment is not None
+        self.assertEqual(fit_male_assignment.job, "stone carrier")
+        self.assertEqual(frail_assignment.job, "bead sorter")
+        self.assertEqual(fit_female_assignment.job, "stone carrier")
+        self.assertGreater(fit_male_assignment.body_power_01, fit_female_assignment.body_power_01)
+        self.assertGreater(fit_female_assignment.body_power_01, frail_assignment.body_power_01)
+        self.assertGreater(fit_male_assignment.physical_demand_01, 0.85)
+
+    def test_modern_and_magic_leveling_narrow_physical_demand_penalty(self) -> None:
+        person = replace(
+            _person(birthyear=1980, genome={"physical": -70.0}),
+            gender="Female",
+            gender_mind="feminine",
+        )
+        prehistoric = body_demand_fit_for_person(
+            person,
+            physical_demand_01=0.90,
+            leveling_affinity_01=0.80,
+            era="prehistoric",
+            magic_leveling_01=0.0,
+        )
+        modern = body_demand_fit_for_person(
+            person,
+            physical_demand_01=0.90,
+            leveling_affinity_01=0.80,
+            era="modern",
+            magic_leveling_01=0.0,
+        )
+        magical = body_demand_fit_for_person(
+            person,
+            physical_demand_01=0.90,
+            leveling_affinity_01=0.80,
+            era="prehistoric",
+            magic_leveling_01=1.0,
+        )
+
+        self.assertLess(modern.effective_physical_demand_01, prehistoric.effective_physical_demand_01)
+        self.assertLess(magical.effective_physical_demand_01, modern.effective_physical_demand_01)
+        self.assertGreater(modern.physical_demand_multiplier, prehistoric.physical_demand_multiplier)
+        self.assertGreater(magical.physical_demand_multiplier, modern.physical_demand_multiplier)
 
     def test_assignment_uses_era_jobs_and_ignores_annotation_columns(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

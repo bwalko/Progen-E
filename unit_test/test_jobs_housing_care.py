@@ -83,11 +83,24 @@ class TestJobsHousingCare(unittest.TestCase):
             vice = catalog.lookup("prostitute")
             self.assertEqual(vice.job_market_type, "vice")
             self.assertTrue(vice.adult_only)
+            self.assertGreaterEqual(vice.informal_role_01, 0.9)
+
+            charlatan = catalog.lookup("charlatan")
+            self.assertEqual(charlatan.job_market_type, "criminal")
+            self.assertEqual(charlatan.manuality, "social")
+            self.assertGreaterEqual(charlatan.informal_role_01, 0.9)
+            self.assertLess(charlatan.physical_demand_01, 0.2)
 
             prestige = catalog.lookup("banker")
             self.assertEqual(prestige.role_family, "finance")
             self.assertGreaterEqual(prestige.public_prestige_01, 0.70)
             self.assertGreaterEqual(prestige.personal_prosperity_01, 0.80)
+            self.assertLess(prestige.physical_demand_01, 0.2)
+
+            soldier = catalog.lookup("soldier")
+            self.assertEqual(soldier.role_family, "security")
+            self.assertGreater(soldier.physical_demand_01, 0.7)
+            self.assertGreater(soldier.force_authority_01, 0.6)
 
             echelons = StatusEchelonCatalog.load(cfg)
             elite = echelons.echelon_for_values(

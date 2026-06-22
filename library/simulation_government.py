@@ -43,6 +43,11 @@ from library.passive_population import (
     build_passive_office_candidate_index,
     promote_passive_candidate_for_office,
 )
+from library.work_body_fit import (
+    authority_force_fit_from_body_power,
+    body_power_01,
+    magic_physical_leveling_for_world,
+)
 from library.polity import (
     AllianceState,
     DynastyState,
@@ -98,14 +103,31 @@ def _childcare_duty_factor_safe(
     return float(duty_by_adult.get(int(rec.person_id), 0.0))
 
 
+def _government_job_era_key(ctx: "SimulationContext", year: int) -> str:
+    try:
+        historical_year = ctx.get_historical_year(int(year))
+    except Exception:
+        historical_year = int(year)
+    from library.simulation_careers import resolve_job_era
+
+    return resolve_job_era(historical_year)
+
+
+def _government_magic_leveling(ctx: "SimulationContext") -> float:
+    return magic_physical_leveling_for_world(
+        getattr(ctx, "world", "default"),
+        getattr(ctx, "db_path", None),
+    )
+
+
 def _government_candidate_facts(
     ctx: "SimulationContext",
     rec,
     *,
     composite_rows: tuple,
     year: int,
-) -> tuple[float, float, float, int, int, float]:
-    """Per-year reusable office-candidate facts: leadership, military, cfs, age, male, duty."""
+) -> tuple[float, float, float, int, int, float, float]:
+    """Per-year reusable office-candidate facts: leadership, military, cfs, age, male, duty, body."""
     y = int(year)
     pid = int(rec.person_id)
     cache = getattr(ctx, "_gov_candidate_fact_cache", None)
@@ -134,7 +156,8 @@ def _government_candidate_facts(
     duty = _childcare_duty_factor_safe(ctx, rec, y)
     if prof:
         simulation_timing.accumulate("government.candidate_facts.duty", tpc() - t0)
-    facts = (li, mi, cf, age, male, duty)
+    body_power = body_power_01(rec.person)
+    facts = (li, mi, cf, age, male, duty, body_power)
     cache[key] = facts
     return facts
 
@@ -150,11 +173,21 @@ def _government_scored_candidate_pool(
     """Score title-eligible candidates once per year/title/sample."""
     y = int(year)
     record_ids = tuple(int(rec.person_id) for rec in records if rec is not None)
+    force_authority = float(getattr(title, "force_authority_01", 0.0) or 0.0)
+    era_key = _government_job_era_key(ctx, y)
+    magic_leveling = _government_magic_leveling(ctx)
     cache = getattr(ctx, "_gov_scored_candidate_cache", None)
     if cache is None:
         cache = {}
         setattr(ctx, "_gov_scored_candidate_cache", cache)
-    key = (y, str(title.title_id), record_ids)
+    key = (
+        y,
+        str(title.title_id),
+        round(force_authority, 4),
+        era_key,
+        round(magic_leveling, 4),
+        record_ids,
+    )
     cached = cache.get(key)
     if cached is not None:
         _gov_profile_count(ctx, y, "scored_pool_cache_hits")
@@ -183,7 +216,7 @@ def _government_scored_candidate_pool(
         if cf < min_cf:
             _gov_profile_count(ctx, y, "scored_pool_cfs_skips")
             continue
-        li, mi, cf, age, male_code, duty = _government_candidate_facts(
+        li, mi, cf, age, male_code, duty, body_power = _government_candidate_facts(
             ctx, rec, composite_rows=composite_rows, year=y
         )
         if age < min_age or li < min_li or mi < min_mi or cf < min_cf:
@@ -196,7 +229,21 @@ def _government_scored_candidate_pool(
         else:
             base = li
         duty_mult = max(0.0, 1.0 - GOV_CHILD_DUTY_MERIT_WEIGHT * duty)
-        scored.append((base * gender_weight * duty_mult, int(rec.person_id)))
+        force_fit = authority_force_fit_from_body_power(
+            body_power=body_power,
+            force_authority_01=force_authority,
+            era=era_key,
+            magic_leveling_01=magic_leveling,
+        )
+        scored.append(
+            (
+                base
+                * gender_weight
+                * duty_mult
+                * force_fit.physical_demand_multiplier,
+                int(rec.person_id),
+            )
+        )
     if prof:
         simulation_timing.accumulate("government.scored_pool.loop", tpc() - t0)
     _gov_profile_count(ctx, y, "scored_pool_candidates", len(scored))
@@ -397,14 +444,23 @@ def _pick_head_candidate_in_region(
     if available:
         residents = available
     pref = float(head_title.male_weight) if head_title is not None else 0.5
+    force_authority = float(getattr(head_title, "force_authority_01", 0.0) or 0.0)
+    era_key = _government_job_era_key(ctx, eff_year)
+    magic_leveling = _government_magic_leveling(ctx)
 
     def head_score(rec) -> tuple[float, float, int]:
-        li, _mi, cf, _age, male, duty = _government_candidate_facts(
+        li, _mi, cf, _age, male, duty, body_power = _government_candidate_facts(
             ctx, rec, composite_rows=composite_rows, year=eff_year
         )
         boost = pref * male + (1.0 - pref) * (1 - male)
         duty_mult = max(0.0, 1.0 - GOV_CHILD_DUTY_HEAD_WEIGHT * duty)
-        return (li * boost * duty_mult, cf, -rec.person_id)
+        force_fit = authority_force_fit_from_body_power(
+            body_power=body_power,
+            force_authority_01=force_authority,
+            era=era_key,
+            magic_leveling_01=magic_leveling,
+        )
+        return (li * boost * duty_mult * force_fit.physical_demand_multiplier, cf, -rec.person_id)
 
     residents.sort(key=head_score, reverse=True)
     return residents[0].person_id
@@ -443,14 +499,23 @@ def _pick_head_candidate_in_settlement(
     if available:
         residents = available
     pref = float(head_title.male_weight) if head_title is not None else 0.5
+    force_authority = float(getattr(head_title, "force_authority_01", 0.0) or 0.0)
+    era_key = _government_job_era_key(ctx, eff_year)
+    magic_leveling = _government_magic_leveling(ctx)
 
     def head_score(rec) -> tuple[float, float, int]:
-        li, _mi, cf, _age, male, duty = _government_candidate_facts(
+        li, _mi, cf, _age, male, duty, body_power = _government_candidate_facts(
             ctx, rec, composite_rows=composite_rows, year=eff_year
         )
         boost = pref * male + (1.0 - pref) * (1 - male)
         duty_mult = max(0.0, 1.0 - GOV_CHILD_DUTY_HEAD_WEIGHT * duty)
-        return (li * boost * duty_mult, cf, -rec.person_id)
+        force_fit = authority_force_fit_from_body_power(
+            body_power=body_power,
+            force_authority_01=force_authority,
+            era=era_key,
+            magic_leveling_01=magic_leveling,
+        )
+        return (li * boost * duty_mult * force_fit.physical_demand_multiplier, cf, -rec.person_id)
 
     residents.sort(key=head_score, reverse=True)
     return residents[0].person_id

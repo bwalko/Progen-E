@@ -46,13 +46,17 @@ Surplus seats (when a settlement shrinks) are not removed; their merit cycle sim
 
 Each death-vacated hereditary seat (titles with `salic_primogeniture` / `cognatic_primogeniture` selection) first rolls `government_titles.merit_takeover_chance` in `_succession_tick`. On a hit, the seat is filled by `_fill_merit_or_election` (an "ambitious leader" displaces the heir) and the resulting `office_succession` event records `via=merit_takeover` with `previous_holder_id`; on a miss the primogeniture chain runs and the event records `via=hereditary`. Default tuning: counts mix freely (`0.40`), dukes mostly hereditary (`0.10`), kings nearly always hereditary (`0.05`); tribal chiefs `0.20`, city basileis `0.15`. The in-life `usurp_base_chance` follows the same gradient (highest for counts, lowest for kings). Universal merit titles (`settlement_leader`, `settlement_alderman`) and other `merit_*` / `election_*` selection rules don't enter this path — they are always merit/elected via `_fill_vacancies` and `_term_expiry`.
 
+### Force-backed office scoring
+
+`government_titles.force_authority_01` marks titles whose authority plausibly depends on personally credible force or physical enforcement. `_government_scored_candidate_pool` and head-seat pickers keep the existing `male_weight`, leadership/military/career-fitness, and childcare-duty terms, then apply `library.work_body_fit` as a soft multiplier only for titles with force demand. Low-force civic offices should remain mostly leadership/career driven; high-force offices such as chiefs, generals, kings, sheriffs, bailiffs, dukes, and counts receive additional body-power weighting. Era tools and `world_start.magic_physical_leveling_01` soften this demand the same way they do for jobs.
+
 ## Config CSVs (`config/`)
 
 Imported into the world’s `config.sqlite` with the rest of the config (see `dev_rules/config_schemas.md` summary table):
 
 - `government_eras.csv` — historical-year bands → allowed polity types + default succession style.
 - `government_polity_types.csv` — grain (region/settlement), head title, split thresholds, vassal flags.
-- `government_titles.csv` — selection rules (`merit`, hereditary styles), term years, male weights, usurp parameters.
+- `government_titles.csv` — selection rules (`merit`, hereditary styles), term years, male weights, force-authority demand, usurp parameters.
 - `government_starting_polities.csv` — optional seed rows (optional for auto-bootstrap).
 
 Reload after edits::

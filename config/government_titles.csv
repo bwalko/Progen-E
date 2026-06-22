@@ -1,18 +1,18 @@
-title_id,title_name_by_era_json,polity_type_id,role,selection_rule,max_holders,term_years,min_age,min_leadership_index,min_military_quality_index,min_career_fitness,male_weight,can_be_usurped,usurp_base_chance,eligibility_kinship,min_population_for_first_holder,pop_per_holder,merit_takeover_chance
-band_elder,"{""*"":""Elder""}",band,head,merit_meritocratic,1,,16,0.15,0.0,0.2,0.55,1,0.04,realm_resident,0,0,0.0
-chief,"{""*"":""Chief""}",tribe,head,salic_primogeniture,1,,18,0.2,0.1,0.25,0.90,1,0.06,house_blood,0,0,0.20
-elder_council,"{""*"":""Council Elder""}",tribe,court,election_by_council,3,8,30,0.25,0.0,0.3,0.70,0,0.0,realm_resident,0,0,0.0
-king_of_city,"{""*"":""Basileus""}",city_state,head,cognatic_primogeniture,1,,18,0.22,0.12,0.28,0.85,1,0.07,house_blood,0,0,0.15
-magistrate,"{""*"":""Magistrate""}",city_state,court,election_by_council,1,4,25,0.28,0.0,0.35,0.85,0,0.0,realm_resident,0,0,0.0
-general,"{""*"":""General""}",city_state,court,merit_meritocratic,1,,20,0.15,0.45,0.25,0.88,1,0.05,realm_resident,0,0,0.0
-king,"{""*"":""King""}",kingdom,head,salic_primogeniture,1,,18,0.2,0.1,0.25,0.97,1,0.02,house_blood,0,0,0.05
-sheriff,"{""*"":""Sheriff""}",kingdom,local_merit,merit_meritocratic,1,,22,0.12,0.35,0.2,0.92,0,0.0,realm_resident,0,0,0.0
-bailiff,"{""*"":""Bailiff""}",kingdom,local_merit,appointment_by_parent_office,1,,20,0.1,0.2,0.18,0.80,0,0.0,realm_resident,0,0,0.0
-duke,"{""*"":""Duke""}",duchy,head,salic_primogeniture,1,,18,0.2,0.12,0.25,0.97,1,0.04,house_blood,0,0,0.10
-count,"{""*"":""Count""}",county,head,salic_primogeniture,1,,18,0.18,0.1,0.22,0.92,1,0.10,house_blood,0,0,0.40
-president,"{""*"":""President""}",republic,head,election_by_council,1,5,35,0.3,0.0,0.4,0.52,0,0.0,realm_resident,0,0,0.0
-prime_minister,"{""*"":""Prime Minister""}",republic,court,appointment_by_parent_office,1,5,30,0.28,0.0,0.38,0.50,0,0.0,realm_resident,0,0,0.0
-mayor,"{""*"":""Mayor""}",republic,local_merit,election_by_council,1,4,28,0.22,0.0,0.32,0.55,0,0.0,realm_resident,0,0,0.0
-council_member,"{""*"":""Councillor""}",republic,local_merit,election_by_council,4,4,25,0.15,0.0,0.25,0.50,0,0.0,realm_resident,0,0,0.0
-settlement_leader,"{""*"":""Settlement Leader""}",*,settlement_merit,merit_meritocratic,1,,18,0.12,0.0,0.18,0.55,0,0.0,settlement_resident,100,0,0.0
-settlement_alderman,"{""*"":""Alderman""}",*,settlement_merit,election_by_council,1,6,25,0.10,0.0,0.20,0.55,0,0.0,settlement_resident,600,500,0.0
+title_id,title_name_by_era_json,polity_type_id,role,selection_rule,max_holders,term_years,min_age,min_leadership_index,min_military_quality_index,min_career_fitness,male_weight,can_be_usurped,usurp_base_chance,eligibility_kinship,min_population_for_first_holder,pop_per_holder,merit_takeover_chance,force_authority_01
+band_elder,"{""*"":""Elder""}",band,head,merit_meritocratic,1,,16,0.15,0.0,0.2,0.55,1,0.04,realm_resident,0,0,0.0,0.10
+chief,"{""*"":""Chief""}",tribe,head,salic_primogeniture,1,,18,0.2,0.1,0.25,0.90,1,0.06,house_blood,0,0,0.20,0.75
+elder_council,"{""*"":""Council Elder""}",tribe,court,election_by_council,3,8,30,0.25,0.0,0.3,0.70,0,0.0,realm_resident,0,0,0.0,0.15
+king_of_city,"{""*"":""Basileus""}",city_state,head,cognatic_primogeniture,1,,18,0.22,0.12,0.28,0.85,1,0.07,house_blood,0,0,0.15,0.65
+magistrate,"{""*"":""Magistrate""}",city_state,court,election_by_council,1,4,25,0.28,0.0,0.35,0.85,0,0.0,realm_resident,0,0,0.0,0.25
+general,"{""*"":""General""}",city_state,court,merit_meritocratic,1,,20,0.15,0.45,0.25,0.88,1,0.05,realm_resident,0,0,0.0,0.85
+king,"{""*"":""King""}",kingdom,head,salic_primogeniture,1,,18,0.2,0.1,0.25,0.97,1,0.02,house_blood,0,0,0.05,0.80
+sheriff,"{""*"":""Sheriff""}",kingdom,local_merit,merit_meritocratic,1,,22,0.12,0.35,0.2,0.92,0,0.0,realm_resident,0,0,0.0,0.75
+bailiff,"{""*"":""Bailiff""}",kingdom,local_merit,appointment_by_parent_office,1,,20,0.1,0.2,0.18,0.80,0,0.0,realm_resident,0,0,0.0,0.55
+duke,"{""*"":""Duke""}",duchy,head,salic_primogeniture,1,,18,0.2,0.12,0.25,0.97,1,0.04,house_blood,0,0,0.10,0.75
+count,"{""*"":""Count""}",county,head,salic_primogeniture,1,,18,0.18,0.1,0.22,0.92,1,0.10,house_blood,0,0,0.40,0.65
+president,"{""*"":""President""}",republic,head,election_by_council,1,5,35,0.3,0.0,0.4,0.52,0,0.0,realm_resident,0,0,0.0,0.05
+prime_minister,"{""*"":""Prime Minister""}",republic,court,appointment_by_parent_office,1,5,30,0.28,0.0,0.38,0.50,0,0.0,realm_resident,0,0,0.0,0.03
+mayor,"{""*"":""Mayor""}",republic,local_merit,election_by_council,1,4,28,0.22,0.0,0.32,0.55,0,0.0,realm_resident,0,0,0.0,0.10
+council_member,"{""*"":""Councillor""}",republic,local_merit,election_by_council,4,4,25,0.15,0.0,0.25,0.50,0,0.0,realm_resident,0,0,0.0,0.03
+settlement_leader,"{""*"":""Settlement Leader""}",*,settlement_merit,merit_meritocratic,1,,18,0.12,0.0,0.18,0.55,0,0.0,settlement_resident,100,0,0.0,0.20
+settlement_alderman,"{""*"":""Alderman""}",*,settlement_merit,election_by_council,1,6,25,0.10,0.0,0.20,0.55,0,0.0,settlement_resident,600,500,0.0,0.08

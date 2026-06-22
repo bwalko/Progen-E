@@ -32,6 +32,11 @@ from library.simulation_outlaws import (
     normalize_outlaw_labor_state,
     outlaw_blocks_normal_career,
 )
+from library.work_body_fit import (
+    BodyDemandFit,
+    body_demand_fit_for_person,
+    magic_physical_leveling_for_world,
+)
 
 if TYPE_CHECKING:
     from library.person import Person
@@ -103,6 +108,8 @@ CAREER_CHILD_DUTY_FACTOR_CAP = 0.85
 PRIMARY_CHILDCARE_DUTY_THRESHOLD = 0.25
 PRIMARY_CHILDCARE_HOME_JOB_WEIGHT = 2.8
 PRIMARY_CHILDCARE_OUT_OF_HOME_LOSS_FLOOR = 0.72
+PRIMARY_CHILDCARE_KIN_SIGNAL_WEIGHT = 0.44
+PRIMARY_CHILDCARE_KIN_PULL_WEIGHT = 0.35
 
 JOB_SEEKER_MIGRATION_MAX_PROB = 0.35
 
@@ -158,6 +165,10 @@ class CareerAssignment:
     care_intensity_01: float = 0.0
     saturation_score: float = 1.0
     desperation_score: float = 0.0
+    physical_demand_01: float = 0.0
+    effective_physical_demand_01: float = 0.0
+    body_power_01: float = 0.0
+    physical_demand_multiplier: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -451,6 +462,7 @@ class YearCareerFacts:
 
     pressure_by_person_id: dict[int, float]
     duty_by_person_id: dict[int, float]
+    kinship_bonus_by_person_id: dict[int, float]
     resource_facts: YearResourceFacts
     care_indexes: object | None = None
 
@@ -476,6 +488,7 @@ class YearCareerFacts:
         return cls(
             pressure_by_person_id=pressure_by_person_id,
             duty_by_person_id=duty_by_person_id,
+            kinship_bonus_by_person_id={},
             resource_facts=resource_facts,
             care_indexes=care_indexes,
         )
@@ -499,6 +512,18 @@ class YearCareerFacts:
                 childcare_duty_factor(ctx, rec, year, indexes=self.care_indexes)
             )
         return self.duty_by_person_id[pid]
+
+    def kinship_bonus_for(
+        self, ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+    ) -> float:
+        pid = int(rec.person_id)
+        if pid not in self.kinship_bonus_by_person_id:
+            from library.simulation_household_care import childcare_kinship_bonus_01
+
+            self.kinship_bonus_by_person_id[pid] = float(
+                childcare_kinship_bonus_01(ctx, rec, year, indexes=self.care_indexes)
+            )
+        return self.kinship_bonus_by_person_id[pid]
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -846,16 +871,27 @@ def _filter_job_entries_for_person(
     return tuple(out)
 
 
-def _primary_childcare_pull(person: "Person", childcare_duty_factor: float) -> float:
+def _primary_childcare_pull(
+    person: "Person",
+    childcare_duty_factor: float,
+    childcare_kinship_bonus_01: float = 0.0,
+) -> float:
     """How strongly this person should stay in the implicit home-childcare role."""
     duty = _clamp(float(childcare_duty_factor or 0.0), 0.0, 1.0)
-    if duty < PRIMARY_CHILDCARE_DUTY_THRESHOLD:
+    kin_bonus = _clamp(float(childcare_kinship_bonus_01 or 0.0), 0.0, 1.0)
+    kin_signal = kin_bonus * PRIMARY_CHILDCARE_KIN_SIGNAL_WEIGHT
+    if max(duty, kin_signal) < PRIMARY_CHILDCARE_DUTY_THRESHOLD:
         return 0.0
     if (person.gender or "").strip().lower() != "female":
         return 0.0
     if (person.gender_mind or "").strip().lower() == "masculine":
         return 0.0
-    return _clamp(duty / CAREER_CHILD_DUTY_FACTOR_CAP, 0.0, 1.0)
+    return _clamp(
+        duty / CAREER_CHILD_DUTY_FACTOR_CAP
+        + kin_bonus * PRIMARY_CHILDCARE_KIN_PULL_WEIGHT,
+        0.0,
+        1.0,
+    )
 
 
 def _job_home_childcare_compatible(job_title: str | None, job_family: str | None = None) -> bool:
@@ -2166,7 +2202,10 @@ def choose_career_assignment(
     unemployment_years: int = 0,
     household_prosperity: float | None = None,
     childcare_duty_factor: float = 0.0,
+    childcare_kinship_bonus_01: float = 0.0,
     trait_values: dict[str, float] | None = None,
+    world: str = "default",
+    magic_physical_leveling_01: float | None = None,
 ) -> CareerAssignment | None:
     """Pick the best available job for the person's skill, market, and desperation."""
     prof = simulation_timing.active_for_year(year)
@@ -2177,6 +2216,11 @@ def choose_career_assignment(
     db_path_s = str(path.resolve())
     era_key = (era or "").strip().lower()
     traits = trait_values if trait_values is not None else work_trait_values(person)
+    magic_leveling = (
+        magic_physical_leveling_for_world(world, path)
+        if magic_physical_leveling_01 is None
+        else _clamp(float(magic_physical_leveling_01), 0.0, 1.0)
+    )
     allowed_by_restriction = _job_restriction_allowance(person, traits)
     options = _career_job_options_for_era_and_allowance(
         db_path_s,
@@ -2239,6 +2283,7 @@ def choose_career_assignment(
             float,
             float,
             float,
+            BodyDemandFit,
             float,
         ]
     ] = []
@@ -2247,7 +2292,9 @@ def choose_career_assignment(
         unemployment_years=unemployment_years,
         household_prosperity=household_prosperity,
     )
-    primary_care_pull = _primary_childcare_pull(person, childcare_duty_factor)
+    primary_care_pull = _primary_childcare_pull(
+        person, childcare_duty_factor, childcare_kinship_bonus_01
+    )
     job_counts = current_job_counts or {}
     family_counts = current_family_counts or {}
     saturation_cache: dict[tuple[str, str, str], float] = {}
@@ -2324,6 +2371,15 @@ def choose_career_assignment(
                 )
                 if primary_care_pull > 0.0 and entry.home_compatible:
                     weight *= 1.0 + PRIMARY_CHILDCARE_HOME_JOB_WEIGHT * primary_care_pull
+                body_fit = body_demand_fit_for_person(
+                    person,
+                    physical_demand_01=entry.archetype.physical_demand_01,
+                    leveling_affinity_01=entry.archetype.leveling_affinity_01,
+                    era=era_key,
+                    magic_leveling_01=magic_leveling,
+                    trait_values=traits,
+                )
+                weight *= body_fit.physical_demand_multiplier
                 scored_jobs.append(
                     (
                         option,
@@ -2333,6 +2389,7 @@ def choose_career_assignment(
                         prosperity_score,
                         selfish_desperate,
                         saturation,
+                        body_fit,
                         weight,
                     )
                 )
@@ -2348,13 +2405,13 @@ def choose_career_assignment(
         max(1, int(top_n)),
         scored_jobs,
         key=lambda item: (
-            -item[7],
+            -item[8],
             item[2].title,
             item[0].trait,
             item[0].deviation_band,
         ),
     )
-    weights = [item[7] for item in top]
+    weights = [item[8] for item in top]
     (
         option,
         trait_score,
@@ -2363,6 +2420,7 @@ def choose_career_assignment(
         prosperity_score,
         selfish_desperate,
         saturation,
+        body_fit,
         _weight,
     ) = rng.choices(top, weights=weights, k=1)[0]
     if not entry.title:
@@ -2406,6 +2464,10 @@ def choose_career_assignment(
         care_intensity_01=round(float(entry.archetype.care_intensity_01), 4),
         saturation_score=round(saturation, 4),
         desperation_score=desperation,
+        physical_demand_01=round(float(entry.archetype.physical_demand_01), 4),
+        effective_physical_demand_01=round(body_fit.effective_physical_demand_01, 4),
+        body_power_01=round(body_fit.body_power_01, 4),
+        physical_demand_multiplier=round(body_fit.physical_demand_multiplier, 4),
     )
 
 
@@ -2453,6 +2515,7 @@ def assign_career_if_eligible(
         if childcare_duty_factor is None
         else float(childcare_duty_factor)
     )
+    kinship_bonus = _childcare_kinship_bonus_safe(ctx, rec, year) if duty > 0.0 else 0.0
     prof = simulation_timing.active_for_year(year)
     tpc = time.perf_counter
     if prof:
@@ -2486,7 +2549,9 @@ def assign_career_if_eligible(
         unemployment_years=_unemployment_years(rec.person, year),
         household_prosperity=rec.person.household_prosperity,
         childcare_duty_factor=duty,
+        childcare_kinship_bonus_01=kinship_bonus,
         trait_values=traits,
+        world=getattr(ctx, "world", "default"),
     )
     if assignment is None:
         if prof:
@@ -2572,6 +2637,10 @@ def assign_career_if_eligible(
             "perceived_worth_01": assignment.perceived_worth_01,
             "care_intensity_01": assignment.care_intensity_01,
             "job_saturation_score": assignment.saturation_score,
+            "physical_demand_01": assignment.physical_demand_01,
+            "effective_physical_demand_01": assignment.effective_physical_demand_01,
+            "body_power_01": assignment.body_power_01,
+            "physical_demand_multiplier": assignment.physical_demand_multiplier,
             "society_need": assignment.society_need,
             "selfish_desperate": assignment.selfish_desperate,
             "desperation_score": assignment.desperation_score,
@@ -2768,7 +2837,8 @@ def maybe_lose_job(
             0.0,
             JOB_LOSS_MAX_PROB,
         )
-    primary_care_pull = _primary_childcare_pull(rec.person, duty)
+    kinship_bonus = _childcare_kinship_bonus_safe(ctx, rec, year) if duty > 0.0 else 0.0
+    primary_care_pull = _primary_childcare_pull(rec.person, duty, kinship_bonus)
     out_of_home_primary_care_conflict = False
     if primary_care_pull > 0.0:
         job_family = str(rec.person.job_market_type or "").strip().lower()
@@ -2817,6 +2887,17 @@ def _childcare_duty_factor_safe(
     return float(childcare_duty_factor(ctx, rec, year, indexes=ctx.annual_care_indexes(year)))
 
 
+def _childcare_kinship_bonus_safe(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+) -> float:
+    """Look up childcare kinship pull without taking a hard dep at import."""
+    from library.simulation_household_care import childcare_kinship_bonus_01
+
+    return float(
+        childcare_kinship_bonus_01(ctx, rec, year, indexes=ctx.annual_care_indexes(year))
+    )
+
+
 def _assign_special_household_job(
     ctx: "SimulationContext",
     rec: "SimulationPersonRecord",
@@ -2855,6 +2936,16 @@ def _assign_special_household_job(
         trait_phrases = tuple(n.phrase for n in trait_notes if n.phrase)
     era = resolve_job_era(ctx.get_historical_year(year))
     fitness_score = fitness.score if fitness is not None else career_fitness_score(rec.person)
+    body_fit = body_demand_fit_for_person(
+        rec.person,
+        physical_demand_01=archetype.physical_demand_01,
+        leveling_affinity_01=archetype.leveling_affinity_01,
+        era=era,
+        magic_leveling_01=magic_physical_leveling_for_world(
+            getattr(ctx, "world", "default"), ctx.db_path
+        ),
+        trait_values=traits,
+    )
     rec.person = replace(
         rec.person,
         job=job,
@@ -2907,6 +2998,14 @@ def _assign_special_household_job(
             "perceived_worth_01": round(float(archetype.perceived_worth_01), 4),
             "care_intensity_01": round(float(archetype.care_intensity_01), 4),
             "job_prosperity_score": round(float(archetype.personal_prosperity_01), 4),
+            "physical_demand_01": round(float(archetype.physical_demand_01), 4),
+            "effective_physical_demand_01": round(
+                body_fit.effective_physical_demand_01, 4
+            ),
+            "body_power_01": round(body_fit.body_power_01, 4),
+            "physical_demand_multiplier": round(
+                body_fit.physical_demand_multiplier, 4
+            ),
             "placement_reason": reason,
             "resource_pressure": pressure,
             "non_graphic": archetype.job_market_type == "vice",
@@ -3331,9 +3430,11 @@ def _household_labor_pre_assignment_pass(
         if rec.person.job:
             continue
         duty = career_facts.duty_for(ctx, rec, year)
+        kin_bonus = career_facts.kinship_bonus_for(ctx, rec, year)
+        care_pull = _primary_childcare_pull(rec.person, duty, kin_bonus)
         if (
-            duty >= HOUSEHOLD_CARE_MIN_DUTY
-            and _primary_childcare_pull(rec.person, duty) > 0.0
+            care_pull > 0.0
+            and (duty >= HOUSEHOLD_CARE_MIN_DUTY or kin_bonus >= 0.60)
         ):
             if _assign_special_household_job(
                 ctx,
@@ -3423,7 +3524,12 @@ def maybe_assign_or_rehire(
         )
     placement_failure_reason = (
         "primary_childcare"
-        if _primary_childcare_pull(rec.person, duty) > 0.0
+        if _primary_childcare_pull(
+            rec.person,
+            duty,
+            _childcare_kinship_bonus_safe(ctx, rec, year) if duty > 0.0 else 0.0,
+        )
+        > 0.0
         else "placement_failed"
     )
     rng = random.Random(

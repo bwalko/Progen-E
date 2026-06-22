@@ -1,36 +1,50 @@
-job_key_pattern,match_type,job_market_type,role_family,workplace,skill_level,manuality,supervision_level,class_band,personal_prosperity_01,societal_impact_01,public_prestige_01,perceived_worth_01,care_intensity_01,home_compatible,domestic_service_kind,female_mindset_affinity_01,adult_only,board_compensation_01,cash_wage_multiplier
-*,default,settlement_market,labor,settlement,ordinary,mixed,peer,commoner,0.32,0.42,0.32,0.38,0.00,0,,0.50,0,0.00,1.00
-child rearer,exact,household_care,care,home,skilled,mixed,self_directed,household,0.04,0.92,0.24,0.34,1.00,1,,0.82,0,0.00,0.00
-parent,exact,household_care,care,home,skilled,mixed,self_directed,household,0.04,0.90,0.26,0.36,0.92,1,,0.76,0,0.00,0.00
-nanny,exact,domestic_service,care,employer_household,skilled,mixed,supervised,servant,0.16,0.82,0.28,0.42,0.90,1,nanny,0.88,1,0.72,0.35
-maid,exact,domestic_service,domestic,employer_household,ordinary,manual,supervised,servant,0.13,0.46,0.20,0.32,0.18,1,maid,0.70,1,0.68,0.28
-servant,exact,domestic_service,domestic,employer_household,ordinary,mixed,supervised,servant,0.14,0.48,0.22,0.34,0.22,1,servant,0.68,1,0.68,0.28
-household manager,exact,domestic_service,domestic,employer_household,skilled,mixed,supervisory,servant,0.22,0.60,0.36,0.48,0.32,1,household_manager,0.62,1,0.65,0.52
-child watcher,contains,domestic_service,care,employer_household,ordinary,mixed,supervised,servant,0.14,0.76,0.24,0.38,0.82,1,nanny,0.86,1,0.70,0.30
-care aide,exact,domestic_service,care,employer_household,ordinary,mixed,supervised,servant,0.15,0.74,0.24,0.39,0.78,1,nanny,0.84,1,0.66,0.34
-midwife,exact,settlement_market,care,settlement,skilled,mixed,self_directed,commoner,0.38,0.84,0.48,0.62,0.72,1,,0.74,1,0.00,1.10
-healer,exact,settlement_market,care,settlement,skilled,mixed,self_directed,commoner,0.36,0.78,0.44,0.58,0.58,1,,0.62,1,0.00,1.05
-prostitute,exact,vice,vice,street_or_house,ordinary,social,informal,marginal,0.18,0.14,0.10,0.16,0.00,0,,0.72,1,0.05,0.55
-courtesan,exact,vice,vice,patron_household,skilled,social,informal,marginal,0.30,0.18,0.22,0.24,0.00,0,,0.70,1,0.12,0.82
-brothel worker,exact,vice,vice,street_or_house,ordinary,social,informal,marginal,0.16,0.12,0.08,0.14,0.00,0,,0.74,1,0.05,0.50
-thief,exact,criminal,criminal,informal,ordinary,mixed,informal,marginal,0.18,0.04,0.04,0.06,0.00,0,,0.45,1,0.00,0.50
-fraudster,exact,criminal,criminal,informal,skilled,social,informal,marginal,0.22,0.04,0.05,0.08,0.00,0,,0.42,1,0.00,0.60
-bandit,exact,criminal,criminal,informal,ordinary,manual,informal,marginal,0.20,0.03,0.04,0.06,0.00,0,,0.38,1,0.00,0.52
-raider,exact,criminal,criminal,informal,ordinary,manual,informal,marginal,0.22,0.04,0.06,0.08,0.00,0,,0.35,1,0.00,0.58
-judge,contains,office,authority,office,elite,cognitive,supervisory,upper,0.68,0.74,0.78,0.76,0.00,0,,0.42,1,0.00,1.45
-magistrate,contains,office,authority,office,elite,cognitive,supervisory,upper,0.66,0.72,0.76,0.74,0.00,0,,0.42,1,0.00,1.42
-guild master,contains,office,authority,office,elite,cognitive,supervisory,upper,0.76,0.60,0.70,0.72,0.00,0,,0.44,1,0.00,1.60
-merchant,exact,settlement_market,trade,market,elite,cognitive,self_directed,notable,0.72,0.60,0.66,0.68,0.00,0,,0.46,1,0.00,1.55
-caravan master,exact,settlement_market,trade,route,elite,mixed,supervisory,notable,0.74,0.62,0.68,0.70,0.00,0,,0.44,1,0.00,1.58
-shipowner,exact,settlement_market,trade,port,elite,cognitive,supervisory,elite,0.82,0.62,0.74,0.72,0.00,0,,0.44,1,0.00,1.70
-banker,exact,settlement_market,finance,market,elite,cognitive,self_directed,elite,0.84,0.54,0.70,0.66,0.00,0,,0.42,1,0.00,1.75
-moneylender,exact,settlement_market,finance,market,skilled,cognitive,self_directed,notable,0.70,0.38,0.50,0.44,0.00,0,,0.42,1,0.00,1.45
-courtier,exact,office,prestige,court,elite,social,supervisory,upper,0.64,0.42,0.72,0.62,0.00,0,,0.48,1,0.00,1.38
-steward,exact,office,stewardship,estate,skilled,cognitive,supervisory,professional,0.58,0.58,0.60,0.66,0.00,0,,0.50,1,0.00,1.28
-estate steward,exact,office,stewardship,estate,elite,cognitive,supervisory,notable,0.72,0.62,0.68,0.70,0.00,0,,0.50,1,0.00,1.55
-treasurer,exact,office,finance,office,elite,cognitive,supervisory,upper,0.78,0.58,0.70,0.68,0.00,0,,0.44,1,0.00,1.62
-guild treasurer,exact,office,finance,guild,elite,cognitive,supervisory,upper,0.76,0.58,0.68,0.68,0.00,0,,0.44,1,0.00,1.58
-scholar,exact,settlement_market,knowledge,school,elite,cognitive,self_directed,professional,0.56,0.78,0.66,0.72,0.00,0,,0.44,1,0.00,1.25
-physician,exact,settlement_market,care,settlement,elite,cognitive,self_directed,professional,0.64,0.86,0.70,0.78,0.38,0,,0.58,1,0.00,1.35
-priest,exact,settlement_market,ritual,temple,skilled,social,self_directed,professional,0.54,0.70,0.64,0.68,0.12,0,,0.50,1,0.00,1.15
-landholder,exact,settlement_market,estate,estate,elite,mixed,supervisory,elite,0.80,0.46,0.72,0.66,0.00,0,,0.46,1,0.00,1.65
+job_key_pattern,match_type,job_market_type,role_family,workplace,skill_level,manuality,supervision_level,class_band,personal_prosperity_01,societal_impact_01,public_prestige_01,perceived_worth_01,care_intensity_01,home_compatible,domestic_service_kind,female_mindset_affinity_01,adult_only,board_compensation_01,cash_wage_multiplier,physical_demand_01,force_authority_01,leveling_affinity_01,informal_role_01
+*,default,settlement_market,labor,settlement,ordinary,mixed,peer,commoner,0.32,0.42,0.32,0.38,0.00,0,,0.50,0,0.00,1.00,0.30,0.00,0.50,0.00
+child rearer,exact,household_care,care,home,skilled,mixed,self_directed,household,0.04,0.92,0.24,0.34,1.00,1,,0.82,0,0.00,0.00,0.18,0.00,0.35,0.00
+parent,exact,household_care,care,home,skilled,mixed,self_directed,household,0.04,0.90,0.26,0.36,0.92,1,,0.76,0,0.00,0.00,0.18,0.00,0.35,0.00
+nanny,exact,domestic_service,care,employer_household,skilled,mixed,supervised,servant,0.16,0.82,0.28,0.42,0.90,1,nanny,0.88,1,0.72,0.35,0.22,0.00,0.35,0.00
+maid,exact,domestic_service,domestic,employer_household,ordinary,manual,supervised,servant,0.13,0.46,0.20,0.32,0.18,1,maid,0.70,1,0.68,0.28,0.45,0.00,0.45,0.00
+servant,exact,domestic_service,domestic,employer_household,ordinary,mixed,supervised,servant,0.14,0.48,0.22,0.34,0.22,1,servant,0.68,1,0.68,0.28,0.35,0.00,0.45,0.00
+household manager,exact,domestic_service,domestic,employer_household,skilled,mixed,supervisory,servant,0.22,0.60,0.36,0.48,0.32,1,household_manager,0.62,1,0.65,0.52,0.25,0.05,0.40,0.00
+child watcher,contains,domestic_service,care,employer_household,ordinary,mixed,supervised,servant,0.14,0.76,0.24,0.38,0.82,1,nanny,0.86,1,0.70,0.30,0.22,0.00,0.35,0.00
+care aide,exact,domestic_service,care,employer_household,ordinary,mixed,supervised,servant,0.15,0.74,0.24,0.39,0.78,1,nanny,0.84,1,0.66,0.34,0.25,0.00,0.40,0.00
+midwife,exact,settlement_market,care,settlement,skilled,mixed,self_directed,commoner,0.38,0.84,0.48,0.62,0.72,1,,0.74,1,0.00,1.10,0.28,0.00,0.45,0.00
+healer,exact,settlement_market,care,settlement,skilled,mixed,self_directed,commoner,0.36,0.78,0.44,0.58,0.58,1,,0.62,1,0.00,1.05,0.25,0.00,0.45,0.00
+prostitute,exact,vice,vice,street_or_house,ordinary,social,informal,marginal,0.18,0.14,0.10,0.16,0.00,0,,0.72,1,0.05,0.55,0.20,0.00,0.30,1.00
+courtesan,exact,vice,vice,patron_household,skilled,social,informal,marginal,0.30,0.18,0.22,0.24,0.00,0,,0.70,1,0.12,0.82,0.12,0.00,0.30,1.00
+brothel worker,exact,vice,vice,street_or_house,ordinary,social,informal,marginal,0.16,0.12,0.08,0.14,0.00,0,,0.74,1,0.05,0.50,0.20,0.00,0.30,1.00
+thief,exact,criminal,criminal,informal,ordinary,mixed,informal,marginal,0.18,0.04,0.04,0.06,0.00,0,,0.45,1,0.00,0.50,0.35,0.05,0.25,1.00
+fraudster,exact,criminal,criminal,informal,skilled,social,informal,marginal,0.22,0.04,0.05,0.08,0.00,0,,0.42,1,0.00,0.60,0.10,0.00,0.65,1.00
+charlatan,exact,criminal,criminal,informal,skilled,social,informal,marginal,0.20,0.04,0.05,0.08,0.00,0,,0.42,1,0.00,0.60,0.10,0.00,0.65,1.00
+huckster,contains,criminal,criminal,informal,ordinary,social,informal,marginal,0.18,0.04,0.04,0.08,0.00,0,,0.42,1,0.00,0.58,0.10,0.00,0.65,1.00
+con artist,contains,criminal,criminal,informal,skilled,social,informal,marginal,0.22,0.04,0.05,0.08,0.00,0,,0.42,1,0.00,0.62,0.10,0.00,0.65,1.00
+scammer,contains,criminal,criminal,informal,ordinary,social,informal,marginal,0.18,0.04,0.04,0.08,0.00,0,,0.42,1,0.00,0.58,0.10,0.00,0.65,1.00
+bandit,exact,criminal,criminal,informal,ordinary,manual,informal,marginal,0.20,0.03,0.04,0.06,0.00,0,,0.38,1,0.00,0.52,0.78,0.65,0.30,1.00
+raider,exact,criminal,criminal,informal,ordinary,manual,informal,marginal,0.22,0.04,0.06,0.08,0.00,0,,0.35,1,0.00,0.58,0.82,0.70,0.30,1.00
+soldier,contains,settlement_market,security,settlement,ordinary,manual,peer,commoner,0.36,0.58,0.42,0.46,0.00,0,,0.35,1,0.00,1.10,0.82,0.75,0.35,0.00
+guard,contains,settlement_market,security,settlement,ordinary,manual,peer,commoner,0.34,0.52,0.38,0.42,0.00,0,,0.35,1,0.00,1.05,0.75,0.65,0.35,0.00
+farmer,exact,settlement_market,food,field,ordinary,manual,peer,commoner,0.32,0.82,0.26,0.44,0.00,1,,0.46,0,0.00,0.95,0.70,0.05,0.45,0.00
+hunter,exact,settlement_market,food,wilds,ordinary,manual,peer,commoner,0.34,0.70,0.34,0.44,0.00,0,,0.38,0,0.00,1.00,0.78,0.25,0.30,0.00
+fisher,exact,settlement_market,food,waterfront,ordinary,manual,peer,commoner,0.32,0.72,0.30,0.42,0.00,0,,0.42,0,0.00,0.96,0.68,0.05,0.40,0.00
+mason,exact,settlement_market,craft,construction,skilled,manual,peer,commoner,0.40,0.64,0.38,0.48,0.00,0,,0.42,1,0.00,1.18,0.78,0.05,0.50,0.00
+smith,contains,settlement_market,craft,workshop,skilled,manual,peer,commoner,0.42,0.68,0.42,0.52,0.00,0,,0.40,1,0.00,1.20,0.72,0.05,0.55,0.00
+porter,contains,settlement_market,transport,market,ordinary,manual,supervised,commoner,0.24,0.48,0.20,0.30,0.00,0,,0.40,1,0.00,0.82,0.84,0.02,0.45,0.00
+rower,contains,settlement_market,transport,waterfront,ordinary,manual,supervised,commoner,0.26,0.52,0.24,0.34,0.00,0,,0.38,1,0.00,0.88,0.86,0.05,0.45,0.00
+laborer,contains,settlement_market,labor,settlement,ordinary,manual,supervised,commoner,0.22,0.44,0.20,0.30,0.00,0,,0.40,1,0.00,0.78,0.82,0.02,0.45,0.00
+judge,contains,office,authority,office,elite,cognitive,supervisory,upper,0.68,0.74,0.78,0.76,0.00,0,,0.42,1,0.00,1.45,0.08,0.18,0.55,0.00
+magistrate,contains,office,authority,office,elite,cognitive,supervisory,upper,0.66,0.72,0.76,0.74,0.00,0,,0.42,1,0.00,1.42,0.08,0.25,0.55,0.00
+guild master,contains,office,authority,office,elite,cognitive,supervisory,upper,0.76,0.60,0.70,0.72,0.00,0,,0.44,1,0.00,1.60,0.10,0.35,0.55,0.00
+merchant,exact,settlement_market,trade,market,elite,cognitive,self_directed,notable,0.72,0.60,0.66,0.68,0.00,0,,0.46,1,0.00,1.55,0.18,0.05,0.55,0.00
+caravan master,exact,settlement_market,trade,route,elite,mixed,supervisory,notable,0.74,0.62,0.68,0.70,0.00,0,,0.44,1,0.00,1.58,0.55,0.25,0.55,0.00
+shipowner,exact,settlement_market,trade,port,elite,cognitive,supervisory,elite,0.82,0.62,0.74,0.72,0.00,0,,0.44,1,0.00,1.70,0.12,0.10,0.55,0.00
+banker,exact,settlement_market,finance,market,elite,cognitive,self_directed,elite,0.84,0.54,0.70,0.66,0.00,0,,0.42,1,0.00,1.75,0.05,0.00,0.70,0.00
+moneylender,exact,settlement_market,finance,market,skilled,cognitive,self_directed,notable,0.70,0.38,0.50,0.44,0.00,0,,0.42,1,0.00,1.45,0.05,0.02,0.70,0.00
+courtier,exact,office,prestige,court,elite,social,supervisory,upper,0.64,0.42,0.72,0.62,0.00,0,,0.48,1,0.00,1.38,0.05,0.05,0.70,0.00
+steward,exact,office,stewardship,estate,skilled,cognitive,supervisory,professional,0.58,0.58,0.60,0.66,0.00,0,,0.50,1,0.00,1.28,0.18,0.10,0.60,0.00
+estate steward,exact,office,stewardship,estate,elite,cognitive,supervisory,notable,0.72,0.62,0.68,0.70,0.00,0,,0.50,1,0.00,1.55,0.18,0.15,0.60,0.00
+treasurer,exact,office,finance,office,elite,cognitive,supervisory,upper,0.78,0.58,0.70,0.68,0.00,0,,0.44,1,0.00,1.62,0.05,0.05,0.70,0.00
+guild treasurer,exact,office,finance,guild,elite,cognitive,supervisory,upper,0.76,0.58,0.68,0.68,0.00,0,,0.44,1,0.00,1.58,0.05,0.05,0.70,0.00
+scholar,exact,settlement_market,knowledge,school,elite,cognitive,self_directed,professional,0.56,0.78,0.66,0.72,0.00,0,,0.44,1,0.00,1.25,0.08,0.00,0.70,0.00
+physician,exact,settlement_market,care,settlement,elite,cognitive,self_directed,professional,0.64,0.86,0.70,0.78,0.38,0,,0.58,1,0.00,1.35,0.18,0.00,0.60,0.00
+priest,exact,settlement_market,ritual,temple,skilled,social,self_directed,professional,0.54,0.70,0.64,0.68,0.12,0,,0.50,1,0.00,1.15,0.12,0.02,0.60,0.00
+landholder,exact,settlement_market,estate,estate,elite,mixed,supervisory,elite,0.80,0.46,0.72,0.66,0.00,0,,0.46,1,0.00,1.65,0.20,0.30,0.45,0.00

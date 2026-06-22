@@ -51,6 +51,7 @@ class TitleRow:
     can_be_usurped: bool
     usurp_base_chance: float
     eligibility_kinship: str
+    force_authority_01: float = 0.0
     # Population-scaled holder sizing (for per-settlement merit titles like
     # ``settlement_leader`` / ``settlement_alderman``). Values are real-world counts
     # interpreted under ``world_start.population_scale``; ``0``/blank disables scaling.
@@ -127,6 +128,19 @@ def _parse_float(val: object, default: float = 0.0) -> float:
         return float(s)
     except (TypeError, ValueError):
         return default
+
+
+def _default_force_authority_for_title(rd: dict[str, object]) -> float:
+    role = str(rd.get("role") or "").strip().lower()
+    rule = str(rd.get("selection_rule") or "").strip().lower()
+    min_mi = _parse_float(rd.get("min_military_quality_index"), 0.0)
+    if min_mi > 0.0:
+        return _clamp01(0.30 + min_mi)
+    if role == "head" and ("salic" in rule or "primogeniture" in rule):
+        return 0.65
+    if role in {"local_merit", "settlement_merit"}:
+        return 0.12
+    return 0.0
 
 
 def _parse_bool(val: object) -> bool:
@@ -245,6 +259,12 @@ def load_government_catalog(db_path: Path | str) -> GovernmentCatalog:
                 ),
                 min_career_fitness=_parse_float(rd.get("min_career_fitness"), 0.0),
                 male_weight=_clamp01(_parse_float(rd.get("male_weight"), 0.5)),
+                force_authority_01=_clamp01(
+                    _parse_float(
+                        rd.get("force_authority_01"),
+                        _default_force_authority_for_title(rd),
+                    )
+                ),
                 can_be_usurped=_parse_bool(rd.get("can_be_usurped")),
                 usurp_base_chance=_parse_float(rd.get("usurp_base_chance"), 0.0),
                 eligibility_kinship=str(rd.get("eligibility_kinship") or "realm_resident")

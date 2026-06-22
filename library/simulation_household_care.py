@@ -565,6 +565,82 @@ def childcare_duty_factor(
     return min(CHILD_DUTY_FACTOR_CAP, duty)
 
 
+def _is_aunt_or_uncle_of_minor(
+    ctx: SimulationContext,
+    adult_id: int,
+    minor_rec: SimulationPersonRecord,
+) -> bool:
+    for parent_id in (minor_rec.father_id, minor_rec.mother_id):
+        if parent_id is None or int(parent_id) == int(adult_id):
+            continue
+        parent_rec = ctx.id_to_record.get(int(parent_id))
+        if parent_rec is None:
+            continue
+        parent_parents = {
+            int(pid)
+            for pid in (parent_rec.father_id, parent_rec.mother_id)
+            if pid is not None
+        }
+        if not parent_parents:
+            continue
+        adult_rec = ctx.id_to_record.get(int(adult_id))
+        if adult_rec is None:
+            return False
+        adult_parents = {
+            int(pid)
+            for pid in (adult_rec.father_id, adult_rec.mother_id)
+            if pid is not None
+        }
+        if parent_parents & adult_parents:
+            return True
+    return False
+
+
+def childcare_kinship_bonus_01(
+    ctx: SimulationContext,
+    rec: SimulationPersonRecord,
+    year: int,
+    indexes: YearCareIndexes | None = None,
+) -> float:
+    """Kinship pull toward household childcare for parents, grandparents, aunts/uncles."""
+    if ctx._person_is_dependent_minor(rec, year):
+        return 0.0
+    adult_id = int(rec.person_id)
+    sid = _residence_sid(rec)
+    if not sid:
+        return 0.0
+    if indexes is not None:
+        minor_id_set = set(indexes.minor_ids)
+        minor_ids = tuple(
+            int(r.person_id)
+            for r in indexes.by_settlement.get(sid, ())
+            if int(r.person_id) in minor_id_set
+        )
+    else:
+        minor_ids = tuple(
+            int(r.person_id)
+            for r in ctx.iter_current_people(sorted_by_id=True)
+            if _residence_sid(r) == sid and ctx._person_is_dependent_minor(r, year)
+        )
+    best = 0.0
+    for mid in minor_ids:
+        minor_rec = ctx.id_to_record.get(int(mid))
+        if minor_rec is None:
+            continue
+        parents = {
+            int(pid)
+            for pid in (minor_rec.father_id, minor_rec.mother_id)
+            if pid is not None
+        }
+        if adult_id in parents:
+            return 1.0
+        if adult_id in _living_grandparent_ids_for_minor(ctx, minor_rec):
+            best = max(best, 0.72)
+        elif _is_aunt_or_uncle_of_minor(ctx, adult_id, minor_rec):
+            best = max(best, 0.62)
+    return min(1.0, best)
+
+
 def _largest_active_settlement_id(ctx: SimulationContext) -> str | None:
     best: tuple[int, str] | None = None
     for sid, st in ctx.settlements_by_id.items():

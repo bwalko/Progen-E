@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -112,6 +113,88 @@ class TestSimulationGovernment(unittest.TestCase):
 
         self.assertEqual(scored_people, ["eligible"])
         self.assertEqual([pid for _score, pid in scored], [3])
+
+    def test_force_authority_titles_use_body_power_without_overriding_low_force_offices(self) -> None:
+        ctx = SimpleNamespace(
+            _gov_candidate_fact_cache={},
+            _gov_scored_candidate_cache={},
+            _gov_care_indexes=SimpleNamespace(childcare_duty_factor_by_adult={}),
+        )
+        base_title = TitleRow(
+            title_id="office",
+            title_names_by_era={},
+            polity_type_id="city_state",
+            role="court",
+            selection_rule="election",
+            max_holders=1,
+            term_years=None,
+            min_age=16,
+            min_leadership_index=0.0,
+            min_military_quality_index=0.0,
+            min_career_fitness=0.5,
+            male_weight=0.5,
+            can_be_usurped=False,
+            usurp_base_chance=0.0,
+            eligibility_kinship="none",
+            force_authority_01=0.0,
+        )
+        high_force_title = replace(
+            base_title,
+            title_id="marshal",
+            force_authority_01=0.85,
+        )
+        male_weighted_title = replace(base_title, title_id="elder", male_weight=0.80)
+        records = [
+            SimpleNamespace(
+                person_id=10,
+                person=SimpleNamespace(
+                    birthyear=970,
+                    deathyear=None,
+                    gender="Male",
+                    career_fitness_score=0.9,
+                    genome={"physical": 0.0},
+                    mind_body={"physical": 0.0},
+                ),
+            ),
+            SimpleNamespace(
+                person_id=11,
+                person=SimpleNamespace(
+                    birthyear=970,
+                    deathyear=None,
+                    gender="Female",
+                    career_fitness_score=0.9,
+                    genome={"physical": -85.0},
+                    mind_body={"physical": -85.0},
+                ),
+            ),
+        ]
+
+        with patch(
+            "library.simulation_government.leadership_and_military_indexes",
+            return_value=(0.8, 0.5),
+        ):
+            low_force = dict(
+                (pid, score)
+                for score, pid in _government_scored_candidate_pool(
+                    ctx, records, title=base_title, composite_rows=(), year=1000
+                )
+            )
+            high_force = dict(
+                (pid, score)
+                for score, pid in _government_scored_candidate_pool(
+                    ctx, records, title=high_force_title, composite_rows=(), year=1000
+                )
+            )
+            male_weighted = dict(
+                (pid, score)
+                for score, pid in _government_scored_candidate_pool(
+                    ctx, records, title=male_weighted_title, composite_rows=(), year=1000
+                )
+            )
+
+        self.assertAlmostEqual(low_force[10], low_force[11])
+        self.assertGreater(high_force[10], high_force[11])
+        self.assertGreater(male_weighted[10], male_weighted[11])
 
     def test_office_history_readable_view_tracks_successions_and_death_endings(self) -> None:
         with closing(sqlite3.connect(":memory:")) as conn:

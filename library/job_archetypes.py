@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -59,6 +59,10 @@ class JobArchetypeParams:
     adult_only: bool
     board_compensation_01: float
     cash_wage_multiplier: float
+    physical_demand_01: float = 0.30
+    force_authority_01: float = 0.0
+    leveling_affinity_01: float = 0.50
+    informal_role_01: float = 0.0
 
 
 DEFAULT_JOB_ARCHETYPE = JobArchetypeParams(
@@ -80,6 +84,10 @@ DEFAULT_JOB_ARCHETYPE = JobArchetypeParams(
     adult_only=False,
     board_compensation_01=0.0,
     cash_wage_multiplier=1.0,
+    physical_demand_01=0.30,
+    force_authority_01=0.0,
+    leveling_affinity_01=0.50,
+    informal_role_01=0.0,
 )
 
 
@@ -176,6 +184,26 @@ def _params_from_row(row: dict[str, object], base: JobArchetypeParams) -> JobArc
             0.0,
             _float_cell(row, "cash_wage_multiplier", base.cash_wage_multiplier),
         ),
+        physical_demand_01=_clamp(
+            _float_cell(row, "physical_demand_01", base.physical_demand_01),
+            0.0,
+            1.0,
+        ),
+        force_authority_01=_clamp(
+            _float_cell(row, "force_authority_01", base.force_authority_01),
+            0.0,
+            1.0,
+        ),
+        leveling_affinity_01=_clamp(
+            _float_cell(row, "leveling_affinity_01", base.leveling_affinity_01),
+            0.0,
+            1.0,
+        ),
+        informal_role_01=_clamp(
+            _float_cell(row, "informal_role_01", base.informal_role_01),
+            0.0,
+            1.0,
+        ),
     )
 
 
@@ -188,7 +216,8 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
         return any(p in jk for p in parts)
 
     if has("child rearer", "parent"):
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "household_care",
             "care",
             "home",
@@ -207,9 +236,13 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             False,
             0.0,
             0.0,
+            ),
+            physical_demand_01=0.18,
+            leveling_affinity_01=0.35,
         )
     if has("nanny", "child watcher"):
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "domestic_service",
             "care",
             "employer_household",
@@ -228,10 +261,14 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.72,
             0.35,
+            ),
+            physical_demand_01=0.22,
+            leveling_affinity_01=0.35,
         )
     if has("maid", "servant", "valet", "household manager", "aide", "retainer"):
         kind = "household_manager" if "manager" in jk else "servant"
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "domestic_service",
             "domestic",
             "employer_household",
@@ -250,9 +287,14 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.68,
             0.28,
+            ),
+            physical_demand_01=0.25 if kind == "household_manager" else 0.40,
+            force_authority_01=0.05 if kind == "household_manager" else 0.0,
+            leveling_affinity_01=0.45,
         )
     if has("prostitute", "courtesan", "brothel worker"):
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "vice",
             "vice",
             "street_or_house",
@@ -271,9 +313,40 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.05,
             0.55,
+            ),
+            physical_demand_01=0.16,
+            leveling_affinity_01=0.30,
+            informal_role_01=1.0,
         )
-    if has("thief", "fraud", "extortion", "raider", "criminal", "bandit"):
-        return JobArchetypeParams(
+    if has("charlatan", "huckster", "con artist", "scammer", "fraud"):
+        return replace(
+            JobArchetypeParams(
+            "criminal",
+            "criminal",
+            "informal",
+            "skilled",
+            "social",
+            "informal",
+            "marginal",
+            0.20,
+            0.04,
+            0.05,
+            0.08,
+            0.0,
+            False,
+            None,
+            0.42,
+            True,
+            0.0,
+            0.60,
+            ),
+            physical_demand_01=0.10,
+            leveling_affinity_01=0.65,
+            informal_role_01=1.0,
+        )
+    if has("thief", "extortion", "raider", "criminal", "bandit", "smuggler", "poacher"):
+        return replace(
+            JobArchetypeParams(
             "criminal",
             "criminal",
             "informal",
@@ -292,10 +365,80 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.0,
             0.50,
+            ),
+            physical_demand_01=0.80 if has("raider", "bandit") else 0.35,
+            force_authority_01=0.68 if has("raider", "bandit") else 0.10,
+            leveling_affinity_01=0.30,
+            informal_role_01=1.0,
+        )
+    if has(
+        "soldier",
+        "guard",
+        "warrior",
+        "infantry",
+        "legionary",
+        "longbowman",
+        "gladiator",
+        "duelist",
+        "mercenary",
+        "brawler",
+        "enforcer",
+        "constable",
+        "sheriff",
+        "knight",
+    ):
+        return replace(
+            DEFAULT_JOB_ARCHETYPE,
+            role_family="security",
+            skill_level="ordinary",
+            manuality="manual",
+            societal_impact_01=0.58,
+            public_prestige_01=0.42,
+            perceived_worth_01=0.46,
+            physical_demand_01=0.80 if not has("guard", "constable", "sheriff") else 0.74,
+            force_authority_01=0.72,
+            leveling_affinity_01=0.35,
+        )
+    if has(
+        "farmer",
+        "hunter",
+        "fisher",
+        "laborer",
+        "labourer",
+        "porter",
+        "rower",
+        "mason",
+        "carpenter",
+        "smith",
+        "blacksmith",
+        "digger",
+        "builder",
+        "road worker",
+        "sailor",
+        "teamster",
+        "courier",
+        "runner",
+        "messenger",
+    ):
+        demand = 0.70
+        if has("hunter", "rower", "porter", "digger", "laborer", "labourer"):
+            demand = 0.82
+        elif has("courier", "runner", "messenger", "sailor", "teamster"):
+            demand = 0.62
+        return replace(
+            DEFAULT_JOB_ARCHETYPE,
+            role_family="labor",
+            manuality="manual",
+            societal_impact_01=0.52,
+            perceived_worth_01=0.42,
+            physical_demand_01=demand,
+            force_authority_01=0.20 if has("hunter") else 0.05,
+            leveling_affinity_01=0.45,
         )
     if has("banker", "shipowner", "landholder"):
         role = "finance" if "banker" in jk else ("trade" if "shipowner" in jk else "estate")
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "settlement_market",
             role,
             "market" if role != "estate" else "estate",
@@ -314,10 +457,15 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.0,
             1.7,
+            ),
+            physical_demand_01=0.05 if role == "finance" else (0.12 if role == "trade" else 0.20),
+            force_authority_01=0.30 if role == "estate" else 0.10,
+            leveling_affinity_01=0.65 if role == "finance" else 0.45,
         )
     if has("merchant", "caravan master", "moneylender"):
         role = "finance" if "moneylender" in jk else "trade"
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "settlement_market",
             role,
             "market",
@@ -336,10 +484,15 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.0,
             1.5,
+            ),
+            physical_demand_01=0.55 if "caravan master" in jk else (0.05 if role == "finance" else 0.18),
+            force_authority_01=0.25 if "caravan master" in jk else 0.05,
+            leveling_affinity_01=0.55,
         )
     if has("scholar", "physician", "priest"):
         role = "care" if "physician" in jk else ("ritual" if "priest" in jk else "knowledge")
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "settlement_market",
             role,
             "settlement",
@@ -358,10 +511,14 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.0,
             1.25,
+            ),
+            physical_demand_01=0.20 if role == "care" else 0.10,
+            leveling_affinity_01=0.60,
         )
     if has("courtier", "steward", "treasurer"):
         role = "finance" if "treasurer" in jk else ("prestige" if "courtier" in jk else "stewardship")
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "office",
             role,
             "office",
@@ -380,9 +537,14 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.0,
             1.45,
+            ),
+            physical_demand_01=0.05 if role in {"finance", "prestige"} else 0.18,
+            force_authority_01=0.10 if role == "stewardship" else 0.05,
+            leveling_affinity_01=0.70,
         )
     if has("judge", "magistrate", "officer", "mayor", "ruler", "guild master"):
-        return JobArchetypeParams(
+        return replace(
+            JobArchetypeParams(
             "office",
             "authority",
             "office",
@@ -401,6 +563,10 @@ def infer_job_archetype_params(job_title: str | None) -> JobArchetypeParams:
             True,
             0.0,
             1.5,
+            ),
+            physical_demand_01=0.10,
+            force_authority_01=0.35 if has("ruler", "officer", "guild master") else 0.22,
+            leveling_affinity_01=0.55,
         )
     return DEFAULT_JOB_ARCHETYPE
 

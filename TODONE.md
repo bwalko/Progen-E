@@ -3244,3 +3244,62 @@ completion.
   non-detailed-directory save with `mixed_mode_alive=1057`,
   `detailed_alive=68`, `nondetailed_alive=989`, and
   `murder_per_10k_mixed_person_years=4.882812`.
+
+## 2026-06-22 Era-Appropriate Jobs And Force Scoring
+
+### Enhancements
+
+- Added `library/work_body_fit.py`, a shared body-demand helper that derives
+  `body_power_01` from current mind/body `physical`, applies the small male
+  raw-strength prior only inside body-demand and force-authority scoring, and
+  reduces effective demand through era tools or
+  `world_start.magic_physical_leveling_01`.
+- Extended `job_archetypes.csv` and `JobArchetypeParams` with
+  `physical_demand_01`, `force_authority_01`, `leveling_affinity_01`, and
+  `informal_role_01`; tuned manual labor, combat/security, transport,
+  construction, care, domestic service, office, criminal, and vice examples.
+- Extended `government_titles.csv` / `TitleRow` with `force_authority_01` and
+  applied body-power multipliers to high-force office and head-seat scoring
+  while preserving existing `male_weight`, leadership, career-fitness, military,
+  and childcare-duty terms.
+- Added career assignment diagnostics to `job_assigned` payloads:
+  `physical_demand_01`, `effective_physical_demand_01`, `body_power_01`, and
+  `physical_demand_multiplier`.
+- Added explicit parent/grandparent/aunt/uncle childcare kinship pull via
+  `childcare_kinship_bonus_01`, feeding the household-care preassignment path
+  for feminine high-care kin without making the behavior a hard rule.
+
+### Fixes
+
+- Reclassified `charlatan`, huckster, con-artist, scammer, and fraudster-style
+  work as informal criminal/social roles so they no longer fall through to
+  default labor semantics.
+- Added criminal job-market rows for fraud/charlatan-style titles and synced
+  `dev_rules/config_schemas.md`, `dev_rules/government.md`, and
+  `dev_rules/module_map.md` for the new knobs.
+- Reloaded `worlds/default/config.sqlite` after the CSV changes.
+
+### Validation
+
+- `python -m py_compile library\work_body_fit.py library\job_archetypes.py
+  library\government_catalog.py library\simulation_careers.py
+  library\simulation_government.py library\simulation_household_care.py
+  unit_test\test_simulation_careers.py unit_test\test_simulation_government.py
+  unit_test\test_simulation_household_care.py
+  unit_test\test_jobs_housing_care.py`
+- CSV width check for `config/job_archetypes.csv`, `config/job_market.csv`,
+  `config/government_titles.csv`, and `config/world_start.csv`.
+- `python utils\util_load_config.py --world default`
+- `python utils\util_check_config_sqlite_vs_csv.py --world default`
+- `python -m unittest
+  unit_test.test_simulation_careers.TestSimulationCareers.test_pretech_body_demand_favors_fit_workers_without_hard_bans
+  unit_test.test_simulation_careers.TestSimulationCareers.test_modern_and_magic_leveling_narrow_physical_demand_penalty
+  unit_test.test_jobs_housing_care.TestJobsHousingCare.test_job_archetypes_parse_and_mark_adult_only_roles
+  unit_test.test_simulation_government.TestSimulationGovernment.test_force_authority_titles_use_body_power_without_overriding_low_force_offices
+  unit_test.test_simulation_household_care.TestSimulationHouseholdCare.test_childcare_kinship_bonus_scores_parent_grandparent_and_aunt`
+- `python -m unittest
+  unit_test.test_simulation_careers.TestSimulationCareers.test_assignment_uses_era_jobs_and_ignores_annotation_columns
+  unit_test.test_simulation_careers.TestSimulationCareers.test_female_cross_gender_exception_can_draw_male_only_job
+  unit_test.test_simulation_careers.TestSimulationCareers.test_non_masculine_mother_with_childcare_duty_prefers_home_role
+  unit_test.test_simulation_careers.TestSimulationCareers.test_job_market_favors_simple_jobs_in_small_settlements
+  unit_test.test_simulation_government.TestSimulationGovernment.test_government_scored_pool_skips_cheap_ineligible_candidates_before_composites`
