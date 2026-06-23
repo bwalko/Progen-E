@@ -860,6 +860,66 @@ def _attach_empty_genome_config(con: sqlite3.Connection) -> None:
     )
 
 
+def _add_composite_rating_config(con: sqlite3.Connection, *, schema_prefix: str = "cfg.") -> None:
+    con.execute(
+        f"""
+        create table {schema_prefix}genome_composite_ratings (
+            rating_id text,
+            display_name text,
+            component_1_trait text,
+            component_1_position text,
+            component_1_weight real,
+            notes text
+        )
+        """
+    )
+    con.executemany(
+        f"insert into {schema_prefix}genome_composite_ratings values (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "physical_strength",
+                "Physical Strength",
+                "physical",
+                "excess",
+                1.0,
+                "Physical force and resilience.",
+            ),
+            (
+                "practical_intellect",
+                "Practical Intellect",
+                "intellect",
+                "optimal",
+                1.0,
+                "Applied reasoning and judgment.",
+            ),
+        ],
+    )
+
+
+def _attach_composite_rating_config(con: sqlite3.Connection) -> None:
+    _attach_empty_genome_config(con)
+    _add_composite_rating_config(con)
+
+
+def _write_composite_config(path: Path) -> None:
+    with closing(sqlite3.connect(path)) as con:
+        con.execute(
+            """
+            create table genome (
+                trait text,
+                "deficient deviation" text,
+                "optimal centerpoint" text,
+                "excess deviation" text,
+                "deficient description" text,
+                "optimal description" text,
+                "excess description" text
+            )
+            """
+        )
+        _add_composite_rating_config(con, schema_prefix="")
+        con.commit()
+
+
 def _insert_compact_person(
     con: sqlite3.Connection,
     person_id: int,
@@ -3251,6 +3311,203 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertEqual(person["genome"], {"focus": 0.0, "courage": -80.0})
         self.assertEqual(person["mind_body"], {"focus": 5.0, "courage": -75.0})
+
+    def test_person_sheet_and_share_show_composite_trait_scores(self) -> None:
+        con = _memory_save()
+        _attach_composite_rating_config(con)
+        con.execute(
+            "update simulation_people set person_json = ? where person_id = 1",
+            (
+                json.dumps(
+                    {
+                        "first_name": "Ada",
+                        "last_name": "Forge",
+                        "birthyear": 0,
+                        "genome_composite_scores": {
+                            "physical_strength": 0.91,
+                            "practical_intellect": 0.42,
+                        },
+                    }
+                ),
+            ),
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertIn("Composite Trait Scores", sheet)
+        self.assertIn("Physical Strength", sheet)
+        self.assertIn("physical_strength", sheet)
+        self.assertIn(">0.91<", sheet)
+        self.assertIn("Composite Trait Scores:", share)
+        self.assertIn("- Physical Strength: 0.91", share)
+
+    def test_person_sheet_falls_back_to_computed_composite_scores(self) -> None:
+        con = _memory_save()
+        _attach_composite_rating_config(con)
+        con.execute(
+            "update simulation_people set person_json = ? where person_id = 1",
+            (
+                json.dumps(
+                    {
+                        "first_name": "Ada",
+                        "last_name": "Forge",
+                        "birthyear": 0,
+                        "genome": {"physical": 80.0},
+                        "mind_body": {"physical": 80.0},
+                    }
+                ),
+            ),
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertIn("Composite Trait Scores", sheet)
+        self.assertIn("Physical Strength", sheet)
+        self.assertNotIn("No composite trait scores recorded", sheet)
+        self.assertIn("- Physical Strength:", share)
+
+    def test_people_browser_shows_and_sorts_top_composite_score(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = Path(tmp) / "save.sqlite"
+            config = Path(tmp) / "config.sqlite"
+            _write_composite_config(config)
+            with closing(sqlite3.connect(save)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Ada", "Forge")
+                _insert_compact_person(con, 2, "Bea", "Forge")
+                con.execute(
+                    "update simulation_people set person_json = ? where person_id = 1",
+                    (
+                        json.dumps(
+                            {
+                                "genome_composite_scores": {
+                                    "physical_strength": 0.62,
+                                    "practical_intellect": 0.70,
+                                }
+                            }
+                        ),
+                    ),
+                )
+                con.execute(
+                    "update simulation_people set person_json = ? where person_id = 2",
+                    (
+                        json.dumps(
+                            {
+                                "genome_composite_scores": {
+                                    "physical_strength": 0.93,
+                                    "practical_intellect": 0.20,
+                                }
+                            }
+                        ),
+                    ),
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: config if db_kind == "Config DB" else save
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                table, status, person_ids = gdb.load_people_browser(
+                    "default",
+                    "",
+                    "All",
+                    "",
+                    "",
+                    gdb.COMPOSITE_SCORE_SORT_LABEL,
+                    "Descending",
+                    50,
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        rows = self._history_table_rows(table)
+        self.assertEqual(person_ids, [2, 1])
+        self.assertIn("Top Composite", table["headers"])
+        self.assertEqual(rows[0]["Top Composite"], "Physical Strength")
+        self.assertEqual(rows[0]["Top Composite Score"], "0.93")
+        self.assertIn("sorted by: Top Composite Score descending", status)
+
+    def test_composite_scores_browser_filters_and_selects_person(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = Path(tmp) / "save.sqlite"
+            config = Path(tmp) / "config.sqlite"
+            _write_composite_config(config)
+            with closing(sqlite3.connect(save)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                _insert_compact_person(con, 1, "Ada", "Forge")
+                _insert_compact_person(con, 2, "Bea", "Forge")
+                con.execute(
+                    "update simulation_people set person_json = ? where person_id = 1",
+                    (
+                        json.dumps(
+                            {
+                                "birthyear": 0,
+                                "genome_composite_scores": {
+                                    "physical_strength": 0.91,
+                                    "practical_intellect": 0.30,
+                                },
+                            }
+                        ),
+                    ),
+                )
+                con.execute(
+                    "update simulation_people set person_json = ? where person_id = 2",
+                    (
+                        json.dumps(
+                            {
+                                "birthyear": 0,
+                                "genome_composite_scores": {
+                                    "physical_strength": 0.40,
+                                    "practical_intellect": 0.88,
+                                },
+                            }
+                        ),
+                    ),
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: config if db_kind == "Config DB" else save
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                table, status, keys = gdb.load_composite_scores_browser(
+                    "default",
+                    "Physical Strength",
+                    "All",
+                    "Ada",
+                    "0.5",
+                    50,
+                    "Descending",
+                )
+                sheet, share = gdb.select_composite_score_from_table(
+                    keys,
+                    "default",
+                    types.SimpleNamespace(index=0),
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        rows = self._history_table_rows(table)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Composite"], "Physical Strength")
+        self.assertEqual(rows[0]["Person"], "Ada Forge")
+        self.assertEqual(rows[0]["Score"], "0.91")
+        self.assertIn("showing 1 of 1 composite score rows", status)
+        self.assertIn("Ada Forge", sheet)
+        self.assertIn("Composite Trait Scores", sheet)
+        self.assertIn("- Physical Strength: 0.91", share)
 
     def test_couple_formed_shows_rare_kinship_exception(self) -> None:
         con = _memory_save()

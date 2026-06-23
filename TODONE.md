@@ -3467,3 +3467,39 @@ completion.
   unit_test.test_jobs_housing_care.TestJobsHousingCare.test_stable_job_rehomes_street_adult
   unit_test.test_jobs_housing_care.TestJobsHousingCare.test_street_household_cannot_anchor_domestic_service_demand`
 - `python -m unittest unit_test.test_jobs_housing_care`
+
+## 2026-06-23 Composite Trait Scores In Gradio
+
+### Enhancements
+
+- Gradio person sheets now include a dedicated `Composite Trait Scores`
+  section for `Person.genome_composite_scores`, using display names from
+  `genome_composite_ratings` and falling back to rating IDs when config labels
+  are unavailable.
+- Person share text now includes top composite trait scores, and the People
+  browser shows `Top Composite` / `Top Composite Score` with a computed
+  `Top Composite Score` sort.
+- Added a dedicated `Composite Scores` tab with explicit load controls for
+  world, rating, life filter, search, minimum score, limit, and sort direction;
+  selecting a score row opens the existing person sheet/share text.
+- Older saves without persisted `genome_composite_scores` get a read-only
+  browser fallback from recorded genome/mind-body values; the browser does not
+  write refreshed scores back to `save.sqlite`.
+
+### Validation
+
+- `python -m py_compile utils/gradio_data_browser.py
+  unit_test/test_gradio_data_browser.py`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_and_share_show_composite_trait_scores
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_falls_back_to_computed_composite_scores
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_people_browser_shows_and_sorts_top_composite_score
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_composite_scores_browser_filters_and_selects_person`
+- `python -m unittest unit_test.test_genome_composite_profiles`
+- `python -c "import time; from utils.gradio_data_browser import build_app; t=time.perf_counter(); app=build_app('default'); print('build_app', round(time.perf_counter()-t,3), 'dependencies', len(app.fns))"` reported
+  `build_app 21.444 dependencies 113`.
+- `git diff --check` passed with only existing LF-to-CRLF working-copy
+  warnings for the edited Python files.
+- Full `python -m unittest unit_test.test_gradio_data_browser` was attempted;
+  the only failures were the two pre-existing unrelated fixture/schema errors
+  in the Almanack refresh and compact property-crime readable-view tests.

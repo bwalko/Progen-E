@@ -65,6 +65,20 @@ LEGACY_SCORE_KEY_TO_LABEL = {
 }
 LEGACY_SCORE_LABEL_TO_KEY = {v: k for k, v in LEGACY_SCORE_KEY_TO_LABEL.items()}
 LEGACY_SCORE_MIN_DISPLAY = 0.70
+COMPOSITE_SCORE_ALL_CHOICE = "All Scores"
+COMPOSITE_SCORE_SORT_LABEL = "Top Composite Score"
+COMPOSITE_SCORE_HEADERS = [
+    "Rank",
+    "Score",
+    "Composite",
+    "Person",
+    "Person ID",
+    "Life",
+    "Age",
+    "Home",
+    "Top Composite",
+    "Context",
+]
 ARCHIVE_SCORE_DEFINITIONS = {
     "Narrative Heat": "0-100: how much visible story material this person has accumulated from events, relationships, rarity, and consequences.",
     "ARI": "Archive Recognition Index, 0-100: how likely this person is to be identifiable in later records instead of surviving only as background context.",
@@ -3025,6 +3039,7 @@ def _person_summary_row(
     row: sqlite3.Row,
     current_year: int | None,
     trait_slots: tuple[str, ...] = (),
+    composite_catalog: tuple[dict[str, object], ...] = (),
 ) -> dict[str, object]:
     person = _person_from_row(row, trait_slots)
     birthyear = person.get("birthyear")
@@ -3046,6 +3061,13 @@ def _person_summary_row(
         "Home": person.get("current_settlement_id") or person.get("birthplace") or "",
         "Traits": ", ".join(person.get("genome_trait_phrases") or person.get("genome_composite_names") or []),
     }
+    top_composite = _top_composite_score_entry(person, composite_catalog)
+    if top_composite:
+        out["Top Composite"] = top_composite["display_name"]
+        out["Top Composite Score"] = _format_composite_score(top_composite["score"])
+    else:
+        out["Top Composite"] = ""
+        out["Top Composite Score"] = ""
     out.update(_legacy_score_columns(person.get("mind_body") or person.get("genome") or {}))
     return out
 
@@ -3091,6 +3113,27 @@ def _sort_rows_by_legacy_score(
         rows,
         key=lambda row: (
             _legacy_score_value(_person_from_row(row, trait_slots), str(sort_by)),
+            int(row["person_id"]),
+        ),
+        reverse=reverse,
+    )
+
+
+def _sort_rows_by_top_composite_score(
+    rows: Iterable[sqlite3.Row],
+    *,
+    sort_dir: str,
+    trait_slots: tuple[str, ...] = (),
+    composite_catalog: tuple[dict[str, object], ...] = (),
+) -> list[sqlite3.Row]:
+    reverse = sort_dir != "Ascending"
+    return sorted(
+        rows,
+        key=lambda row: (
+            _top_composite_score_value(
+                _person_from_row(row, trait_slots),
+                composite_catalog,
+            ),
             int(row["person_id"]),
         ),
         reverse=reverse,
@@ -3210,6 +3253,7 @@ def load_people_browser(
         saved_world = _resolve_saved_world(con, world)
         current_year = _current_year(con, saved_world)
     trait_slots = _trait_slots_for_world(saved_world)
+    composite_catalog = _composite_rating_catalog(world=saved_world)
 
     clauses: list[str] = []
     params: list[object] = []
@@ -3247,6 +3291,7 @@ def load_people_browser(
 
     where_sql = " and ".join(clauses) if clauses else "1 = 1"
     legacy_sort = sort_by in LEGACY_SCORE_COLUMNS
+    composite_sort = sort_by == COMPOSITE_SCORE_SORT_LABEL
     sort_map = {
         "ID": "person_id",
         "Name": (
@@ -3264,7 +3309,7 @@ def load_people_browser(
     }
     direction = "asc" if sort_dir == "Ascending" else "desc"
     order_sql_default = sort_map.get("Age" or "", "is_alive desc, person_id desc")
-    if legacy_sort:
+    if legacy_sort or composite_sort:
         order_clause = "person_id asc"
         order_params = []
     elif sort_by in (None, "", "Default"):
@@ -3280,9 +3325,9 @@ def load_people_browser(
         order_params = []
 
     with _connect_readonly(path) as con:
-        limit_sql = "" if legacy_sort else "limit ?"
+        limit_sql = "" if legacy_sort or composite_sort else "limit ?"
         query_params = [*params, *order_params]
-        if not legacy_sort:
+        if not legacy_sort and not composite_sort:
             query_params.append(row_limit)
         rows = con.execute(
             f"""
@@ -3307,6 +3352,8 @@ def load_people_browser(
         "Ethnic",
         "Home",
         "Traits",
+        "Top Composite",
+        "Top Composite Score",
         *LEGACY_SCORE_COLUMNS,
     ]
     if legacy_sort:
@@ -3316,7 +3363,22 @@ def load_people_browser(
             sort_dir=sort_dir,
             trait_slots=trait_slots,
         )[:row_limit]
-    values = [_person_summary_row(row, current_year, trait_slots) for row in rows]
+    elif composite_sort:
+        rows = _sort_rows_by_top_composite_score(
+            rows,
+            sort_dir=sort_dir,
+            trait_slots=trait_slots,
+            composite_catalog=composite_catalog,
+        )[:row_limit]
+    values = [
+        _person_summary_row(
+            row,
+            current_year,
+            trait_slots,
+            composite_catalog,
+        )
+        for row in rows
+    ]
     person_ids = [int(row["person_id"]) for row in rows]
     filter_bits = []
     if min_age not in (None, ""):
@@ -3324,13 +3386,206 @@ def load_people_browser(
     if max_age not in (None, ""):
         filter_bits.append(f"age <= {_safe_int(max_age, 10_000, 0, 10_000)}")
     filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
-    sort_text = f" | sorted by: {sort_by} {sort_dir.lower()}" if legacy_sort else ""
+    sort_text = (
+        f" | sorted by: {sort_by} {sort_dir.lower()}"
+        if legacy_sort or composite_sort
+        else ""
+    )
     saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
     status = (
         f"{path.name}: showing {len(values)} of {total} people{filter_text}{sort_text}{saved_world_note}. "
         "Click any person row to open their sheet."
     )
     return _dataframe(values, headers), status, person_ids
+
+
+def _composite_score_empty_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=COMPOSITE_SCORE_HEADERS)
+
+
+def _person_home_display(
+    con: sqlite3.Connection,
+    world: str,
+    person: dict[str, object],
+) -> str:
+    settlement_id = person.get("current_settlement_id") or person.get("birthplace_settlement_id")
+    if settlement_id and (
+        _has_table(con, "simulation_settlements")
+        or _has_relation(con, "simulation_settlements_readable")
+    ):
+        label = _settlement_name(con, world, settlement_id)
+        if label:
+            return label
+    return str(settlement_id or person.get("birthplace") or "").strip()
+
+
+def _composite_score_search_matches(row: dict[str, object], search: str) -> bool:
+    needle = str(search or "").strip().lower()
+    if not needle:
+        return True
+    variants = {needle, needle.replace("_", " ")}
+    haystacks: list[str] = []
+    for value in row.values():
+        text = str(value or "").lower()
+        haystacks.append(text)
+        haystacks.append(text.replace("_", " "))
+    return any(variant in haystack for variant in variants for haystack in haystacks)
+
+
+def _composite_score_key(person_id: object, rating_id: object) -> str:
+    return json.dumps(
+        {"person_id": int(person_id), "rating_id": str(rating_id or "")},
+        separators=(",", ":"),
+    )
+
+
+def _decode_composite_score_key(value: object) -> dict[str, object] | None:
+    try:
+        data = json.loads(str(value or ""))
+        person_id = int(data.get("person_id") or 0)
+        rating_id = str(data.get("rating_id") or "").strip()
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if person_id <= 0:
+        return None
+    return {"person_id": person_id, "rating_id": rating_id}
+
+
+def load_composite_scores_browser(
+    world: str,
+    rating: str,
+    life_filter: str,
+    search: str,
+    min_score: object,
+    limit: object,
+    sort_dir: str,
+) -> tuple[gr.Dataframe, str, list[str]]:
+    if not world:
+        return _composite_score_empty_frame(), "Choose a world.", []
+    row_limit = _safe_int(limit, 50, 1, 250)
+    try:
+        minimum = max(0.0, min(1.0, float(min_score))) if min_score not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        minimum = 0.0
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _composite_score_empty_frame(), f"{path} is missing. Run a simulation first.", []
+
+    values: list[dict[str, object]] = []
+    keys: list[str] = []
+    with _connect_readonly(path) as con:
+        saved_world = _resolve_saved_world(con, world)
+        current_year = _current_year(con, saved_world)
+        trait_slots = _trait_slots_for_world(saved_world)
+        catalog = _composite_rating_catalog(world=saved_world)
+        selected_rating_id = _composite_rating_id_for_choice(rating, catalog)
+        if (
+            selected_rating_id is None
+            and str(rating or "").strip()
+            and str(rating).strip() != COMPOSITE_SCORE_ALL_CHOICE
+        ):
+            selected_rating_id = str(rating).strip()
+
+        people_columns = _table_columns(con, "simulation_people")
+        people_source_sql, _people_source_columns = _people_browser_source_sql(con)
+        clauses: list[str] = []
+        params: list[object] = []
+        if "world" in people_columns:
+            clauses.append("world = ?")
+            params.append(saved_world)
+        if life_filter == "Alive":
+            clauses.append("is_alive = 1")
+        elif life_filter == "Dead":
+            clauses.append("is_alive = 0")
+        where_sql = " and ".join(clauses) if clauses else "1 = 1"
+        rows = con.execute(
+            f"""
+            select *
+            from {people_source_sql}
+            where {where_sql}
+            order by person_id
+            """,
+            params,
+        ).fetchall()
+        for row in rows:
+            person = _person_from_row(row, trait_slots)
+            entries = _composite_score_entries(person, catalog, min_score=minimum)
+            if selected_rating_id:
+                entries = [
+                    entry
+                    for entry in entries
+                    if str(entry["rating_id"]) == selected_rating_id
+                ]
+            if not entries:
+                continue
+            birthyear = person.get("birthyear")
+            deathyear = person.get("deathyear")
+            end_year = deathyear if deathyear is not None else current_year
+            age = ""
+            if birthyear is not None and end_year is not None:
+                age = int(end_year) - int(birthyear)
+            top = entries[0]
+            top_context = (
+                f"{top['display_name']} {_format_composite_score(top['score'])}"
+            )
+            tags = ", ".join(
+                str(tag)
+                for tag in [
+                    *list(person.get("genome_trait_phrases") or []),
+                    *list(person.get("genome_composite_names") or []),
+                ][:4]
+            )
+            for entry in entries:
+                out = {
+                    "Rank": 0,
+                    "Score": _format_composite_score(entry["score"]),
+                    "Composite": entry["display_name"],
+                    "Person": _person_name(person),
+                    "Person ID": int(row["person_id"]),
+                    "Life": "Alive" if row["is_alive"] else "Dead",
+                    "Age": age,
+                    "Home": _person_home_display(con, saved_world, person),
+                    "Top Composite": top_context,
+                    "Context": tags or str(entry["rating_id"]),
+                    "_score_value": float(entry["score"]),
+                    "_rating_id": str(entry["rating_id"]),
+                }
+                if _composite_score_search_matches(out, search):
+                    values.append(out)
+
+    reverse = sort_dir != "Ascending"
+    values.sort(
+        key=lambda row: (
+            float(row["_score_value"]),
+            str(row["Composite"]).casefold(),
+            int(row["Person ID"]),
+        ),
+        reverse=reverse,
+    )
+    limited = values[:row_limit]
+    public_rows: list[dict[str, object]] = []
+    for index, row in enumerate(limited, start=1):
+        row = dict(row)
+        row["Rank"] = index
+        keys.append(_composite_score_key(row["Person ID"], row["_rating_id"]))
+        row.pop("_score_value", None)
+        row.pop("_rating_id", None)
+        public_rows.append(row)
+
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    filter_bits = []
+    if str(rating or "").strip() and str(rating).strip() != COMPOSITE_SCORE_ALL_CHOICE:
+        filter_bits.append(f"rating={rating}")
+    if minimum > 0.0:
+        filter_bits.append(f"score >= {minimum:.2f}")
+    if search:
+        filter_bits.append(f"search={search!r}")
+    filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
+    status = (
+        f"{path.name}: showing {len(public_rows)} of {len(values)} composite score rows"
+        f"{filter_text}{saved_world_note}. Click a row to open its person sheet."
+    )
+    return _dataframe(public_rows, COMPOSITE_SCORE_HEADERS), status, keys
 
 
 def _almanack_headers_for_metric(selection: object) -> list[str]:
@@ -8018,6 +8273,279 @@ def _render_detail_card_html(label: str, value: str, tooltip: str | None = None)
     return f'<div class="detail-card"><div class="detail-label"{title}>{html.escape(label)}</div><div class="detail-value">{shown}</div></div>'
 
 
+def _normalize_composite_score_map(raw: object) -> dict[str, float]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    scores: dict[str, float] = {}
+    for key, value in raw.items():
+        rating_id = str(key or "").strip()
+        if not rating_id:
+            continue
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            continue
+        if score != score:
+            continue
+        scores[rating_id] = max(0.0, min(1.0, score))
+    return scores
+
+
+@lru_cache(maxsize=16)
+def _composite_rating_rows_from_config_path(path_text: str) -> tuple[dict[str, object], ...]:
+    path = Path(path_text)
+    if not path.exists():
+        return ()
+    try:
+        with _connect_readonly(path) as con:
+            if not _has_table(con, "genome_composite_ratings"):
+                return ()
+            rows = con.execute(
+                "select * from genome_composite_ratings order by rowid"
+            ).fetchall()
+            return tuple(dict(row) for row in rows)
+    except (FileNotFoundError, sqlite3.Error):
+        return ()
+
+
+def _composite_rating_rows_from_attached_config(
+    con: sqlite3.Connection,
+) -> tuple[dict[str, object], ...]:
+    try:
+        rows = con.execute(
+            "select * from cfg.genome_composite_ratings order by rowid"
+        ).fetchall()
+    except sqlite3.Error:
+        return ()
+    return tuple(dict(row) for row in rows)
+
+
+def _composite_rating_catalog(
+    *,
+    con: sqlite3.Connection | None = None,
+    world: str = "",
+) -> tuple[dict[str, object], ...]:
+    rows = _composite_rating_rows_from_attached_config(con) if con is not None else ()
+    if not rows and world:
+        rows = _composite_rating_rows_from_config_path(str(_db_path(world, "Config DB")))
+    catalog: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        rating_id = str(row.get("rating_id") or "").strip()
+        if not rating_id or rating_id in seen:
+            continue
+        seen.add(rating_id)
+        display = str(row.get("display_name") or "").strip() or _display_title(rating_id)
+        catalog.append(
+            {
+                "rating_id": rating_id,
+                "display_name": display,
+                "notes": str(row.get("notes") or "").strip(),
+                "order": index,
+                "row": dict(row),
+            }
+        )
+    return tuple(catalog)
+
+
+def _composite_rating_by_id(
+    catalog: tuple[dict[str, object], ...],
+) -> dict[str, dict[str, object]]:
+    return {str(row["rating_id"]): row for row in catalog}
+
+
+def _composite_rating_display_name(
+    rating_id: object,
+    catalog_by_id: dict[str, dict[str, object]] | None = None,
+) -> str:
+    rid = str(rating_id or "").strip()
+    if catalog_by_id and rid in catalog_by_id:
+        return str(catalog_by_id[rid].get("display_name") or _display_title(rid))
+    return _display_title(rid)
+
+
+def _composite_rating_choices(world: str) -> list[str]:
+    catalog = _composite_rating_catalog(world=world)
+    choices = [COMPOSITE_SCORE_ALL_CHOICE]
+    choices.extend(str(row["display_name"]) for row in catalog)
+    return choices
+
+
+def _composite_rating_id_for_choice(
+    choice: object,
+    catalog: tuple[dict[str, object], ...],
+) -> str | None:
+    text = str(choice or "").strip()
+    if not text or text == COMPOSITE_SCORE_ALL_CHOICE:
+        return None
+    for row in catalog:
+        rid = str(row["rating_id"])
+        display = str(row.get("display_name") or "")
+        if text == rid or text == display:
+            return rid
+    return None
+
+
+def _format_composite_score(value: object) -> str:
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _composite_trait_values_for_person(person: dict[str, object]) -> dict[str, float]:
+    raw_traits = person.get("mind_body") or person.get("genome") or {}
+    values: dict[str, float] = {}
+    if isinstance(raw_traits, dict):
+        for key, value in raw_traits.items():
+            try:
+                values[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+    for key, value in person.items():
+        if not str(key).endswith("_01"):
+            continue
+        try:
+            values[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def _person_composite_score_map(
+    person: dict[str, object],
+    catalog: tuple[dict[str, object], ...],
+) -> dict[str, float]:
+    scores = _normalize_composite_score_map(person.get("genome_composite_scores"))
+    if scores or not catalog:
+        return scores
+    values = _composite_trait_values_for_person(person)
+    if not values:
+        return {}
+    try:
+        from library.genome_composites import genome_composite_scores_for_traits
+
+        rows = tuple(dict(row.get("row") or {}) for row in catalog)
+        return _normalize_composite_score_map(
+            genome_composite_scores_for_traits(values, rows)
+        )
+    except Exception:
+        return {}
+
+
+def _composite_score_entries(
+    person: dict[str, object],
+    catalog: tuple[dict[str, object], ...],
+    *,
+    min_score: float = 0.0,
+) -> list[dict[str, object]]:
+    scores = _person_composite_score_map(person, catalog)
+    if not scores:
+        return []
+    by_id = _composite_rating_by_id(catalog)
+    default_order = len(catalog) + 10_000
+    entries: list[dict[str, object]] = []
+    for rating_id, score in scores.items():
+        if score < min_score:
+            continue
+        meta = by_id.get(rating_id, {})
+        entries.append(
+            {
+                "rating_id": rating_id,
+                "display_name": meta.get("display_name") or _display_title(rating_id),
+                "notes": meta.get("notes") or "",
+                "order": int(meta.get("order") or default_order),
+                "score": float(score),
+            }
+        )
+    entries.sort(
+        key=lambda entry: (
+            -float(entry["score"]),
+            int(entry["order"]),
+            str(entry["display_name"]).casefold(),
+            str(entry["rating_id"]),
+        )
+    )
+    return entries
+
+
+def _top_composite_score_entry(
+    person: dict[str, object],
+    catalog: tuple[dict[str, object], ...],
+) -> dict[str, object] | None:
+    entries = _composite_score_entries(person, catalog)
+    return entries[0] if entries else None
+
+
+def _top_composite_score_value(
+    person: dict[str, object],
+    catalog: tuple[dict[str, object], ...],
+) -> float:
+    entry = _top_composite_score_entry(person, catalog)
+    return float(entry["score"]) if entry else float("-inf")
+
+
+def _render_composite_score_section(
+    person_id: object,
+    person: dict[str, object],
+    catalog: tuple[dict[str, object], ...],
+) -> str:
+    entries = _composite_score_entries(person, catalog)
+    pid = html.escape(str(person_id))
+    if not entries:
+        body = '<div class="muted">No composite trait scores recorded.</div>'
+    else:
+        cards: list[str] = []
+        for entry in entries:
+            score = max(0.0, min(1.0, float(entry["score"])))
+            rating_id = str(entry["rating_id"])
+            label = str(entry["display_name"])
+            notes = str(entry.get("notes") or "").strip()
+            tooltip = notes or f"Rating ID: {rating_id}"
+            cards.append(
+                '<div class="legacy-score composite-score">'
+                '<div class="legacy-score-head">'
+                f'<span title="{html.escape(tooltip, quote=True)}">{html.escape(label)}</span>'
+                f'<span>{score:.2f}</span>'
+                '</div>'
+                f'<div class="legacy-score-desc">{html.escape(rating_id)}</div>'
+                '<div class="legacy-track" aria-hidden="true">'
+                f'<div class="legacy-fill" style="width: {score * 100:.1f}%"></div>'
+                '</div>'
+                '</div>'
+            )
+        body = f'<div class="legacy-grid composite-score-grid">{"".join(cards)}</div>'
+    return f"""
+      <section aria-labelledby="person-{pid}-composite-scores">
+        <h3 id="person-{pid}-composite-scores" class="section-title">Composite Trait Scores</h3>
+        {body}
+      </section>
+    """
+
+
+def _composite_score_share_lines(
+    person: dict[str, object],
+    catalog: tuple[dict[str, object], ...],
+    *,
+    limit: int = 8,
+) -> list[str]:
+    entries = _composite_score_entries(person, catalog)
+    if not entries:
+        return []
+    lines = ["Composite Trait Scores:"]
+    for entry in entries[: max(1, int(limit))]:
+        lines.append(
+            f"- {entry['display_name']}: {_format_composite_score(entry['score'])}"
+        )
+    lines.append("")
+    return lines
+
+
 def _legacy_indices_module():
     global _LEGACY_INDICES_MODULE
     if _LEGACY_INDICES_MODULE is not None:
@@ -8579,9 +9107,15 @@ def _render_person_sheet(
 
     labels = _genome_labels(con)
     trait_order = _genome_trait_order(con)
+    composite_catalog = _composite_rating_catalog(con=con, world=world)
     base_genome = person.get("genome") or {}
     current_genome = person.get("mind_body") or base_genome
     legacy_scores_html = _render_legacy_scores(current_genome)
+    composite_score_section = _render_composite_score_section(
+        row["person_id"],
+        person,
+        composite_catalog,
+    )
     trait_rows: list[str] = []
     if isinstance(current_genome, dict) or isinstance(base_genome, dict):
         trait_names = _ordered_genome_trait_names(
@@ -8748,6 +9282,7 @@ def _render_person_sheet(
         <h3 id="person-{row['person_id']}-tags" class="section-title">Character Tags</h3>
         <div class="pill-list" aria-label="Character tags">{pill_html}</div>
       </section>
+      {composite_score_section}
       {archive_score_section}
       <section aria-labelledby="person-{row['person_id']}-legacy">
         <h3 id="person-{row['person_id']}-legacy" class="section-title">Legacy Indexes</h3>
@@ -8859,6 +9394,10 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     archive_score = _person_archive_score_row(con, row["person_id"])
     archive_reason_rows = _person_archive_reason_rows(con, row["person_id"])
     archive_score_lines = _archive_score_share_lines(archive_score, archive_reason_rows)
+    composite_score_lines = _composite_score_share_lines(
+        person,
+        _composite_rating_catalog(con=con, world=world),
+    )
     obligation_lines = _person_obligation_lines(
         con, world, obligation_rows, row["person_id"]
     )
@@ -8923,6 +9462,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             f"Custody: {outlaw_custody_label}.",
             f"Character tags: {tags_text}",
             "",
+            *composite_score_lines,
             *archive_score_lines,
             "Family:",
             f"- Father: {father}",
@@ -9067,6 +9607,24 @@ def select_person_from_table(person_ids: list[int], world: str, evt: gr.SelectDa
             "Click a person row to generate share text.",
         )
     return render_person_outputs(world, person_id, open_target=PERSON_LINK_TARGET_DEFAULT)
+
+
+def select_composite_score_from_table(
+    composite_keys: list[str],
+    world: str,
+    evt: gr.SelectData,
+) -> tuple[str, str]:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        decoded = _decode_composite_score_key(composite_keys[int(row_index)])
+    except Exception:
+        decoded = None
+    if not decoded:
+        return (
+            '<div class="person-sheet muted" role="status">Click a composite score row to open its person sheet.</div>',
+            "Click a composite score row to generate share text.",
+        )
+    return render_person_outputs(world, decoded["person_id"], open_target="composite")
 
 
 def _decode_almanack_key(value: object) -> dict[str, object] | None:
@@ -12761,6 +13319,9 @@ def build_app(default_world: str = "default") -> gr.Blocks:
     initial_world = default_world if default_world in worlds else (worlds[0] if worlds else "")
     initial_tables = _table_names(initial_world, "Config DB") if initial_world else []
     initial_world_map = render_world_map_html(initial_world, True, True, True) if initial_world else ""
+    initial_composite_score_choices = (
+        _composite_rating_choices(initial_world) if initial_world else [COMPOSITE_SCORE_ALL_CHOICE]
+    )
     _log_info(
         "build_app_initial_data worlds=%s csvs=%s initial_world=%r initial_tables=%s map_bytes=%s elapsed=%.4fs",
         len(worlds),
@@ -12797,6 +13358,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                                 "Species",
                                 "Ethnic",
                                 "Home",
+                                COMPOSITE_SCORE_SORT_LABEL,
                                 *LEGACY_SCORE_COLUMNS,
                             ],
                             value="Default",
@@ -12831,6 +13393,64 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                     )
                     person_share_text = gr.Textbox(
                         value="Click a person row to generate share text.",
+                        label="Copyable Gmail Text",
+                        lines=14,
+                        max_lines=24,
+                        interactive=False,
+                        buttons=["copy"],
+                    )
+
+        with gr.Tab("Composite Scores"):
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=6):
+                    with gr.Row():
+                        composite_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        composite_rating = gr.Dropdown(
+                            initial_composite_score_choices,
+                            value=initial_composite_score_choices[0],
+                            label="Rating",
+                        )
+                        composite_life = gr.Radio(["All", "Alive", "Dead"], value="All", label="People")
+                    with gr.Row():
+                        composite_min_score = gr.Textbox(value="", label="Minimum", placeholder="Any")
+                        composite_limit = gr.Number(value=50, label="Limit", precision=0)
+                        composite_sort_dir = gr.Radio(
+                            ["Descending", "Ascending"],
+                            value="Descending",
+                            label="Sort",
+                        )
+                    composite_search = gr.Textbox(
+                        label="Search Composite Scores",
+                        placeholder="Name, id, home, rating, or tag...",
+                    )
+                    composite_load = gr.Button("Load Composite Scores", variant="primary")
+                    composite_status = gr.Textbox(label="Status", interactive=False)
+                    composite_table = gr.Dataframe(
+                        value=[],
+                        headers=COMPOSITE_SCORE_HEADERS,
+                        label="Composite Scores",
+                        interactive=False,
+                        wrap=True,
+                        elem_id="composite-score-table",
+                    )
+                    composite_keys_state = gr.State([])
+                with gr.Column(scale=5):
+                    with gr.Row(elem_classes=["linked-person-open-controls"]):
+                        composite_person_open_id = gr.Textbox(
+                            value="",
+                            label="Open Linked Person ID",
+                            elem_id="composite-person-open-id",
+                        )
+                        composite_person_open_button = gr.Button(
+                            "Open Linked Person",
+                            elem_id="composite-person-open-button",
+                        )
+                    composite_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Load composite scores, then click a row.</div>',
+                        label="Composite Person Sheet",
+                    )
+                    composite_share_text = gr.Textbox(
+                        value="Load composite scores, then click a row.",
                         label="Copyable Gmail Text",
                         lines=14,
                         max_lines=24,
@@ -13368,6 +13988,43 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             load_people_browser,
             person_browser_inputs,
             [person_table, person_status, person_ids_state],
+        )
+        composite_inputs = [
+            composite_world,
+            composite_rating,
+            composite_life,
+            composite_search,
+            composite_min_score,
+            composite_limit,
+            composite_sort_dir,
+        ]
+        composite_outputs = [
+            composite_table,
+            composite_status,
+            composite_keys_state,
+        ]
+        composite_load.click(load_composite_scores_browser, composite_inputs, composite_outputs)
+        for composite_input in composite_inputs:
+            composite_input.change(
+                load_composite_scores_browser,
+                composite_inputs,
+                composite_outputs,
+            )
+        composite_search.submit(load_composite_scores_browser, composite_inputs, composite_outputs)
+        composite_table.select(
+            select_composite_score_from_table,
+            [composite_keys_state, composite_world],
+            [composite_sheet, composite_share_text],
+        )
+        composite_person_open_button.click(
+            render_person_outputs,
+            [composite_world, composite_person_open_id],
+            [composite_sheet, composite_share_text],
+        )
+        composite_person_open_id.submit(
+            render_person_outputs,
+            [composite_world, composite_person_open_id],
+            [composite_sheet, composite_share_text],
         )
         almanack_inputs = [
             almanack_world,
