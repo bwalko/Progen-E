@@ -9,10 +9,12 @@ from library.event_scoring import (
     EventPropensitySpec,
     EventScoringContext,
     TraitFactor,
+    composite_score,
     contextual_propensity_by_person_id,
     eligible_records_by_threshold,
     ideal_strength,
     infer_role_tags,
+    moral_friction_relief,
     negative_extreme,
     positive_extreme,
     pressure_excess,
@@ -21,7 +23,9 @@ from library.event_scoring import (
     property_crime_propensity,
     propensity_by_person_id,
     religious_cultural_conflict_propensity,
+    score_composite_scores,
     score_propensity,
+    serial_killer_composite_pressure,
     serial_predator_propensity,
     threshold_excess_weights,
     violent_actor_propensity,
@@ -32,6 +36,7 @@ from library.event_scoring import (
 class PersonStub:
     genome: dict[str, float]
     genome_composite_names: tuple[str, ...] = ()
+    genome_composite_scores: dict[str, float] | None = None
     birthyear: int = 980
     partner_person_id: int | None = None
     unemployment_started_year: int | None = None
@@ -99,6 +104,41 @@ class TestEventScoring(unittest.TestCase):
         self.assertIn("spouse", roles)
         self.assertIn("unemployed", roles)
         self.assertGreater(score_propensity(rec, spec, context=ctx), 0.55)
+
+    def test_numeric_composite_weights_and_moral_friction_relief(self) -> None:
+        rec = _record(
+            1,
+            {},
+            genome_composite_scores={
+                "psychopathy": 1.2,
+                "good_done_desire": 1.0,
+                "honest_work_desire": 1.0,
+            },
+        )
+        spec = EventPropensitySpec(
+            key="fixture",
+            composite_score_risk_weights={"psychopathy": 0.40},
+            composite_score_protective_weights={
+                "good_done_desire": 0.40,
+                "honest_work_desire": 0.20,
+            },
+            protective_cap=0.80,
+        )
+        pressure = EventScoringContext(
+            pressure_tags=frozenset({"scarcity", "debt", "survival_need"}),
+            resource_pressure=1.25,
+        )
+
+        self.assertEqual(composite_score(rec, "missing"), 0.0)
+        self.assertAlmostEqual(composite_score(rec, "psychopathy"), 1.2)
+        self.assertAlmostEqual(
+            score_composite_scores(rec, {"psychopathy": 0.25}), 0.30
+        )
+        self.assertGreater(moral_friction_relief(pressure), 0.40)
+        self.assertGreater(
+            score_propensity(rec, spec, context=pressure),
+            score_propensity(rec, spec),
+        )
 
     def test_role_inference_accepts_cached_family_and_office_context(self) -> None:
         rec = _record(
@@ -190,6 +230,56 @@ class TestEventScoring(unittest.TestCase):
         self.assertGreater(
             serial_predator_propensity(extreme, context=context, previous_murders=2),
             serial_predator_propensity(extreme, context=context),
+        )
+
+    def test_serial_composite_pressure_requires_multiple_aligned_scores(self) -> None:
+        one_loud_score = _record(
+            30,
+            {},
+            genome_composite_scores={"psychopathy": 1.0},
+        )
+        aligned = _record(
+            31,
+            {},
+            genome_composite_scores={
+                "psychopathy": 0.9,
+                "force_get_way_desire": 0.85,
+                "disguise_motive": 0.8,
+                "isolation_preference": 0.75,
+                "evil_done_desire": 0.8,
+                "lie_or_cheat_willingness": 0.75,
+            },
+        )
+
+        self.assertLess(serial_killer_composite_pressure(one_loud_score), 0.10)
+        self.assertGreater(serial_killer_composite_pressure(aligned), 0.70)
+        self.assertGreater(
+            serial_predator_propensity(aligned),
+            serial_predator_propensity(one_loud_score),
+        )
+
+    def test_good_composites_suppress_neutral_context_violence_not_pressure(self) -> None:
+        conflicted = _record(
+            32,
+            {},
+            genome_composite_scores={
+                "psychopathy": 0.55,
+                "force_get_way_desire": 0.55,
+                "revenge_desire": 0.45,
+                "good_done_desire": 0.9,
+                "honest_work_desire": 0.8,
+            },
+        )
+        pressure = EventScoringContext(
+            pressure_tags=frozenset({"relationship_strain", "status_fall", "war"}),
+            opportunity_tags=frozenset({"isolated"}),
+            resource_pressure=1.30,
+        )
+
+        self.assertLess(violent_actor_propensity(conflicted), 0.20)
+        self.assertGreater(
+            violent_actor_propensity(conflicted, context=pressure),
+            violent_actor_propensity(conflicted),
         )
 
     def test_new_workstream_propensity_specs_cover_future_event_families(self) -> None:

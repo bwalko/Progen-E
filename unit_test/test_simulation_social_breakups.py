@@ -36,6 +36,7 @@ from library.simulation_social import (
     _paramour_end_probability,
     _paramour_orientation_multiplier,
     _paramour_pair_probability,
+    _paramour_promotion_probability,
     _partner_breakup_probability,
     maybe_end_paramour_relationships,
     maybe_dissolve_partner_couples,
@@ -53,6 +54,7 @@ def _person(
     attractiveness_01: float = 0.75,
     household_prosperity: float | None = None,
     job_prosperity_01: float | None = None,
+    genome_composite_scores: dict[str, float] | None = None,
 ) -> Person:
     base_traits = {
         "physical": 0.0,
@@ -81,6 +83,7 @@ def _person(
         paramour_person_id=paramour_id,
         genome=dict(base_traits),
         mind_body=dict(base_traits),
+        genome_composite_scores=dict(genome_composite_scores or {}),
         sexual_nature=sexual_nature,
         attractiveness_01=attractiveness_01,
         household_prosperity=household_prosperity,
@@ -189,6 +192,14 @@ class _FakeCtx:
     def _record_simulation_event(self, year, event_type, payload) -> None:
         self._pending_simulation_events.append((year, event_type, payload))
 
+    def paramour_ids_for_person(self, person_id: int) -> tuple[int, ...]:
+        pid = int(person_id)
+        return tuple(
+            int(b if int(a) == pid else a)
+            for a, b in self.paramours
+            if int(a) == pid or int(b) == pid
+        )
+
 
 class TestSimulationSocialBreakups(unittest.TestCase):
     def test_paramour_contact_budget_is_exhaustive_only_for_small_pair_sets(self) -> None:
@@ -214,6 +225,31 @@ class TestSimulationSocialBreakups(unittest.TestCase):
         self.assertLess(
             _paramour_pair_probability(restrained, neutral),
             _paramour_pair_probability(tempted, neutral),
+        )
+
+    def test_paramour_probability_responds_to_composite_desire_and_conscience(self) -> None:
+        neutral = _person(3, {})
+        magnetic = _person(
+            2,
+            {},
+            genome_composite_scores={
+                "sexual_magnetism": 0.9,
+                "sexual_object": 0.7,
+                "lie_or_cheat_willingness": 0.8,
+            },
+        )
+        principled = _person(
+            4,
+            {},
+            genome_composite_scores={
+                "good_done_desire": 0.9,
+                "honest_work_desire": 0.9,
+            },
+        )
+
+        self.assertGreater(
+            _paramour_pair_probability(magnetic, neutral),
+            _paramour_pair_probability(principled, neutral),
         )
 
     def test_extreme_instability_needs_matching_extreme_fit(self) -> None:
@@ -377,6 +413,87 @@ class TestSimulationSocialBreakups(unittest.TestCase):
         self.assertGreater(stressed_p, calm_p)
         self.assertIn("paramour", reasons)
         self.assertIn("mental_instability", reasons)
+
+    def test_partner_breakup_probability_responds_to_relationship_composites(self) -> None:
+        steady_a = _rec(
+            1,
+            _person(
+                1,
+                {},
+                partner_id=2,
+                genome_composite_scores={
+                    "make_friends": 0.9,
+                    "good_done_desire": 0.8,
+                    "honest_work_desire": 0.8,
+                },
+            ),
+        )
+        steady_b = _rec(2, _person(2, {}, partner_id=1))
+        strained_a = _rec(
+            3,
+            _person(
+                3,
+                {},
+                partner_id=4,
+                genome_composite_scores={
+                    "insanity": 0.9,
+                    "revenge_desire": 0.8,
+                    "isolation_preference": 0.8,
+                    "lie_or_cheat_willingness": 0.8,
+                    "psychopathy": 0.7,
+                },
+            ),
+        )
+        strained_b = _rec(4, _person(4, {}, partner_id=3))
+
+        steady_p, _ = _partner_breakup_probability(
+            _FakeCtx(steady_a, steady_b), steady_a, steady_b
+        )
+        strained_p, reasons = _partner_breakup_probability(
+            _FakeCtx(strained_a, strained_b), strained_a, strained_b
+        )
+
+        self.assertGreater(strained_p, steady_p)
+        self.assertIn("personality_strain", reasons)
+
+    def test_paramour_promotion_probability_responds_to_social_composites(self) -> None:
+        warm_a = _rec(
+            1,
+            _person(
+                1,
+                {},
+                paramour_id=2,
+                genome_composite_scores={
+                    "make_friends": 0.9,
+                    "lead_others_ability": 0.7,
+                    "sexual_magnetism": 0.6,
+                },
+            ),
+        )
+        warm_b = _rec(2, _person(2, {}, paramour_id=1))
+        cold_a = _rec(
+            3,
+            _person(
+                3,
+                {},
+                paramour_id=4,
+                genome_composite_scores={
+                    "isolation_preference": 0.9,
+                    "psychopathy": 0.8,
+                },
+            ),
+        )
+        cold_b = _rec(4, _person(4, {}, paramour_id=3))
+
+        warm_p, warm_reasons = _paramour_promotion_probability(
+            _FakeCtx(warm_a, warm_b), warm_a, warm_b, 1000
+        )
+        cold_p, _ = _paramour_promotion_probability(
+            _FakeCtx(cold_a, cold_b), cold_a, cold_b, 1000
+        )
+
+        self.assertGreater(warm_p, cold_p)
+        self.assertIn("social_bond", warm_reasons)
 
     def test_maybe_dissolve_partner_couples_records_reasons(self) -> None:
         a = _rec(

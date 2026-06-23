@@ -36,6 +36,10 @@ class EventPropensitySpec:
     inhibitors: tuple[TraitFactor, ...] = ()
     inhibitor_cap: float = 0.65
     composite_weights: Mapping[str, float] = field(default_factory=dict)
+    composite_score_risk_weights: Mapping[str, float] = field(default_factory=dict)
+    composite_score_protective_weights: Mapping[str, float] = field(default_factory=dict)
+    composite_score_additive_weights: Mapping[str, float] = field(default_factory=dict)
+    composite_score_inhibitor_weights: Mapping[str, float] = field(default_factory=dict)
     role_weights: Mapping[str, float] = field(default_factory=dict)
     pressure_weights: Mapping[str, float] = field(default_factory=dict)
     opportunity_weights: Mapping[str, float] = field(default_factory=dict)
@@ -138,6 +142,98 @@ def score_named_composites(subject: Any, weights: Mapping[str, float]) -> float:
         for name, weight in weights.items()
         if str(name).strip().lower() in names
     )
+
+
+def composite_score(subject: Any, rating_id: str, default: float = 0.0) -> float:
+    """Return a numeric composite score from a record, person, or score map."""
+
+    key = str(rating_id).strip()
+    if not key:
+        return float(default)
+    source = subject
+    if isinstance(source, Mapping):
+        raw_scores = source
+    else:
+        person = getattr(source, "person", source)
+        raw_scores = getattr(person, "genome_composite_scores", None)
+    if not isinstance(raw_scores, Mapping):
+        return float(default)
+    raw = raw_scores.get(key)
+    if raw is None:
+        raw = raw_scores.get(key.lower())
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+    if value != value:
+        return float(default)
+    return max(0.0, value)
+
+
+def score_composite_scores(subject: Any, weights: Mapping[str, float]) -> float:
+    if not weights:
+        return 0.0
+    return sum(
+        composite_score(subject, rating_id) * float(weight)
+        for rating_id, weight in weights.items()
+    )
+
+
+_MORAL_FRICTION_RELIEF_WEIGHTS: Mapping[str, float] = {
+    "survival_need": 0.28,
+    "scarcity": 0.18,
+    "debt": 0.20,
+    "street_precarity": 0.22,
+    "relationship_strain": 0.18,
+    "status_fall": 0.14,
+    "war": 0.20,
+    "succession_crisis": 0.16,
+    "faction_tension": 0.14,
+    "office_tension": 0.12,
+    "bereavement": 0.12,
+}
+_MORAL_FRICTION_OPPORTUNITY_RELIEF_WEIGHTS: Mapping[str, float] = {
+    "battlefield": 0.18,
+    "isolated": 0.08,
+    "street": 0.08,
+    "begging": 0.08,
+    "guard_gap": 0.08,
+}
+
+
+def moral_friction_relief(context: EventScoringContext | None) -> float:
+    """How much pressure makes normally protective morals easier to override."""
+
+    if context is None:
+        return 0.0
+    relief = score_tag_weights(context.pressure_tags, _MORAL_FRICTION_RELIEF_WEIGHTS)
+    relief += score_tag_weights(
+        context.opportunity_tags, _MORAL_FRICTION_OPPORTUNITY_RELIEF_WEIGHTS
+    )
+    relief += clamp01(float(context.resource_pressure) - 0.90, 0.0, 1.0) * 0.18
+    relief += clamp01(float(context.crowding) - 0.65, 0.0, 1.0) * 0.08
+    return clamp01(relief, 0.0, 0.75)
+
+
+def _adjusted_composite_protection(
+    subject: Any,
+    weights: Mapping[str, float],
+    *,
+    context: EventScoringContext | None,
+) -> float:
+    if not weights:
+        return 0.0
+    protection = score_composite_scores(subject, weights)
+    moral_weight = 0.0
+    for rating_id, weight in weights.items():
+        if str(rating_id).strip().lower() in {
+            "good_done_desire",
+            "honest_work_desire",
+        }:
+            moral_weight += composite_score(subject, rating_id) * float(weight)
+    if moral_weight <= 0.0:
+        return protection
+    return max(0.0, protection - moral_weight * moral_friction_relief(context))
 
 
 def _subject_person_id(subject: Any) -> int | None:
@@ -287,15 +383,33 @@ def score_propensity(
     risk = (
         score_trait_factors(subject, spec.risk_factors)
         + score_named_composites(subject, spec.composite_weights)
+        + score_composite_scores(subject, spec.composite_score_risk_weights)
         + score_tag_weights(ctx.role_tags, spec.role_weights)
         + score_tag_weights(ctx.pressure_tags, spec.pressure_weights)
         + score_tag_weights(ctx.opportunity_tags, spec.opportunity_weights)
         + float(extra_risk)
     )
-    protection = score_trait_factors(subject, spec.protective_factors)
-    additive = score_trait_factors(subject, spec.additive_factors) + float(extra_additive)
-    inhibitors = score_trait_factors(subject, spec.inhibitors) + float(extra_inhibition)
-    if spec.additive_factors or spec.inhibitors:
+    protection = score_trait_factors(
+        subject, spec.protective_factors
+    ) + _adjusted_composite_protection(
+        subject, spec.composite_score_protective_weights, context=ctx
+    )
+    additive = (
+        score_trait_factors(subject, spec.additive_factors)
+        + score_composite_scores(subject, spec.composite_score_additive_weights)
+        + float(extra_additive)
+    )
+    inhibitors = (
+        score_trait_factors(subject, spec.inhibitors)
+        + score_composite_scores(subject, spec.composite_score_inhibitor_weights)
+        + float(extra_inhibition)
+    )
+    if (
+        spec.additive_factors
+        or spec.inhibitors
+        or spec.composite_score_additive_weights
+        or spec.composite_score_inhibitor_weights
+    ):
         return clamp01((risk + additive) * (1.0 - min(float(spec.inhibitor_cap), inhibitors)))
     return clamp01(risk * (1.0 - min(float(spec.protective_cap), protection)))
 
@@ -413,6 +527,19 @@ VIOLENT_ACTOR_SPEC = EventPropensitySpec(
         "paranoid tester": 0.04,
         "destructive spark": 0.04,
     },
+    composite_score_risk_weights={
+        "psychopathy": 0.18,
+        "force_get_way_desire": 0.12,
+        "revenge_desire": 0.11,
+        "evil_done_desire": 0.10,
+        "insanity": 0.08,
+        "physical_strength": 0.04,
+    },
+    composite_score_protective_weights={
+        "good_done_desire": 0.18,
+        "honest_work_desire": 0.07,
+        "make_friends": 0.04,
+    },
 )
 
 PROPERTY_CRIME_SPEC = EventPropensitySpec(
@@ -463,6 +590,18 @@ PROPERTY_CRIME_SPEC = EventPropensitySpec(
         "sweet withholder": 0.03,
         "hardened heart": 0.03,
     },
+    composite_score_risk_weights={
+        "lie_or_cheat_willingness": 0.16,
+        "enrich_self_desire": 0.13,
+        "disguise_motive": 0.08,
+        "ruthless_ambition": 0.08,
+        "psychopathy": 0.06,
+        "evil_done_desire": 0.05,
+    },
+    composite_score_protective_weights={
+        "good_done_desire": 0.16,
+        "honest_work_desire": 0.16,
+    },
 )
 
 SCANDAL_EXPOSURE_SPEC = EventPropensitySpec(
@@ -506,6 +645,16 @@ SCANDAL_EXPOSURE_SPEC = EventPropensitySpec(
         "dramatic leaver": 0.03,
         "bottomless want": 0.03,
     },
+    composite_score_risk_weights={
+        "sexual_magnetism": 0.12,
+        "sexual_object": 0.05,
+        "lie_or_cheat_willingness": 0.06,
+        "insanity": 0.04,
+    },
+    composite_score_protective_weights={
+        "honest_work_desire": 0.06,
+        "good_done_desire": 0.04,
+    },
 )
 
 PUBLIC_VIRTUE_SPEC = EventPropensitySpec(
@@ -548,6 +697,17 @@ PUBLIC_VIRTUE_SPEC = EventPropensitySpec(
         "shared_household": 0.02,
         "witnessed_need": 0.05,
     },
+    composite_score_risk_weights={
+        "good_done_desire": 0.18,
+        "honest_work_desire": 0.08,
+        "make_friends": 0.06,
+        "lead_others_ability": 0.04,
+    },
+    composite_score_inhibitor_weights={
+        "psychopathy": 0.14,
+        "evil_done_desire": 0.12,
+        "ruthless_ambition": 0.05,
+    },
 )
 
 KNOWLEDGE_CULTURE_SPEC = EventPropensitySpec(
@@ -588,6 +748,14 @@ KNOWLEDGE_CULTURE_SPEC = EventPropensitySpec(
         "court": 0.03,
         "market_day": 0.02,
     },
+    composite_score_risk_weights={
+        "creative_intellect": 0.18,
+        "practical_intellect": 0.10,
+        "lead_others_ability": 0.03,
+    },
+    composite_score_inhibitor_weights={
+        "insanity": 0.04,
+    },
 )
 
 
@@ -618,6 +786,17 @@ POLITICAL_CRIME_SPEC = EventPropensitySpec(
         "legitimacy seizer": 0.06,
         "self-anointed": 0.05,
         "procedural predator": 0.05,
+    },
+    composite_score_risk_weights={
+        "ruthless_ambition": 0.15,
+        "disguise_motive": 0.12,
+        "lie_or_cheat_willingness": 0.10,
+        "lead_others_ability": 0.08,
+        "evil_done_desire": 0.06,
+    },
+    composite_score_protective_weights={
+        "good_done_desire": 0.10,
+        "honest_work_desire": 0.08,
     },
     role_weights={
         "ruler": 0.03,
@@ -721,6 +900,13 @@ PRIVATE_LIFE_SEED_SPEC = EventPropensitySpec(
         "mystic": 0.03,
         "gentle mentor": 0.03,
     },
+    composite_score_risk_weights={
+        "disguise_motive": 0.10,
+        "lie_or_cheat_willingness": 0.10,
+        "revenge_desire": 0.08,
+        "isolation_preference": 0.04,
+        "insanity": 0.04,
+    },
     role_weights={
         "spouse": 0.03,
         "parent": 0.03,
@@ -817,6 +1003,39 @@ def jealousy_crime_pressure(
     return base * clamp01(context_factor)
 
 
+def serial_killer_composite_pressure(subject: Any) -> float:
+    """Serial-predator signal that needs several aligned composite drives."""
+
+    coldness = max(
+        composite_score(subject, "psychopathy"),
+        composite_score(subject, "evil_done_desire") * 0.80,
+    )
+    domination = max(
+        composite_score(subject, "force_get_way_desire"),
+        composite_score(subject, "revenge_desire") * 0.80,
+    )
+    concealment = max(
+        composite_score(subject, "disguise_motive"),
+        composite_score(subject, "lie_or_cheat_willingness") * 0.70,
+    )
+    separation = max(
+        composite_score(subject, "isolation_preference"),
+        composite_score(subject, "insanity") * 0.80,
+    )
+    parts = (coldness, domination, concealment, separation)
+    if max(parts) <= 0.0:
+        return 0.0
+    product = 1.0
+    aligned = 0
+    for value in parts:
+        v = max(0.02, float(value))
+        product *= v
+        if v >= 0.45:
+            aligned += 1
+    geometric = product ** (1.0 / len(parts))
+    return clamp01(geometric * (0.40 + 0.15 * aligned))
+
+
 def violent_actor_propensity(
     subject: Any, *, context: EventScoringContext | None = None
 ) -> float:
@@ -866,15 +1085,22 @@ def serial_predator_propensity(
     if context is not None:
         role += score_tag_weights(context.pressure_tags, {"scarcity": 0.02, "war": 0.02})
         role += score_tag_weights(context.opportunity_tags, {"isolated": 0.04, "privacy": 0.03})
+    serial_profile = serial_killer_composite_pressure(subject)
+    moral_brake = (
+        composite_score(subject, "good_done_desire") * 0.10
+        + composite_score(subject, "honest_work_desire") * 0.06
+    )
     return clamp01(
         coldness * 0.42
         + control * 0.24
         + instability * 0.14
+        + serial_profile * 0.35
         + violent_actor_propensity(subject, context=context) * 0.10
         + prior * 0.10
         + role
         - ideal_strength(subject, "empathy") * 0.10
         - ideal_strength(subject, "justice") * 0.08
+        - moral_brake
     )
 
 

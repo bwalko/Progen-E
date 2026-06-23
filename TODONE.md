@@ -3583,3 +3583,125 @@ completion.
 - `python utils/util_refresh_person_archive_scores.py --world default
   --person-id 32232 --person-id 22476 --person-id 9800 --person-id 42108
   --debug-breakdown`
+
+## 2026-06-23 Genome Composite Score Recalibration
+
+### Enhancements
+
+- Recalibrated numeric `genome_composite_scores` to use weighted arithmetic
+  rating curves instead of geometric compression, while leaving legacy
+  `genome_composite_names` tag scoring unchanged.
+- Retuned `deviation` scoring so ordinary spread no longer saturates Insanity:
+  `abs(value)=35` contributes no deviation score, `abs(value)=80` is the
+  normal `1.0` point, and rarer extremes can exceed `1.0`.
+- Added optional `male_body_bonus`, `female_body_bonus`,
+  `masculine_mind_bonus`, and `feminine_mind_bonus` columns to
+  `config/genome_composite_ratings.csv`; configured feminine bonuses for
+  Sexual Object, masculine bonuses for Sexual Magnetism, and male-body plus
+  small masculine-mind bonuses for Physical Strength.
+- Preserved above-`1.0` composite scores through save parsing and Gradio
+  browser rendering/filtering, with visual progress bars capped at full width
+  while still displaying true values such as `1.12`.
+- Added score-only refresh on checkpoint load and Gradio recomputation from
+  current config/person context so older saves show recalibrated scores without
+  rewriting `save.sqlite`.
+
+### Validation
+
+- Current `worlds/default/save.sqlite` recomputed distribution audit:
+  `insanity p50=0.366 p90=0.573 p99=0.795 max=1.100 gt1=4`;
+  `sexual_object p50=0.460 max=0.854`; `sexual_magnetism p50=0.443
+  max=0.861`; `physical_strength p50=0.601 p99=0.982 max=1.122 gt1=14`.
+- Gender/mind split checks from the same audit: Sexual Object feminine-mind
+  median `0.487` vs masculine-mind `0.436`; Sexual Magnetism masculine-mind
+  median `0.477` vs feminine-mind `0.409`; Physical Strength male-body median
+  `0.733` vs female-body `0.455`.
+- `python utils/util_load_config.py --world default`
+- `python utils/util_check_config_sqlite_vs_csv.py --world default`
+- `python -m unittest unit_test.test_genome_composite_profiles
+  unit_test.test_gradio_data_browser` passed 93 tests in 141.899 seconds, with
+  a non-fatal sqlite ResourceWarning from the browser test process.
+
+## 2026-06-23 Genome Composite Nonlinear Rollout
+
+### Enhancements
+
+- Retuned numeric `genome_composite_scores` from the arithmetic blend to a
+  nonlinear component-fit blend: component scores are curved, blended with a
+  weighted geometric-style mean, and damped by overall coherence so one strong
+  trait cannot carry a rating by itself.
+- Made body/mind context bonuses confidence-weighted by the base rating fit, so
+  requested bonuses still help but do not make otherwise unaligned scores look
+  high.
+- Added the requested two-per-year reveal schedule for numeric composite scores
+  from birth through age 10, using the shared reveal helpers in
+  `library.genome_composites`.
+- Applied reveal gating to checkpoint refresh, career/profile refresh, Gradio
+  person sheets, share text, people-browser top-composite sorting, and the
+  Composite Scores table; unrevealed ratings are hidden from tables and shown as
+  not-yet-known in person detail views.
+
+### Validation
+
+- Current `worlds/default/save.sqlite` recomputed distribution audit over 216
+  detailed people: `insanity p50=0.101 p90=0.234 p99=0.382 max=0.694`;
+  `sexual_object p50=0.174 max=0.462`; `sexual_magnetism p50=0.159 max=0.661`;
+  `physical_strength p50=0.257 p99=0.640 max=0.650`. All current-save maxima
+  are below `1.0`; synthetic all-aligned outlier tests still exceed `1.0`.
+- Median range across all 21 ratings is `0.073` to `0.257`, average `0.147`.
+- `python utils/util_load_config.py --world default`
+- `python utils/util_check_config_sqlite_vs_csv.py --world default`
+- `python -m unittest unit_test.test_genome_composite_profiles
+  unit_test.test_gradio_data_browser` passed 97 tests in 108.173 seconds, with
+  a non-fatal sqlite ResourceWarning from the browser test process.
+
+## 2026-06-23 Composite-Driven Event Rebalance
+
+### Enhancements
+
+- Made numeric `genome_composite_scores` first-class inputs to
+  `EventPropensitySpec`, alongside the existing trait factors, context tags,
+  and legacy `genome_composite_names`.
+- Added pressure-based moral-friction relief so `good_done_desire` and
+  `honest_work_desire` usually suppress crime, but scarcity, debt, war,
+  relationship strain, and similar circumstances can make bad acts more
+  palatable without turning the rule binary.
+- Added composite weights to violent crime, property crime, scandal exposure,
+  public virtue, knowledge/culture, political crime, and private-life seed
+  propensities.
+- Added a multi-factor serial-killer composite pressure that requires aligned
+  coldness, domination/revenge, concealment, and separation/instability scores;
+  it now feeds serial-predator propensity, repeat-murder selection, and the
+  settlement murder chance read.
+- Added government office candidate multipliers so high `insanity`,
+  `psychopathy`, `evil_done_desire`, and `ruthless_ambition` hurt civic office
+  prospects, while `lead_others_ability`, `practical_intellect`,
+  `honest_work_desire`, and `good_done_desire` help.
+- Added social composite modifiers for paramour formation, paramour stability,
+  paramour-to-partner promotion, and partner breakup stress.
+
+### Validation
+
+- `python -m py_compile library\event_scoring.py
+  library\simulation_incidents.py library\simulation_government.py
+  library\simulation_social.py unit_test\test_event_scoring.py
+  unit_test\test_simulation_government.py
+  unit_test\test_simulation_social_breakups.py`
+- `python utils\util_load_config.py --world default`
+- `python -m unittest unit_test.test_event_scoring
+  unit_test.test_simulation_social_breakups
+  unit_test.test_simulation_government.TestSimulationGovernment.test_government_scored_pool_skips_cheap_ineligible_candidates_before_composites
+  unit_test.test_simulation_government.TestSimulationGovernment.test_force_authority_titles_use_body_power_without_overriding_low_force_offices
+  unit_test.test_simulation_government.TestSimulationGovernment.test_office_composite_multiplier_penalizes_insane_candidates_without_exclusion`
+  passed 32 tests in 0.033 seconds.
+- `python utils\util_event_history_report.py --world default --sample-limit 0`
+  completed against the current save; the hybrid calibration section reported
+  `serial_predator_profile_people=1`, `max_serial_predator_propensity=0.8312`,
+  `serial_predator_candidate_events=1`, and insufficient murder sample for
+  serial/rate retuning.
+- Tiny annual-loop smoke:
+  `python utils\run_mixed_mode_calibration.py --targets 1000 --years 5
+  --replicates 1 --starting-couples 5 --min-detailed-cap 50
+  --max-detailed-cap 100 --disable-birth-settlement-spinoff ...` completed one
+  temp-output scenario with 3 murders and `needs_more_murder_sample`; no
+  `incident_rates.csv` retune was justified from that small sample.

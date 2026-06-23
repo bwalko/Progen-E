@@ -1101,10 +1101,11 @@ def _maybe_murder_in_settlement(
         for rec in adults
     }
     max_propensity = max(propensities.values(), default=0.0)
+    max_serial_propensity = max(serial_propensities.values(), default=0.0)
     chance = _murder_chance_from_propensity(
         adults_count=max(len(adults), int(population_count or len(adults))),
         scarcity=scarcity,
-        max_propensity=max_propensity,
+        max_propensity=max(max_propensity, max_serial_propensity * 0.90),
         rate=rate,
     )
     if chance_roll >= chance:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import sqlite3
 import time
 from collections import defaultdict
@@ -7704,7 +7705,9 @@ def _parse_genome_composite_scores(raw: object) -> dict[str, float]:
             score = float(value)
         except (TypeError, ValueError):
             continue
-        scores[rid] = max(0.0, min(1.0, score))
+        if not math.isfinite(score):
+            continue
+        scores[rid] = max(0.0, score)
     return scores
 
 
@@ -8910,10 +8913,22 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                     settlement_ids_by_key=settlement_ids_by_key,
                 )
             )
-            if not person.genome_composite_scores:
+            if person.genome_composite_scores:
+                from library.genome_composites import refresh_genome_composite_scores
+
+                person = refresh_genome_composite_scores(
+                    person,
+                    ctx.db_path,
+                    current_year=reference_year,
+                )
+            else:
                 from library.genome_composites import refresh_genome_composite_profile
 
-                person = refresh_genome_composite_profile(person, ctx.db_path)
+                person = refresh_genome_composite_profile(
+                    person,
+                    ctx.db_path,
+                    current_year=reference_year,
+                )
             if not person_belongs_in_working_ram(
                 person,
                 reference_year=reference_year,

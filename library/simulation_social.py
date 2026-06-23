@@ -8,6 +8,7 @@ from collections import deque
 from typing import TYPE_CHECKING
 
 from library import simulation_timing
+from library.event_scoring import composite_score
 from library.geography import _get_route_edges_by_origin
 from library.mind_body import attractiveness_01 as attractiveness_score
 from library.mind_body import work_trait_values
@@ -164,6 +165,14 @@ def _negative_trait_01(person: Person, key: str) -> float:
     return _clamp01((100.0 - _trait(person, key)) / 200.0)
 
 
+def _comp(person: Person, rating_id: str) -> float:
+    return _clamp01(composite_score(person, rating_id))
+
+
+def _pair_comp_avg(a: Person, b: Person, rating_id: str) -> float:
+    return (_comp(a, rating_id) + _comp(b, rating_id)) / 2.0
+
+
 def _sexual_nature(person: Person) -> str:
     return (person.sexual_nature or "heterosexual").strip().lower()
 
@@ -193,7 +202,18 @@ def _paramour_impulse_01(person: Person) -> float:
     # Near-ideal loyalty is the main brake. Explicit disloyalty adds extra risk;
     # sycophantic excess is less protective than true commitment.
     loyalty_risk = 0.15 + 0.55 * loyalty_deviation + 0.30 * disloyal_pull
-    return _clamp01(mating * loyalty_risk)
+    composite_pull = (
+        _comp(person, "sexual_magnetism") * 0.18
+        + _comp(person, "sexual_object") * 0.12
+        + _comp(person, "lie_or_cheat_willingness") * 0.10
+        + _comp(person, "insanity") * 0.05
+    )
+    moral_brake = min(
+        0.35,
+        _comp(person, "good_done_desire") * 0.10
+        + _comp(person, "honest_work_desire") * 0.14,
+    )
+    return _clamp01(mating * loyalty_risk * (1.0 + composite_pull) * (1.0 - moral_brake))
 
 
 def _paramour_orientation_multiplier(
@@ -311,7 +331,21 @@ def _paramour_bond_score_01(
     patience = (
         _positive_trait_01(pa, "patience") + _positive_trait_01(pb, "patience")
     ) / 2.0
-    return _clamp01(0.35 * attraction_fit + 0.25 * prosperity + 0.25 * stability + 0.15 * patience)
+    composite_stability = (
+        _pair_comp_avg(pa, pb, "make_friends") * 0.08
+        + _pair_comp_avg(pa, pb, "good_done_desire") * 0.04
+        + _pair_comp_avg(pa, pb, "honest_work_desire") * 0.04
+        - _pair_comp_avg(pa, pb, "isolation_preference") * 0.06
+        - _pair_comp_avg(pa, pb, "psychopathy") * 0.05
+        - _pair_comp_avg(pa, pb, "insanity") * 0.04
+    )
+    return _clamp01(
+        0.35 * attraction_fit
+        + 0.25 * prosperity
+        + 0.25 * stability
+        + 0.15 * patience
+        + composite_stability
+    )
 
 
 def _has_outside_paramour(ctx: SimulationContext, person_id: int, partner_id: int) -> bool:
@@ -337,6 +371,20 @@ def _person_breakup_stress_01(
     if neuro >= 0.65:
         stress += 0.11 + 0.15 * neuro
         reasons.append("mental_instability")
+
+    composite_stress = (
+        _comp(p, "insanity") * 0.12
+        + _comp(p, "revenge_desire") * 0.08
+        + _comp(p, "isolation_preference") * 0.08
+        + _comp(p, "lie_or_cheat_willingness") * 0.06
+        + _comp(p, "psychopathy") * 0.06
+        - _comp(p, "make_friends") * 0.06
+        - _comp(p, "good_done_desire") * 0.03
+        - _comp(p, "honest_work_desire") * 0.03
+    )
+    if composite_stress >= 0.07:
+        reasons.append("personality_strain")
+    stress += composite_stress
 
     if _has_outside_paramour(ctx, rec.person_id, partner_id):
         stress += 0.24
@@ -509,6 +557,13 @@ def _paramour_end_probability(
     if instability > 0.70:
         p += 0.08
         reasons.append("emotional_volatility")
+    conscience = (
+        _pair_comp_avg(pa, pb, "good_done_desire")
+        + _pair_comp_avg(pa, pb, "honest_work_desire")
+    ) / 2.0
+    if conscience >= 0.45:
+        p += 0.04 * conscience
+        reasons.append("loyalty_or_guilt")
     pressure = max(
         resource_pressure_for_person(ctx, ra, resource_facts=resource_facts),
         resource_pressure_for_person(ctx, rb, resource_facts=resource_facts),
@@ -577,6 +632,16 @@ def _paramour_promotion_probability(
             reasons.append("same_sex_romantic_fit")
         else:
             p *= 0.65
+    composite_commitment = (
+        _pair_comp_avg(pa, pb, "make_friends") * 0.05
+        + _pair_comp_avg(pa, pb, "lead_others_ability") * 0.03
+        + _pair_comp_avg(pa, pb, "sexual_magnetism") * 0.02
+        - _pair_comp_avg(pa, pb, "isolation_preference") * 0.04
+        - _pair_comp_avg(pa, pb, "psychopathy") * 0.04
+    )
+    if composite_commitment >= 0.035:
+        reasons.append("social_bond")
+    p += composite_commitment
     if _deviation_01(pa, "loyalty") < 0.18 and pa.partner_person_id not in (None, int(rb.person_id)):
         p *= 0.45
         reasons.append("existing_partner_loyalty")

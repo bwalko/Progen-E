@@ -8,6 +8,7 @@ import html
 import importlib.util
 import json
 import logging
+import math
 import queue
 import shlex
 import re
@@ -3065,7 +3066,11 @@ def _person_summary_row(
         "Home": person.get("current_settlement_id") or person.get("birthplace") or "",
         "Traits": ", ".join(person.get("genome_trait_phrases") or person.get("genome_composite_names") or []),
     }
-    top_composite = _top_composite_score_entry(person, composite_catalog)
+    top_composite = _top_composite_score_entry(
+        person,
+        composite_catalog,
+        current_year=current_year,
+    )
     if top_composite:
         out["Top Composite"] = top_composite["display_name"]
         out["Top Composite Score"] = _format_composite_score(top_composite["score"])
@@ -3129,6 +3134,7 @@ def _sort_rows_by_top_composite_score(
     sort_dir: str,
     trait_slots: tuple[str, ...] = (),
     composite_catalog: tuple[dict[str, object], ...] = (),
+    current_year: int | None = None,
 ) -> list[sqlite3.Row]:
     reverse = sort_dir != "Ascending"
     return sorted(
@@ -3137,6 +3143,7 @@ def _sort_rows_by_top_composite_score(
             _top_composite_score_value(
                 _person_from_row(row, trait_slots),
                 composite_catalog,
+                current_year=current_year,
             ),
             int(row["person_id"]),
         ),
@@ -3373,6 +3380,7 @@ def load_people_browser(
             sort_dir=sort_dir,
             trait_slots=trait_slots,
             composite_catalog=composite_catalog,
+            current_year=current_year,
         )[:row_limit]
     values = [
         _person_summary_row(
@@ -3468,7 +3476,7 @@ def load_composite_scores_browser(
         return _composite_score_empty_frame(), "Choose a world.", []
     row_limit = _safe_int(limit, 50, 1, 250)
     try:
-        minimum = max(0.0, min(1.0, float(min_score))) if min_score not in (None, "") else 0.0
+        minimum = max(0.0, float(min_score)) if min_score not in (None, "") else 0.0
     except (TypeError, ValueError):
         minimum = 0.0
     path = _db_path(world, "Save DB")
@@ -3513,7 +3521,12 @@ def load_composite_scores_browser(
         ).fetchall()
         for row in rows:
             person = _person_from_row(row, trait_slots)
-            entries = _composite_score_entries(person, catalog, min_score=minimum)
+            entries = _composite_score_entries(
+                person,
+                catalog,
+                min_score=minimum,
+                current_year=current_year,
+            )
             if selected_rating_id:
                 entries = [
                     entry
@@ -8312,9 +8325,9 @@ def _normalize_composite_score_map(raw: object) -> dict[str, float]:
             score = float(value)
         except (TypeError, ValueError):
             continue
-        if score != score:
+        if not math.isfinite(score):
             continue
-        scores[rating_id] = max(0.0, min(1.0, score))
+        scores[rating_id] = max(0.0, score)
     return scores
 
 
@@ -8355,6 +8368,15 @@ def _composite_rating_catalog(
     rows = _composite_rating_rows_from_attached_config(con) if con is not None else ()
     if not rows and world:
         rows = _composite_rating_rows_from_config_path(str(_db_path(world, "Config DB")))
+    try:
+        from library.genome_composites import GENOME_COMPOSITE_REVEAL_ORDER
+
+        reveal_order = {
+            rating_id: order
+            for order, rating_id in enumerate(GENOME_COMPOSITE_REVEAL_ORDER)
+        }
+    except Exception:
+        reveal_order = {}
     catalog: list[dict[str, object]] = []
     seen: set[str] = set()
     for index, row in enumerate(rows):
@@ -8368,10 +8390,11 @@ def _composite_rating_catalog(
                 "rating_id": rating_id,
                 "display_name": display,
                 "notes": str(row.get("notes") or "").strip(),
-                "order": index,
+                "order": reveal_order.get(rating_id, len(reveal_order) + index),
                 "row": dict(row),
             }
         )
+    catalog.sort(key=lambda row: (int(row["order"]), str(row["rating_id"])))
     return tuple(catalog)
 
 
@@ -8442,22 +8465,39 @@ def _composite_trait_values_for_person(person: dict[str, object]) -> dict[str, f
 def _person_composite_score_map(
     person: dict[str, object],
     catalog: tuple[dict[str, object], ...],
+    *,
+    current_year: int | None = None,
 ) -> dict[str, float]:
     scores = _normalize_composite_score_map(person.get("genome_composite_scores"))
-    if scores or not catalog:
+    try:
+        from library.genome_composites import (
+            composite_score_age,
+            filter_known_genome_composite_scores,
+        )
+
+        reveal_age = composite_score_age(person, current_year=current_year)
+        scores = filter_known_genome_composite_scores(scores, age=reveal_age)
+    except Exception:
+        reveal_age = None
+    if not catalog:
         return scores
     values = _composite_trait_values_for_person(person)
     if not values:
-        return {}
+        return scores
     try:
         from library.genome_composites import genome_composite_scores_for_traits
 
         rows = tuple(dict(row.get("row") or {}) for row in catalog)
         return _normalize_composite_score_map(
-            genome_composite_scores_for_traits(values, rows)
+            genome_composite_scores_for_traits(
+                values,
+                rows,
+                person=person,
+                age=reveal_age,
+            )
         )
     except Exception:
-        return {}
+        return scores
 
 
 def _composite_score_entries(
@@ -8465,8 +8505,13 @@ def _composite_score_entries(
     catalog: tuple[dict[str, object], ...],
     *,
     min_score: float = 0.0,
+    current_year: int | None = None,
 ) -> list[dict[str, object]]:
-    scores = _person_composite_score_map(person, catalog)
+    scores = _person_composite_score_map(
+        person,
+        catalog,
+        current_year=current_year,
+    )
     if not scores:
         return []
     by_id = _composite_rating_by_id(catalog)
@@ -8499,32 +8544,107 @@ def _composite_score_entries(
 def _top_composite_score_entry(
     person: dict[str, object],
     catalog: tuple[dict[str, object], ...],
+    *,
+    current_year: int | None = None,
 ) -> dict[str, object] | None:
-    entries = _composite_score_entries(person, catalog)
+    entries = _composite_score_entries(
+        person,
+        catalog,
+        current_year=current_year,
+    )
     return entries[0] if entries else None
 
 
 def _top_composite_score_value(
     person: dict[str, object],
     catalog: tuple[dict[str, object], ...],
+    *,
+    current_year: int | None = None,
 ) -> float:
-    entry = _top_composite_score_entry(person, catalog)
+    entry = _top_composite_score_entry(
+        person,
+        catalog,
+        current_year=current_year,
+    )
     return float(entry["score"]) if entry else float("-inf")
+
+
+def _unknown_composite_score_entries(
+    person: dict[str, object],
+    catalog: tuple[dict[str, object], ...],
+    *,
+    current_year: int | None = None,
+) -> tuple[int | None, list[dict[str, object]]]:
+    if not catalog:
+        return None, []
+    try:
+        from library.genome_composites import (
+            composite_score_age,
+            genome_composite_rating_reveal_age,
+            unknown_genome_composite_rating_ids,
+        )
+    except Exception:
+        return None, []
+    age = composite_score_age(person, current_year=current_year)
+    unknown_ids = set(
+        unknown_genome_composite_rating_ids(
+            tuple(dict(row.get("row") or {}) for row in catalog),
+            age=age,
+        )
+    )
+    if not unknown_ids:
+        return age, []
+    unknown: list[dict[str, object]] = []
+    for row in catalog:
+        rid = str(row.get("rating_id") or "").strip()
+        if rid not in unknown_ids:
+            continue
+        unknown.append(
+            {
+                "rating_id": rid,
+                "display_name": row.get("display_name") or _display_title(rid),
+                "reveal_age": genome_composite_rating_reveal_age(rid),
+                "order": int(row.get("order") or 0),
+            }
+        )
+    unknown.sort(
+        key=lambda row: (
+            int(row.get("reveal_age") or 10_000),
+            int(row.get("order") or 0),
+            str(row.get("display_name") or "").casefold(),
+        )
+    )
+    return age, unknown
 
 
 def _render_composite_score_section(
     person_id: object,
     person: dict[str, object],
     catalog: tuple[dict[str, object], ...],
+    *,
+    current_year: int | None = None,
 ) -> str:
-    entries = _composite_score_entries(person, catalog)
+    entries = _composite_score_entries(
+        person,
+        catalog,
+        current_year=current_year,
+    )
+    age, unknown_entries = _unknown_composite_score_entries(
+        person,
+        catalog,
+        current_year=current_year,
+    )
     pid = html.escape(str(person_id))
     if not entries:
-        body = '<div class="muted">No composite trait scores recorded.</div>'
+        if unknown_entries:
+            body = '<div class="muted">Composite trait scores are not known yet.</div>'
+        else:
+            body = '<div class="muted">No composite trait scores recorded.</div>'
     else:
         cards: list[str] = []
         for entry in entries:
-            score = max(0.0, min(1.0, float(entry["score"])))
+            score = max(0.0, float(entry["score"]))
+            fill_score = min(1.0, score)
             rating_id = str(entry["rating_id"])
             label = str(entry["display_name"])
             notes = str(entry.get("notes") or "").strip()
@@ -8537,11 +8657,29 @@ def _render_composite_score_section(
                 '</div>'
                 f'<div class="legacy-score-desc">{html.escape(rating_id)}</div>'
                 '<div class="legacy-track" aria-hidden="true">'
-                f'<div class="legacy-fill" style="width: {score * 100:.1f}%"></div>'
+                f'<div class="legacy-fill" style="width: {fill_score * 100:.1f}%"></div>'
                 '</div>'
                 '</div>'
             )
         body = f'<div class="legacy-grid composite-score-grid">{"".join(cards)}</div>'
+    if unknown_entries:
+        next_age = min(
+            int(entry["reveal_age"])
+            for entry in unknown_entries
+            if entry.get("reveal_age") is not None
+        )
+        next_names = [
+            str(entry["display_name"])
+            for entry in unknown_entries
+            if entry.get("reveal_age") == next_age
+        ][:2]
+        age_text = f" at age {int(age)}" if age is not None else ""
+        body += (
+            '<div class="muted composite-score-locked">'
+            f'{len(unknown_entries)} composite scores are not known yet{age_text}. '
+            f'Next reveal at age {next_age}: {html.escape(", ".join(next_names))}.'
+            '</div>'
+        )
     return f"""
       <section aria-labelledby="person-{pid}-composite-scores">
         <h3 id="person-{pid}-composite-scores" class="section-title">Composite Trait Scores</h3>
@@ -8555,15 +8693,27 @@ def _composite_score_share_lines(
     catalog: tuple[dict[str, object], ...],
     *,
     limit: int = 8,
+    current_year: int | None = None,
 ) -> list[str]:
-    entries = _composite_score_entries(person, catalog)
-    if not entries:
+    entries = _composite_score_entries(
+        person,
+        catalog,
+        current_year=current_year,
+    )
+    _age, unknown_entries = _unknown_composite_score_entries(
+        person,
+        catalog,
+        current_year=current_year,
+    )
+    if not entries and not unknown_entries:
         return []
     lines = ["Composite Trait Scores:"]
     for entry in entries[: max(1, int(limit))]:
         lines.append(
             f"- {entry['display_name']}: {_format_composite_score(entry['score'])}"
         )
+    if unknown_entries:
+        lines.append(f"- {len(unknown_entries)} composite scores not yet known.")
     lines.append("")
     return lines
 
@@ -9214,6 +9364,7 @@ def _render_person_sheet(
         row["person_id"],
         person,
         composite_catalog,
+        current_year=current_year,
     )
     trait_rows: list[str] = []
     if isinstance(current_genome, dict) or isinstance(base_genome, dict):
@@ -9496,6 +9647,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
     composite_score_lines = _composite_score_share_lines(
         person,
         _composite_rating_catalog(con=con, world=world),
+        current_year=current_year,
     )
     obligation_lines = _person_obligation_lines(
         con, world, obligation_rows, row["person_id"]

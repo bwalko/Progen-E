@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from library import simulation_timing
 from library import government_checkpoint as gov_ckpt
+from library.event_scoring import clamp01, composite_score
 from library.geography import population_scale_for_world
 from library.government_catalog import (
     GovernmentCatalog,
@@ -77,6 +78,26 @@ def _cfs_safe(p) -> float:
 # leadership score. See ``library.simulation_household_care.childcare_duty_factor``.
 GOV_CHILD_DUTY_MERIT_WEIGHT = 0.55
 GOV_CHILD_DUTY_HEAD_WEIGHT = 0.45
+
+
+def _government_office_composite_multiplier(rec, title: TitleRow | None) -> float:
+    force_authority = float(getattr(title, "force_authority_01", 0.0) or 0.0)
+    insanity = composite_score(rec, "insanity")
+    insanity_pressure = clamp01((insanity - 0.25) / 0.55)
+    trust_penalty = (
+        composite_score(rec, "psychopathy") * 0.18
+        + composite_score(rec, "evil_done_desire") * 0.12
+        + composite_score(rec, "ruthless_ambition") * 0.08
+    )
+    force_relief = clamp01(force_authority / 0.85) * 0.35
+    penalty = 1.0 - insanity_pressure * 0.75 - trust_penalty * (1.0 - force_relief)
+    boost = (
+        composite_score(rec, "lead_others_ability") * 0.20
+        + composite_score(rec, "practical_intellect") * 0.12
+        + composite_score(rec, "honest_work_desire") * 0.08
+        + composite_score(rec, "good_done_desire") * 0.06
+    )
+    return max(0.20, penalty) * (1.0 + min(0.35, boost))
 
 
 def _gov_profile_count(
@@ -235,15 +256,14 @@ def _government_scored_candidate_pool(
             era=era_key,
             magic_leveling_01=magic_leveling,
         )
-        scored.append(
-            (
-                base
-                * gender_weight
-                * duty_mult
-                * force_fit.physical_demand_multiplier,
-                int(rec.person_id),
-            )
+        score = (
+            base
+            * gender_weight
+            * duty_mult
+            * force_fit.physical_demand_multiplier
+            * _government_office_composite_multiplier(rec, title)
         )
+        scored.append((score, int(rec.person_id)))
     if prof:
         simulation_timing.accumulate("government.scored_pool.loop", tpc() - t0)
     _gov_profile_count(ctx, y, "scored_pool_candidates", len(scored))
@@ -460,7 +480,14 @@ def _pick_head_candidate_in_region(
             era=era_key,
             magic_leveling_01=magic_leveling,
         )
-        return (li * boost * duty_mult * force_fit.physical_demand_multiplier, cf, -rec.person_id)
+        score = (
+            li
+            * boost
+            * duty_mult
+            * force_fit.physical_demand_multiplier
+            * _government_office_composite_multiplier(rec, head_title)
+        )
+        return (score, cf, -rec.person_id)
 
     residents.sort(key=head_score, reverse=True)
     return residents[0].person_id
@@ -515,7 +542,14 @@ def _pick_head_candidate_in_settlement(
             era=era_key,
             magic_leveling_01=magic_leveling,
         )
-        return (li * boost * duty_mult * force_fit.physical_demand_multiplier, cf, -rec.person_id)
+        score = (
+            li
+            * boost
+            * duty_mult
+            * force_fit.physical_demand_multiplier
+            * _government_office_composite_multiplier(rec, head_title)
+        )
+        return (score, cf, -rec.person_id)
 
     residents.sort(key=head_score, reverse=True)
     return residents[0].person_id

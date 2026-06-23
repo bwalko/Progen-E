@@ -447,6 +447,33 @@ Keep literal assignable job names neutral. Trait color belongs in `genome_jobs` 
 
 ---
 
+## `config/genome_composite_ratings.csv`
+
+**Purpose:** Browser/report numeric ratings stored on
+`Person.genome_composite_scores`. These are derived presentation scores, not
+job assignment rules or legacy composite tags.
+
+| Column | Type / role | Notes |
+|--------|-------------|-------|
+| `rating_id` / `display_name` | string | Stable score key and UI label. |
+| `component_*_trait` | string | Trait key from genome/mind-body values, or a direct `*_01` field such as `attractiveness_01`. |
+| `component_*_position` | `optimal` / `excess` / `deficient` / `high` / `low` / `deviation` or `|` list | Numeric scoring bands used only by `library.genome_composites`. `deviation` ignores ordinary spread, maps extreme normal deviation to about `1.0`, and may exceed `1.0` for rare outliers. |
+| `component_*_weight` | float `>=0` | Relative weight in the nonlinear component blend. Component scores are curved and blended with a weighted geometric-style mean plus a coherence dampener, so ratings need several aligned traits rather than one standout component. |
+| `disqualifier_*_trait` / `position` / `weight` | optional | Multiplicative dampener after the component blend. |
+| `male_body_bonus` / `female_body_bonus` | optional float `>=0` | Body-sex bonus for this rating. Bonuses are confidence-weighted by the base component fit, so context helps but does not carry an otherwise unaligned rating. |
+| `masculine_mind_bonus` / `feminine_mind_bonus` | optional float `>=0` | Gender-mind bonus for this rating, also confidence-weighted by base component fit. |
+| `notes` | string | Browser-facing note/tooltip text. |
+
+Scores are lower-bounded at `0` but not upper-clamped. Treat `1.0` as the
+normal maximum and values above `1.0` as visible extreme outliers.
+
+Numeric score visibility is age-gated by `library.genome_composites`: two
+ratings become known per year from age `0`, following the explicit reveal order
+in `GENOME_COMPOSITE_REVEAL_ORDER`. Gradio person sheets and the Composite
+Scores table filter out unrevealed ratings and show unknown-state text instead.
+
+---
+
 ## `config/genome_jobs.csv`
 
 **Purpose:** Assign tendency-based simulation jobs from existing genome traits. Rows describe how one trait band influences status movement, leadership perception/quality, and example jobs by historical era. The simulation treats this as probabilistic guidance: people do not need perfect or extreme values to match a row, but stronger trait expression makes that row more likely.

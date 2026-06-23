@@ -24,6 +24,7 @@ from library.government_checkpoint import (
 from library.polity import polity_for_region
 from library.simulation_context import SimulationContext
 from library.simulation_government import (
+    _government_office_composite_multiplier,
     _government_scored_candidate_pool,
     simulation_government_annual_tick,
 )
@@ -195,6 +196,89 @@ class TestSimulationGovernment(unittest.TestCase):
         self.assertAlmostEqual(low_force[10], low_force[11])
         self.assertGreater(high_force[10], high_force[11])
         self.assertGreater(male_weighted[10], male_weighted[11])
+
+    def test_office_composite_multiplier_penalizes_insane_candidates_without_exclusion(self) -> None:
+        ctx = SimpleNamespace(
+            _gov_candidate_fact_cache={},
+            _gov_scored_candidate_cache={},
+            _gov_care_indexes=SimpleNamespace(childcare_duty_factor_by_adult={}),
+        )
+        title = TitleRow(
+            title_id="mayor",
+            title_names_by_era={},
+            polity_type_id="republic",
+            role="local_merit",
+            selection_rule="election_by_council",
+            max_holders=1,
+            term_years=4,
+            min_age=28,
+            min_leadership_index=0.0,
+            min_military_quality_index=0.0,
+            min_career_fitness=0.0,
+            male_weight=0.5,
+            can_be_usurped=False,
+            usurp_base_chance=0.0,
+            eligibility_kinship="realm_resident",
+            min_population_for_first_holder=0,
+            pop_per_holder=0,
+            merit_takeover_chance=0.0,
+            force_authority_01=0.10,
+        )
+        records = [
+            SimpleNamespace(
+                person_id=21,
+                person=SimpleNamespace(
+                    marker="steady",
+                    deathyear=None,
+                    birthyear=960,
+                    gender="Male",
+                    career_fitness_score=0.80,
+                    genome={"physical": 0.0},
+                    mind_body={"physical": 0.0},
+                    genome_composite_scores={
+                        "lead_others_ability": 0.55,
+                        "practical_intellect": 0.45,
+                        "good_done_desire": 0.50,
+                    },
+                ),
+            ),
+            SimpleNamespace(
+                person_id=22,
+                person=SimpleNamespace(
+                    marker="unstable",
+                    deathyear=None,
+                    birthyear=960,
+                    gender="Male",
+                    career_fitness_score=0.80,
+                    genome={"physical": 0.0},
+                    mind_body={"physical": 0.0},
+                    genome_composite_scores={
+                        "insanity": 1.0,
+                        "psychopathy": 0.70,
+                        "ruthless_ambition": 0.70,
+                    },
+                ),
+            ),
+        ]
+
+        def fake_indexes(person, *, composite_rows):
+            return (0.75, 0.20) if person.marker == "steady" else (0.90, 0.20)
+
+        with patch(
+            "library.simulation_government.leadership_and_military_indexes",
+            side_effect=fake_indexes,
+        ):
+            scored = dict(
+                (pid, score)
+                for score, pid in _government_scored_candidate_pool(
+                    ctx, records, title=title, composite_rows=(), year=1000
+                )
+            )
+
+        unstable_mult = _government_office_composite_multiplier(records[1], title)
+        self.assertGreater(unstable_mult, 0.0)
+        self.assertLess(unstable_mult, 0.35)
+        self.assertGreater(scored[21], scored[22])
 
     def test_office_history_readable_view_tracks_successions_and_death_endings(self) -> None:
         with closing(sqlite3.connect(":memory:")) as conn:

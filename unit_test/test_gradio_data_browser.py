@@ -21,6 +21,7 @@ from library.government_checkpoint import (
 )
 from library.person_archive_scores import ensure_person_archive_score_schema
 from library.world_save import (
+    _parse_genome_composite_scores,
     append_simulation_event_rows,
     ensure_checkpoint_schema,
     mark_event_record_lost,
@@ -869,12 +870,16 @@ def _add_composite_rating_config(con: sqlite3.Connection, *, schema_prefix: str 
             component_1_trait text,
             component_1_position text,
             component_1_weight real,
-            notes text
+            notes text,
+            male_body_bonus real,
+            female_body_bonus real,
+            masculine_mind_bonus real,
+            feminine_mind_bonus real
         )
         """
     )
     con.executemany(
-        f"insert into {schema_prefix}genome_composite_ratings values (?, ?, ?, ?, ?, ?)",
+        f"insert into {schema_prefix}genome_composite_ratings values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 "physical_strength",
@@ -883,6 +888,10 @@ def _add_composite_rating_config(con: sqlite3.Connection, *, schema_prefix: str 
                 "excess",
                 1.0,
                 "Physical force and resilience.",
+                0.20,
+                None,
+                0.03,
+                None,
             ),
             (
                 "practical_intellect",
@@ -891,6 +900,10 @@ def _add_composite_rating_config(con: sqlite3.Connection, *, schema_prefix: str 
                 "optimal",
                 1.0,
                 "Applied reasoning and judgment.",
+                None,
+                None,
+                None,
+                None,
             ),
         ],
     )
@@ -3358,7 +3371,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                         "last_name": "Forge",
                         "birthyear": 0,
                         "genome_composite_scores": {
-                            "physical_strength": 0.91,
+                            "physical_strength": 1.12,
                             "practical_intellect": 0.42,
                         },
                     }
@@ -3373,9 +3386,10 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Composite Trait Scores", sheet)
         self.assertIn("Physical Strength", sheet)
         self.assertIn("physical_strength", sheet)
-        self.assertIn(">0.91<", sheet)
+        self.assertIn(">1.12<", sheet)
+        self.assertIn("width: 100.0%", sheet)
         self.assertIn("Composite Trait Scores:", share)
-        self.assertIn("- Physical Strength: 0.91", share)
+        self.assertIn("- Physical Strength: 1.12", share)
 
     def test_person_sheet_falls_back_to_computed_composite_scores(self) -> None:
         con = _memory_save()
@@ -3388,6 +3402,8 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                         "first_name": "Ada",
                         "last_name": "Forge",
                         "birthyear": 0,
+                        "gender": "Male",
+                        "gender_mind": "masculine",
                         "genome": {"physical": 80.0},
                         "mind_body": {"physical": 80.0},
                     }
@@ -3401,8 +3417,51 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
         self.assertIn("Composite Trait Scores", sheet)
         self.assertIn("Physical Strength", sheet)
+        self.assertIn(">1.23<", sheet)
         self.assertNotIn("No composite trait scores recorded", sheet)
-        self.assertIn("- Physical Strength:", share)
+        self.assertIn("- Physical Strength: 1.23", share)
+
+    def test_person_sheet_marks_unrevealed_composite_scores_unknown(self) -> None:
+        con = _memory_save()
+        _attach_composite_rating_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, 0)")
+        con.execute(
+            "update simulation_people set person_json = ? where person_id = 1",
+            (
+                json.dumps(
+                    {
+                        "first_name": "Ada",
+                        "last_name": "Forge",
+                        "birthyear": 0,
+                        "genome_composite_scores": {
+                            "physical_strength": 1.12,
+                            "practical_intellect": 0.42,
+                        },
+                    }
+                ),
+            ),
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertIn("Composite Trait Scores", sheet)
+        self.assertNotIn(">1.12<", sheet)
+        self.assertIn("2 composite scores are not known yet at age 0", sheet)
+        self.assertIn("Next reveal at age 7: Practical Intellect.", sheet)
+        self.assertIn("- 2 composite scores not yet known.", share)
+
+    def test_composite_score_parsers_preserve_above_one_values(self) -> None:
+        self.assertEqual(
+            _parse_genome_composite_scores({"physical_strength": 1.12}),
+            {"physical_strength": 1.12},
+        )
+        self.assertEqual(
+            gdb._normalize_composite_score_map({"physical_strength": 1.12}),
+            {"physical_strength": 1.12},
+        )
 
     def test_people_browser_shows_and_sorts_top_composite_score(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -3412,6 +3471,11 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             with closing(sqlite3.connect(save)) as con:
                 con.row_factory = sqlite3.Row
                 ensure_checkpoint_schema(con)
+                con.execute(
+                    "create table if not exists world_state "
+                    "(id integer primary key, current_year integer)"
+                )
+                con.execute("insert or replace into world_state values (1, 980)")
                 _insert_compact_person(con, 1, "Ada", "Forge")
                 _insert_compact_person(con, 2, "Bea", "Forge")
                 con.execute(
@@ -3433,7 +3497,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                         json.dumps(
                             {
                                 "genome_composite_scores": {
-                                    "physical_strength": 0.93,
+                                    "physical_strength": 1.08,
                                     "practical_intellect": 0.20,
                                 }
                             }
@@ -3466,10 +3530,10 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(person_ids, [2, 1])
         self.assertIn("Top Composite", table["headers"])
         self.assertEqual(rows[0]["Top Composite"], "Physical Strength")
-        self.assertEqual(rows[0]["Top Composite Score"], "0.93")
+        self.assertEqual(rows[0]["Top Composite Score"], "1.08")
         self.assertIn("sorted by: Top Composite Score descending", status)
 
-    def test_composite_scores_browser_filters_and_selects_person(self) -> None:
+    def test_composite_scores_browser_hides_scores_before_reveal_age(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             save = Path(tmp) / "save.sqlite"
             config = Path(tmp) / "config.sqlite"
@@ -3477,16 +3541,22 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             with closing(sqlite3.connect(save)) as con:
                 con.row_factory = sqlite3.Row
                 ensure_checkpoint_schema(con)
+                con.execute(
+                    "create table if not exists world_state "
+                    "(id integer primary key, current_year integer)"
+                )
+                con.execute("insert or replace into world_state values (1, 0)")
                 _insert_compact_person(con, 1, "Ada", "Forge")
                 _insert_compact_person(con, 2, "Bea", "Forge")
                 con.execute(
-                    "update simulation_people set person_json = ? where person_id = 1",
+                    "update simulation_people set birthyear = 0, person_json = ? "
+                    "where person_id = 1",
                     (
                         json.dumps(
                             {
                                 "birthyear": 0,
                                 "genome_composite_scores": {
-                                    "physical_strength": 0.91,
+                                    "physical_strength": 1.12,
                                     "practical_intellect": 0.30,
                                 },
                             }
@@ -3494,7 +3564,8 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     ),
                 )
                 con.execute(
-                    "update simulation_people set person_json = ? where person_id = 2",
+                    "update simulation_people set birthyear = 0, person_json = ? "
+                    "where person_id = 2",
                     (
                         json.dumps(
                             {
@@ -3519,7 +3590,69 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     "Physical Strength",
                     "All",
                     "Ada",
-                    "0.5",
+                    "0",
+                    50,
+                    "Descending",
+                )
+                sheet, share = gdb.select_composite_score_from_table(
+                    keys,
+                    "default",
+                    types.SimpleNamespace(index=0),
+                )
+            finally:
+                gdb._db_path = original_db_path
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+
+        rows = self._history_table_rows(table)
+        self.assertEqual(rows, [])
+        self.assertEqual(keys, [])
+        self.assertIn("showing 0 of 0 composite score rows", status)
+        self.assertIn("Click a composite score row", sheet)
+        self.assertIn("Click a composite score row", share)
+
+    def test_composite_scores_browser_shows_scores_after_reveal_age(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = Path(tmp) / "save.sqlite"
+            config = Path(tmp) / "config.sqlite"
+            _write_composite_config(config)
+            with closing(sqlite3.connect(save)) as con:
+                con.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(con)
+                con.execute(
+                    "create table if not exists world_state "
+                    "(id integer primary key, current_year integer)"
+                )
+                con.execute("insert or replace into world_state values (1, 8)")
+                _insert_compact_person(con, 1, "Ada", "Forge")
+                con.execute(
+                    "update simulation_people set birthyear = 0, person_json = ? "
+                    "where person_id = 1",
+                    (
+                        json.dumps(
+                            {
+                                "birthyear": 0,
+                                "genome_composite_scores": {
+                                    "physical_strength": 1.12,
+                                    "practical_intellect": 0.30,
+                                },
+                            }
+                        ),
+                    ),
+                )
+                con.commit()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            gdb._db_path = lambda world, db_kind: config if db_kind == "Config DB" else save
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            try:
+                table, status, keys = gdb.load_composite_scores_browser(
+                    "default",
+                    "Physical Strength",
+                    "All",
+                    "Ada",
+                    "1.1",
                     50,
                     "Descending",
                 )
@@ -3537,11 +3670,11 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["Composite"], "Physical Strength")
         self.assertEqual(rows[0]["Person"], "Ada Forge")
-        self.assertEqual(rows[0]["Score"], "0.91")
+        self.assertEqual(rows[0]["Score"], "1.12")
         self.assertIn("showing 1 of 1 composite score rows", status)
         self.assertIn("Ada Forge", sheet)
         self.assertIn("Composite Trait Scores", sheet)
-        self.assertIn("- Physical Strength: 0.91", share)
+        self.assertIn("- Physical Strength: 1.12", share)
 
     def test_couple_formed_shows_rare_kinship_exception(self) -> None:
         con = _memory_save()

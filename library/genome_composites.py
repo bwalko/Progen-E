@@ -38,6 +38,51 @@ _RATING_DISQUALIFIER_KEYS: tuple[tuple[str, str, str], ...] = (
     ("disqualifier_2_trait", "disqualifier_2_position", "disqualifier_2_weight"),
 )
 _RATING_SCORE_FLOOR = 0.05
+_RATING_DIRECT_HIGH_NORMAL_MAX = 0.70
+_RATING_SIGNED_SIDE_NORMAL_MAX = 80.0
+_RATING_DEVIATION_FREE_BAND = 35.0
+_RATING_DEVIATION_NORMAL_SPAN = 45.0
+_RATING_COMPONENT_CURVE_EXPONENT = 1.25
+_RATING_COHERENCE_EXPONENT = 0.75
+_RATING_GEOMEAN_FLOOR = 0.10
+_RATING_CONTEXT_BONUS_MIN_MULTIPLIER = 0.35
+_RATING_CONTEXT_BONUS_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("gender", "male", "male_body_bonus"),
+    ("gender", "female", "female_body_bonus"),
+    ("gender_mind", "masculine", "masculine_mind_bonus"),
+    ("gender_mind", "feminine", "feminine_mind_bonus"),
+)
+GENOME_COMPOSITE_REVEALS_PER_YEAR = 2
+GENOME_COMPOSITE_REVEAL_ORDER: tuple[str, ...] = (
+    "make_friends",
+    "force_get_way_desire",
+    "make_enemies",
+    "isolation_preference",
+    "convince_people",
+    "insanity",
+    "good_done_desire",
+    "creative_intellect",
+    "psychopathy",
+    "revenge_desire",
+    "disguise_motive",
+    "lie_or_cheat_willingness",
+    "ruthless_ambition",
+    "lead_others_ability",
+    "evil_done_desire",
+    "practical_intellect",
+    "honest_work_desire",
+    "physical_strength",
+    "enrich_self_desire",
+    "sexual_object",
+    "sexual_magnetism",
+)
+_GENOME_COMPOSITE_REVEAL_AGE_BY_ID = {
+    rating_id: index // GENOME_COMPOSITE_REVEALS_PER_YEAR
+    for index, rating_id in enumerate(GENOME_COMPOSITE_REVEAL_ORDER)
+}
+_GENOME_COMPOSITE_REVEAL_INDEX_BY_ID = {
+    rating_id: index for index, rating_id in enumerate(GENOME_COMPOSITE_REVEAL_ORDER)
+}
 _score_genome_job_row = None
 
 
@@ -67,31 +112,125 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
+def _score_floor(value: float) -> float:
+    if not math.isfinite(value):
+        return 0.0
+    return max(0.0, float(value))
+
+
+def _person_field(person: object | None, field: str) -> object | None:
+    if person is None:
+        return None
+    if isinstance(person, Mapping):
+        return person.get(field)
+    return getattr(person, field, None)
+
+
+def _optional_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def composite_score_age(
+    person: object | None,
+    *,
+    current_year: int | None = None,
+) -> int | None:
+    """Return the age used for numeric composite score reveal gates."""
+    birthyear = _optional_int(_person_field(person, "birthyear"))
+    if birthyear is None:
+        return None
+    deathyear = _optional_int(_person_field(person, "deathyear"))
+    end_year = deathyear if deathyear is not None else current_year
+    if end_year is None:
+        return None
+    return max(0, int(end_year) - int(birthyear))
+
+
+def genome_composite_rating_reveal_age(rating_id: object) -> int | None:
+    """Age when a configured numeric rating becomes known."""
+    rid = str(rating_id or "").strip()
+    if not rid:
+        return None
+    return _GENOME_COMPOSITE_REVEAL_AGE_BY_ID.get(rid)
+
+
+def genome_composite_rating_is_known(rating_id: object, age: int | None) -> bool:
+    """Whether a numeric rating should be visible/usable at ``age``."""
+    if age is None:
+        return True
+    reveal_age = genome_composite_rating_reveal_age(rating_id)
+    if reveal_age is None:
+        return True
+    return int(age) >= int(reveal_age)
+
+
+def filter_known_genome_composite_scores(
+    scores: Mapping[str, float],
+    *,
+    age: int | None,
+) -> dict[str, float]:
+    """Return only numeric composite scores already revealed for ``age``."""
+    return {
+        str(rating_id): float(score)
+        for rating_id, score in scores.items()
+        if genome_composite_rating_is_known(rating_id, age)
+    }
+
+
+def unknown_genome_composite_rating_ids(
+    rows: tuple[Mapping[str, Any], ...],
+    *,
+    age: int | None,
+) -> tuple[str, ...]:
+    """Configured numeric ratings that exist but are not known yet at ``age``."""
+    if age is None:
+        return ()
+    out: list[str] = []
+    for row in sorted(rows, key=_rating_row_reveal_sort_key):
+        rid = str(row.get("rating_id") or "").strip()
+        if rid and not genome_composite_rating_is_known(rid, age):
+            out.append(rid)
+    return tuple(out)
+
+
+def _rating_row_reveal_sort_key(row: Mapping[str, Any]) -> tuple[int, str]:
+    rid = str(row.get("rating_id") or "").strip()
+    return (_GENOME_COMPOSITE_REVEAL_INDEX_BY_ID.get(rid, 10_000), rid)
+
+
 def _score_direct_01(value: float, position: str) -> float:
     v = _clamp01(float(value))
     p = normalize_composite_band(position)
     if p in {"", "high", "excess", "excessive"}:
-        return v
+        return _score_floor(v / _RATING_DIRECT_HIGH_NORMAL_MAX)
     if p in {"low", "deficient"}:
-        return 1.0 - v
+        return _score_floor((1.0 - v) / _RATING_DIRECT_HIGH_NORMAL_MAX)
     if p == "optimal":
-        return 1.0 - min(1.0, abs(v - 0.5) * 2.0)
+        return _score_floor(1.0 - abs(v - 0.5) * 2.0)
     if p == "deviation":
-        return min(1.0, abs(v - 0.5) * 2.0)
+        return _score_floor((abs(v - 0.5) - 0.2) / 0.3)
     return v
 
 
 def _score_signed_trait_position(value: float, position: str) -> float:
     p = normalize_composite_band(position)
-    if p in {"", "optimal", "deficient", "excess"}:
-        return _clamp01(_score_trait(float(value), p or "optimal"))
+    v = max(-100.0, min(100.0, float(value)))
+    if p in {"", "optimal"}:
+        return _score_floor(1.0 - abs(v) / 100.0)
+    if p in {"excess", "high"}:
+        return _score_floor(v / _RATING_SIGNED_SIDE_NORMAL_MAX)
+    if p in {"deficient", "low"}:
+        return _score_floor(-v / _RATING_SIGNED_SIDE_NORMAL_MAX)
     if p == "deviation":
-        return _clamp01(abs(float(value)) / 50.0)
-    if p == "high":
-        return _clamp01((float(value) + 50.0) / 100.0)
-    if p == "low":
-        return _clamp01((50.0 - float(value)) / 100.0)
-    return _clamp01(_score_trait(float(value), p))
+        return _score_floor(
+            (abs(v) - _RATING_DEVIATION_FREE_BAND) / _RATING_DEVIATION_NORMAL_SPAN
+        )
+    return _score_floor(_score_trait(v, p))
 
 
 def _score_rating_component(
@@ -114,8 +253,8 @@ def _score_rating_component(
 
     value: float | None = None
     if trait_s.endswith("_01"):
-        if person is not None and hasattr(person, trait_s):
-            raw = getattr(person, trait_s)
+        if person is not None:
+            raw = _person_field(person, trait_s)
             if raw is not None:
                 try:
                     value = float(raw)
@@ -141,6 +280,17 @@ def _float_from_row(row: Mapping[str, Any], key: str, default: float) -> float:
         return float(raw)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _rating_context_bonus(row: Mapping[str, Any], person: object | None) -> float:
+    if person is None:
+        return 0.0
+    bonus = 0.0
+    for field, target, row_key in _RATING_CONTEXT_BONUS_KEYS:
+        actual = str(_person_field(person, field) or "").strip().lower()
+        if actual == target:
+            bonus += max(0.0, _float_from_row(row, row_key, 0.0))
+    return bonus
 
 
 def composite_row_name(row: dict[str, Any]) -> str:
@@ -208,10 +358,10 @@ def score_composite_rating_row_for_traits(
     trait_values: Mapping[str, float],
     row: Mapping[str, Any],
     *,
-    person: "Person | None" = None,
+    person: object | None = None,
 ) -> float | None:
-    """Return a 0..1 config-driven rating using weighted geometric blending."""
-    comp_logs: list[tuple[float, float]] = []
+    """Return a config-driven numeric rating using nonlinear fit blending."""
+    comp_scores: list[tuple[float, float]] = []
     for trait_key, pos_key, weight_key in _RATING_COMPONENT_KEYS:
         trait = str(row.get(trait_key) or "").strip()
         if not trait:
@@ -225,16 +375,24 @@ def score_composite_rating_row_for_traits(
             str(row.get(pos_key) or "optimal"),
             person=person,
         )
-        comp_logs.append((math.log(max(_RATING_SCORE_FLOOR, _clamp01(score))), weight))
+        curved = _score_floor(score) ** _RATING_COMPONENT_CURVE_EXPONENT
+        comp_scores.append((curved, weight))
 
-    if not comp_logs:
+    if not comp_scores:
         return None
 
-    weight_total = sum(w for _log_s, w in comp_logs)
+    weight_total = sum(w for _score, w in comp_scores)
     if weight_total <= 0.0:
         return None
-    base = math.exp(sum(log_s * w for log_s, w in comp_logs) / weight_total)
-    final = _clamp01(base)
+    log_total = sum(
+        math.log(max(_RATING_GEOMEAN_FLOOR, score)) * weight
+        for score, weight in comp_scores
+    )
+    geometric_fit = math.exp(log_total / weight_total)
+    average_fit = (
+        sum(min(1.0, score) * weight for score, weight in comp_scores) / weight_total
+    )
+    final = geometric_fit * (average_fit ** _RATING_COHERENCE_EXPONENT)
     for trait_key, pos_key, weight_key in _RATING_DISQUALIFIER_KEYS:
         trait = str(row.get(trait_key) or "").strip()
         if not trait:
@@ -250,7 +408,14 @@ def score_composite_rating_row_for_traits(
         )
         final *= max(0.0, 1.0 - _clamp01(d) * min(1.0, weight))
 
-    return _clamp01(final)
+    if bonus := _rating_context_bonus(row, person):
+        bonus_multiplier = _RATING_CONTEXT_BONUS_MIN_MULTIPLIER + (
+            1.0 - _RATING_CONTEXT_BONUS_MIN_MULTIPLIER
+        ) * min(1.0, max(0.0, final))
+        final += bonus * bonus_multiplier
+    if not math.isfinite(final):
+        return None
+    return _score_floor(final)
 
 
 def significant_composite_names(
@@ -359,19 +524,45 @@ def genome_composite_scores_for_traits(
     trait_values: Mapping[str, float],
     rows: tuple[dict[str, Any], ...],
     *,
-    person: "Person | None" = None,
+    person: object | None = None,
+    age: int | None = None,
 ) -> dict[str, float]:
     """Score all configured numeric composite ratings."""
     scores: dict[str, float] = {}
-    for row in rows:
+    for row in sorted(rows, key=_rating_row_reveal_sort_key):
         rid = str(row.get("rating_id") or "").strip()
         if not rid:
+            continue
+        if not genome_composite_rating_is_known(rid, age):
             continue
         s = score_composite_rating_row_for_traits(trait_values, row, person=person)
         if s is None:
             continue
-        scores[rid] = round(_clamp01(s), 6)
+        scores[rid] = round(_score_floor(s), 6)
     return scores
+
+
+def refresh_genome_composite_scores(
+    person: "Person",
+    db_path: str | Path,
+    trait_values: Mapping[str, float] | None = None,
+    *,
+    current_year: int | None = None,
+    age: int | None = None,
+) -> "Person":
+    """Refresh numeric composite ratings while preserving existing legacy labels."""
+    from library.mind_body import work_trait_values
+
+    values = trait_values if trait_values is not None else work_trait_values(person)
+    rating_rows = composite_rating_rows_from_db(str(Path(db_path)))
+    reveal_age = composite_score_age(person, current_year=current_year) if age is None else age
+    scores = genome_composite_scores_for_traits(
+        values,
+        rating_rows,
+        person=person,
+        age=reveal_age,
+    )
+    return replace(person, genome_composite_scores=scores)
 
 
 def _preserved_composite_labels(person: "Person", new_labels: tuple[str, ...]) -> tuple[str, ...]:
@@ -393,6 +584,9 @@ def refresh_genome_composite_profile(
     person: "Person",
     db_path: str | Path,
     trait_values: Mapping[str, float] | None = None,
+    *,
+    current_year: int | None = None,
+    age: int | None = None,
 ) -> "Person":
     """Refresh legacy composite labels and full numeric genome rating scores."""
     from library.mind_body import work_trait_values
@@ -403,7 +597,13 @@ def refresh_genome_composite_profile(
     rating_rows = composite_rating_rows_from_db(path_s)
     labels = significant_composite_names_for_traits(values, label_rows) if label_rows else ()
     labels = (*labels, *_preserved_composite_labels(person, labels))
-    scores = genome_composite_scores_for_traits(values, rating_rows, person=person)
+    reveal_age = composite_score_age(person, current_year=current_year) if age is None else age
+    scores = genome_composite_scores_for_traits(
+        values,
+        rating_rows,
+        person=person,
+        age=reveal_age,
+    )
     return replace(
         person,
         genome_composite_names=labels,

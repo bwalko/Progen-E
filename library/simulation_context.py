@@ -734,7 +734,11 @@ class SimulationContext:
         p = person
         if p.current_settlement_id is None and p.birthplace_settlement_id:
             p = replace(p, current_settlement_id=p.birthplace_settlement_id)
-        p = refresh_genome_composite_profile(p, self.db_path)
+        p = refresh_genome_composite_profile(
+            p,
+            self.db_path,
+            current_year=self.current_year,
+        )
         rec = SimulationPersonRecord(
             person_id=self.next_person_id,
             person=p,
@@ -853,7 +857,11 @@ class SimulationContext:
             reason=reason_text,
             source=source_payload,
         )
-        person = refresh_genome_composite_profile(person, self.db_path)
+        person = refresh_genome_composite_profile(
+            person,
+            self.db_path,
+            current_year=year,
+        )
         rec = SimulationPersonRecord(
             person_id=int(prec.person_id),
             person=person,
@@ -1093,7 +1101,11 @@ class SimulationContext:
                 "source_kind": "nondetailed_directory",
             },
         )
-        person = refresh_genome_composite_profile(person, self.db_path)
+        person = refresh_genome_composite_profile(
+            person,
+            self.db_path,
+            current_year=year,
+        )
         rec = SimulationPersonRecord(
             person_id=promote_id,
             person=person,

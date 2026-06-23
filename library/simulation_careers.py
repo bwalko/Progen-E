@@ -2620,6 +2620,7 @@ def assign_career_if_eligible(
         rec.person,
         ctx.db_path,
         trait_values=traits,
+        current_year=year,
     )
     comp_labels = tuple(profiled_person.genome_composite_names or ())
     comp_scores = dict(profiled_person.genome_composite_scores or {})
@@ -2988,6 +2989,7 @@ def _assign_special_household_job(
         rec.person,
         ctx.db_path,
         trait_values=traits,
+        current_year=year,
     )
     comp_labels = tuple(profiled_person.genome_composite_names or ())
     comp_scores = dict(profiled_person.genome_composite_scores or {})
