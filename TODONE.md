@@ -3418,3 +3418,52 @@ completion.
 - The full `unit_test.test_simulation_outlaws` module was attempted, but it
   exceeded the 240 second local timeout on this laptop; the targeted changed
   outlaw regressions passed.
+
+## 2026-06-23 Browser Relationship Timeline And Map Click Fixes
+
+### Fixes
+
+- Capped browser relationship-history spans at the other participant's
+  deathyear, so old saves with missing death-time `paramour_ended` /
+  `couple_dissolved` events no longer draw a relationship past the row
+  person's death.
+- Restored world-map settlement and feature click handling by including town
+  and feature targets in the map click handler's actionable-target check.
+
+### Validation
+
+- Confirmed live save case: Thezonus van Hannsouwa's Beatrice Montfort paramour
+  span renders `1049-1050`, and `1049-1096` is absent from sheet/share output.
+- `python -m py_compile utils/gradio_data_browser.py
+  unit_test/test_gradio_data_browser.py`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_relationship_history_caps_open_span_at_other_person_death
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_has_combined_relationship_history_section
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_click_handler_accepts_towns_and_features
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_selection_opens_existing_region_or_town_sheet`
+- Full `unit_test.test_gradio_data_browser` was attempted, but two unrelated
+  existing fixture/schema failures remain in the Almanack refresh and compact
+  property-crime readable-view tests.
+
+## 2026-06-23 Street Housing And Household Service Consistency
+
+### Fixes
+
+- Stable settlement/office/household-care jobs now lift an adult out of
+  `street` housing instead of preserving the old precarious status forever.
+- Domestic-service demand now requires a host with an actual `own_household`,
+  preventing servants from being placed into street-housed employers'
+  impossible households.
+
+### Validation
+
+- Confirmed the live Richard of Mabelaneby case was a real state contradiction:
+  he was employed as a `physician` while still saved with
+  `housing_status='street'`, and Joanna's service contract targeted him as
+  household host.
+- `python -m py_compile library/simulation_careers.py
+  unit_test/test_jobs_housing_care.py`
+- `python -m unittest
+  unit_test.test_jobs_housing_care.TestJobsHousingCare.test_stable_job_rehomes_street_adult
+  unit_test.test_jobs_housing_care.TestJobsHousingCare.test_street_household_cannot_anchor_domestic_service_demand`
+- `python -m unittest unit_test.test_jobs_housing_care`

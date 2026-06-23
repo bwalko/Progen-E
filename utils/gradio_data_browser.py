@@ -1256,7 +1256,7 @@ def _world_map_click_onclick() -> str:
             "const route=(town||refuge||feature)?null:target.closest('[data-map-layer]');"
             "const region=town||refuge||feature||route?null:target.closest('[data-region-id],[data-region-label]');"
             "const routeValue=route?{view:'Map Routes',layer:route.dataset.mapLayer||'',river_id:route.dataset.riverId||'',class_name:route.getAttribute('class')||'',from_settlement_id:route.dataset.roadFromSettlementId||route.dataset.seaRouteFromSettlementId||'',to_settlement_id:route.dataset.roadToSettlementId||route.dataset.seaRouteToSettlementId||'',regions:route.dataset.seaRouteRegions||'',usage:route.dataset.roadUsage||route.dataset.seaRouteUsage||'',actual_usage:route.dataset.roadActual||route.dataset.seaRouteActual||'',implied_usage:route.dataset.roadImplied||route.dataset.seaRouteImplied||''}:null;"
-            "if(!region&&!route&&!refuge){return true;}"
+            "if(!town&&!region&&!route&&!refuge&&!feature){return true;}"
             "const id=town?town.dataset.settlementId:(refuge?refuge.dataset.outlawRefugeId:(feature?feature.dataset.featureId:(route?(routeValue.river_id||((routeValue.from_settlement_id||'?')+'->'+(routeValue.to_settlement_id||'?'))):(region.dataset.regionId||region.dataset.regionLabel))));"
             "if(!id){return true;}"
             "event.preventDefault();event.stopPropagation();"
@@ -7177,6 +7177,37 @@ def _combined_relationship_history_entries(
     )
 
 
+def _cap_relationship_entries_at_other_deaths(
+    con: sqlite3.Connection,
+    world: str,
+    entries: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if not entries:
+        return entries
+
+    death_years: dict[int, int | None] = {}
+    for entry in entries:
+        other_id = _coerce_int_or_none(entry.get("person_id"))
+        if other_id is None or other_id in death_years:
+            continue
+        _, other_person = _lookup_person(con, world, other_id)
+        death_years[other_id] = _history_int(other_person.get("deathyear"))
+
+    capped: list[dict[str, object]] = []
+    for entry in entries:
+        other_id = _coerce_int_or_none(entry.get("person_id"))
+        other_death = death_years.get(other_id) if other_id is not None else None
+        end_year = _history_int(entry.get("end_year"))
+        if other_death is None or (end_year is not None and end_year <= other_death):
+            capped.append(entry)
+            continue
+        fixed = dict(entry)
+        start_year = _history_int(fixed.get("start_year"))
+        fixed["end_year"] = max(other_death, start_year) if start_year is not None else other_death
+        capped.append(fixed)
+    return capped
+
+
 def _relationship_kind_label(entry: dict[str, object]) -> str:
     kind = str(entry.get("relationship_kind") or "Partner").strip()
     return "Paramour" if kind.lower() == "paramour" else "Partner"
@@ -8480,6 +8511,8 @@ def _render_person_sheet(
         person,
         current_year,
     )
+    partner_history = _cap_relationship_entries_at_other_deaths(con, world, partner_history)
+    paramour_history = _cap_relationship_entries_at_other_deaths(con, world, paramour_history)
     relationship_history = _combined_relationship_history_entries(
         partner_history,
         paramour_history,
@@ -8812,6 +8845,8 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
         person,
         current_year,
     )
+    partner_history = _cap_relationship_entries_at_other_deaths(con, world, partner_history)
+    paramour_history = _cap_relationship_entries_at_other_deaths(con, world, paramour_history)
     relationship_history = _combined_relationship_history_entries(
         partner_history,
         paramour_history,

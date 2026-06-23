@@ -1,4 +1,5 @@
 import json
+import html
 import importlib.util
 import sqlite3
 import sys
@@ -2431,6 +2432,57 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("- 103-112: Paramour - Cato Vale", share)
         self.assertNotIn("Paramour History:", share)
 
+    def test_relationship_history_caps_open_span_at_other_person_death(self) -> None:
+        con = _memory_save()
+        _attach_empty_genome_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, 120)")
+        con.execute(
+            """
+            insert into simulation_people (
+                person_id, world, is_founder, father_id, mother_id, is_alive, person_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                3,
+                "test",
+                1,
+                None,
+                None,
+                0,
+                json.dumps(
+                    {
+                        "first_name": "Cato",
+                        "last_name": "Vale",
+                        "birthyear": 5,
+                        "deathyear": 108,
+                    }
+                ),
+            ),
+        )
+        con.execute(
+            """
+            insert into simulation_events (world, sim_year, event_type, payload_json)
+            values (?, ?, ?, ?)
+            """,
+            (
+                "test",
+                103,
+                "paramour_formed",
+                json.dumps({"person_a_id": 1, "person_b_id": 3}),
+            ),
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        relationship_section = sheet[sheet.index("Relationship History"):sheet.index(">Events</h3>")]
+        self.assertIn('title="103-108 | 5 years | Paramour with Cato Vale (b. 5-108)"', relationship_section)
+        self.assertNotIn("103-120", relationship_section)
+        self.assertIn("Relationship History:\n- 103-108: Paramour - Cato Vale", share)
+
     def test_job_history_gaps_do_not_expand_short_unemployment_spans(self) -> None:
         items = gdb._job_history_items_html(
             [
@@ -4683,6 +4735,13 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Ford", generic_feature_html)
         self.assertIn("Regional Ford landmark", generic_feature_html)
         self.assertIn("Unnamed", generic_feature_html)
+
+    def test_world_map_click_handler_accepts_towns_and_features(self) -> None:
+        onclick = html.unescape(gdb._world_map_click_onclick())
+
+        self.assertIn("if(!town&&!region&&!route&&!refuge&&!feature){return true;}", onclick)
+        self.assertIn("const town=target.closest", onclick)
+        self.assertIn("const feature=", onclick)
 
     def test_world_map_overlays_read_named_features_from_local_geography(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

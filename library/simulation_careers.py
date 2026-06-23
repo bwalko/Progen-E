@@ -127,6 +127,12 @@ PRESTIGE_MIN_SETTLEMENT_POPULATION = 8
 PRESTIGE_FALL_STANDING_THRESHOLD = 0.62
 PRESTIGE_BANKRUPTCY_PROSPERITY_THRESHOLD = 0.16
 
+PRECARIOUS_HOUSING_STATUSES: frozenset[str] = frozenset({"street"})
+STABLE_HOUSING_JOB_MARKET_TYPES: frozenset[str] = frozenset(
+    {"settlement_market", "office", "household_care"}
+)
+SERVICE_HOST_HOUSING_STATUSES: frozenset[str] = frozenset({"own_household"})
+
 # Sex-restricted jobs: tokens may end with `` [M]`` (male-only) or `` [F]`` (female-only).
 # Cross-gender exception: opposite ``gender_mind``, low ``mating drive`` genome, physical gate.
 CROSS_GENDER_MATING_DRIVE_THRESHOLD = 35.0
@@ -965,11 +971,22 @@ def _social_standing_from_archetype(archetype: JobArchetypeParams) -> float:
     )
 
 
+def _stable_job_market_provides_household(job_market_type: str | None) -> bool:
+    return (job_market_type or "").strip().lower() in STABLE_HOUSING_JOB_MARKET_TYPES
+
+
 def _default_housing_status(
-    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    year: int,
+    *,
+    job_market_type: str | None = None,
 ) -> str:
     current = (rec.person.housing_status or "").strip().lower()
-    if current:
+    if current and not (
+        current in PRECARIOUS_HOUSING_STATUSES
+        and _stable_job_market_provides_household(job_market_type)
+    ):
         return current
     if rec.person.employer_person_id is not None:
         return "employer_household"
@@ -980,6 +997,29 @@ def _default_housing_status(
     if _household_dependent_minor_count(ctx, rec, year) > 0:
         return "own_household"
     return "own_household"
+
+
+def _service_host_housing_status(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+) -> str:
+    current = (rec.person.housing_status or "").strip().lower()
+    if current:
+        return current
+    return _default_housing_status(
+        ctx,
+        rec,
+        year,
+        job_market_type=rec.person.job_market_type,
+    )
+
+
+def _can_anchor_service_household(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord", year: int
+) -> bool:
+    return (
+        _service_host_housing_status(ctx, rec, year)
+        in SERVICE_HOST_HOUSING_STATUSES
+    )
 
 
 def _apply_job_archetype_state(
@@ -1300,9 +1340,21 @@ def _promote_to_prestige_job(
         rec.person,
         job=target.job,
         archetype=archetype,
-        housing_status=_default_housing_status(ctx, rec, year),
-        household_role=archetype.role_family if archetype.job_market_type == "office" else rec.person.household_role,
-        job_prosperity_01=max(float(rec.person.job_prosperity_01 or 0.0), float(archetype.personal_prosperity_01)),
+        housing_status=_default_housing_status(
+            ctx,
+            rec,
+            year,
+            job_market_type=archetype.job_market_type,
+        ),
+        household_role=(
+            archetype.role_family
+            if archetype.job_market_type == "office"
+            else rec.person.household_role
+        ),
+        job_prosperity_01=max(
+            float(rec.person.job_prosperity_01 or 0.0),
+            float(archetype.personal_prosperity_01),
+        ),
     )
     new_standing = max(
         _social_standing_from_archetype(archetype),
@@ -2603,7 +2655,12 @@ def assign_career_if_eligible(
         rec.person,
         job=assignment.job,
         archetype=archetype,
-        housing_status=_default_housing_status(ctx, rec, year),
+        housing_status=_default_housing_status(
+            ctx,
+            rec,
+            year,
+            job_market_type=assignment.job_market_type,
+        ),
         household_role=assignment.role_family if assignment.job_market_type != "settlement_market" else None,
     )
     ctx._record_simulation_event(
@@ -3080,7 +3137,9 @@ def _service_demand_anchors(
             continue
         employer = rec.person.employer_person_id
         if employer is not None:
-            existing_by_employer[int(employer)] = existing_by_employer.get(int(employer), 0) + 1
+            existing_by_employer[int(employer)] = (
+                existing_by_employer.get(int(employer), 0) + 1
+            )
 
     seen: set[frozenset[int]] = set()
     demands: list[dict[str, object]] = []
@@ -3093,7 +3152,13 @@ def _service_demand_anchors(
                 (int(rec.person_id),),
             )
             if care_indexes is not None
-            else _household_ids_for_job_move(ctx, rec, year, indexes=None, use_shared_index=False)
+            else _household_ids_for_job_move(
+                ctx,
+                rec,
+                year,
+                indexes=None,
+                use_shared_index=False,
+            )
         )
         hkey = frozenset(int(x) for x in hids)
         if not hkey or hkey in seen:
@@ -3111,17 +3176,31 @@ def _service_demand_anchors(
         ]
         if not adults:
             continue
-        prosperity = max(float(a.person.household_prosperity or 0.0) for a in adults)
-        standing = max(float(a.person.social_standing_01 or 0.0) for a in adults)
+        hostable_adults = [
+            a for a in adults if _can_anchor_service_household(ctx, a, year)
+        ]
+        if not hostable_adults:
+            continue
+        prosperity = max(
+            float(a.person.household_prosperity or 0.0) for a in hostable_adults
+        )
+        standing = max(
+            float(a.person.social_standing_01 or 0.0) for a in hostable_adults
+        )
         if prosperity < SERVICE_HOUSEHOLD_PROSPERITY_THRESHOLD and standing < SERVICE_HIGH_STANDING_THRESHOLD:
             continue
         anchor = None
-        for a in adults:
+        for a in hostable_adults:
             if a.person.household_purseholder_person_id in hkey:
                 anchor = int(a.person.household_purseholder_person_id)
                 break
         if anchor is None:
-            anchor = int(max(adults, key=lambda a: float(a.person.household_prosperity or 0.0)).person_id)
+            anchor = int(
+                max(
+                    hostable_adults,
+                    key=lambda a: float(a.person.household_prosperity or 0.0),
+                ).person_id
+            )
         desired = 1
         if prosperity >= 4.0 or standing >= 0.82:
             desired = 2
@@ -3313,10 +3392,41 @@ def _resolve_adult_housing_pressure(
     if _person_age(rec.person, year) < ADULT_HOUSING_MIN_AGE:
         return
     if rec.person.job:
-        if not rec.person.housing_status:
+        current_housing = (rec.person.housing_status or "").strip().lower()
+        job_market_type = (rec.person.job_market_type or "").strip().lower()
+        if not job_market_type:
+            job_market_type = archetypes.lookup(rec.person.job).job_market_type
+        if (
+            not current_housing
+            or (
+                current_housing in PRECARIOUS_HOUSING_STATUSES
+                and _stable_job_market_provides_household(job_market_type)
+            )
+        ):
+            housing_status = _default_housing_status(
+                ctx,
+                rec,
+                year,
+                job_market_type=job_market_type,
+            )
             rec.person = replace(
                 rec.person,
-                housing_status=_default_housing_status(ctx, rec, year),
+                housing_status=housing_status,
+                household_role=(
+                    "household_adult"
+                    if housing_status == "own_household"
+                    else rec.person.household_role
+                ),
+                host_person_id=(
+                    None
+                    if housing_status == "own_household"
+                    else rec.person.host_person_id
+                ),
+                employer_person_id=(
+                    None
+                    if housing_status != "employer_household"
+                    else rec.person.employer_person_id
+                ),
             )
         return
     own_minor_count = _household_dependent_minor_count(
@@ -3442,16 +3552,23 @@ def _household_labor_pre_assignment_pass(
             care_pull > 0.0
             and (duty >= HOUSEHOLD_CARE_MIN_DUTY or kin_bonus >= 0.60)
         ):
+            child_rearer = archetypes.lookup("child rearer")
+            housing_status = _default_housing_status(
+                ctx,
+                rec,
+                year,
+                job_market_type=child_rearer.job_market_type,
+            )
             if _assign_special_household_job(
                 ctx,
                 rec,
                 year,
                 job="child rearer",
-                archetype=archetypes.lookup("child rearer"),
+                archetype=child_rearer,
                 reason="primary_child_rearing",
                 pressure=pressure,
                 fitness=fitness,
-                housing_status=_default_housing_status(ctx, rec, year),
+                housing_status=housing_status,
                 household_role="primary_child_rearer",
                 trait_values=traits,
             ):

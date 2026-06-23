@@ -15,6 +15,7 @@ from library.person import Person
 from library.simulation_careers import (
     CareerFitness,
     _resolve_adult_housing_pressure,
+    _service_demand_anchors,
     simulation_careers_annual_tick,
 )
 from library.simulation_context import (
@@ -492,6 +493,121 @@ class TestJobsHousingCare(unittest.TestCase):
                 investment_payload["household_prosperity_before"],
             )
             self.assertLessEqual(investment_payload["prosperity_pool_delta"], 0.055)
+
+    def test_stable_job_rehomes_street_adult(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            cfg = Path(td) / "config.sqlite"
+            sav = Path(td) / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="rehomed-worker",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            st = ctx.ensure_active_settlement_for_region("aeria_north")
+            worker = ctx.add_person(
+                person=replace(
+                    _person(
+                        first_name="Richard",
+                        birthyear=960,
+                        gender="Male",
+                        settlement_id=st.settlement_id,
+                        household_prosperity=0.08,
+                    ),
+                    job="physician",
+                    employment_status="employed",
+                    job_market_type="settlement_market",
+                    housing_status="street",
+                    household_role="street_adult",
+                    host_person_id=999,
+                    social_class_band="professional",
+                    social_standing_01=0.64,
+                    job_prosperity_01=0.18,
+                ),
+                is_founder=True,
+            )
+
+            _resolve_adult_housing_pressure(
+                ctx,
+                worker,
+                1000,
+                pressure=0.80,
+                fitness=CareerFitness(0.5, (), (), 0.0, 0.0),
+                trait_values=worker.person.mind_body,
+                care_indexes=None,
+                archetypes=JobArchetypeCatalog.load(cfg),
+            )
+
+            self.assertEqual(worker.person.housing_status, "own_household")
+            self.assertEqual(worker.person.household_role, "household_adult")
+            self.assertIsNone(worker.person.host_person_id)
+            self.assertIsNone(worker.person.employer_person_id)
+
+    def test_street_household_cannot_anchor_domestic_service_demand(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            cfg = Path(td) / "config.sqlite"
+            sav = Path(td) / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="street-service-anchor",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            st = ctx.ensure_active_settlement_for_region("aeria_north")
+            street_professional = ctx.add_person(
+                person=replace(
+                    _person(
+                        first_name="StreetProfessional",
+                        birthyear=950,
+                        gender="Male",
+                        settlement_id=st.settlement_id,
+                        household_prosperity=5.0,
+                    ),
+                    job="physician",
+                    employment_status="employed",
+                    job_market_type="settlement_market",
+                    housing_status="street",
+                    household_role="street_adult",
+                    social_class_band="professional",
+                    social_standing_01=0.90,
+                    job_prosperity_01=0.90,
+                ),
+                is_founder=True,
+            )
+            housed_professional = ctx.add_person(
+                person=replace(
+                    _person(
+                        first_name="HousedProfessional",
+                        birthyear=950,
+                        gender="Female",
+                        settlement_id=st.settlement_id,
+                        household_prosperity=5.0,
+                    ),
+                    job="physician",
+                    employment_status="employed",
+                    job_market_type="settlement_market",
+                    housing_status="own_household",
+                    household_role="household_adult",
+                    social_class_band="professional",
+                    social_standing_01=0.90,
+                    job_prosperity_01=0.90,
+                ),
+                is_founder=True,
+            )
+
+            demands = _service_demand_anchors(ctx, 1000, care_indexes=None)
+            employer_ids = {int(d["employer_person_id"]) for d in demands}
+
+            self.assertNotIn(street_professional.person_id, employer_ids)
+            self.assertIn(housed_professional.person_id, employer_ids)
 
     def test_adult_housing_pressure_retains_cared_for_or_manipulative_adults(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
