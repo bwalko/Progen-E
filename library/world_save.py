@@ -5076,7 +5076,7 @@ def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
             return
     rows = conn.execute(
         """
-        SELECT id, payload_json, primary_person_id, secondary_person_id,
+        SELECT id, event_type, payload_json, primary_person_id, secondary_person_id,
                settlement_key, region_key, event_origin
         FROM simulation_events
         """

@@ -2174,7 +2174,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
     def test_compact_property_crime_uses_readable_place_columns(self) -> None:
         con = _memory_place_save()
-        con.execute("drop view simulation_events_readable")
+        con.execute("drop view if exists simulation_events_readable")
         con.execute(
             """
             insert into simulation_events (id, world, sim_year, event_type, payload_json)
@@ -2951,6 +2951,17 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             },
             separators=(",", ":"),
         )
+        texture_flags_json = json.dumps(
+            [
+                {
+                    "flag": "gifted_life_cut_short",
+                    "strength": 0.62,
+                    "evidence": ["young death", "child loss"],
+                    "person_visible_text": "Brief promise and domestic loss leave a vivid but fragile trace.",
+                }
+            ],
+            separators=(",", ":"),
+        )
         con.execute(
             """
             insert into simulation_person_archive_scores (
@@ -2960,17 +2971,19 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 narrative_heat_rarity, narrative_heat_volatility,
                 narrative_heat_legacy, hidden_heat, violet_marginalia_score,
                 violet_marginalia, recognition_bucket, narrative_bucket,
-                component_json,
+                recognition_scope, infamy_gap, prestige_gap, texture_flags_json,
+                score_breakdown_json, component_json,
                 updated_at
             )
             values (
                 1, 73.25, 41.5, 22.0, 8.0, 12.0, 7.0, 9.0, 6.0,
                 9.25, 31.75, 0.48, 1, 'interesting but obscure', 'high',
+                'household', 0.0, 0.0, ?, '{}',
                 ?,
                 '2026-01-01T00:00:00+00:00'
             )
             """,
-            (component_json,),
+            (texture_flags_json, component_json),
         )
         con.executemany(
             """
@@ -3045,6 +3058,10 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             sheet,
         )
         self.assertIn("Archive Quadrant", sheet)
+        self.assertIn("Recognition Scope", sheet)
+        self.assertIn("Texture Flags", sheet)
+        self.assertIn("Brief promise and domestic loss", sheet)
+        self.assertIn("young death", sheet)
         self.assertIn("Narrative Heat Drivers", sheet)
         self.assertIn("ARI Drivers", sheet)
         self.assertIn("Obscurity / Suppression Drivers", sheet)
@@ -3057,6 +3074,8 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("- ARI: 41.5", share)
         self.assertIn("- Violet marginalia: yes (0.5)", share)
         self.assertIn("- Archive quadrant: interesting but obscure", share)
+        self.assertIn("- Recognition scope: household", share)
+        self.assertIn("- Texture: Brief promise and domestic loss", share)
         self.assertIn("- Why noticed: event traces give the life story shape", share)
         self.assertNotIn("- Why noticed: Interesting but obscure:", share)
         self.assertIn("- Top reasons:", share)
@@ -3291,6 +3310,21 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(person_ids, [1])
         self.assertIn("showing 1 of 1 people", status)
         self.assertEqual(table["value"][0][8], "r1:s1")
+
+    def test_person_lookup_hydrates_keyed_current_settlement_for_display(self) -> None:
+        con = _memory_keyed_place_save()
+        _attach_empty_genome_config(con)
+
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        self.assertIsNotNone(row)
+        self.assertEqual(person["current_settlement_id"], "r1:s1")
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertIn("Fordham", sheet)
+        self.assertIn("Home: Fordham.", share)
+        self.assertNotIn("Home: no current settlement", share)
 
     def test_person_from_row_expands_compact_trait_arrays(self) -> None:
         con = _test_connect(":memory:")

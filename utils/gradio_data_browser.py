@@ -85,6 +85,9 @@ ARCHIVE_SCORE_DEFINITIONS = {
     "Hidden Heat": "0-100: story significance that exists in private, sealed, rumored, or currently obscure records.",
     "Violet Marginalia": "Whether the person crosses the threshold for later annotators to flag them as unusually archive-worthy.",
     "Archive Quadrant": "Bucketed cross of Narrative Heat and Archive Recognition Index.",
+    "Recognition Scope": "Controlled archive visibility scope: none, household, local social, local legal, institutional, regional, chronicle, or legendary.",
+    "Infamy Gap": "How much local/legal notoriety exceeds prestige-style recognition.",
+    "Prestige Gap": "How much formal recognition exceeds drama, scandal, or infamy.",
     "Recognition": "Bucketed explanation of the Archive Recognition Index.",
     "Narrative": "Bucketed explanation of the total Narrative Heat score.",
     "Events": "Narrative Heat from direct event participation.",
@@ -94,6 +97,7 @@ ARCHIVE_SCORE_DEFINITIONS = {
     "Rarity": "Narrative Heat from unusual traits, roles, circumstances, or low-frequency combinations.",
     "Volatility": "Narrative Heat from instability, risk, or fast-changing life context.",
     "Legacy": "Narrative Heat contributed by high legacy-index potential.",
+    "Low-Status Visibility": "ARI from infamy, custody, outlawry, and legal notoriety rather than respectable status.",
 }
 LOGGER = logging.getLogger("gradio_data_browser")
 REGION_BROWSER_HEADERS = [
@@ -4388,7 +4392,25 @@ def _lookup_person(con: sqlite3.Connection, world: str, person_id: object) -> tu
             "select * from simulation_people where person_id = ?",
             (pid,),
         ).fetchone()
-    return row, _person_from_row(row, _trait_slots_for_world(world)) if row else {}
+    if not row:
+        return row, {}
+    person = _person_from_row(row, _trait_slots_for_world(world))
+    current_settlement_id = _person_current_settlement_id(con, row, person)
+    if current_settlement_id:
+        person["current_settlement_id"] = current_settlement_id
+    if (
+        not person.get("birthplace_settlement_id")
+        and "birthplace_settlement_key" in row.keys()
+        and row["birthplace_settlement_key"] is not None
+        and _has_table(con, "simulation_settlement_lookup")
+    ):
+        lookup = con.execute(
+            "SELECT settlement_id FROM simulation_settlement_lookup WHERE settlement_key = ?",
+            (row["birthplace_settlement_key"],),
+        ).fetchone()
+        if lookup:
+            person["birthplace_settlement_id"] = lookup["settlement_id"]
+    return row, person
 
 
 def _settlement_name(con: sqlite3.Connection, world: str, settlement_id: object) -> str:
@@ -8653,7 +8675,11 @@ def _person_archive_reason_rows(
             score_version
         from simulation_person_archive_score_reasons
         where person_id = ?
-        order by abs(contribution) desc, component_key asc, sort_rank asc
+        order by
+            case when source_kind = 'formula' then 1 else 0 end,
+            abs(contribution) desc,
+            component_key asc,
+            sort_rank asc
         limit ?
         """,
         (pid, max(1, min(100, int(limit)))),
@@ -8767,6 +8793,45 @@ def _archive_reason_groups_html(reasons: list[dict[str, object]]) -> str:
     return '<div class="consequence-groups archive-reason-groups">' + "".join(html_parts) + "</div>"
 
 
+def _archive_texture_flags(payload: dict[str, object], score: sqlite3.Row) -> list[dict[str, object]]:
+    raw = payload.get("texture_flags")
+    if not isinstance(raw, list) and "texture_flags_json" in score.keys():
+        try:
+            raw = json.loads(str(score["texture_flags_json"] or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw = []
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def _archive_texture_flags_html(flags: list[dict[str, object]]) -> str:
+    if not flags:
+        return ""
+    items = []
+    for flag in flags[:4]:
+        text = str(flag.get("person_visible_text") or flag.get("flag") or "").strip()
+        evidence = flag.get("evidence")
+        evidence_items = []
+        if isinstance(evidence, list):
+            evidence_items = [str(item).strip() for item in evidence if str(item).strip()]
+        strength = _format_archive_score(flag.get("strength"))
+        evidence_text = f" Evidence: {'; '.join(evidence_items[:4])}." if evidence_items else ""
+        items.append(
+            '<div class="relation">'
+            f'<strong>{html.escape(text or "Archive texture")}</strong> '
+            f'<span class="muted">strength {html.escape(strength)}</span>.'
+            f'{html.escape(evidence_text)}'
+            '</div>'
+        )
+    return (
+        '<div class="history-card">'
+        '<h4>Texture Flags</h4>'
+        + "".join(items)
+        + "</div>"
+    )
+
+
 def _archive_score_component_cards(score: sqlite3.Row) -> str:
     component_labels = [
         ("Events", "narrative_heat_events"),
@@ -8776,6 +8841,7 @@ def _archive_score_component_cards(score: sqlite3.Row) -> str:
         ("Rarity", "narrative_heat_rarity"),
         ("Volatility", "narrative_heat_volatility"),
         ("Legacy", "narrative_heat_legacy"),
+        ("Low-Status Visibility", "ari_low_status_visibility"),
     ]
     return "".join(
         _render_detail_card(
@@ -8798,6 +8864,7 @@ def _render_archive_score_section(
     payload = _archive_score_payload(score)
     reason_rows = list(reasons or _archive_reason_from_payload(payload))
     summary = _archive_score_summary(score, payload)
+    texture_flags = _archive_texture_flags(payload, score)
     violet = "Yes" if int(score["violet_marginalia"] or 0) else "No"
     cards = [
         _render_detail_card(
@@ -8823,7 +8890,32 @@ def _render_archive_score_section(
         _render_detail_card("Archive Quadrant", score["recognition_bucket"], ARCHIVE_SCORE_DEFINITIONS["Archive Quadrant"]),
         _render_detail_card("Narrative", score["narrative_bucket"], ARCHIVE_SCORE_DEFINITIONS["Narrative"]),
     ]
+    if "recognition_scope" in score.keys():
+        cards.append(
+            _render_detail_card(
+                "Recognition Scope",
+                str(score["recognition_scope"] or "none").replace("_", " "),
+                ARCHIVE_SCORE_DEFINITIONS["Recognition Scope"],
+            )
+        )
+    if "infamy_gap" in score.keys():
+        cards.append(
+            _render_detail_card(
+                "Infamy Gap",
+                _format_archive_score(score["infamy_gap"]),
+                ARCHIVE_SCORE_DEFINITIONS["Infamy Gap"],
+            )
+        )
+    if "prestige_gap" in score.keys():
+        cards.append(
+            _render_detail_card(
+                "Prestige Gap",
+                _format_archive_score(score["prestige_gap"]),
+                ARCHIVE_SCORE_DEFINITIONS["Prestige Gap"],
+            )
+        )
     components = _archive_score_component_cards(score)
+    texture_html = _archive_texture_flags_html(texture_flags)
     reason_groups = _archive_reason_groups_html(reason_rows)
     pid = html.escape(str(person_id))
     return f"""
@@ -8831,6 +8923,7 @@ def _render_archive_score_section(
         <h3 id="person-{pid}-archive-scores" class="section-title">Archive Scores</h3>
         <p><strong>Why this person was noticed:</strong> {html.escape(summary)}</p>
         <div class="detail-grid">{''.join(cards)}</div>
+        {texture_html}
         {reason_groups}
         <div class="detail-grid">{components}</div>
       </section>
@@ -8845,6 +8938,7 @@ def _archive_score_share_lines(
     payload = _archive_score_payload(score)
     reason_rows = list(reasons or _archive_reason_from_payload(payload))
     summary = _archive_score_summary(score, payload)
+    texture_flags = _archive_texture_flags(payload, score)
     caveats = payload.get("data_caveats") if isinstance(payload.get("data_caveats"), list) else []
     violet = "yes" if int(score["violet_marginalia"] or 0) else "no"
     lines = [
@@ -8854,8 +8948,13 @@ def _archive_score_share_lines(
         f"- Hidden heat: {_format_archive_score(score['hidden_heat'])}",
         f"- Violet marginalia: {violet} ({_format_archive_score(score['violet_marginalia_score'])})",
         f"- Archive quadrant: {score['recognition_bucket']}",
+        f"- Recognition scope: {str(score['recognition_scope'] if 'recognition_scope' in score.keys() else 'none').replace('_', ' ')}",
         f"- Why noticed: {summary}",
     ]
+    if texture_flags:
+        text = str(texture_flags[0].get("person_visible_text") or "").strip()
+        if text:
+            lines.append(f"- Texture: {text}")
     top_reasons = reason_rows[:3]
     if top_reasons:
         lines.append("- Top reasons:")

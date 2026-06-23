@@ -3503,3 +3503,83 @@ completion.
 - Full `python -m unittest unit_test.test_gradio_data_browser` was attempted;
   the only failures were the two pre-existing unrelated fixture/schema errors
   in the Almanack refresh and compact property-crime readable-view tests.
+
+## 2026-06-23 ARI / Narrative Heat Score V3 Recalibration
+
+### Enhancements
+
+- Reworked `simulation_person_archive_scores` to score formula v3 with
+  migration-safe columns for `recognition_scope`, `infamy_gap`,
+  `prestige_gap`, structured `texture_flags_json`, and
+  `score_breakdown_json`.
+- Added ordered recognition scopes from `none` through `legendary`; current
+  v3 scoring assigns low-status legal notoriety to `local_legal` instead of
+  treating ARI as respectability only.
+- Replaced sticker-like Violet Marginalia with evidence-backed texture flags
+  carrying `flag`, `strength`, `evidence`, and `person_visible_text`.
+- Split Narrative Heat into inspectable breakdown channels for realized
+  consequence, capped latent potential, tragic compression, knowledge legacy,
+  criminal/outlaw consequence, relationship consequence, damped repeat
+  volume, and separate arc bonuses.
+- Preserved escalation arcs while damping repetition: outlaw/criminal arcs,
+  relationship scandal/legal-afterlife arcs, and public-achievement arcs now
+  score separately from isolated duplicate event volume.
+- Added `--debug-breakdown` to
+  `utils/util_refresh_person_archive_scores.py` for per-person score channel,
+  cap, damping, arc, scope, gap, and texture-flag output.
+- Gradio Archive Scores now show recognition scope, infamy/prestige gaps,
+  low-status visibility, structured texture flags, and human-readable share
+  text while preserving cached read-model behavior.
+
+### Tests And Fixes
+
+- Added archive-score v3 fixtures for ordinary baseline, obscure tragic
+  potential, local legal infamy, relationship scandal/social disruption, and
+  remembered public achievement.
+- Added/kept regressions for structured texture flags, explanation evidence,
+  arc bonuses, repeat damping, absence of unsupported faction-memory reasons,
+  death-capped relationship spans, and keyed current-settlement display
+  hydration.
+- Fixed a save-schema migration backfill bug where
+  `_backfill_simulation_event_people` read `row["event_type"]` without
+  selecting `event_type`.
+- Made the compact property-crime browser fixture drop
+  `simulation_events_readable` idempotently, allowing the full browser suite
+  to complete locally.
+
+### Live Anchor Refresh
+
+- Refreshed v3 cache rows for Adelhaid `32232`, Fulk `22476`, Thezonus `9800`,
+  and Richard of Mabelaneby `42108` with `--debug-breakdown`.
+- Old committed scorer baseline on an in-memory save copy:
+  Thezonus `heat=100.0 ari=51.0 hidden=49.0 violet=0.725`;
+  Fulk `heat=100.0 ari=47.7 hidden=52.3 violet=0.742`;
+  Adelhaid `heat=79.7 ari=44.0 hidden=35.7 violet=0.597`;
+  Richard `heat=100.0 ari=83.3 hidden=16.7 violet=0.404`.
+- Current v3 cache:
+  Thezonus `heat=83.8 ari=51.0 hidden=19.8 violet=0.659 scope=local_legal`
+  with `scandal_afterlife`; Fulk
+  `heat=100.0 ari=69.7 hidden=11.6 violet=0.480 scope=local_legal`
+  with `infamous_pursuit`; Adelhaid
+  `heat=60.2 ari=44.0 hidden=22.9 violet=0.849 scope=household`
+  with `gifted_life_cut_short`; Richard
+  `heat=100.0 ari=83.3 hidden=10.2 violet=0.611 scope=regional`
+  with `precarious_achievement`.
+
+### Validation
+
+- `python -m py_compile library/person_archive_scores.py
+  utils/util_refresh_person_archive_scores.py utils/gradio_data_browser.py
+  unit_test/test_person_archive_scores.py
+  unit_test/test_gradio_data_browser.py`
+- `python -m py_compile library/world_save.py`
+- `python -m unittest unit_test.test_person_archive_scores`
+- `python -m unittest unit_test.test_save_checkpoint`
+- `python -m unittest unit_test.test_gradio_data_browser`
+- `python -m unittest unit_test.test_person_archive_scores
+  unit_test.test_gradio_data_browser unit_test.test_save_checkpoint` passed
+  120 tests in 174.365 seconds, with a non-fatal sqlite ResourceWarning from
+  the browser test process.
+- `python utils/util_refresh_person_archive_scores.py --world default
+  --person-id 32232 --person-id 22476 --person-id 9800 --person-id 42108
+  --debug-breakdown`
