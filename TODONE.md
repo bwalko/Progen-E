@@ -3834,6 +3834,45 @@ completion.
 - Passed: `python -m unittest unit_test.test_lazy_settlements`
 - Passed: `python -m unittest unit_test.test_population_growth_nondetailed_runner`
 - Passed: `python -m unittest unit_test.test_simulation_careers`
+
+## 2026-06-24 - Settlement Affordance Performance Triage
+
+### Fixes
+
+- Added behavior-preserving in-memory settlement affordance caching:
+  - cached profiles are keyed by settlement geography/founding fields, year,
+    route context, and relevant government context;
+  - `SettlementState` keeps non-persisted cached role, multiplier, pull, enabler,
+    and profile fields so hot scoring loops can reuse the same profile;
+  - non-detailed seeding, destination selection, migration event payloads, site
+    capacity, and attraction scoring now read cached profiles.
+- Reduced another destination-selection hot-loop repeat by loading mixed
+  population counts once per destination-pick call instead of rebuilding the
+  count map per candidate.
+- Separated ordinary civic settlement diagnostics from outlaw refuge browsing:
+  - Settlements and Towns browser counts now report `simulation_settlements`
+    civic rows only;
+  - outlaw refuges remain visible through the dedicated Outlaw Refuges browser
+    and detail sheet, but no longer count as towns/villages/cities/hamlets.
+
+### Validation
+
+- Tiny deterministic cProfile probe over 26 default-world settlements:
+  - no-cache shim: 310 affordance requests, 310 actual profile builds,
+    `build_settlement_affordance_profile` 0.546s, `_route_signal` 0.464s,
+    `list_routes_from` 336 calls / 0.499s;
+  - cached path: 310 affordance requests, 26 actual profile builds,
+    `list_routes_from` 52 calls / 0.102s.
+- `python -m py_compile library\settlement_affordances.py library\settlements.py
+  library\nondetailed_population.py utils\gradio_data_browser.py
+  unit_test\test_settlement_affordances.py
+  unit_test\test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_settlement_affordances
+  unit_test.test_nondetailed_population unit_test.test_geography_model`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_settlements_browser_loads_rows_and_opens_sheet
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_outlaw_refuges_stay_separate_from_settlement_and_town_browsers
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_outlaw_browser_loads_cases_refuges_and_person_selection`
 - Passed targeted government regression:
   `python -m unittest unit_test.test_simulation_government.TestSimulationGovernment.test_assign_holder_preserves_existing_livelihood_job`
 - `python -m unittest unit_test.test_simulation_government` timed out after

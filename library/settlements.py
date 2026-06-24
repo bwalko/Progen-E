@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import random
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from zlib import crc32
 
 PRIMARY_SETTLEMENT_SUFFIX = ":primary"
@@ -92,6 +92,13 @@ class SettlementState:
     mother_settlement_id: str | None = None
     trade_network_id: str | None = None
     autonomy_level: str = "autonomous"
+    affordance_selected_role: str | None = field(default=None, repr=False, compare=False)
+    affordance_secondary_roles: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
+    affordance_population_ceiling_multiplier: float | None = field(default=None, repr=False, compare=False)
+    affordance_migration_pull: float | None = field(default=None, repr=False, compare=False)
+    affordance_large_population_enablers: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
+    _affordance_cache_key: tuple[object, ...] | None = field(default=None, repr=False, compare=False)
+    _affordance_profile: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not str(self.settlement_id).strip():
@@ -158,9 +165,9 @@ def settlement_site_capacity_factor(
     """Deterministic local carrying-capacity signal for uneven settlement scale."""
     if ctx is not None:
         try:
-            from library.settlement_affordances import build_settlement_affordance_profile
+            from library.settlement_affordances import cached_settlement_affordance_profile
 
-            return build_settlement_affordance_profile(
+            return cached_settlement_affordance_profile(
                 ctx,
                 state,
                 year=year,
@@ -207,9 +214,9 @@ def settlement_attraction_score(
     profile = None
     if ctx is not None:
         try:
-            from library.settlement_affordances import build_settlement_affordance_profile
+            from library.settlement_affordances import cached_settlement_affordance_profile
 
-            profile = build_settlement_affordance_profile(ctx, state, year=year)
+            profile = cached_settlement_affordance_profile(ctx, state, year=year)
             affordance_pull = 0.84 + profile.migration_pull * 0.42
         except Exception:
             profile = None
@@ -296,4 +303,11 @@ def evolve_settlement(
         mother_settlement_id=state.mother_settlement_id,
         trade_network_id=state.trade_network_id,
         autonomy_level=state.autonomy_level,
+        affordance_selected_role=state.affordance_selected_role,
+        affordance_secondary_roles=state.affordance_secondary_roles,
+        affordance_population_ceiling_multiplier=state.affordance_population_ceiling_multiplier,
+        affordance_migration_pull=state.affordance_migration_pull,
+        affordance_large_population_enablers=state.affordance_large_population_enablers,
+        _affordance_cache_key=state._affordance_cache_key,
+        _affordance_profile=state._affordance_profile,
     )

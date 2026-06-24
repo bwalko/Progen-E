@@ -513,6 +513,118 @@ def build_settlement_affordance_profile(
     )
 
 
+def _active_status(value: Any) -> bool:
+    return str(getattr(value, "status", "active") or "active").strip().lower() == "active"
+
+
+def _government_cache_signature(ctx: Any, sid: str, rid: str) -> tuple[object, ...]:
+    if ctx is None:
+        return ()
+    capital_hits = tuple(
+        sorted(
+            str(getattr(pol, "capital_settlement_id", "") or "").strip()
+            for pol in getattr(ctx, "gov_polities", {}).values()
+            if _active_status(pol)
+            and str(getattr(pol, "capital_settlement_id", "") or "").strip() == sid
+        )
+    )
+    seat_hits = tuple(
+        sorted(
+            str(getattr(seat, "scope_settlement_id", "") or "").strip()
+            for seat in getattr(ctx, "gov_office_seats", {}).values()
+            if str(getattr(seat, "scope_settlement_id", "") or "").strip() == sid
+        )
+    )
+    territory_hits: list[tuple[str, str]] = []
+    for row in getattr(ctx, "gov_territory_rows", ()) or ():
+        kind = str(getattr(row, "target_kind", "") or "").strip().lower()
+        target = str(getattr(row, "target_id", "") or "").strip()
+        if (kind == "settlement" and target == sid) or (kind == "region" and target == rid):
+            territory_hits.append((kind, target))
+    return (capital_hits, seat_hits, tuple(sorted(territory_hits)))
+
+
+def _route_cache_signature(ctx: Any, rid: str, year: int | None) -> tuple[object, ...]:
+    if ctx is None:
+        return ()
+    override = getattr(ctx, "settlement_affordance_route_counts", None)
+    if isinstance(override, dict):
+        return ("override", rid, override.get(rid, 0))
+    return (
+        "db",
+        getattr(ctx, "world", "default"),
+        str(getattr(ctx, "db_path", "") or ""),
+        int(year or 0),
+    )
+
+
+def settlement_affordance_cache_key(
+    ctx: Any,
+    settlement: Any,
+    *,
+    year: int | None = None,
+) -> tuple[object, ...]:
+    sid = str(getattr(settlement, "settlement_id", "") or "").strip()
+    rid = str(getattr(settlement, "region_id", "") or "").strip()
+    slot = max(1, int(getattr(settlement, "site_slot", 1) or 1))
+    return (
+        sid,
+        rid,
+        slot,
+        str(getattr(settlement, "local_geography_json", "") or ""),
+        str(getattr(settlement, "founding_reason", "") or "").strip().lower(),
+        str(getattr(settlement, "autonomy_level", "") or "").strip().lower(),
+        int(year or 0),
+        _route_cache_signature(ctx, rid, year),
+        _government_cache_signature(ctx, sid, rid),
+    )
+
+
+def _store_cached_profile(
+    settlement: Any,
+    key: tuple[object, ...],
+    profile: SettlementAffordanceProfile,
+) -> None:
+    try:
+        setattr(settlement, "_affordance_cache_key", key)
+        setattr(settlement, "_affordance_profile", profile)
+        setattr(settlement, "affordance_selected_role", profile.selected_role)
+        setattr(
+            settlement,
+            "affordance_secondary_roles",
+            tuple(role for role, _weight in profile.role_candidates if role != profile.selected_role),
+        )
+        setattr(
+            settlement,
+            "affordance_population_ceiling_multiplier",
+            profile.population_ceiling_multiplier,
+        )
+        setattr(settlement, "affordance_migration_pull", profile.migration_pull)
+        setattr(
+            settlement,
+            "affordance_large_population_enablers",
+            tuple(profile.large_population_enablers),
+        )
+    except Exception:
+        pass
+
+
+def cached_settlement_affordance_profile(
+    ctx: Any,
+    settlement: Any,
+    year: int | None = None,
+) -> SettlementAffordanceProfile:
+    """Return a per-settlement/year affordance profile without repeated route work."""
+    key = settlement_affordance_cache_key(ctx, settlement, year=year)
+    cached_key = getattr(settlement, "_affordance_cache_key", None)
+    cached_profile = getattr(settlement, "_affordance_profile", None)
+    if cached_key == key and isinstance(cached_profile, SettlementAffordanceProfile):
+        return cached_profile
+    profile = build_settlement_affordance_profile(ctx, settlement, year=year)
+    _store_cached_profile(settlement, key, profile)
+    return profile
+
+
 def growth_invariant_cap(profile: SettlementAffordanceProfile, target_count: int) -> int:
     """Cap unexplained large settlement populations."""
     target = max(0, int(target_count))

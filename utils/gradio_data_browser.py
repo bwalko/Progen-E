@@ -4370,21 +4370,11 @@ def load_settlements_browser(
         total = _count_one(con, f"select count(*) from {_quote_identifier(settlement_table)} where {where_sql}", params)
         values = [_settlement_summary_row(con, saved_world, row) for row in rows]
         settlement_ids = [str(row["settlement_id"]) for row in rows]
-        refuge_rows, refuge_total = _query_outlaw_refuges(
-            con,
-            search=search or "",
-            status_filter=status_filter,
-            limit=row_limit,
-        )
-        if refuge_rows:
-            values.extend(_outlaw_refuge_summary_row(con, saved_world, row) for row in refuge_rows)
-            settlement_ids.extend(str(row["refuge_id"]) for row in refuge_rows)
-        total += refuge_total
 
     filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
     saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
     status = (
-        f"{path.name}: showing {len(values)} of {total} settlements/refuges{filter_text}{saved_world_note}. "
+        f"{path.name}: showing {len(values)} of {total} civic settlements{filter_text}{saved_world_note}. "
         "Click any settlement row to open its sheet."
     )
     return _dataframe(values, SETTLEMENT_BROWSER_HEADERS), status, settlement_ids
@@ -12196,16 +12186,6 @@ def _places_browser_data(
                     }
                 )
                 keys.append(_encode_place_key(world, saved_world, sid))
-            refuge_rows, refuge_total = _query_outlaw_refuges(
-                con,
-                search=search or "",
-                status_filter="All",
-                limit=row_limit,
-            )
-            for refuge_row in refuge_rows:
-                summary = _outlaw_refuge_summary_row(con, saved_world, refuge_row)
-                values.append({header: summary.get(header, "") for header in PLACE_TOWN_HEADERS})
-                keys.append(_encode_place_key(world, saved_world, refuge_row["refuge_id"]))
         elif selected == "Polities":
             if not _has_table(con, "simulation_polities"):
                 return [], headers, "No simulation_polities table found.", [], selected

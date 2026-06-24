@@ -1,4 +1,5 @@
 import json
+import random
 import sqlite3
 import tempfile
 import unittest
@@ -6,13 +7,18 @@ from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
-from library.nondetailed_population import seed_nondetailed_from_active_settlements
+import library.settlement_affordances as settlement_affordances
+from library.nondetailed_population import (
+    _pick_nondetailed_destination,
+    seed_nondetailed_from_active_settlements,
+)
 from library.settlement_affordances import (
     build_settlement_affordance_profile,
+    cached_settlement_affordance_profile,
     growth_invariant_cap,
     new_settlement_backfill_cap,
 )
-from library.settlements import SettlementState
+from library.settlements import SettlementState, settlement_attraction_score
 from library.world_save import ensure_checkpoint_schema
 
 
@@ -173,6 +179,110 @@ class TestSettlementAffordances(unittest.TestCase):
         cap = new_settlement_backfill_cap(profile, st, year=1000, detailed_alive=4)
         self.assertIsNotNone(cap)
         self.assertLess(cap, 50)
+
+    def test_cached_profile_reuses_repeated_settlement_scoring(self) -> None:
+        ctx, st = _settlement("harbor", "river", region_text="fertile coastal port", routes=4)
+        original = settlement_affordances.build_settlement_affordance_profile
+        calls = 0
+
+        def counted(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        settlement_affordances.build_settlement_affordance_profile = counted
+        try:
+            for _i in range(3):
+                settlement_attraction_score(st, ctx=ctx, year=1000)
+                cached_settlement_affordance_profile(ctx, st, year=1000)
+        finally:
+            settlement_affordances.build_settlement_affordance_profile = original
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(st.affordance_selected_role, st._affordance_profile.selected_role)
+        self.assertIsNotNone(st.affordance_population_ceiling_multiplier)
+        self.assertIsNotNone(st.affordance_migration_pull)
+
+    def test_cached_profile_invalidates_on_year_or_geography_change(self) -> None:
+        ctx, st = _settlement("pasture", region_text="fertile plain", routes=0)
+        original = settlement_affordances.build_settlement_affordance_profile
+        calls = 0
+
+        def counted(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        settlement_affordances.build_settlement_affordance_profile = counted
+        try:
+            cached_settlement_affordance_profile(ctx, st, year=1000)
+            cached_settlement_affordance_profile(ctx, st, year=1000)
+            cached_settlement_affordance_profile(ctx, st, year=1001)
+            st.local_geography_json = _geo("harbor", "river")
+            cached_settlement_affordance_profile(ctx, st, year=1001)
+        finally:
+            settlement_affordances.build_settlement_affordance_profile = original
+
+        self.assertEqual(calls, 3)
+
+    def test_destination_picker_reuses_candidate_affordance_profiles(self) -> None:
+        ctx = _ctx("fertile river market", routes=0)
+        primary = SettlementState(
+            settlement_id="r1:s1",
+            region_id="r1",
+            resident_count=20,
+            status="active",
+            local_geography_json=_geo("river", "market"),
+        )
+        secondary = SettlementState(
+            settlement_id="r1:s2",
+            region_id="r1",
+            resident_count=12,
+            status="active",
+            local_geography_json=_geo("pasture"),
+        )
+        ctx.settlements_by_id = {
+            primary.settlement_id: primary,
+            secondary.settlement_id: secondary,
+        }
+        mixed_map_calls = 0
+        mixed_single_calls = 0
+
+        def mixed_counts_by_settlement():
+            nonlocal mixed_map_calls
+            mixed_map_calls += 1
+            return {"r1:s1": 20, "r1:s2": 12}
+
+        def mixed_count_in_settlement(sid):
+            nonlocal mixed_single_calls
+            mixed_single_calls += 1
+            return 20 if sid == "r1:s1" else 12
+
+        ctx.mixed_population_counts_by_settlement = mixed_counts_by_settlement
+        ctx.mixed_population_count_in_settlement = mixed_count_in_settlement
+        original = settlement_affordances.build_settlement_affordance_profile
+        calls = 0
+
+        def counted(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        settlement_affordances.build_settlement_affordance_profile = counted
+        try:
+            dest = _pick_nondetailed_destination(
+                ctx,
+                primary,
+                year=1000,
+                rng=random.Random(1234),
+            )
+        finally:
+            settlement_affordances.build_settlement_affordance_profile = original
+
+        self.assertIsNotNone(dest)
+        self.assertEqual(calls, 2)
+        self.assertEqual(mixed_map_calls, 1)
+        self.assertEqual(mixed_single_calls, 0)
 
     def test_extra_settlement_seed_can_remain_under_fifty_mixed_residents(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

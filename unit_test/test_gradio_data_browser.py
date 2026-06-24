@@ -4408,11 +4408,11 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(table["headers"], gdb.SETTLEMENT_BROWSER_HEADERS)
         self.assertEqual(table["value"][0][0], "Fordham")
         self.assertEqual(settlement_ids, ["r1:s1"])
-        self.assertIn("showing 1 of 1 settlements", status)
+        self.assertIn("showing 1 of 1 civic settlements", status)
         self.assertIn("Fordham", sheet)
         self.assertIn("miller", sheet)
 
-    def test_outlaw_refuges_appear_in_settlement_and_town_browsers(self) -> None:
+    def test_outlaw_refuges_stay_separate_from_settlement_and_town_browsers(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "save.sqlite"
             con = _memory_outlaw_place_save()
@@ -4429,14 +4429,14 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 settlement_table, status, settlement_ids = gdb.load_settlements_browser(
                     "test", "outlaw_refuge", "All", 50
                 )
-                settlement_sheet = gdb.select_settlement_from_table(
-                    settlement_ids, "test", types.SimpleNamespace(index=0)
-                )
                 town_table, town_status, town_keys = gdb.load_towns_browser(
                     "test", "outlaw_refuge", 50
                 )
-                town_sheet = gdb.select_town_from_table(
-                    town_keys, "test", types.SimpleNamespace(index=0)
+                refuge_table, refuge_status, refuge_keys = gdb.load_outlaw_refuges_browser(
+                    "test", "Active", "Blackthorn", 50
+                )
+                refuge_sheet = gdb.select_outlaw_refuge_from_table(
+                    refuge_keys, "test", types.SimpleNamespace(index=0)
                 )
             finally:
                 gdb._db_path = original_db_path
@@ -4444,17 +4444,21 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     gdb.gr.Dataframe = original_dataframe
 
         self.assertEqual(settlement_table["headers"], gdb.SETTLEMENT_BROWSER_HEADERS)
-        self.assertEqual(settlement_ids, ["outlaw_refuge:r1:1"])
-        self.assertIn("settlements/refuges", status)
-        self.assertIn("The Blackthorn Crag", settlement_table["value"][0][0])
-        self.assertIn("outlaw refuge", settlement_table["value"][0][1])
-        self.assertIn("The Blackthorn Crag", settlement_sheet)
-        self.assertIn("storehouse robbery", settlement_sheet)
+        self.assertEqual(settlement_ids, [])
+        self.assertIn("civic settlements", status)
+        self.assertNotIn("settlements/refuges", status)
+        self.assertEqual(settlement_table["value"], [])
         self.assertEqual(town_table["headers"], gdb.PLACE_TOWN_HEADERS)
-        self.assertEqual(town_keys, [gdb._encode_place_key("test", "test", "outlaw_refuge:r1:1")])
-        self.assertIn("showing 1 towns", town_status)
-        self.assertIn("The Blackthorn Crag", town_sheet)
-        self.assertNotIn("outlaw_refuge:r1:1</h2>", settlement_sheet)
+        self.assertEqual(town_keys, [])
+        self.assertEqual(town_table["value"], [])
+        self.assertIn("showing 0 towns", town_status)
+        self.assertEqual(refuge_table["headers"], gdb.OUTLAW_REFUGE_BROWSER_HEADERS)
+        self.assertEqual(refuge_keys, ["outlaw_refuge:r1:1"])
+        self.assertIn("outlaw refuges", refuge_status)
+        self.assertIn("The Blackthorn Crag", refuge_table["value"][0][0])
+        self.assertIn("The Blackthorn Crag", refuge_sheet)
+        self.assertIn("storehouse robbery", refuge_sheet)
+        self.assertNotIn("outlaw_refuge:r1:1</h2>", refuge_sheet)
 
     def test_outlaw_browser_loads_cases_refuges_and_person_selection(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

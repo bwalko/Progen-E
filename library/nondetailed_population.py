@@ -14,7 +14,7 @@ from typing import Iterable
 from library.geography import list_routes_from
 from library import simulation_timing
 from library.settlement_affordances import (
-    build_settlement_affordance_profile,
+    cached_settlement_affordance_profile,
     growth_invariant_cap,
     new_settlement_backfill_cap,
 )
@@ -742,7 +742,7 @@ def run_nondetailed_sql_migration(
                 "destination_prosperity_pool": round(float(getattr(dest, "prosperity_pool", 1.0) or 1.0), 4),
             }
             try:
-                profile = build_settlement_affordance_profile(ctx, dest, year=year)
+                profile = cached_settlement_affordance_profile(ctx, dest, year=year)
                 event_payload.update(
                     {
                         "destination_affordance_role": profile.selected_role,
@@ -787,6 +787,17 @@ def _pick_nondetailed_destination(ctx: object, source_st: object, *, year: int, 
         if str(getattr(st, "region_id", "") or "").strip() in allowed_regions
         and str(getattr(st, "status", "") or "").strip().lower() == "active"
     ]
+    mixed_counts_by_settlement = None
+    mixed_counts_fn = getattr(ctx, "mixed_population_counts_by_settlement", None)
+    if callable(mixed_counts_fn):
+        try:
+            mixed_counts_by_settlement = {
+                str(sid): int(count)
+                for sid, count in mixed_counts_fn().items()
+            }
+        except Exception:
+            mixed_counts_by_settlement = None
+    mixed_count_fn = getattr(ctx, "mixed_population_count_in_settlement", None)
     scored: list[tuple[float, object]] = []
     for st in candidates:
         sid = str(getattr(st, "settlement_id", "") or "").strip()
@@ -794,10 +805,11 @@ def _pick_nondetailed_destination(ctx: object, source_st: object, *, year: int, 
             continue
         score = settlement_attraction_score(st, ctx=ctx, year=year)
         try:
-            profile = build_settlement_affordance_profile(ctx, st, year=year)
-            mixed_count_fn = getattr(ctx, "mixed_population_count_in_settlement", None)
+            profile = cached_settlement_affordance_profile(ctx, st, year=year)
             residents = (
-                int(mixed_count_fn(sid))
+                int(mixed_counts_by_settlement.get(sid, 0))
+                if mixed_counts_by_settlement is not None
+                else int(mixed_count_fn(sid))
                 if callable(mixed_count_fn)
                 else max(0, int(getattr(st, "resident_count", 0) or 0))
             )
@@ -898,7 +910,7 @@ def seed_nondetailed_from_active_settlements(
                 continue
             profile = None
             try:
-                profile = build_settlement_affordance_profile(ctx, st, year=year)
+                profile = cached_settlement_affordance_profile(ctx, st, year=year)
             except Exception:
                 profile = None
             weights.append(
