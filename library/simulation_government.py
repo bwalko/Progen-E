@@ -389,22 +389,20 @@ def assign_holder(
         except Exception:
             archetype = None
             social_standing = 0.72
+        class_band = getattr(archetype, "class_band", None) if archetype is not None else "upper"
+        existing_standing = float(getattr(rec.person, "social_standing_01", 0.0) or 0.0)
+        existing_impact = float(getattr(rec.person, "societal_impact_01", 0.0) or 0.0)
+        existing_worth = float(getattr(rec.person, "perceived_worth_01", 0.0) or 0.0)
         rec.person = replace(
             rec.person,
-            job=display_job,
-            job_assigned_year=year,
-            employment_status="employed",
-            job_market_type="office",
-            social_class_band=(
-                getattr(archetype, "class_band", None) if archetype is not None else "upper"
-            ),
-            social_standing_01=round(float(social_standing), 4),
+            social_class_band=class_band or rec.person.social_class_band,
+            social_standing_01=round(max(existing_standing, float(social_standing)), 4),
             societal_impact_01=round(
-                float(getattr(archetype, "societal_impact_01", 0.72)),
+                max(existing_impact, float(getattr(archetype, "societal_impact_01", 0.72))),
                 4,
             ),
             perceived_worth_01=round(
-                float(getattr(archetype, "perceived_worth_01", 0.74)),
+                max(existing_worth, float(getattr(archetype, "perceived_worth_01", 0.74))),
                 4,
             ),
         )

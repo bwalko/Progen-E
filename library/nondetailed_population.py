@@ -13,6 +13,11 @@ from typing import Iterable
 
 from library.geography import list_routes_from
 from library import simulation_timing
+from library.settlement_affordances import (
+    build_settlement_affordance_profile,
+    growth_invariant_cap,
+    new_settlement_backfill_cap,
+)
 from library.settlements import settlement_attraction_score
 
 
@@ -724,21 +729,35 @@ def run_nondetailed_sql_migration(
         moved_total += moved
         source_count += 1
         if hasattr(ctx, "_record_simulation_event"):
+            event_payload = {
+                "from_settlement_id": source_sid,
+                "to_settlement_id": dest.settlement_id,
+                "from_region_id": rid,
+                "to_region_id": getattr(dest, "region_id", None),
+                "migrant_count": moved,
+                "source_pressure": round(source_pressure, 4),
+                "source_food_pressure": round(food_pressure, 4),
+                "source_prosperity_pool": round(prosperity, 4),
+                "destination_market_pull": round(float(getattr(dest, "market_pull", 0.0) or 0.0), 4),
+                "destination_prosperity_pool": round(float(getattr(dest, "prosperity_pool", 1.0) or 1.0), 4),
+            }
+            try:
+                profile = build_settlement_affordance_profile(ctx, dest, year=year)
+                event_payload.update(
+                    {
+                        "destination_affordance_role": profile.selected_role,
+                        "destination_affordance_pull": round(profile.migration_pull, 4),
+                        "destination_large_population_enablers": list(
+                            profile.large_population_enablers
+                        ),
+                    }
+                )
+            except Exception:
+                pass
             ctx._record_simulation_event(
                 int(year),
                 "nondetailed_settlement_migration",
-                {
-                    "from_settlement_id": source_sid,
-                    "to_settlement_id": dest.settlement_id,
-                    "from_region_id": rid,
-                    "to_region_id": getattr(dest, "region_id", None),
-                    "migrant_count": moved,
-                    "source_pressure": round(source_pressure, 4),
-                    "source_food_pressure": round(food_pressure, 4),
-                    "source_prosperity_pool": round(prosperity, 4),
-                    "destination_market_pull": round(float(getattr(dest, "market_pull", 0.0) or 0.0), 4),
-                    "destination_prosperity_pool": round(float(getattr(dest, "prosperity_pool", 1.0) or 1.0), 4),
-                },
+                event_payload,
             )
     return NondetailedMigrationResult(
         moved=moved_total,
@@ -773,7 +792,24 @@ def _pick_nondetailed_destination(ctx: object, source_st: object, *, year: int, 
         sid = str(getattr(st, "settlement_id", "") or "").strip()
         if not sid:
             continue
-        score = settlement_attraction_score(st)
+        score = settlement_attraction_score(st, ctx=ctx, year=year)
+        try:
+            profile = build_settlement_affordance_profile(ctx, st, year=year)
+            mixed_count_fn = getattr(ctx, "mixed_population_count_in_settlement", None)
+            residents = (
+                int(mixed_count_fn(sid))
+                if callable(mixed_count_fn)
+                else max(0, int(getattr(st, "resident_count", 0) or 0))
+            )
+            region_cap = max(1, int(ctx.effective_regional_population_cap(profile.region_id)))
+            soft_site_cap = max(
+                24,
+                int(round(region_cap * 0.18 * profile.population_ceiling_multiplier)),
+            )
+            headroom = _clamp(1.15 - residents / soft_site_cap, 0.18, 1.35)
+            score *= headroom * (0.82 + profile.migration_pull * 0.38)
+        except Exception:
+            pass
         if sid == str(getattr(source_st, "settlement_id", "") or ""):
             score *= 0.62
         if score > 0.0:
@@ -855,24 +891,45 @@ def seed_nondetailed_from_active_settlements(
             target = 0
         if target <= 0:
             continue
-        weights: list[tuple[object, float]] = []
+        weights: list[tuple[object, float, object | None]] = []
         for st in region_settlements:
             sid = str(getattr(st, "settlement_id", "") or "").strip()
             if not sid:
                 continue
-            weights.append((st, max(0.01, settlement_attraction_score(st))))
+            profile = None
+            try:
+                profile = build_settlement_affordance_profile(ctx, st, year=year)
+            except Exception:
+                profile = None
+            weights.append(
+                (
+                    st,
+                    max(0.01, settlement_attraction_score(st, ctx=ctx, year=year)),
+                    profile,
+                )
+            )
         if not weights:
             continue
-        total_weight = sum(weight for _, weight in weights)
-        remaining = target
-        for pos, (st, weight) in enumerate(weights):
-            if pos == len(weights) - 1:
-                target_count = max(0, remaining)
-            else:
-                target_count = max(0, int(round(target * weight / total_weight)))
-                remaining -= target_count
+        total_weight = sum(weight for _, weight, _ in weights)
+        for st, weight, profile in weights:
+            target_count = max(0, int(round(target * weight / total_weight)))
             sid = str(getattr(st, "settlement_id", "") or "").strip()
             existing_alive = int(current_by_settlement.get(sid, 0))
+            if profile is not None:
+                target_count = growth_invariant_cap(profile, target_count)
+                detailed_alive = 0
+                try:
+                    detailed_alive = int(ctx.count_alive_in_settlement(sid))
+                except Exception:
+                    detailed_alive = max(0, int(getattr(st, "resident_count", 0) or 0))
+                cap = new_settlement_backfill_cap(
+                    profile,
+                    st,
+                    year=year,
+                    detailed_alive=detailed_alive,
+                )
+                if cap is not None:
+                    target_count = min(target_count, max(0, cap - detailed_alive))
             count = max(0, target_count - existing_alive)
             if count <= 0:
                 continue

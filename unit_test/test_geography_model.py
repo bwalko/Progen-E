@@ -167,25 +167,45 @@ class TestGeographyModel(unittest.TestCase):
 
     def test_nondetailed_allocation_allows_hamlets_and_cities(self) -> None:
         rid = "aeria_port"
-        geo = '{"settlements":[{"terrain":"river delta port market"}]}'
+        low_geo = (
+            '{"features":[{"feature_id":"f1","kind":"ridge"}],'
+            '"settlements":[{"settlement_slot":0,"anchor_feature_id":"f1"}]}'
+        )
+        high_geo = (
+            '{"features":[{"feature_id":"f1","kind":"harbor"},'
+            '{"feature_id":"f2","kind":"river_mouth"},'
+            '{"feature_id":"f3","kind":"pasture"},'
+            '{"feature_id":"f4","kind":"road_crossing"}],'
+            '"settlements":[{"settlement_slot":0,"anchor_feature_id":"f1"}]}'
+        )
         low = SettlementState(
             region_id=rid,
             settlement_id=f"{rid}:fixture33",
             site_slot=33,
             display_name="Fixture 33",
-            local_geography_json=geo,
+            local_geography_json=low_geo,
         )
         high = SettlementState(
             region_id=rid,
             settlement_id=f"{rid}:fixture46",
             site_slot=46,
             display_name="Fixture 46",
-            local_geography_json=geo,
+            local_geography_json=high_geo,
+            market_pull=0.8,
         )
         ctx = SimpleNamespace(
             settlements_by_id={low.settlement_id: low, high.settlement_id: high},
             next_person_id=1,
-            effective_regional_population_cap=lambda _rid: 1050,
+            effective_regional_population_cap=lambda _rid: 1200,
+            region_by_id={
+                rid: SimpleNamespace(
+                    region_name="Aeria Port",
+                    biome="fertile coastal delta",
+                    terrain="river mouth harbor",
+                    keywords="port market road fertile",
+                )
+            },
+            settlement_affordance_route_counts={rid: 4},
         )
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             save = Path(td) / "save.sqlite"

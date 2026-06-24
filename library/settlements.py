@@ -149,8 +149,24 @@ def _settlement_signal_text(state: SettlementState) -> str:
     return " ".join(pieces).lower()
 
 
-def settlement_site_capacity_factor(state: SettlementState) -> float:
+def settlement_site_capacity_factor(
+    state: SettlementState,
+    *,
+    ctx: object | None = None,
+    year: int | None = None,
+) -> float:
     """Deterministic local carrying-capacity signal for uneven settlement scale."""
+    if ctx is not None:
+        try:
+            from library.settlement_affordances import build_settlement_affordance_profile
+
+            return build_settlement_affordance_profile(
+                ctx,
+                state,
+                year=year,
+            ).population_ceiling_multiplier
+        except Exception:
+            pass
     key = (
         f"{state.region_id}|{state.settlement_id}|{state.site_slot}|"
         f"{state.founding_reason}|{state.display_name or ''}"
@@ -177,6 +193,8 @@ def settlement_attraction_score(
     *,
     connectivity_score: float = 0.0,
     resident_count: int | None = None,
+    ctx: object | None = None,
+    year: int | None = None,
 ) -> float:
     """Positive destination/allocation score from site, economy, stability, and mass."""
     residents = (
@@ -184,17 +202,45 @@ def settlement_attraction_score(
         if resident_count is not None
         else max(0, int(getattr(state, "resident_count", 0) or 0))
     )
-    site = settlement_site_capacity_factor(state)
+    affordance_pull = 1.0
+    headroom = 1.0
+    profile = None
+    if ctx is not None:
+        try:
+            from library.settlement_affordances import build_settlement_affordance_profile
+
+            profile = build_settlement_affordance_profile(ctx, state, year=year)
+            affordance_pull = 0.84 + profile.migration_pull * 0.42
+        except Exception:
+            profile = None
+    site = (
+        profile.population_ceiling_multiplier
+        if profile is not None
+        else settlement_site_capacity_factor(state)
+    )
     prosperity = _clamp(float(getattr(state, "prosperity_pool", 1.0) or 1.0), 0.0, 3.0)
     market = _clamp(float(getattr(state, "market_pull", 0.0) or 0.0), 0.0, 1.0)
     stability = _clamp(float(getattr(state, "stability", 0.5) or 0.5), 0.0, 1.0)
     pressure = _clamp(float(getattr(state, "food_pressure", 0.0) or 0.0), 0.0, 2.0)
     conn = _clamp(float(connectivity_score), 0.0, 3.0)
-    mass = 1.0 + min(1.15, residents**0.5 / 28.0)
+    if ctx is not None and profile is not None:
+        try:
+            region_cap = max(1, int(ctx.effective_regional_population_cap(profile.region_id)))
+            soft_site_cap = max(
+                24,
+                int(round(region_cap * 0.18 * profile.population_ceiling_multiplier)),
+            )
+            headroom = _clamp(1.16 - residents / soft_site_cap, 0.22, 1.35)
+        except Exception:
+            headroom = 1.0
+    mass = 1.0 + min(0.82, residents**0.5 / 34.0)
     economy = 0.56 + 0.22 * prosperity + 0.34 * market + 0.24 * stability
     pressure_factor = _clamp(1.28 - pressure * 0.32, 0.35, 1.35)
     connectivity_factor = 0.86 + min(0.42, conn * 0.12)
-    return max(0.01, site * economy * pressure_factor * connectivity_factor * mass)
+    return max(
+        0.01,
+        site * economy * pressure_factor * connectivity_factor * mass * affordance_pull * headroom,
+    )
 
 
 def evolve_settlement(

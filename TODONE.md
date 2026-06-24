@@ -3785,3 +3785,56 @@ completion.
   `detailed_alive=339`, `nondetailed_alive=25454`, 17 towns, 12 cities,
   28 polities, 392 office seats, and zero alive partnered non-detailed rows
   missing `partner_person_id`.
+
+## 2026-06-24 - Settlement affordance model and role taxonomy guard
+
+### Enhancements
+
+- Added `library/settlement_affordances.py` with deterministic on-demand
+  settlement affordance profiles, normalized scores, probabilistic role
+  candidates, selected roles, population ceiling multipliers, migration pull,
+  backfill caps, and explicit large-population enabler reasons.
+- Replaced broad text-token site capacity and attraction scoring with the
+  affordance profile when simulation context is available, while keeping the
+  legacy fallback for context-free callers.
+- Updated non-detailed settlement seeding and migration to consume affordance
+  pull, site headroom, role-aware young-settlement caps, and large-population
+  enabler caps instead of forcing all regional remainder into the final
+  settlement.
+- Extended non-detailed migration event payloads with destination affordance
+  role, migration pull, and large-population enabler reasons for traceability.
+
+### Fixes
+
+- Prevented newly founded non-primary settlements from immediately ballooning
+  through non-detailed backfill; founder-year mixed populations can remain
+  under 50 when the site role and affordances support that.
+- Made regional route/port/fertility context bias local settlement roles only
+  when the local site has compatible water, route, or agricultural affordances,
+  so backwater sites in strong regions do not automatically become cities.
+- Stopped government office assignment from overwriting livelihood job fields;
+  office/title status now updates social standing/impact without turning a
+  merchant, farmer, or other worker into an "office" job.
+- Added career compatibility checks for formal officeholders so ordinary
+  assignment blocks vice/criminal/domestic-service livelihoods for office
+  holders and blocks low-status ordinary livelihoods for high-rank title
+  holders unless an explicit story system later authors the exception.
+
+### Validation
+
+- `python -m py_compile library\settlement_affordances.py library\settlements.py
+  library\nondetailed_population.py library\population_growth_runner.py
+  library\simulation_government.py library\simulation_careers.py
+  unit_test\test_settlement_affordances.py unit_test\test_geography_model.py
+  unit_test\test_nondetailed_population.py unit_test\test_simulation_government.py
+  unit_test\test_simulation_careers.py`
+- Passed: `python -m unittest unit_test.test_settlement_affordances`
+- Passed: `python -m unittest unit_test.test_nondetailed_population`
+- Passed: `python -m unittest unit_test.test_geography_model`
+- Passed: `python -m unittest unit_test.test_lazy_settlements`
+- Passed: `python -m unittest unit_test.test_population_growth_nondetailed_runner`
+- Passed: `python -m unittest unit_test.test_simulation_careers`
+- Passed targeted government regression:
+  `python -m unittest unit_test.test_simulation_government.TestSimulationGovernment.test_assign_holder_preserves_existing_livelihood_job`
+- `python -m unittest unit_test.test_simulation_government` timed out after
+  180 seconds on this laptop before producing a pass/fail result.

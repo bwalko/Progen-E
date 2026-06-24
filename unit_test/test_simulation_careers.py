@@ -60,6 +60,7 @@ from library.simulation_careers import (
     score_genome_job_row,
     simulation_careers_annual_tick,
     _job_home_childcare_compatible,
+    _job_allowed_for_government_holder,
     _job_allowed_for_person,
     _parse_job_token,
 )
@@ -559,6 +560,54 @@ class TestSimulationCareers(unittest.TestCase):
         self.assertTrue(_job_allowed_for_person(male_ok, "female"))
         male_high_phys = replace(male_ok, genome={**base_g, "physical": -10.0})
         self.assertFalse(_job_allowed_for_person(male_high_phys, "female"))
+
+    def test_government_office_blocks_incompatible_livelihood_jobs(self) -> None:
+        alderman_ctx = types.SimpleNamespace(
+            db_path=Path("unused-config.sqlite"),
+            gov_office_seats={
+                1: types.SimpleNamespace(holder_person_id=10, title_id="alderman")
+            },
+        )
+        duke_ctx = types.SimpleNamespace(
+            db_path=Path("unused-config.sqlite"),
+            gov_office_seats={
+                1: types.SimpleNamespace(holder_person_id=11, title_id="duke")
+            },
+        )
+        alderman = types.SimpleNamespace(person_id=10)
+        duke = types.SimpleNamespace(person_id=11)
+        prostitute = types.SimpleNamespace(
+            job_market_type="vice",
+            role_family="vice",
+            class_band="marginal",
+            informal_role_01=1.0,
+        )
+        merchant = types.SimpleNamespace(
+            job_market_type="settlement_market",
+            role_family="trade",
+            class_band="notable",
+            informal_role_01=0.0,
+        )
+        farmer = types.SimpleNamespace(
+            job_market_type="settlement_market",
+            role_family="food",
+            class_band="commoner",
+            informal_role_01=0.0,
+        )
+
+        self.assertFalse(
+            _job_allowed_for_government_holder(
+                duke_ctx, duke, "prostitute", prostitute
+            )
+        )
+        self.assertTrue(
+            _job_allowed_for_government_holder(
+                alderman_ctx, alderman, "merchant", merchant
+            )
+        )
+        self.assertFalse(
+            _job_allowed_for_government_holder(duke_ctx, duke, "farmer", farmer)
+        )
 
     def test_female_blocked_from_male_only_job_without_cross_gender_exception(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -1445,10 +1494,10 @@ class TestSimulationCareers(unittest.TestCase):
                 year=2000,
                 historical_year=2000,
                 salt=2,
-                top_n=1,
+                top_n=2,
                 settlement_resident_count=90,
-                current_job_counts={"smith": 8},
-                current_family_counts={"craft": 12},
+                current_job_counts={"smith": 80},
+                current_family_counts={"craft": 120},
             )
 
         self.assertIsNotNone(open_market)

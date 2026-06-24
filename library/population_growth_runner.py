@@ -1656,14 +1656,22 @@ def _stable_unit_interval(text: str) -> float:
     return crc32(text.encode("utf-8")) / 0xFFFFFFFF
 
 
-def _passive_settlement_weight(st: SettlementState, *, year: int) -> float:
+def _passive_settlement_weight(
+    st: SettlementState,
+    *,
+    ctx: SimulationContext | None = None,
+    year: int,
+) -> float:
     founded = st.founded_sim_year if st.founded_sim_year is not None else year
     age = max(0, int(year) - int(founded))
     age_factor = 1.0 + min(0.45, age / 200.0)
     jitter = 0.82 + 0.36 * _stable_unit_interval(
         f"{st.region_id}|{st.settlement_id}|{st.site_slot}"
     )
-    return max(0.01, age_factor * jitter * settlement_attraction_score(st))
+    return max(
+        0.01,
+        age_factor * jitter * settlement_attraction_score(st, ctx=ctx, year=year),
+    )
 
 
 def _allocate_counts_by_weight(total: int, weighted_ids: list[tuple[str, float]]) -> dict[str, int]:
@@ -1844,7 +1852,7 @@ def refresh_passive_background_cohorts(
         regional_target = int(round(ctx.effective_regional_population_cap(rid) * scale))
         background_target = max(0, regional_target)
         weights = [
-            (sid, _passive_settlement_weight(ctx.settlements_by_id[sid], year=year))
+            (sid, _passive_settlement_weight(ctx.settlements_by_id[sid], ctx=ctx, year=year))
             for sid in settlement_ids
         ]
         background_by_settlement = _allocate_counts_by_weight(background_target, weights)

@@ -1065,6 +1065,98 @@ def _holds_formal_government_office(ctx: "SimulationContext", person_id: int) ->
     return False
 
 
+_HIGH_GOVERNMENT_TITLE_TOKENS: frozenset[str] = frozenset(
+    {
+        "duke",
+        "duchess",
+        "king",
+        "queen",
+        "count",
+        "countess",
+        "earl",
+        "lord",
+        "lady",
+        "prince",
+        "princess",
+        "knight",
+        "baron",
+        "baroness",
+    }
+)
+_INCOMPATIBLE_OFFICE_LIVELIHOOD_TYPES: frozenset[str] = frozenset(
+    {"vice", "criminal", "domestic_service"}
+)
+_HIGH_GOVERNMENT_COMPATIBLE_JOB_TYPES: frozenset[str] = frozenset(
+    {"settlement_market", "household_care"}
+)
+_HIGH_GOVERNMENT_COMPATIBLE_CLASS_BANDS: frozenset[str] = frozenset(
+    {"upper", "notable", "professional", "elite"}
+)
+_HIGH_GOVERNMENT_COMPATIBLE_ROLE_FAMILIES: frozenset[str] = frozenset(
+    {"trade", "authority", "stewardship", "finance", "knowledge", "ritual"}
+)
+
+
+def _formal_government_office_roles(ctx: "SimulationContext", person_id: int) -> set[str]:
+    roles: set[str] = set()
+    pid = int(person_id)
+    title_roles: dict[str, str] = {}
+    try:
+        from library.government_catalog import GovernmentCatalog
+
+        catalog = GovernmentCatalog.load(ctx.db_path)
+        title_roles = {
+            str(title.title_id).strip().lower(): str(title.role).strip().lower()
+            for title in catalog.titles.values()
+        }
+    except Exception:
+        title_roles = {}
+    for seat in getattr(ctx, "gov_office_seats", {}).values():
+        if getattr(seat, "holder_person_id", None) != pid:
+            continue
+        title_id = str(getattr(seat, "title_id", "") or "").strip().lower()
+        if title_id:
+            roles.add(title_id)
+            role = title_roles.get(title_id)
+            if role:
+                roles.add(role)
+    return roles
+
+
+def _person_has_high_government_rank(ctx: "SimulationContext", person_id: int) -> bool:
+    roles = _formal_government_office_roles(ctx, person_id)
+    if roles.intersection({"head", "court"}):
+        return True
+    tokens = " ".join(roles).replace("_", " ").replace("-", " ").split()
+    return any(token in _HIGH_GOVERNMENT_TITLE_TOKENS for token in tokens)
+
+
+def _job_allowed_for_government_holder(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    job: str,
+    archetype: JobArchetypeParams,
+) -> bool:
+    if not _holds_formal_government_office(ctx, rec.person_id):
+        return True
+    market_type = str(getattr(archetype, "job_market_type", "") or "").strip().lower()
+    role_family = str(getattr(archetype, "role_family", "") or "").strip().lower()
+    class_band = str(getattr(archetype, "class_band", "") or "").strip().lower()
+    if (
+        market_type in _INCOMPATIBLE_OFFICE_LIVELIHOOD_TYPES
+        or role_family in _INCOMPATIBLE_OFFICE_LIVELIHOOD_TYPES
+        or float(getattr(archetype, "informal_role_01", 0.0) or 0.0) >= 0.5
+    ):
+        return False
+    if not _person_has_high_government_rank(ctx, rec.person_id):
+        return True
+    if market_type not in _HIGH_GOVERNMENT_COMPATIBLE_JOB_TYPES:
+        return False
+    if class_band in _HIGH_GOVERNMENT_COMPATIBLE_CLASS_BANDS:
+        return True
+    return role_family in _HIGH_GOVERNMENT_COMPATIBLE_ROLE_FAMILIES
+
+
 def _patronage_strength_for_client(ctx: "SimulationContext", person_id: int) -> float:
     strength = 0.0
     for tie in getattr(ctx, "patronage_ties", {}).values():
@@ -2614,6 +2706,11 @@ def assign_career_if_eligible(
         if prof:
             simulation_timing.accumulate("careers.assignment_choose", tpc() - t0)
         return None
+    archetype = JobArchetypeCatalog.load(ctx.db_path).lookup(assignment.job)
+    if not _job_allowed_for_government_holder(ctx, rec, assignment.job, archetype):
+        if prof:
+            simulation_timing.accumulate("careers.assignment_choose", tpc() - t0)
+        return None
     if prof:
         simulation_timing.accumulate("careers.assignment_choose", tpc() - t0)
         t0 = tpc()
@@ -2656,7 +2753,6 @@ def assign_career_if_eligible(
         genome_composite_scores=comp_scores,
         genome_trait_phrases=trait_phrases,
     )
-    archetype = JobArchetypeCatalog.load(ctx.db_path).lookup(assignment.job)
     rec.person = _apply_job_archetype_state(
         rec.person,
         job=assignment.job,
@@ -2984,6 +3080,8 @@ def _assign_special_household_job(
         normalize_outlaw_labor_state(ctx, rec, year)
         return False
     if rec.person.job:
+        return False
+    if not _job_allowed_for_government_holder(ctx, rec, job, archetype):
         return False
     previous_job = rec.person.last_job
     was_unemployed = rec.person.employment_status == "unemployed"

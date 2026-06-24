@@ -22,11 +22,13 @@ from library.government_checkpoint import (
     ensure_government_schema,
 )
 from library.passive_population import PassiveCohort
-from library.polity import polity_for_region
-from library.simulation_context import SimulationContext
+from library.person import Person
+from library.polity import OfficeSeatState, polity_for_region
+from library.simulation_context import SimulationContext, SimulationPersonRecord
 from library.simulation_government import (
     _government_office_composite_multiplier,
     _government_scored_candidate_pool,
+    assign_holder,
     simulation_government_annual_tick,
 )
 
@@ -40,6 +42,39 @@ def _force_population_scale(cfg_path: Path, scale: float) -> None:
 
 
 class TestSimulationGovernment(unittest.TestCase):
+    def test_assign_holder_preserves_existing_livelihood_job(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            save = Path(td) / "save.sqlite"
+            person = Person(
+                first_name="Mara",
+                last_name="Vale",
+                gender="Female",
+                ethnic="Test",
+                species="Human",
+                birthyear=970,
+                job="merchant",
+                job_assigned_year=990,
+                employment_status="employed",
+                job_market_type="settlement_market",
+            )
+            record = SimulationPersonRecord(person_id=1, person=person, is_founder=False)
+            original_standing = float(record.person.social_standing_01 or 0.0)
+            seat = OfficeSeatState(seat_id=1, polity_id=1, title_id="alderman")
+            ctx = SimpleNamespace(
+                world="test",
+                save_db_path=save,
+                db_path=Path(td) / "missing-config.sqlite",
+                gov_office_seats={1: seat},
+                id_to_record={1: record},
+            )
+
+            assign_holder(ctx, seat, 1, 1000, display_job="alderman")
+
+        self.assertEqual(record.person.job, "merchant")
+        self.assertEqual(record.person.job_market_type, "settlement_market")
+        self.assertEqual(record.person.employment_status, "employed")
+        self.assertGreaterEqual(record.person.social_standing_01, original_standing)
+
     def test_government_scored_pool_skips_cheap_ineligible_candidates_before_composites(self) -> None:
         ctx = SimpleNamespace(
             _gov_candidate_fact_cache={},
