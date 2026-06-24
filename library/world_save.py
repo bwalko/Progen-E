@@ -5734,6 +5734,21 @@ _CREATE_SIMULATION_SETTLEMENTS_V2 = """
 
 
 def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
+    try:
+        cached = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_temp_master
+            WHERE type = 'table'
+              AND name = '_progen_checkpoint_schema_ensured'
+            """
+        ).fetchone()
+    except sqlite3.Error:
+        cached = None
+    if cached is not None:
+        conn.commit()
+        return
+
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS simulation_meta (
@@ -5790,6 +5805,13 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _gov_ckpt.ensure_government_schema(conn)
     _ensure_readable_place_views(conn)
     _ensure_supported_save_schema(conn)
+    conn.execute(
+        """
+        CREATE TEMP TABLE IF NOT EXISTS _progen_checkpoint_schema_ensured (
+            marker INTEGER PRIMARY KEY
+        )
+        """
+    )
     conn.commit()
 
 
@@ -9499,8 +9521,6 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
         rid: [sid for sid in settlement_ids_by_region[rid]]
         for rid in settlement_ids_by_region
     }
-    if hasattr(ctx, "refresh_all_region_local_geographies"):
-        ctx.refresh_all_region_local_geographies()
     ctx.next_person_id = next_id
     ctx.region_effective_cap_multiplier = cap_multipliers
     ctx.region_display_label_overrides = display_overrides

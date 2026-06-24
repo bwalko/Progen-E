@@ -3877,3 +3877,30 @@ completion.
   `python -m unittest unit_test.test_simulation_government.TestSimulationGovernment.test_assign_holder_preserves_existing_livelihood_job`
 - `python -m unittest unit_test.test_simulation_government` timed out after
   180 seconds on this laptop before producing a pass/fail result.
+
+## 2026-06-24 - Simulation Runtime Regression Triage
+
+### Fixes
+
+- Stopped checkpoint resume from unconditionally refreshing every loaded
+  settlement region's local geography. Saved geography now loads as-is; normal
+  preload still refreshes genuinely missing or outdated local geography.
+- Added a per-SQLite-connection checkpoint schema guard so repeated
+  `ensure_checkpoint_schema()` calls in promotion/backfill loops do not replay
+  the full table/view setup after it has already succeeded on that connection.
+
+### Validation
+
+- User-observed timing row: the latest 100-year default run took about 71.8
+  minutes, matching the reported regression.
+- Before fix, one-year resumed cProfile showed
+  `try_load_simulation_checkpoint -> refresh_all_region_local_geographies ->
+  build_world_map_geometry` spending about 87.5s before the simulated year.
+- Before schema guard, a one-year resumed probe spent 68.9s wall /
+  73.0s profiled CPU, with `summary.migration` at 43.5s and cProfile showing a
+  one-time settlement-founding map build plus repeated checkpoint schema work.
+- After the fixes, the same tiny resumed probe ran one year in 22.0s wall /
+  26.6s profiled CPU; final cProfile ran in 28.6s wall, with migration down to
+  0.68s and no `build_world_map_geometry` call in the profiled year.
+- Passed:
+  `python -m unittest unit_test.test_save_checkpoint.TestSaveCheckpoint.test_checkpoint_load_does_not_refresh_all_local_geographies unit_test.test_save_checkpoint.TestSaveCheckpoint.test_ensure_checkpoint_schema_skips_repeated_full_setup_per_connection`

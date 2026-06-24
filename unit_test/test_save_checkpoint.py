@@ -1917,6 +1917,103 @@ class TestSaveCheckpoint(unittest.TestCase):
             )
             self.assertFalse(try_load_simulation_checkpoint(shell))
 
+    def test_checkpoint_load_does_not_refresh_all_local_geographies(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ensure_checkpoint_schema_for_file(sav)
+            person_payload = {
+                "first_name": "Saved",
+                "last_name": "Person",
+                "gender": "female",
+                "ethnic": "human",
+                "species": "human",
+                "birthyear": 1000,
+                "genome": {},
+                "mind_body": {},
+            }
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS world_state (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        start_year INTEGER NOT NULL,
+                        current_year INTEGER NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO world_state (id, start_year, current_year)
+                    VALUES (1, ?, ?)
+                    """,
+                    (1000, 1001),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_people (
+                        person_id, is_founder, father_id, mother_id,
+                        is_alive, first_name, last_name, gender, ethnic,
+                        species, birthyear, person_json
+                    )
+                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1,
+                        1,
+                        1,
+                        "Saved",
+                        "Person",
+                        "female",
+                        "human",
+                        "human",
+                        1000,
+                        json.dumps(person_payload, separators=(",", ":")),
+                    ),
+                )
+                conn.commit()
+
+            shell = SimulationContext(
+                db_path=cfg,
+                save_db_path=sav,
+                world="default",
+                simulation_start_year=1000,
+                history_equivalent_start_year=1000,
+                current_year=1000,
+            )
+            refresh_calls = 0
+
+            def fail_refresh_all() -> None:
+                nonlocal refresh_calls
+                refresh_calls += 1
+                raise AssertionError(
+                    "checkpoint load should not force a full local geography refresh"
+                )
+
+            shell.refresh_all_region_local_geographies = fail_refresh_all  # type: ignore[method-assign]
+
+            self.assertTrue(try_load_simulation_checkpoint(shell))
+            self.assertEqual(refresh_calls, 0)
+            self.assertEqual(len(shell.people), 1)
+            self.assertEqual(shell.people[0].person.full_name, "Saved Person")
+
+    def test_ensure_checkpoint_schema_skips_repeated_full_setup_per_connection(self) -> None:
+        with closing(sqlite3.connect(":memory:")) as conn:
+            ensure_checkpoint_schema(conn)
+            traced: list[str] = []
+            conn.set_trace_callback(traced.append)
+            ensure_checkpoint_schema(conn)
+            conn.set_trace_callback(None)
+
+        replayed_full_setup = any(
+            "CREATE TABLE IF NOT EXISTS simulation_meta" in stmt
+            for stmt in traced
+        )
+        self.assertFalse(replayed_full_setup)
+
     def test_couple_surname_convention_roundtrip_on_resume(self) -> None:
         random.seed(5)
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
