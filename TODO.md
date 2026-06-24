@@ -180,6 +180,38 @@ Add a new concrete hybrid-population TODO only when a longer mixed-mode
 replicate or UI/reporting pass shows a specific drift, promotion-source bias,
 missing backfill anchor, or scale regression.
 
+### Concrete Follow-up: Ordinary Settlement Satellite Founding
+
+- Current live-save invariant failure (`worlds/default/save.sqlite`, year 1099):
+  24 of 26 regions have exactly one active civic settlement even though many
+  one-settlement regions have active outlaw refuges. Outlaw refuges are stored
+  separately in `simulation_outlaw_refuges` and are not the civic count source;
+  the civic shortage is in ordinary settlement founding.
+- Observed distribution evidence:
+  - active civic settlements by region: 24 regions with 1, one region with 2,
+    one region with 3;
+  - resource-pressure migration rows are mostly cross-region
+    (`23,178` cross-region vs `3,428` same-region in
+    `simulation_event_moves_readable`);
+  - birth spin-off is rare by comparison (`6` same-region moved rows), and the
+    new civic rows persist as generic `founding_reason='organic'` with no
+    `mother_settlement_id`.
+- Minimal fix boundary:
+  - keep outlaw refuges out of civic settlement counts and caps;
+  - add a small ordinary satellite-founding branch that considers active civic
+    settlements only, uses mixed population/load and local site headroom, and
+    creates `birth_spinoff`/ordinary satellite settlements with
+    `mother_settlement_id` instead of relying only on rare detailed birth
+    spin-off;
+  - let resource/job-seeker migration select the new local satellite when it
+    exists, but do not broadly retune migration weights until this founding
+    path is proven.
+- Completion boundary: a focused test plus a short default-world smoke shows a
+  strong, populated region can develop a main settlement plus smaller hamlets or
+  villages while refuge rows remain excluded from settlement browser counts,
+  regional settlement summaries, founding-pressure checks, and migration target
+  pools.
+
 ### Concrete Hybrid Follow-up: Persist Directory Names Before Promotion
 
 - Persist lightweight display names for newly seeded and SQL-born
