@@ -49,6 +49,8 @@ from library.settlements import (
     make_settlement_id,
     next_settlement_sequence,
     roll_abandon_this_year,
+    settlement_attraction_score,
+    settlement_site_capacity_factor,
 )
 from library.simulation_store import SimulationFileStore
 from library.simulation_outlaws import (
@@ -278,6 +280,12 @@ class SimulationContext:
     _alive_columns_cache: tuple[int, AlivePersonColumns] | None = field(default=None, repr=False)
     _annual_care_indexes_cache: tuple[int, Any] | None = field(default=None, repr=False)
     _annual_resource_facts_cache: tuple[int, Any] | None = field(default=None, repr=False)
+    _passive_population_counts_by_settlement_cache: tuple[int, dict[str, int]] | None = field(
+        default=None, repr=False
+    )
+    _passive_population_counts_by_region_cache: tuple[int, dict[str, int]] | None = field(
+        default=None, repr=False
+    )
     _world_map_geometry_cache: WorldMapGeometry | None = field(default=None, repr=False)
     _regional_base_cap_cache: dict[str, int] = field(default_factory=dict, repr=False)
     _species_life_stage_rows_cache: tuple[
@@ -538,6 +546,12 @@ class SimulationContext:
     def invalidate_annual_indexes(self) -> None:
         """Drop per-year shared indexes after population, residence, or relationship changes."""
         self._annual_care_indexes_cache = None
+        self._annual_resource_facts_cache = None
+
+    def invalidate_mixed_population_cache(self) -> None:
+        """Drop cached passive/directory counts after background rows change."""
+        self._passive_population_counts_by_settlement_cache = None
+        self._passive_population_counts_by_region_cache = None
         self._annual_resource_facts_cache = None
 
     @staticmethod
@@ -826,11 +840,13 @@ class SimulationContext:
         rec = PassivePersonRecord(person_id=self.next_person_id, person=person)
         self.next_person_id += 1
         self.passive_people[rec.person_id] = rec
+        self.invalidate_mixed_population_cache()
         return rec
 
     def add_passive_cohort(self, cohort: PassiveCohort) -> PassiveCohort:
         """Stage one aggregate cohort bucket for checkpoint persistence."""
         self.passive_cohorts.append(cohort)
+        self.invalidate_mixed_population_cache()
         return cohort
 
     def promote_passive_person(
@@ -845,6 +861,7 @@ class SimulationContext:
         reason_text = str(reason).strip() or "passive_promotion"
         source_payload = dict(source or {})
         prec = self.passive_people.pop(int(passive_id))
+        self.invalidate_mixed_population_cache()
         person = passive_person_to_detailed_person(
             prec.person,
             simulation_context=self,
@@ -1080,6 +1097,7 @@ class SimulationContext:
                 "DELETE FROM simulation_people_nondetailed WHERE person_id = ?",
                 (promote_id,),
             )
+            self.invalidate_mixed_population_cache()
             if own_conn is not None:
                 db_conn.commit()
         finally:
@@ -2358,10 +2376,13 @@ class SimulationContext:
 
     def passive_population_counts_by_settlement(self) -> dict[str, int]:
         """Alive passive people plus latest aggregate cohort counts by settlement."""
+        y = int(self.current_year if self.current_year is not None else self.simulation_start_year)
+        cached = self._passive_population_counts_by_settlement_cache
+        if cached is not None and int(cached[0]) == y:
+            return dict(cached[1])
         out: dict[str, int] = {}
         for rec in self.passive_people.values():
             p = rec.person
-            y = self.current_year if self.current_year is not None else self.simulation_start_year
             if p.deathyear is not None and int(p.deathyear) <= int(y):
                 continue
             sid = (p.current_settlement_id or p.birthplace_settlement_id or "").strip()
@@ -2376,6 +2397,7 @@ class SimulationContext:
                 out[sid] = out.get(sid, 0) + max(0, int(cohort.population_count))
         for sid, count in self.nondetailed_population_counts_by_settlement().items():
             out[sid] = out.get(sid, 0) + int(count)
+        self._passive_population_counts_by_settlement_cache = (y, dict(out))
         return out
 
     def nondetailed_population_counts_by_settlement(self) -> dict[str, int]:
@@ -2404,36 +2426,58 @@ class SimulationContext:
             return 0
 
     def passive_population_counts_by_region(self) -> dict[str, int]:
+        y = int(self.current_year if self.current_year is not None else self.simulation_start_year)
+        cached = self._passive_population_counts_by_region_cache
+        if cached is not None and int(cached[0]) == y:
+            return dict(cached[1])
         out: dict[str, int] = {}
         for sid, count in self.passive_population_counts_by_settlement().items():
             st = self.settlements_by_id.get(sid)
             rid = (st.region_id if st is not None else sid.split(":", 1)[0]).strip()
             if rid:
                 out[rid] = out.get(rid, 0) + int(count)
+        self._passive_population_counts_by_region_cache = (y, dict(out))
+        return out
+
+    def mixed_population_counts_by_settlement(self) -> dict[str, int]:
+        out = {
+            str(sid): int(count)
+            for sid, count in self.alive_census_cache().count_by_settlement.items()
+        }
+        for sid, count in self.passive_population_counts_by_settlement().items():
+            out[sid] = int(out.get(sid, 0)) + int(count)
+        return out
+
+    def mixed_population_counts_by_region(self) -> dict[str, int]:
+        out = {
+            str(rid): int(count)
+            for rid, count in self.alive_census_cache().count_by_region.items()
+        }
+        for rid, count in self.passive_population_counts_by_region().items():
+            out[rid] = int(out.get(rid, 0)) + int(count)
         return out
 
     def mixed_population_count_in_settlement(self, settlement_id: str) -> int:
         sid = (settlement_id or "").strip()
         if not sid:
             return 0
-        return self.count_alive_in_settlement(sid) + self.passive_population_counts_by_settlement().get(sid, 0)
+        return int(self.mixed_population_counts_by_settlement().get(sid, 0))
 
     def mixed_population_count_in_region(self, region_id: str) -> int:
         rid = (region_id or "").strip()
         if not rid:
             return 0
-        return self.count_alive_in_region(rid) + self.passive_population_counts_by_region().get(rid, 0)
+        return int(self.mixed_population_counts_by_region().get(rid, 0))
 
     def sync_settlement_resident_counts(self) -> None:
-        by_sid = self.current_people_by_settlement()
-        passive_by_sid = self.passive_population_counts_by_settlement()
+        mixed_by_sid = self.mixed_population_counts_by_settlement()
         for sid, st in list(self.settlements_by_id.items()):
             if (st.status or "").strip().lower() != "active":
                 self.settlements_by_id[sid] = replace(
                     st, resident_count=0, household_cap=0
                 )
                 continue
-            rc = len(by_sid.get(sid, ())) + int(passive_by_sid.get(sid, 0))
+            rc = int(mixed_by_sid.get(sid, 0))
             hh = max(0 if rc <= 0 else 1, int(round(rc / 4.5)))
             self.settlements_by_id[sid] = replace(
                 st, resident_count=rc, household_cap=hh
@@ -2813,8 +2857,29 @@ class SimulationContext:
         rid = (region_id or "").strip()
         if not rid:
             return region_id, mother_settlement_id
+        sim_y = int(self.current_year or self.simulation_start_year)
+        cache_year = getattr(self, "_birth_spinoff_passive_counts_year", None)
+        if cache_year != sim_y:
+            passive_by_sid = self.passive_population_counts_by_settlement()
+            passive_by_region: dict[str, int] = {}
+            for sid_cached, count in passive_by_sid.items():
+                st_cached = self.settlements_by_id.get(sid_cached)
+                rid_cached = (
+                    st_cached.region_id
+                    if st_cached is not None
+                    else sid_cached.split(":", 1)[0]
+                ).strip()
+                if rid_cached:
+                    passive_by_region[rid_cached] = passive_by_region.get(
+                        rid_cached, 0
+                    ) + int(count)
+            self._birth_spinoff_passive_counts_year = sim_y
+            self._birth_spinoff_passive_by_settlement = passive_by_sid
+            self._birth_spinoff_passive_by_region = passive_by_region
+        passive_by_sid = getattr(self, "_birth_spinoff_passive_by_settlement", {})
+        passive_by_region = getattr(self, "_birth_spinoff_passive_by_region", {})
         cap_eff = self.effective_regional_population_cap(rid)
-        census = self.count_alive_in_region(rid)
+        census = self.count_alive_in_region(rid) + int(passive_by_region.get(rid, 0))
         if cap_eff <= 0 or census >= cap_eff:
             self.spinoff_pending_families_by_region.pop(rid, None)
             return rid, mother_settlement_id
@@ -2831,11 +2896,15 @@ class SimulationContext:
             act = self.active_settlements_in_region(rid)
             if len(act) < 1:
                 return rid, mother_settlement_id
-        mp = self.count_alive_in_settlement(mother_sid) if mother_sid else 0
+        mp = (
+            self.count_alive_in_settlement(mother_sid)
+            + int(passive_by_sid.get(mother_sid, 0))
+            if mother_sid
+            else 0
+        )
         min_pop = max(1, int(self.spinoff_min_mother_settlement_population))
         if mp < min_pop:
             return rid, mother_settlement_id
-        sim_y = int(self.current_year or self.simulation_start_year)
         last_y = int(self.last_spinoff_sim_year_by_region.get(rid, -10**9))
         if sim_y - last_y < int(self.spinoff_cooldown_years):
             return rid, mother_settlement_id
@@ -3179,6 +3248,42 @@ class SimulationContext:
         )
         next_by_id: dict[str, SettlementState] = {}
         abandon_year = int(self.current_year or self.simulation_start_year)
+        connectivity_by_region: dict[str, float] = {}
+        capacity_by_settlement: dict[str, int] = {}
+        active_by_region: dict[str, list[SettlementState]] = {}
+        for state in self.settlements_by_id.values():
+            if (state.status or "").strip().lower() != "active":
+                continue
+            if state.region_id not in regions:
+                continue
+            active_by_region.setdefault(state.region_id, []).append(state)
+        for rid, states in active_by_region.items():
+            conn = region_connectivity_score(
+                rid,
+                world=self.world,
+                db_path=self.db_path,
+                simulation_year=self.current_year,
+            )
+            connectivity_by_region[rid] = conn
+            eff_cap = max(1, int(self.effective_regional_population_cap(rid)))
+            weighted: list[tuple[str, float]] = []
+            for state in states:
+                site = settlement_site_capacity_factor(state)
+                attraction = settlement_attraction_score(
+                    state,
+                    connectivity_score=conn,
+                    resident_count=max(0, int(state.resident_count)),
+                )
+                weighted.append((state.settlement_id, max(0.01, site * attraction)))
+            total_weight = sum(weight for _sid, weight in weighted)
+            if total_weight <= 0.0:
+                total_weight = float(max(1, len(weighted)))
+                weighted = [(sid, 1.0) for sid, _weight in weighted]
+            for sid, weight in weighted:
+                capacity_by_settlement[sid] = max(
+                    8,
+                    int(round(eff_cap * float(weight) / total_weight)),
+                )
         for sid, state in self.settlements_by_id.items():
             if (state.status or "").strip().lower() != "active":
                 next_by_id[sid] = state
@@ -3198,13 +3303,18 @@ class SimulationContext:
                     consecutive_empty_years=0,
                 )
                 continue
-            connectivity = region_connectivity_score(
-                state.region_id,
-                world=self.world,
-                db_path=self.db_path,
-                simulation_year=self.current_year,
+            connectivity = connectivity_by_region.get(state.region_id)
+            if connectivity is None:
+                connectivity = region_connectivity_score(
+                    state.region_id,
+                    world=self.world,
+                    db_path=self.db_path,
+                    simulation_year=self.current_year,
+                )
+            eff_cap = capacity_by_settlement.get(
+                sid,
+                max(1, int(self.effective_regional_population_cap(state.region_id))),
             )
-            eff_cap = self.effective_regional_population_cap(state.region_id)
             evolved = evolve_settlement(
                 replace(state, consecutive_empty_years=ce),
                 resident_count=rc,

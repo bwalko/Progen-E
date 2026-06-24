@@ -25,13 +25,14 @@ from library.job_market import JobMarketCatalog, JobMarketParams
 from library.status_echelons import StatusEchelonCatalog
 from library.mind_body import attractiveness_01, ensure_full_mind_body, work_trait_values
 from library.personality_interpreter import interpret_genome_personality
-from library.geography import list_routes_from
+from library.geography import list_routes_from, region_connectivity_score
 from library.random_traits import _as_int, _connect
 from library.simulation_outlaws import (
     is_outlaw_absent,
     normalize_outlaw_labor_state,
     outlaw_blocks_normal_career,
 )
+from library.settlements import settlement_attraction_score
 from library.work_body_fit import (
     BodyDemandFit,
     body_demand_fit_for_person,
@@ -433,12 +434,15 @@ class YearResourceFacts:
             for sid, st in ctx.settlements_by_id.items()
         }
         census = ctx.alive_census_cache()
-        region_population = dict(census.count_by_region)
-        region_ids = set(region_population)
+        region_ids = set(census.count_by_region)
         for st in ctx.settlements_by_id.values():
             rid = (st.region_id or "").strip()
             if rid:
                 region_ids.add(rid)
+        mixed_by_region = ctx.mixed_population_counts_by_region()
+        region_population = {
+            rid: int(mixed_by_region.get(rid, 0)) for rid in region_ids
+        }
         region_cap: dict[str, int] = {}
         for rid in region_ids:
             try:
@@ -1959,7 +1963,8 @@ def resource_pressure_for_person(
     if rid:
         try:
             cap = ctx.effective_regional_population_cap(rid)
-            pop = ctx.count_alive_in_region(rid)
+            mixed = getattr(ctx, "mixed_population_count_in_region", None)
+            pop = int(mixed(rid)) if callable(mixed) else ctx.count_alive_in_region(rid)
             if cap > 0:
                 pressure = max(pressure, float(pop) / float(cap))
         except (LookupError, ValueError):
@@ -3787,7 +3792,7 @@ def _pick_job_seeker_destination(
                 pop = int(resource_facts.region_population.get(rid, 0))
             else:
                 cap = ctx.effective_regional_population_cap(rid)
-                pop = ctx.count_alive_in_region(rid)
+                pop = ctx.mixed_population_count_in_region(rid)
         except (LookupError, ValueError):
             continue
         headroom = max(1.0, float(cap - pop))
@@ -3799,7 +3804,30 @@ def _pick_job_seeker_destination(
     dest_rid = rng.choices(dest_ids, weights=weights, k=1)[0]
     active = ctx.active_settlements_in_region(dest_rid)
     if active:
-        st = min(active, key=lambda s: ctx.count_alive_in_settlement(s.settlement_id))
+        try:
+            connectivity = region_connectivity_score(
+                dest_rid,
+                world=ctx.world,
+                db_path=ctx.db_path,
+                simulation_year=year,
+            )
+        except Exception:
+            connectivity = 0.0
+        scored = [
+            (settlement_attraction_score(st, connectivity_score=connectivity), st)
+            for st in active
+        ]
+        scored = [(score, st) for score, st in scored if score > 0.0]
+        if scored:
+            scored.sort(key=lambda item: (-item[0], item[1].settlement_id))
+            top = scored[: min(6, len(scored))]
+            st = rng.choices(
+                [settlement for _score, settlement in top],
+                weights=[score for score, _settlement in top],
+                k=1,
+            )[0]
+        else:
+            st = active[0]
     else:
         st = ctx.ensure_active_settlement_for_region(dest_rid)
     return st.settlement_id

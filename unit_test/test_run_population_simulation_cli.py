@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from utils import run_population_simulation
@@ -38,15 +39,45 @@ class TestRunPopulationSimulationCli(unittest.TestCase):
         self.assertEqual(explicit.detailed_active_soft_cap, 1200)
         self.assertEqual(disabled.detailed_active_soft_cap, 0)
 
-    def test_auto_detailed_cap_helper_targets_fifty_to_one(self) -> None:
-        self.assertEqual(
-            run_population_simulation._detailed_soft_cap_from_ratio(50_000, 50.0),
-            1000,
-        )
-        self.assertEqual(
-            run_population_simulation._detailed_soft_cap_from_ratio(51, 50.0),
-            1,
-        )
+    def test_default_detailed_cap_is_disabled_not_ratio_derived(self) -> None:
+        args = self._parse("--years", "1")
+
+        with patch.object(
+            run_population_simulation,
+            "_estimated_target_nondetailed_count",
+            return_value=50_000,
+        ):
+            cap, mode, target = run_population_simulation._resolve_detailed_soft_cap(
+                args,
+                SimpleNamespace(),
+            )
+
+        self.assertIsNone(cap)
+        self.assertEqual(mode, "disabled_default")
+        self.assertEqual(target, 50_000)
+
+    def test_explicit_detailed_cap_is_the_only_runtime_cap(self) -> None:
+        explicit = self._parse("--years", "1", "--detailed-active-soft-cap", "1200")
+        disabled = self._parse("--years", "1", "--detailed-active-soft-cap", "0")
+
+        with patch.object(
+            run_population_simulation,
+            "_estimated_target_nondetailed_count",
+            return_value=50_000,
+        ):
+            cap, mode, _target = run_population_simulation._resolve_detailed_soft_cap(
+                explicit,
+                SimpleNamespace(),
+            )
+            zero_cap, zero_mode, _target = run_population_simulation._resolve_detailed_soft_cap(
+                disabled,
+                SimpleNamespace(),
+            )
+
+        self.assertEqual(cap, 1200)
+        self.assertEqual(mode, "explicit")
+        self.assertIsNone(zero_cap)
+        self.assertEqual(zero_mode, "disabled_explicit")
 
 
 if __name__ == "__main__":

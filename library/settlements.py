@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import random
 import re
 from dataclasses import dataclass
+from zlib import crc32
 
 PRIMARY_SETTLEMENT_SUFFIX = ":primary"
 SETTLEMENT_SEQ_PATTERN = re.compile(r":s(\d+)$")
@@ -110,11 +112,89 @@ class SettlementState:
 
 def classify_settlement_level(resident_count: int) -> str:
     p = max(0, int(resident_count))
-    if p >= 20000:
+    if p >= 1000:
         return "city"
-    if p >= 2500:
+    if p >= 100:
         return "town"
+    if p >= 50:
+        return "village"
     return "hamlet"
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(float(lo), min(float(hi), float(value)))
+
+
+def _stable_unit_interval(text: str) -> float:
+    return crc32(text.encode("utf-8")) / 0xFFFFFFFF
+
+
+def _settlement_signal_text(state: SettlementState) -> str:
+    pieces = [
+        state.region_id,
+        state.settlement_id,
+        state.display_name or "",
+        state.founding_reason or "",
+        state.autonomy_level or "",
+        state.local_geography_json or "",
+    ]
+    try:
+        data = json.loads(state.local_geography_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        data = None
+    if isinstance(data, dict):
+        for site in data.get("settlements") or ():
+            if isinstance(site, dict):
+                pieces.extend(str(v) for v in site.values())
+    return " ".join(pieces).lower()
+
+
+def settlement_site_capacity_factor(state: SettlementState) -> float:
+    """Deterministic local carrying-capacity signal for uneven settlement scale."""
+    key = (
+        f"{state.region_id}|{state.settlement_id}|{state.site_slot}|"
+        f"{state.founding_reason}|{state.display_name or ''}"
+    )
+    unit = _stable_unit_interval(key)
+    base = 0.12 + (unit**2.25) * 3.75
+    text = _settlement_signal_text(state)
+    multiplier = 1.0
+    if any(token in text for token in ("delta", "river", "mouth", "ford", "ferry")):
+        multiplier += 0.32
+    if any(token in text for token in ("port", "harbor", "harbour", "dock", "coast")):
+        multiplier += 0.42
+    if any(token in text for token in ("market", "trade", "road", "crossing")):
+        multiplier += 0.22
+    if "birth" in (state.founding_reason or "") or "spinoff" in (state.founding_reason or ""):
+        multiplier *= 0.72
+    if (state.autonomy_level or "").strip().lower() == "district":
+        multiplier *= 0.88
+    return _clamp(base * multiplier, 0.08, 5.0)
+
+
+def settlement_attraction_score(
+    state: SettlementState,
+    *,
+    connectivity_score: float = 0.0,
+    resident_count: int | None = None,
+) -> float:
+    """Positive destination/allocation score from site, economy, stability, and mass."""
+    residents = (
+        max(0, int(resident_count))
+        if resident_count is not None
+        else max(0, int(getattr(state, "resident_count", 0) or 0))
+    )
+    site = settlement_site_capacity_factor(state)
+    prosperity = _clamp(float(getattr(state, "prosperity_pool", 1.0) or 1.0), 0.0, 3.0)
+    market = _clamp(float(getattr(state, "market_pull", 0.0) or 0.0), 0.0, 1.0)
+    stability = _clamp(float(getattr(state, "stability", 0.5) or 0.5), 0.0, 1.0)
+    pressure = _clamp(float(getattr(state, "food_pressure", 0.0) or 0.0), 0.0, 2.0)
+    conn = _clamp(float(connectivity_score), 0.0, 3.0)
+    mass = 1.0 + min(1.15, residents**0.5 / 28.0)
+    economy = 0.56 + 0.22 * prosperity + 0.34 * market + 0.24 * stability
+    pressure_factor = _clamp(1.28 - pressure * 0.32, 0.35, 1.35)
+    connectivity_factor = 0.86 + min(0.42, conn * 0.12)
+    return max(0.01, site * economy * pressure_factor * connectivity_factor * mass)
 
 
 def evolve_settlement(
@@ -129,10 +209,17 @@ def evolve_settlement(
     pop = max(0, int(resident_count))
     conn = max(0.0, float(connectivity_score))
 
+    site_factor = settlement_site_capacity_factor(state)
     pressure = pop / cap
     next_pressure = min(2.0, max(0.0, pressure))
-    next_market_pull = min(1.0, conn / 2.0) * min(1.0, pop / 10000.0)
-    next_stability = min(1.0, max(0.0, 0.72 - max(0.0, pressure - 1.0) * 0.7))
+    next_market_pull = _clamp(
+        (0.15 + min(0.85, conn / 2.4))
+        * min(1.0, pop / 900.0)
+        * (0.70 + min(0.45, site_factor / 7.0)),
+        0.0,
+        1.0,
+    )
+    next_stability = min(1.0, max(0.0, 0.76 - max(0.0, pressure - 1.0) * 0.7))
 
     hh = max(0 if pop <= 0 else 1, int(round(pop / 4.5)))
 

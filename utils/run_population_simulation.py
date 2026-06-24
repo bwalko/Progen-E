@@ -206,13 +206,9 @@ def _resolve_detailed_soft_cap(
     if args.detailed_active_soft_cap is not None:
         explicit_cap = int(args.detailed_active_soft_cap)
         if explicit_cap == 0:
-            return None, "disabled", target_nondetailed_count
+            return None, "disabled_explicit", target_nondetailed_count
         return explicit_cap, "explicit", target_nondetailed_count
-    auto_cap = _detailed_soft_cap_from_ratio(
-        target_nondetailed_count,
-        float(args.target_nondetailed_detailed_ratio),
-    )
-    return auto_cap, "auto_ratio", target_nondetailed_count
+    return None, "disabled_default", target_nondetailed_count
 
 
 def _parse_args() -> argparse.Namespace:
@@ -310,8 +306,8 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help=(
             "Shift new births into non-detailed population once detailed alive "
-            "reaches this target. Omit to auto-target the non-detailed:detailed "
-            "ratio; use 0 to disable."
+            "reaches this target. Omit to leave detailed births uncapped; use 0 "
+            "to explicitly disable."
         ),
     )
     p.add_argument(
@@ -319,7 +315,10 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=_DEFAULT_TARGET_NONDETAILED_DETAILED_RATIO,
         metavar="N",
-        help="Default auto-cap target for non-detailed:detailed population ratio (default: 50).",
+        help=(
+            "Report/calibration target for non-detailed:detailed population ratio "
+            "(default: 50; does not cap detailed births)."
+        ),
     )
     backend = p.add_mutually_exclusive_group()
     backend.add_argument(

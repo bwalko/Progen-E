@@ -28,6 +28,7 @@ from library.passive_population import (
     promote_passive_candidate_for_settlement_context,
 )
 from library.nondetailed_population import (
+    add_nondetailed_births_from_place_counts,
     apply_nondetailed_job_family_economy_effects,
     next_global_person_id,
     run_nondetailed_sql_annual_tick_for_save,
@@ -35,7 +36,7 @@ from library.nondetailed_population import (
     seed_nondetailed_from_active_settlements,
 )
 from library.random_names import choose_random_first_last
-from library.settlements import SettlementState
+from library.settlements import SettlementState, settlement_attraction_score
 from library.reproduction import (
     annual_conception_probability,
     conception_rng,
@@ -1142,6 +1143,7 @@ def pair_people_by_settlement_then_region(
     ctx: SimulationContext,
     year: int,
     by_settlement: dict[str, list[SimulationPersonRecord]],
+    resource_facts=None,
 ) -> None:
     """Pair local residents first, then use same-region fallback without world-global lists.
 
@@ -1157,7 +1159,9 @@ def pair_people_by_settlement_then_region(
         simulation_timing.accumulate("pairing.paired_ids", tpc() - t0)
         t0 = tpc()
     for sid in sorted(by_settlement.keys()):
-        _pair_from_records(ctx, by_settlement[sid], year, paired_ids)
+        _pair_from_records(
+            ctx, by_settlement[sid], year, paired_ids, resource_facts=resource_facts
+        )
     if prof:
         simulation_timing.accumulate("pairing.settlement_phase", tpc() - t0)
         t0 = tpc()
@@ -1181,12 +1185,16 @@ def pair_people_by_settlement_then_region(
         t0 = tpc()
 
     for rid in sorted(by_region.keys()):
-        _pair_from_records(ctx, by_region[rid], year, paired_ids)
+        _pair_from_records(
+            ctx, by_region[rid], year, paired_ids, resource_facts=resource_facts
+        )
     if prof:
         simulation_timing.accumulate("pairing.region_phase", tpc() - t0)
         t0 = tpc()
 
-    _promote_passive_spouses_for_unpaired_detailed(ctx, year, by_settlement, paired_ids)
+    _promote_passive_spouses_for_unpaired_detailed(
+        ctx, year, by_settlement, paired_ids, resource_facts=resource_facts
+    )
     if prof:
         simulation_timing.accumulate("pairing.passive_promote", tpc() - t0)
 
@@ -1652,26 +1660,10 @@ def _passive_settlement_weight(st: SettlementState, *, year: int) -> float:
     founded = st.founded_sim_year if st.founded_sim_year is not None else year
     age = max(0, int(year) - int(founded))
     age_factor = 1.0 + min(0.45, age / 200.0)
-    site_factor = 1.0 / (max(1, int(st.site_slot)) ** 0.18)
-    stability_factor = 0.82 + 0.36 * _clamp(float(st.stability or 0.0), 0.0, 1.0)
-    market_factor = 0.94 + 0.20 * _clamp(float(st.market_pull or 0.0), 0.0, 1.0)
-    prosperity_factor = 0.84 + 0.28 * _clamp(
-        float(getattr(st, "prosperity_pool", 1.0) or 0.0), 0.0, 2.0
-    ) / 2.0
-    resident_factor = 1.0 + min(0.35, (max(0, int(st.resident_count)) ** 0.5) / 35.0)
     jitter = 0.82 + 0.36 * _stable_unit_interval(
         f"{st.region_id}|{st.settlement_id}|{st.site_slot}"
     )
-    return max(
-        0.01,
-        age_factor
-        * site_factor
-        * stability_factor
-        * market_factor
-        * prosperity_factor
-        * resident_factor
-        * jitter,
-    )
+    return max(0.01, age_factor * jitter * settlement_attraction_score(st))
 
 
 def _allocate_counts_by_weight(total: int, weighted_ids: list[tuple[str, float]]) -> dict[str, int]:
@@ -2063,11 +2055,15 @@ def _run_population_growth_year_loop(
 
         if prof:
             t0 = tpc()
-        promoted_for_migration = _promote_passive_context_for_migration_arrivals(
-            ctx,
-            year,
-            migration_arrivals,
-            detailed_active_soft_cap=detailed_active_soft_cap,
+        promoted_for_migration = (
+            0
+            if use_nondetailed_directory
+            else _promote_passive_context_for_migration_arrivals(
+                ctx,
+                year,
+                migration_arrivals,
+                detailed_active_soft_cap=detailed_active_soft_cap,
+            )
         )
         if prof:
             simulation_timing.accumulate("runner.migration_context_promote", tpc() - t0)
@@ -2084,15 +2080,15 @@ def _run_population_growth_year_loop(
         if prof:
             simulation_timing.accumulate("runner.group_current_by_settlement", tpc() - t0)
             t0 = tpc()
-        pair_people_by_settlement_then_region(ctx, year, people_by_settlement)
-        if prof:
-            simulation_timing.accumulate("runner.pairing", tpc() - t0)
-
-        if prof:
-            t0 = tpc()
         resource_facts = ctx.annual_resource_facts(year)
         if prof:
             simulation_timing.accumulate("births.resource_facts", tpc() - t0)
+            t0 = tpc()
+        pair_people_by_settlement_then_region(
+            ctx, year, people_by_settlement, resource_facts=resource_facts
+        )
+        if prof:
+            simulation_timing.accumulate("runner.pairing", tpc() - t0)
             t0 = tpc()
         births_count = births_by_settlement(
             ctx,
@@ -2120,6 +2116,7 @@ def _run_population_growth_year_loop(
         if prof:
             t0 = tpc()
         if use_nondetailed_directory:
+            overflow_births = 0
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 ensure_checkpoint_schema(conn)
@@ -2130,12 +2127,26 @@ def _run_population_growth_year_loop(
                     population_scale=passive_population_scale,
                     start_person_id=ctx.next_person_id,
                 )
+                overflow_births = add_nondetailed_births_from_place_counts(
+                    conn,
+                    passive_births_by_place,
+                    year=year,
+                    start_person_id=ctx.next_person_id,
+                )
                 conn.commit()
+            ctx.invalidate_mixed_population_cache()
             ctx.last_nondetailed_tick_result = run_nondetailed_sql_annual_tick_for_save(
                 ctx.save_db_path,
                 year=year,
                 start_person_id=int(ctx.next_person_id),
             )
+            ctx.invalidate_mixed_population_cache()
+            if overflow_births:
+                ctx.last_nondetailed_tick_result = replace(
+                    ctx.last_nondetailed_tick_result,
+                    births=int(ctx.last_nondetailed_tick_result.births)
+                    + int(overflow_births),
+                )
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 ensure_checkpoint_schema(conn)
@@ -2149,7 +2160,9 @@ def _run_population_growth_year_loop(
                     ctx,
                     year=year,
                 )
+                ctx._nondetailed_sql_migration_year = int(year)
                 conn.commit()
+            ctx.invalidate_mixed_population_cache()
             if prof:
                 simulation_timing.record_gauge(
                     year,
@@ -2176,6 +2189,7 @@ def _run_population_growth_year_loop(
                 population_scale=passive_population_scale,
                 extra_newborns_by_place=passive_births_by_place,
             )
+            ctx.invalidate_mixed_population_cache()
             ensure_detailed_floor_for_active_settlements(ctx, year)
         if prof:
             simulation_timing.accumulate(

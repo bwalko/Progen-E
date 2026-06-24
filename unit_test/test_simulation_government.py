@@ -21,6 +21,7 @@ from library.government_checkpoint import (
     close_office_holding,
     ensure_government_schema,
 )
+from library.passive_population import PassiveCohort
 from library.polity import polity_for_region
 from library.simulation_context import SimulationContext
 from library.simulation_government import (
@@ -393,6 +394,64 @@ class TestSimulationGovernment(unittest.TestCase):
                     any(t.target_kind == "settlement" for t in ctx.gov_territory_rows),
                     "county polity should hold settlement-grain territory",
                 )
+
+    def test_county_bootstrap_uses_mixed_settlement_population(self) -> None:
+        from library.polity import polity_for_settlement
+
+        random.seed(12)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "c.sqlite"
+            sav = root / "s.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            _force_population_scale(cfg, 0.05)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="mixedgov",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                founder = ctx.add_person(
+                    person=generate_person_random(
+                        simulation_context=ctx,
+                        simulation_year=1000,
+                        age=40,
+                    ),
+                    is_founder=True,
+                )
+                rid = (ctx._residence_region_id(founder) or "").strip()
+                sid = (
+                    founder.person.current_settlement_id
+                    or founder.person.birthplace_settlement_id
+                    or ""
+                ).strip()
+                self.assertTrue(rid and sid)
+                ctx.passive_cohorts.append(
+                    PassiveCohort(
+                        sim_year=1000,
+                        population_count=260,
+                        region_id=rid,
+                        settlement_id=sid,
+                        age_band="30",
+                        gender="Female",
+                        species=founder.person.species or "Human",
+                        culture=founder.person.ethnic or "",
+                        job_family="food",
+                        status_bucket="partnered",
+                    )
+                )
+                ctx.sync_settlement_resident_counts()
+
+                self.assertLess(ctx.count_alive_in_settlement(sid), 250)
+                self.assertGreaterEqual(ctx.mixed_population_count_in_settlement(sid), 250)
+                simulation_government_annual_tick(ctx, 1000)
+
+                county = polity_for_settlement(ctx, sid)
+                self.assertIsNotNone(county)
+                self.assertEqual(county.polity_type_id, "county")
 
     def test_polity_promotes_county_through_duchy_to_kingdom(self) -> None:
         """Growing a region's alive count past tier thresholds promotes the polity in place."""

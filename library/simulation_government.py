@@ -78,6 +78,7 @@ def _cfs_safe(p) -> float:
 # leadership score. See ``library.simulation_household_care.childcare_duty_factor``.
 GOV_CHILD_DUTY_MERIT_WEIGHT = 0.55
 GOV_CHILD_DUTY_HEAD_WEIGHT = 0.45
+SETTLEMENT_MERIT_MAX_SEATS_PER_TITLE = 12
 
 
 def _government_office_composite_multiplier(rec, title: TitleRow | None) -> float:
@@ -422,7 +423,7 @@ def _region_display(ctx: "SimulationContext", region_id: str) -> str:
         thr = naming_threshold_for_world(ctx.world, ctx.db_path)
     except Exception:
         thr = 1
-    if ctx.count_alive_in_region(rid) < thr:
+    if _mixed_alive_in_region(ctx, rid) < thr:
         return placeholder_region_label(rid)
     try:
         r = get_region(rid, world=ctx.world, db_path=ctx.db_path)
@@ -599,7 +600,7 @@ def _bootstrap_region_polity(
     rid = (region_id or "").strip()
     if not rid or polity_for_region(ctx, rid) is not None:
         return
-    if ctx.count_alive_in_region(rid) <= 0:
+    if _mixed_alive_in_region(ctx, rid) <= 0:
         return
     if (ptype.jurisdiction_grain or "region").strip().lower() != "region":
         return
@@ -722,7 +723,7 @@ def _bootstrap_settlement_polity(
     st = ctx.settlements_by_id.get(sid)
     if st is None or (st.status or "").strip().lower() != "active":
         return
-    if ctx.count_alive_in_settlement(sid) < effective_min_population_to_form(
+    if _mixed_alive_in_settlement(ctx, sid) < effective_min_population_to_form(
         ptype, population_scale
     ):
         return
@@ -836,7 +837,7 @@ def _bootstrap_polities_for_region(
     population_scale: float,
 ) -> None:
     rid = (region_id or "").strip()
-    if not rid or ctx.count_alive_in_region(rid) <= 0:
+    if not rid or _mixed_alive_in_region(ctx, rid) <= 0:
         return
     grain = (ptype.jurisdiction_grain or "region").strip().lower()
     if grain == "settlement":
@@ -894,6 +895,7 @@ def _fill_merit_or_election(
     conn: sqlite3.Connection | None = None,
     already_holding: set[int] | None = None,
     passive_office_index=None,
+    allow_passive_promotion: bool = True,
 ) -> int | None:
     prof = simulation_timing.active_for_year(year)
     tpc = time.perf_counter
@@ -946,6 +948,8 @@ def _fill_merit_or_election(
         simulation_timing.accumulate("government.fill.score", tpc() - score_start)
         t0 = tpc()
     if not top:
+        if not allow_passive_promotion:
+            return None
         promoted = promote_passive_candidate_for_office(
             ctx,
             year=year,
@@ -1019,6 +1023,60 @@ def _polity_display_name(ptype_id: str, region_label: str) -> str:
     return f"{label} of {region_label}"
 
 
+def _install_mixed_population_cache(ctx: "SimulationContext") -> None:
+    census = ctx.alive_census_cache()
+    try:
+        passive_by_sid = ctx.passive_population_counts_by_settlement()
+    except Exception:
+        passive_by_sid = {}
+    all_sids = set(census.count_by_settlement) | set(passive_by_sid)
+    all_sids.update(getattr(ctx, "settlements_by_id", {}).keys())
+    settlement_counts: dict[str, int] = {}
+    region_counts: dict[str, int] = dict(census.count_by_region)
+    for sid in all_sids:
+        sid_s = str(sid or "").strip()
+        if not sid_s:
+            continue
+        count = int(census.count_by_settlement.get(sid_s, 0)) + int(
+            passive_by_sid.get(sid_s, 0)
+        )
+        settlement_counts[sid_s] = count
+        st = getattr(ctx, "settlements_by_id", {}).get(sid_s)
+        rid = (st.region_id if st is not None else sid_s.split(":", 1)[0]).strip()
+        if rid:
+            region_counts[rid] = region_counts.get(rid, 0) + int(
+                passive_by_sid.get(sid_s, 0)
+            )
+    ctx._gov_mixed_settlement_counts = settlement_counts
+    ctx._gov_mixed_region_counts = region_counts
+
+
+def _mixed_alive_in_settlement(ctx: "SimulationContext", settlement_id: str) -> int:
+    sid = (settlement_id or "").strip()
+    if not sid:
+        return 0
+    cache = getattr(ctx, "_gov_mixed_settlement_counts", None)
+    if isinstance(cache, dict) and sid in cache:
+        return int(cache.get(sid, 0))
+    mixed = getattr(ctx, "mixed_population_count_in_settlement", None)
+    if callable(mixed):
+        return int(mixed(sid))
+    return int(ctx.count_alive_in_settlement(sid))
+
+
+def _mixed_alive_in_region(ctx: "SimulationContext", region_id: str) -> int:
+    rid = (region_id or "").strip()
+    if not rid:
+        return 0
+    cache = getattr(ctx, "_gov_mixed_region_counts", None)
+    if isinstance(cache, dict) and rid in cache:
+        return int(cache.get(rid, 0))
+    mixed = getattr(ctx, "mixed_population_count_in_region", None)
+    if callable(mixed):
+        return int(mixed(rid))
+    return int(ctx.count_alive_in_region(rid))
+
+
 def _maybe_promote_polity(
     ctx: "SimulationContext",
     year: int,
@@ -1056,9 +1114,9 @@ def _maybe_promote_polity(
         if not rid0:
             continue
         if regions:
-            pop = sum(ctx.count_alive_in_region(r) for r in regions)
+            pop = sum(_mixed_alive_in_region(ctx, r) for r in regions)
         else:
-            pop = ctx.count_alive_in_region(rid0)
+            pop = _mixed_alive_in_region(ctx, rid0)
         target = pick_polity_type_for_region_population(
             catalog, era, alive_in_region=pop, population_scale=population_scale
         )
@@ -1220,7 +1278,7 @@ def _maybe_split_vassal(
         regions = polity_regions(ctx, pol.polity_id)
         if len(regions) < 2:
             continue
-        pop = sum(ctx.count_alive_in_region(r) for r in regions)
+        pop = sum(_mixed_alive_in_region(ctx, r) for r in regions)
         split_threshold = effective_max_population_before_split(ptype, population_scale)
         if split_threshold <= 0 or pop <= split_threshold:
             continue
@@ -1229,7 +1287,7 @@ def _maybe_split_vassal(
             continue
         if pol.polity_type_id != "kingdom":
             continue
-        victim_region = max(regions, key=lambda r: ctx.count_alive_in_region(r))
+        victim_region = max(regions, key=lambda r: _mixed_alive_in_region(ctx, r))
         if victim_region == regions[0]:
             victim_region = regions[-1]
         d_pid = ctx.next_gov_polity_id
@@ -1541,6 +1599,9 @@ def _term_expiry(
                     conn=conn,
                     already_holding=already_holding,
                     passive_office_index=passive_office_index,
+                    allow_passive_promotion=(
+                        (t.role or "").strip().lower() != "settlement_merit"
+                    ),
                 )
                 if new_holder is not None:
                     holder_counts[int(new_holder)] = (
@@ -1602,6 +1663,9 @@ def _fill_vacancies(
                 conn=conn,
                 already_holding=already_holding,
                 passive_office_index=passive_office_index,
+                allow_passive_promotion=(
+                    (t.role or "").strip().lower() != "settlement_merit"
+                ),
             )
             if new_holder is not None:
                 holder_counts[int(new_holder)] = (
@@ -1633,7 +1697,10 @@ def _required_seats_for_settlement_title(
     if per <= 0:
         return 1
     extras = (a - max(1, eff_first)) // max(1, eff_per)
-    return max(1, 1 + max(0, int(extras)))
+    return min(
+        SETTLEMENT_MERIT_MAX_SEATS_PER_TITLE,
+        max(1, 1 + max(0, int(extras))),
+    )
 
 
 def _ensure_settlement_offices(
@@ -1724,7 +1791,7 @@ def _ensure_settlement_offices_for_sid(
     state = ctx.settlements_by_id.get(sid)
     if state is None or (state.status or "").strip().lower() != "active":
         return
-    alive = ctx.count_alive_in_settlement(sid)
+    alive = _mixed_alive_in_settlement(ctx, sid)
     universal = [
         t
         for t in catalog.universal_titles()
@@ -1751,7 +1818,16 @@ def _ensure_settlement_offices_for_sid(
             )
             ctx.gov_office_seats[seat_id] = seat
             _fill_merit_or_election(
-                ctx, year, seat, t, catalog, composite_rows, era_key, rng, conn=conn
+                ctx,
+                year,
+                seat,
+                t,
+                catalog,
+                composite_rows,
+                era_key,
+                rng,
+                conn=conn,
+                allow_passive_promotion=False,
             )
         seats_index[(int(pol.polity_id), str(t.title_id), sid)] = needed
 
@@ -1760,9 +1836,9 @@ def _alive_in_polity_scope(ctx: "SimulationContext", pol: PolityState) -> int:
     regions = polity_regions(ctx, pol.polity_id)
     sids = polity_settlement_territory_ids(ctx, pol.polity_id)
     if regions:
-        return sum(ctx.count_alive_in_region(r) for r in regions)
+        return sum(_mixed_alive_in_region(ctx, r) for r in regions)
     if sids:
-        return sum(ctx.count_alive_in_settlement(s) for s in sids)
+        return sum(_mixed_alive_in_settlement(ctx, s) for s in sids)
     return 0
 
 
@@ -1788,7 +1864,7 @@ def _maybe_name_regions_and_polities(
 
     region_ids = sorted(set(ctx.settlement_ids_by_region.keys()))
     for rid in region_ids:
-        if ctx.count_alive_in_region(rid) < thr:
+        if _mixed_alive_in_region(ctx, rid) < thr:
             continue
         cur = str(ovr.get(rid, "") or "").strip()
         if cur:
@@ -1811,17 +1887,17 @@ def _maybe_name_regions_and_polities(
     hy = REGION_RENAME_DOMINANT_CITY_HYSTERESIS_YEARS
 
     for rid in sorted(set(ctx.settlement_ids_by_region.keys())):
-        if ctx.count_alive_in_region(rid) < thr:
+        if _mixed_alive_in_region(ctx, rid) < thr:
             continue
         sids = list(ctx.settlement_ids_by_region.get(rid, []))
-        counts = [(s, ctx.count_alive_in_settlement(s)) for s in sids]
+        counts = [(s, _mixed_alive_in_settlement(ctx, s)) for s in sids]
         counts = [(s, n) for s, n in counts if n > 0]
         if not counts:
             continue
         counts.sort(key=lambda x: -x[1])
         top_sid, top_n = counts[0]
         second_n = counts[1][1] if len(counts) > 1 else 0
-        region_n = max(1, ctx.count_alive_in_region(rid))
+        region_n = max(1, _mixed_alive_in_region(ctx, rid))
         cond = top_n >= ratio * region_n and top_n >= 2.0 * second_n
 
         if cond:
@@ -2057,12 +2133,18 @@ def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> No
         )
         t0 = tpc()
 
+    _install_mixed_population_cache(ctx)
     cols = ctx.alive_person_columns(y)
     regions_with_people = {
         cols.region_id_by_code[int(code)]
         for code in set(cols.region_codes)
         if int(code) != 0 and int(code) in cols.region_id_by_code
     }
+    regions_with_people.update(
+        rid
+        for rid, count in getattr(ctx, "_gov_mixed_region_counts", {}).items()
+        if int(count) > 0
+    )
     if prof:
         simulation_timing.accumulate("government.alive_region_scan", tpc() - t0)
         simulation_timing.record_gauge(
@@ -2071,7 +2153,7 @@ def simulation_government_annual_tick(ctx: "SimulationContext", year: int) -> No
         t0 = tpc()
 
     for rid in sorted(regions_with_people):
-        n_alive = ctx.count_alive_in_region(rid)
+        n_alive = _mixed_alive_in_region(ctx, rid)
         ptype = pick_polity_type_for_region_population(
             catalog, era, alive_in_region=n_alive, population_scale=pop_scale
         )

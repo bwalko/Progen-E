@@ -28,6 +28,8 @@ from library.settlements import (
     classify_settlement_level,
     evolve_settlement,
     roll_abandon_this_year,
+    settlement_attraction_score,
+    settlement_site_capacity_factor,
 )
 from library.simulation_context import SimulationContext, SimulationPersonRecord
 from library.simulation_mortality import apply_annual_mortality
@@ -112,6 +114,8 @@ __all__ = [
     "classify_settlement_level",
     "evolve_settlement",
     "roll_abandon_this_year",
+    "settlement_attraction_score",
+    "settlement_site_capacity_factor",
     "get_region",
     "list_regions",
     "list_routes_from",

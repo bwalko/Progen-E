@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from library.nondetailed_population import (
     NondetailedEconomyResult,
     NondetailedMigrationResult,
     NondetailedTickResult,
+    nondetailed_alive_count,
 )
 from library.population_growth_runner import _run_population_growth_year_loop
 from library.simulation_context import SimulationContext
@@ -42,6 +44,11 @@ class TestPopulationGrowthNondetailedRunner(unittest.TestCase):
                 "under5_mortality_pct": 0.0,
                 "percent_reaching_age_100": 0.0,
             }
+
+            def births_with_overflow(*_args, passive_births_by_place=None, **_kwargs):
+                passive_births_by_place[("r1", "r1:s1", "Human", "Test")] = 2
+                return 0
+
             with (
                 patch(
                     "library.population_growth_runner._record_profile_scale_snapshot",
@@ -61,7 +68,7 @@ class TestPopulationGrowthNondetailedRunner(unittest.TestCase):
                 ),
                 patch(
                     "library.population_growth_runner.births_by_settlement",
-                    return_value=0,
+                    side_effect=births_with_overflow,
                 ),
                 patch(
                     "library.population_growth_runner.apply_annual_mortality",
@@ -105,12 +112,15 @@ class TestPopulationGrowthNondetailedRunner(unittest.TestCase):
                     progress_callback=None,
                 )
 
-        seed.assert_called_once()
-        tick.assert_called_once_with(save, year=1000, start_person_id=1)
-        economy.assert_called_once()
-        migration.assert_called_once()
-        self.assertEqual(ctx.last_nondetailed_tick_result.alive_after, 25)
-        ctx.record_year_summary.assert_called_once()
+            seed.assert_called_once()
+            tick.assert_called_once_with(save, year=1000, start_person_id=1)
+            economy.assert_called_once()
+            migration.assert_called_once()
+            self.assertEqual(ctx.last_nondetailed_tick_result.alive_after, 25)
+            with sqlite3.connect(save) as conn:
+                conn.row_factory = sqlite3.Row
+                self.assertEqual(nondetailed_alive_count(conn), 2)
+            ctx.record_year_summary.assert_called_once()
 
 
 if __name__ == "__main__":

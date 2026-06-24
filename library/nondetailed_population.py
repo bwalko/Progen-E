@@ -13,6 +13,7 @@ from typing import Iterable
 
 from library.geography import list_routes_from
 from library import simulation_timing
+from library.settlements import settlement_attraction_score
 
 
 NONDETAILED_JOB_FAMILIES: tuple[str, ...] = (
@@ -365,6 +366,60 @@ def add_nondetailed_person(
     return assigned_person_id
 
 
+def add_nondetailed_births_from_place_counts(
+    conn: sqlite3.Connection,
+    births_by_place: dict[tuple[str, str, str, str], int],
+    *,
+    year: int,
+    start_person_id: int | None = None,
+) -> int:
+    """Insert detailed-overflow newborns into the SQLite city-directory table."""
+    positive = [
+        (key, int(count))
+        for key, count in sorted((births_by_place or {}).items())
+        if int(count) > 0
+    ]
+    if not positive:
+        return 0
+    next_id = next_global_person_id(conn, minimum=start_person_id)
+    rows: list[tuple[object, ...]] = []
+    for (rid, sid, species, culture), count in positive:
+        region_key = _region_key(conn, rid)
+        settlement_key = _settlement_key(conn, sid, rid)
+        if settlement_key is None:
+            continue
+        for _i in range(count):
+            pid = next_id
+            next_id += 1
+            rows.append(
+                (
+                    pid,
+                    int(year),
+                    "Female" if (pid & 1) else "Male",
+                    (species or None),
+                    (culture or None),
+                    region_key,
+                    settlement_key,
+                    settlement_key,
+                )
+            )
+    if not rows:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO simulation_people_nondetailed (
+            person_id, birthyear, deathyear, is_alive, gender, species_key, culture_key,
+            birthplace_region_key, birthplace_settlement_key, current_settlement_key,
+            job_family, is_partnered, partner_person_id, father_id, mother_id,
+            child_count, name_key
+        )
+        VALUES (?, ?, NULL, 1, ?, ?, ?, ?, ?, ?, 'dependent', 0, NULL, NULL, NULL, 0, NULL)
+        """,
+        rows,
+    )
+    return len(rows)
+
+
 def nondetailed_alive_count(conn: sqlite3.Connection) -> int:
     row = conn.execute(
         "SELECT COUNT(*) AS c FROM simulation_people_nondetailed WHERE is_alive = 1"
@@ -549,6 +604,57 @@ def run_nondetailed_sql_migration(
     if not counts:
         return NondetailedMigrationResult()
     region_counts = nondetailed_counts_by_region(conn)
+    detailed_by_region: dict[str, int] = {}
+    try:
+        census = ctx.alive_census_cache()
+        detailed_by_region = {
+            str(rid): int(count) for rid, count in getattr(census, "count_by_region", {}).items()
+        }
+    except Exception:
+        detailed_by_region = {}
+    passive_by_region: dict[str, int] = {}
+    try:
+        current_year = int(getattr(ctx, "current_year", year) or year)
+        for rec in getattr(ctx, "passive_people", {}).values():
+            p = rec.person
+            if p.deathyear is not None and int(p.deathyear) <= current_year:
+                continue
+            rid_p = str(getattr(p, "birthplace_region_id", "") or "").strip()
+            if not rid_p:
+                sid_p = str(
+                    getattr(p, "current_settlement_id", None)
+                    or getattr(p, "birthplace_settlement_id", "")
+                    or ""
+                ).strip()
+                if ":" in sid_p:
+                    rid_p = sid_p.split(":", 1)[0].strip()
+            if rid_p:
+                passive_by_region[rid_p] = passive_by_region.get(rid_p, 0) + 1
+        latest_year = None
+        latest = getattr(ctx, "latest_passive_cohort_year", None)
+        if callable(latest):
+            latest_year = latest()
+        else:
+            latest_year = max(
+                (int(c.sim_year) for c in getattr(ctx, "passive_cohorts", ())),
+                default=None,
+            )
+        for cohort in getattr(ctx, "passive_cohorts", ()):
+            if latest_year is None or int(cohort.sim_year) != int(latest_year):
+                continue
+            rid_c = str(cohort.region_id or "").strip()
+            if rid_c:
+                passive_by_region[rid_c] = passive_by_region.get(rid_c, 0) + max(
+                    0, int(cohort.population_count)
+                )
+    except Exception:
+        passive_by_region = {}
+    mixed_region_counts = {
+        rid: int(region_counts.get(rid, 0))
+        + int(detailed_by_region.get(rid, 0))
+        + int(passive_by_region.get(rid, 0))
+        for rid in set(region_counts) | set(detailed_by_region) | set(passive_by_region)
+    }
     moved_total = 0
     source_count = 0
     rng = random.Random(int(year) * 800_011 + int(getattr(ctx, "placename_rng_salt", 0)) + 93_337)
@@ -563,7 +669,7 @@ def run_nondetailed_sql_migration(
             cap = max(1, int(ctx.effective_regional_population_cap(rid)))
         except Exception:
             cap = max(1, int(pop))
-        region_pop = int(region_counts.get(rid, 0)) + int(getattr(ctx, "count_alive_in_region", lambda _rid: 0)(rid))
+        region_pop = int(mixed_region_counts.get(rid, 0))
         regional_pressure = region_pop / cap
         food_pressure = float(getattr(st, "food_pressure", 0.0) or 0.0)
         prosperity = float(getattr(st, "prosperity_pool", 1.0) or 1.0)
@@ -667,15 +773,9 @@ def _pick_nondetailed_destination(ctx: object, source_st: object, *, year: int, 
         sid = str(getattr(st, "settlement_id", "") or "").strip()
         if not sid:
             continue
-        prosperity = float(getattr(st, "prosperity_pool", 1.0) or 1.0)
-        market = float(getattr(st, "market_pull", 0.0) or 0.0)
-        stability = float(getattr(st, "stability", 0.0) or 0.0)
-        food = float(getattr(st, "food_pressure", 0.0) or 0.0)
-        residents = max(0, int(getattr(st, "resident_count", 0) or 0))
-        score = prosperity * 0.45 + market * 0.32 + stability * 0.22 - food * 0.28
-        score += min(0.18, residents**0.5 / 180.0)
+        score = settlement_attraction_score(st)
         if sid == str(getattr(source_st, "settlement_id", "") or ""):
-            score -= 0.25
+            score *= 0.62
         if score > 0.0:
             scored.append((score, st))
     if not scored:
@@ -760,19 +860,10 @@ def seed_nondetailed_from_active_settlements(
             sid = str(getattr(st, "settlement_id", "") or "").strip()
             if not sid:
                 continue
-            stability = max(0.0, min(1.0, float(getattr(st, "stability", 0.5) or 0.5)))
-            market = max(0.0, min(1.0, float(getattr(st, "market_pull", 0.5) or 0.5)))
-            prosperity = max(0.0, float(getattr(st, "prosperity_pool", 1.0) or 1.0))
-            resident = max(1, int(getattr(st, "resident_count", 0) or 0))
-            weight = (0.60 + stability) * (0.70 + market) * (0.70 + min(2.0, prosperity) / 2.0)
-            weight *= 1.0 + min(0.35, resident**0.5 / 40.0)
-            weights.append((st, max(0.01, weight)))
+            weights.append((st, max(0.01, settlement_attraction_score(st))))
         if not weights:
             continue
         total_weight = sum(weight for _, weight in weights)
-        settlement_floor = 0
-        if target >= len(weights):
-            settlement_floor = min(25, max(1, int(round(target * 0.002))))
         remaining = target
         for pos, (st, weight) in enumerate(weights):
             if pos == len(weights) - 1:
@@ -780,7 +871,6 @@ def seed_nondetailed_from_active_settlements(
             else:
                 target_count = max(0, int(round(target * weight / total_weight)))
                 remaining -= target_count
-            target_count = max(target_count, settlement_floor)
             sid = str(getattr(st, "settlement_id", "") or "").strip()
             existing_alive = int(current_by_settlement.get(sid, 0))
             count = max(0, target_count - existing_alive)
@@ -799,7 +889,7 @@ def seed_nondetailed_from_active_settlements(
                 birthyear = int(year) - age
                 gender = "Female" if (pid & 1) else "Male"
                 job = "dependent" if age < 14 else _ADULT_JOB_FAMILIES[(pid * 13) % len(_ADULT_JOB_FAMILIES)]
-                partnered = 1 if 18 <= age <= 65 and ((pid * 17 + int(year)) % 100) < 54 else 0
+                partnered = 0
                 rows.append(
                     (
                         pid,
@@ -891,6 +981,25 @@ def run_nondetailed_sql_annual_tick(
     conn.execute(
         """
         UPDATE simulation_people_nondetailed
+        SET is_partnered = 0,
+            partner_person_id = NULL
+        WHERE is_alive = 1
+          AND is_partnered = 1
+          AND (
+            partner_person_id IS NULL
+            OR NOT EXISTS (
+                SELECT 1
+                FROM simulation_people_nondetailed partner
+                WHERE partner.person_id = simulation_people_nondetailed.partner_person_id
+                  AND partner.is_alive = 1
+            )
+          )
+        """
+    )
+
+    conn.execute(
+        """
+        UPDATE simulation_people_nondetailed
         SET job_family = CASE
             WHEN (? - birthyear) < 14 THEN 'dependent'
             WHEN ((person_id + COALESCE(current_settlement_key, 0) * 17 + ?) % 100) < 42 THEN 'food'
@@ -911,18 +1020,62 @@ def run_nondetailed_sql_annual_tick(
         simulation_timing.accumulate("nondetailed_sql.jobs", time.perf_counter() - t0)
         t0 = time.perf_counter()
 
-    conn.execute("DROP TABLE IF EXISTS temp_nondetailed_new_partners")
+    conn.execute("DROP TABLE IF EXISTS temp_nondetailed_new_partner_pairs")
     conn.execute(
         """
-        CREATE TEMP TABLE temp_nondetailed_new_partners AS
-        SELECT person_id
-        FROM simulation_people_nondetailed
-        WHERE is_alive = 1
-          AND is_partnered = 0
-          AND partner_person_id IS NULL
-          AND (? - birthyear) BETWEEN 18 AND 45
-          AND ((person_id * 1664525 + ?) % 100) < 4
-        ORDER BY current_settlement_key, person_id
+        CREATE TEMP TABLE temp_nondetailed_new_partner_pairs AS
+        WITH eligible AS (
+            SELECT
+                person_id,
+                current_settlement_key,
+                CASE
+                    WHEN lower(COALESCE(gender, '')) LIKE 'm%' THEN 'm'
+                    WHEN lower(COALESCE(gender, '')) LIKE 'f%' THEN 'f'
+                    ELSE ''
+                END AS sex,
+                ((person_id * 1664525 + ?) % 2147483647) AS sort_key
+            FROM simulation_people_nondetailed
+            WHERE is_alive = 1
+              AND is_partnered = 0
+              AND partner_person_id IS NULL
+              AND current_settlement_key IS NOT NULL
+              AND (? - birthyear) BETWEEN 18 AND 45
+        ),
+        ranked AS (
+            SELECT
+                person_id,
+                current_settlement_key,
+                sex,
+                ROW_NUMBER() OVER (
+                    PARTITION BY current_settlement_key, sex
+                    ORDER BY sort_key, person_id
+                ) AS rn,
+                COUNT(*) OVER (
+                    PARTITION BY current_settlement_key, sex
+                ) AS sex_count
+            FROM eligible
+            WHERE sex IN ('m', 'f')
+        ),
+        men AS (
+            SELECT person_id, current_settlement_key, rn
+            FROM ranked
+            WHERE sex = 'm'
+              AND rn <= ((sex_count + 1) / 2)
+        ),
+        women AS (
+            SELECT person_id, current_settlement_key, rn
+            FROM ranked
+            WHERE sex = 'f'
+              AND rn <= ((sex_count + 1) / 2)
+        )
+        SELECT
+            men.person_id AS male_id,
+            women.person_id AS female_id
+        FROM men
+        JOIN women
+          ON women.current_settlement_key = men.current_settlement_key
+         AND women.rn = men.rn
+        ORDER BY men.current_settlement_key, men.rn
         LIMIT ?
         """,
         (y, y, int(max_new_partnerships)),
@@ -930,11 +1083,29 @@ def run_nondetailed_sql_annual_tick(
     conn.execute(
         """
         UPDATE simulation_people_nondetailed
-        SET is_partnered = 1
-        WHERE person_id IN (SELECT person_id FROM temp_nondetailed_new_partners)
+        SET is_partnered = 1,
+            partner_person_id = (
+                SELECT female_id
+                FROM temp_nondetailed_new_partner_pairs pairs
+                WHERE pairs.male_id = simulation_people_nondetailed.person_id
+            )
+        WHERE person_id IN (SELECT male_id FROM temp_nondetailed_new_partner_pairs)
         """
     )
     newly_partnered = int(conn.execute("SELECT changes()").fetchone()[0])
+    conn.execute(
+        """
+        UPDATE simulation_people_nondetailed
+        SET is_partnered = 1,
+            partner_person_id = (
+                SELECT male_id
+                FROM temp_nondetailed_new_partner_pairs pairs
+                WHERE pairs.female_id = simulation_people_nondetailed.person_id
+            )
+        WHERE person_id IN (SELECT female_id FROM temp_nondetailed_new_partner_pairs)
+        """
+    )
+    newly_partnered += int(conn.execute("SELECT changes()").fetchone()[0])
     if prof:
         simulation_timing.accumulate("nondetailed_sql.partnerships", time.perf_counter() - t0)
         t0 = time.perf_counter()

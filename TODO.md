@@ -196,10 +196,11 @@ missing backfill anchor, or scale regression.
 
 ### Detailed Population Fraction
 
-Current default: when no explicit detailed cap is supplied, production and
-mixed-mode calibration helpers auto-target about `50:1`
-non-detailed:detailed population. Explicit detailed caps still override the
-auto mode, and an explicit cap of `0` still disables the cap.
+Current production-run default: when no explicit detailed cap is supplied,
+detailed births are not capped. `--target-nondetailed-detailed-ratio` is
+report/calibration context only for `utils/run_population_simulation.py`; it
+does not derive a runtime cap. Explicit detailed caps still opt into efficiency
+capping, and an explicit cap of `0` still disables the cap.
 
 Research note: modeling 0.1% of the population or less in full detail may be
 useful later for broad society-level probes, but that is not the current
@@ -240,7 +241,7 @@ importance, variance, or narrative salience.
 Completed context needed for future calibration work: detailed-selection
 variance, serial-predator scoring, report/TSV calibration metrics, resume-safe
 mixed-mode calibration batches, non-detailed city-directory calibration,
-full-population homicide accounting, default 50:1 auto cap/report fields, and
+full-population homicide accounting, detailed-cap report fields, and
 focused repeat-selection regression coverage are implemented. See `TODONE.md`
 for the full completion record.
 
@@ -276,6 +277,24 @@ Completion boundary:
   variance falling outside target bands.
 - Keep broad demographic totals sourced from aggregate and non-detailed people,
   not from the intentionally biased detailed sample.
+
+### Concrete Follow-up: Full 100-Couple / 300-Year Mixed-Pop Scale Smoke
+
+- Remaining long validation: run the requested 100-couple / 300-year temp-world
+  smoke when a long calibration window is acceptable:
+  `python utils/run_population_simulation.py --world-id temp_mixed_pop_scale_probe --reset-world --years 300 --starting-couples 100 --seed 20260624 --skip-report-files --skip-timing-log --progress`.
+- Pre-performance-fix attempts should not be treated as current evidence: the
+  300-year command timed out after 300 seconds before a progress line, and a
+  30-year version timed out after 600 seconds before a complete checkpoint.
+- Post-performance-fix bounded evidence on Nazuna:
+  - 10-couple / 10-year smoke completed in 43.50 seconds with
+    `detailed_active_soft_cap_mode=disabled_default`, `detailed_alive=108`,
+    `nondetailed_alive=24604`, 14 towns, 12 cities, 26 polities, 364 office
+    seats, and zero alive partnered non-detailed rows missing `partner_person_id`.
+  - 100-couple / 10-year smoke completed in 56.82 seconds with
+    `detailed_alive=339`, `nondetailed_alive=25454`, 17 towns, 12 cities,
+    28 polities, 392 office seats, and zero alive partnered non-detailed rows
+    missing `partner_person_id`.
 
 ### Completed Context: Passive-To-Detailed Promotion V1
 

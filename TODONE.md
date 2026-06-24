@@ -3705,3 +3705,83 @@ completion.
   --max-detailed-cap 100 --disable-birth-settlement-spinoff ...` completed one
   temp-output scenario with 3 murders and `needs_more_murder_sample`; no
   `incident_rates.csv` retune was justified from that small sample.
+
+## 2026-06-24 Mixed-Pop Scale, Settlements, And Polities
+
+### Enhancements
+
+- Changed `utils/run_population_simulation.py` detailed cap semantics: omitted
+  `--detailed-active-soft-cap` now means uncapped detailed births
+  (`detailed_active_soft_cap_mode=disabled_default`), explicit positive values
+  are the only runtime cap, and explicit `0` remains disabled.
+- Preserved explicit-cap overflow births in the SQLite city-directory backend by
+  inserting them into `simulation_people_nondetailed` instead of dropping them.
+- Reworked settlement levels to `hamlet <50`, `village 50-99`, `town 100-999`,
+  and `city >=1000`.
+- Added shared deterministic settlement site capacity / attractiveness scoring
+  and wired it into non-detailed seeding, passive cohort allocation,
+  non-detailed migration, detailed resource/job migration destinations, and
+  settlement evolution capacity distribution.
+- Switched government bootstrap, promotion/splitting, naming, and settlement
+  merit-office thresholds to mixed population while keeping officeholder
+  selection detailed-person based with passive/non-detailed promotion fallback.
+- Added a cap of 12 seats per settlement merit title so mixed population can
+  create local offices without producing hundred-alderman polities.
+
+### Validation
+
+- `python -m py_compile library/settlements.py library/simulation_context.py library/nondetailed_population.py library/population_growth_runner.py library/simulation_migration.py library/simulation_careers.py library/simulation_government.py utils/run_population_simulation.py unit_test/test_run_population_simulation_cli.py unit_test/test_nondetailed_population.py unit_test/test_population_growth_nondetailed_runner.py unit_test/test_geography_model.py unit_test/test_simulation_government.py`
+- Passed: `python -m unittest unit_test.test_run_population_simulation_cli unit_test.test_population_growth_nondetailed_runner`
+- Passed: `python -m unittest unit_test.test_nondetailed_population`
+- Passed: `python -m unittest unit_test.test_geography_model`
+- Passed: `python -m unittest unit_test.test_simulation_government`
+- Passed: `python -m unittest unit_test.test_population_growth_determinism`
+  passed 19 tests in 198.703 seconds.
+- One-year 100-couple CLI smoke with default directory mode completed and
+  reported `detailed_active_soft_cap_mode=disabled_default`, `detailed_alive=220`,
+  `nondetailed_alive=1106`, one city-level settlement, and one polity.
+- Long smoke follow-up recorded in `TODO.md`: pre-performance-fix
+  100-couple / 300-year and 100-couple / 30-year temp-world attempts timed out
+  before a complete checkpoint useful for population-scale judgment.
+
+## 2026-06-24 Non-Detailed Directory Set-Based Performance Fix
+
+### Fixes
+
+- Removed the directory-backend promotion storm that made tiny mixed-pop runs
+  appear stuck: migration-context detailed promotions are skipped for the
+  SQLite city-directory backend, leaving background movement in the background
+  unless an office, spouse, detailed floor, or explicit focus promotion requests
+  a bounded materialization.
+- Added per-year mixed/passive population count caches on `SimulationContext`
+  and invalidated them after directory writes/promotions, so resource, social,
+  incident, settlement, and government systems do not repeatedly recount the
+  non-detailed table.
+- Built yearly resource facts once before detailed pairing and reused them for
+  pairing and births.
+- Reworked non-detailed partnership formation into a settlement-local SQL
+  pairing pass: eligible unpartnered men and women are ranked by deterministic
+  random score inside each settlement, matching equal ranks and writing
+  reciprocal `partner_person_id` values.
+- Stopped top-up seeding from pre-marking anonymous directory adults as
+  partnered without partner ids; stale partnered rows with missing/dead partners
+  are repaired before the annual pairing pass.
+
+### Validation
+
+- `python -m py_compile library/nondetailed_population.py library/population_growth_runner.py library/simulation_context.py library/simulation_careers.py library/simulation_migration.py`
+- Passed: `python -m unittest unit_test.test_run_population_simulation_cli unit_test.test_population_growth_nondetailed_runner unit_test.test_nondetailed_population unit_test.test_geography_model unit_test.test_simulation_government`
+  passed 43 tests in 41.712 seconds.
+- Passed: `python -m unittest unit_test.test_population_growth_determinism`
+- 10-couple / 5-year profile improved from 53.95 seconds before the fix to
+  10.65 seconds after it. The former hot phases
+  `runner.migration_context_promote` and `social.setup` dropped to effectively
+  zero in the post-fix profile.
+- 10-couple / 10-year directory smoke completed in 43.50 seconds with
+  `detailed_alive=108`, `nondetailed_alive=24604`, 14 towns, 12 cities,
+  26 polities, 364 office seats, and zero alive partnered non-detailed rows
+  missing `partner_person_id`.
+- 100-couple / 10-year directory smoke completed in 56.82 seconds with
+  `detailed_alive=339`, `nondetailed_alive=25454`, 17 towns, 12 cities,
+  28 polities, 392 office seats, and zero alive partnered non-detailed rows
+  missing `partner_person_id`.

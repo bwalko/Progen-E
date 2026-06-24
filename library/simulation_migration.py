@@ -8,8 +8,9 @@ import sqlite3
 from contextlib import closing
 from typing import TYPE_CHECKING
 
-from library.geography import list_regions, list_routes_from
+from library.geography import list_regions, list_routes_from, region_connectivity_score
 from library.nondetailed_population import run_nondetailed_sql_migration
+from library.settlements import settlement_attraction_score
 from library.world_save import ensure_checkpoint_schema
 
 if TYPE_CHECKING:
@@ -69,7 +70,8 @@ def _pick_destination_region(
                 cap = ctx.effective_regional_population_cap(dst)
         else:
             cap = ctx.effective_regional_population_cap(dst)
-            pop = ctx.count_alive_in_region(dst)
+            mixed = getattr(ctx, "mixed_population_count_in_region", None)
+            pop = int(mixed(dst)) if callable(mixed) else ctx.count_alive_in_region(dst)
         headroom = max(1.0, float(cap - pop))
         w = headroom / (1.0 + max(0.0, float(route.friction)))
         dest_ids.append(dst)
@@ -79,11 +81,35 @@ def _pick_destination_region(
     return rng.choices(dest_ids, weights=weights, k=1)[0]
 
 
-def _pick_least_loaded_settlement(ctx: "SimulationContext", region_id: str):
+def _pick_attractive_settlement(
+    ctx: "SimulationContext",
+    region_id: str,
+    *,
+    year: int,
+    rng: random.Random,
+):
     act = ctx.active_settlements_in_region(region_id)
     if not act:
         return ctx.ensure_active_settlement_for_region(region_id)
-    return min(act, key=lambda s: ctx.count_alive_in_settlement(s.settlement_id))
+    try:
+        connectivity = region_connectivity_score(
+            region_id,
+            world=ctx.world,
+            db_path=ctx.db_path,
+            simulation_year=year,
+        )
+    except Exception:
+        connectivity = 0.0
+    scored = [
+        (settlement_attraction_score(st, connectivity_score=connectivity), st)
+        for st in act
+    ]
+    scored = [(score, st) for score, st in scored if score > 0.0]
+    if not scored:
+        return act[0]
+    scored.sort(key=lambda item: (-item[0], item[1].settlement_id))
+    top = scored[: min(6, len(scored))]
+    return rng.choices([st for _score, st in top], weights=[score for score, _st in top], k=1)[0]
 
 
 def _eligible_migrant_pool(ctx: "SimulationContext", origin_rid: str, year: int) -> list[int]:
@@ -190,21 +216,25 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
             if dst_rid is None:
                 continue
             try:
-                st = _pick_least_loaded_settlement(ctx, dst_rid)
+                st = _pick_attractive_settlement(ctx, dst_rid, year=year, rng=rng)
                 _move_migrant_and_coresident_partner(ctx, pid, rid, st.settlement_id, year)
             except (ValueError, LookupError):
                 continue
 
-    try:
-        with closing(sqlite3.connect(ctx.save_db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            ensure_checkpoint_schema(conn)
-            nd_migration = run_nondetailed_sql_migration(conn, ctx, year=year)
-            conn.commit()
-        if nd_migration.moved and hasattr(ctx, "sync_settlement_resident_counts"):
-            ctx.sync_settlement_resident_counts()
-    except sqlite3.Error:
-        pass
+    if int(getattr(ctx, "_nondetailed_sql_migration_year", -1)) != int(year):
+        try:
+            with closing(sqlite3.connect(ctx.save_db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                nd_migration = run_nondetailed_sql_migration(conn, ctx, year=year)
+                conn.commit()
+            ctx._nondetailed_sql_migration_year = int(year)
+            if nd_migration.moved and hasattr(ctx, "sync_settlement_resident_counts"):
+                if hasattr(ctx, "invalidate_mixed_population_cache"):
+                    ctx.invalidate_mixed_population_cache()
+                ctx.sync_settlement_resident_counts()
+        except sqlite3.Error:
+            pass
 
     tick_region_effective_cap_multipliers(ctx, rng)
     ctx.invalidate_annual_indexes()

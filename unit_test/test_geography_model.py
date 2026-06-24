@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import random
+import sqlite3
+import tempfile
 import unittest
+from contextlib import closing
+from pathlib import Path
+from types import SimpleNamespace
 
 from library.config_import import refresh_world_config_from_csv
 from library.generator import generate_person_random
@@ -20,8 +25,17 @@ from library.geography import (
     resolve_travel_era,
     travel_friction,
 )
-from library.settlements import SettlementState, evolve_settlement
+from library.nondetailed_population import (
+    nondetailed_counts_by_settlement,
+    seed_nondetailed_from_active_settlements,
+)
+from library.settlements import (
+    SettlementState,
+    classify_settlement_level,
+    evolve_settlement,
+)
 from library.simulation_context import SimulationContext
+from library.world_save import ensure_checkpoint_schema
 
 
 def setUpModule() -> None:
@@ -141,7 +155,56 @@ class TestGeographyModel(unittest.TestCase):
         )
         self.assertEqual(next_state.resident_count, census)
         self.assertLess(next_state.food_pressure, 1.0)
-        self.assertIn(next_state.level, {"hamlet", "town", "city"})
+        self.assertIn(next_state.level, {"hamlet", "village", "town", "city"})
+
+    def test_settlement_level_thresholds_include_village_and_small_city(self) -> None:
+        self.assertEqual(classify_settlement_level(49), "hamlet")
+        self.assertEqual(classify_settlement_level(50), "village")
+        self.assertEqual(classify_settlement_level(99), "village")
+        self.assertEqual(classify_settlement_level(100), "town")
+        self.assertEqual(classify_settlement_level(999), "town")
+        self.assertEqual(classify_settlement_level(1000), "city")
+
+    def test_nondetailed_allocation_allows_hamlets_and_cities(self) -> None:
+        rid = "aeria_port"
+        geo = '{"settlements":[{"terrain":"river delta port market"}]}'
+        low = SettlementState(
+            region_id=rid,
+            settlement_id=f"{rid}:fixture33",
+            site_slot=33,
+            display_name="Fixture 33",
+            local_geography_json=geo,
+        )
+        high = SettlementState(
+            region_id=rid,
+            settlement_id=f"{rid}:fixture46",
+            site_slot=46,
+            display_name="Fixture 46",
+            local_geography_json=geo,
+        )
+        ctx = SimpleNamespace(
+            settlements_by_id={low.settlement_id: low, high.settlement_id: high},
+            next_person_id=1,
+            effective_regional_population_cap=lambda _rid: 1050,
+        )
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            save = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                seed_nondetailed_from_active_settlements(
+                    conn,
+                    ctx,
+                    year=1000,
+                    population_scale=1.0,
+                    start_person_id=1,
+                )
+                counts = nondetailed_counts_by_settlement(conn)
+
+        self.assertLess(counts[low.settlement_id], 50)
+        self.assertEqual(classify_settlement_level(counts[low.settlement_id]), "hamlet")
+        self.assertGreaterEqual(counts[high.settlement_id], 1000)
+        self.assertEqual(classify_settlement_level(counts[high.settlement_id]), "city")
 
     def test_random_person_gets_geography_backed_birthplace(self) -> None:
         random.seed(5)

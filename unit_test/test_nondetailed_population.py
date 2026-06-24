@@ -7,6 +7,7 @@ from pathlib import Path
 from library.config_import import load_all_csvs_into_sqlite
 from library.nondetailed_population import (
     NondetailedPersonSeed,
+    add_nondetailed_births_from_place_counts,
     add_nondetailed_person,
     apply_nondetailed_job_family_economy_effects,
     nondetailed_alive_count,
@@ -27,6 +28,34 @@ from library.world_save import ensure_checkpoint_schema
 
 
 class TestNondetailedPopulation(unittest.TestCase):
+    def test_detailed_cap_overflow_births_insert_directory_newborns(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            save = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                inserted = add_nondetailed_births_from_place_counts(
+                    conn,
+                    {("r1", "r1:s1", "Human", "Test"): 3},
+                    year=1000,
+                    start_person_id=50,
+                )
+                conn.commit()
+                rows = conn.execute(
+                    """
+                    SELECT person_id, birthyear, is_alive, current_settlement_id, job_family
+                    FROM simulation_people_nondetailed_readable
+                    ORDER BY person_id
+                    """
+                ).fetchall()
+
+            self.assertEqual(inserted, 3)
+            self.assertEqual([int(row["person_id"]) for row in rows], [50, 51, 52])
+            self.assertEqual({int(row["birthyear"]) for row in rows}, {1000})
+            self.assertEqual({int(row["is_alive"]) for row in rows}, {1})
+            self.assertEqual({str(row["current_settlement_id"]) for row in rows}, {"r1:s1"})
+            self.assertEqual({str(row["job_family"]) for row in rows}, {"dependent"})
+
     def test_schema_roundtrip_counts_and_job_groups(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             save = Path(td) / "save.sqlite"
@@ -125,6 +154,76 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertGreater(result.births, 0)
             self.assertGreater(food_workers, 0)
 
+    def test_sql_tick_pairs_unpartnered_adults_by_settlement(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            save = Path(td) / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                pid = 1
+                for sid, per_gender in (("r1:s1", 4), ("r1:s2", 2)):
+                    for gender in ("Male", "Female"):
+                        for _ in range(per_gender):
+                            add_nondetailed_person(
+                                conn,
+                                NondetailedPersonSeed(
+                                    birthyear=980,
+                                    gender=gender,
+                                    region_id="r1",
+                                    settlement_id=sid,
+                                    job_family="other",
+                                    is_partnered=False,
+                                ),
+                                person_id=pid,
+                            )
+                            pid += 1
+                conn.commit()
+
+                result = run_nondetailed_sql_annual_tick(
+                    conn,
+                    year=1000,
+                    max_new_partnerships=10,
+                    start_person_id=10_000,
+                )
+                conn.commit()
+                rows = conn.execute(
+                    """
+                    SELECT
+                        p.person_id,
+                        p.partner_person_id,
+                        sp.settlement_id AS settlement_id,
+                        partner.partner_person_id AS reciprocal_id,
+                        partner_settlement.settlement_id AS partner_settlement_id
+                    FROM simulation_people_nondetailed p
+                    JOIN simulation_people_nondetailed partner
+                      ON partner.person_id = p.partner_person_id
+                    JOIN simulation_settlement_lookup sp
+                      ON sp.settlement_key = p.current_settlement_key
+                    JOIN simulation_settlement_lookup partner_settlement
+                      ON partner_settlement.settlement_key = partner.current_settlement_key
+                    WHERE p.is_alive = 1
+                      AND p.is_partnered = 1
+                      AND p.birthyear = 980
+                    ORDER BY p.person_id
+                    """
+                ).fetchall()
+                partnered_without_ids = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM simulation_people_nondetailed
+                    WHERE is_alive = 1
+                      AND is_partnered = 1
+                      AND partner_person_id IS NULL
+                    """
+                ).fetchone()["c"]
+
+            self.assertEqual(result.newly_partnered, 6)
+            self.assertEqual(len(rows), 6)
+            self.assertEqual(int(partnered_without_ids), 0)
+            for row in rows:
+                self.assertEqual(int(row["reciprocal_id"]), int(row["person_id"]))
+                self.assertEqual(row["partner_settlement_id"], row["settlement_id"])
+
     def test_sql_tick_births_respect_start_person_id_minimum(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             save = Path(td) / "save.sqlite"
@@ -140,8 +239,22 @@ class TestNondetailedPopulation(unittest.TestCase):
                         settlement_id="r1:s1",
                         job_family="care",
                         is_partnered=True,
+                        partner_person_id=5,
                     ),
                     person_id=4,
+                )
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=978,
+                        gender="Male",
+                        region_id="r1",
+                        settlement_id="r1:s1",
+                        job_family="food",
+                        is_partnered=True,
+                        partner_person_id=4,
+                    ),
+                    person_id=5,
                 )
                 conn.commit()
                 result = run_nondetailed_sql_annual_tick(
@@ -290,7 +403,7 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertGreaterEqual(ctx.next_person_id, 941)
             self.assertEqual(
                 {str(row["settlement_id"]): int(row["c"]) for row in counts},
-                {"r1:s1": 20, "r1:s2": 20},
+                {"r1:s1": 23, "r1:s2": 17},
             )
             self.assertGreaterEqual(int(prime_age), 10)
 
