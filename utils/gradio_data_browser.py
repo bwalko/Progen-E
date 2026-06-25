@@ -13549,7 +13549,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
     csvs = _csv_names()
     initial_world = default_world if default_world in worlds else (worlds[0] if worlds else "")
     initial_tables = _table_names(initial_world, "Config DB") if initial_world else []
-    initial_world_map = render_world_map_html(initial_world, True, True, True) if initial_world else ""
+    initial_world_map = '<div class="place-sheet muted">Use Render Map to load the current world map.</div>' if initial_world else ""
     initial_composite_score_choices = (
         _composite_rating_choices(initial_world) if initial_world else [COMPOSITE_SCORE_ALL_CHOICE]
     )
@@ -14531,7 +14531,24 @@ def main() -> None:
         getattr(gr, "__version__", "unknown"),
         log_path,
     )
-    build_app(args.world).launch(server_name=args.host, server_port=args.port, show_error=True)
+    app = build_app(args.world)
+    try:
+        _log_info("launch_start host=%s port=%s", args.host, args.port)
+        app.launch(
+            server_name=args.host,
+            server_port=args.port,
+            show_error=True,
+            prevent_thread_lock=True,
+        )
+        _log_info("launch_ready host=%s port=%s entering_wait_loop", args.host, args.port)
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        _log_info("launch_keyboard_interrupt")
+        app.close()
+    except BaseException:
+        _log_exception("launch_failed")
+        raise
 
 
 if __name__ == "__main__":

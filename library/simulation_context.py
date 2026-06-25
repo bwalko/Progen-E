@@ -2609,10 +2609,17 @@ class SimulationContext:
 
     def reestablish_from_abandoned(self, abandoned: SettlementState) -> SettlementState:
         rid = abandoned.region_id
+        slot = max(1, int(abandoned.site_slot))
+        active_same_slot = [
+            st
+            for st in self.active_settlements_in_region(rid)
+            if int(st.site_slot) == slot
+        ]
+        if active_same_slot:
+            return sorted(active_same_slot, key=lambda st: st.settlement_id)[0]
         seq = next_settlement_sequence(rid, list(self.settlements_by_id.keys()))
         new_sid = make_settlement_id(rid, seq)
         year = self._settlement_founding_year()
-        slot = max(1, int(abandoned.site_slot))
         st = SettlementState(
             region_id=rid,
             region_display_name=abandoned.region_display_name,
@@ -2893,7 +2900,20 @@ class SimulationContext:
         if len(active) >= max_civic_sites:
             return None
         sim_y = int(year)
-        last_y = int(self.last_spinoff_sim_year_by_region.get(rid, -10**9))
+        saved_last_y = max(
+            (
+                int(st.founded_sim_year)
+                for st in self.settlements_by_id.values()
+                if st.region_id == rid
+                and (st.founding_reason or "").strip().lower() == "birth_spinoff"
+                and st.founded_sim_year is not None
+            ),
+            default=-10**9,
+        )
+        last_y = max(
+            int(self.last_spinoff_sim_year_by_region.get(rid, -10**9)),
+            saved_last_y,
+        )
         if sim_y - last_y < int(self.spinoff_cooldown_years):
             return None
         mixed_by_sid = self.mixed_population_counts_by_settlement()
@@ -3004,7 +3024,20 @@ class SimulationContext:
         min_pop = max(1, int(self.spinoff_min_mother_settlement_population))
         if mp < min_pop:
             return rid, mother_settlement_id
-        last_y = int(self.last_spinoff_sim_year_by_region.get(rid, -10**9))
+        saved_last_y = max(
+            (
+                int(st.founded_sim_year)
+                for st in self.settlements_by_id.values()
+                if st.region_id == rid
+                and (st.founding_reason or "").strip().lower() == "birth_spinoff"
+                and st.founded_sim_year is not None
+            ),
+            default=-10**9,
+        )
+        last_y = max(
+            int(self.last_spinoff_sim_year_by_region.get(rid, -10**9)),
+            saved_last_y,
+        )
         if sim_y - last_y < int(self.spinoff_cooldown_years):
             return rid, mother_settlement_id
         crowded_threshold = max(40, cap_eff // 25)

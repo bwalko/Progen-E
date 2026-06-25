@@ -2144,6 +2144,8 @@ def _run_population_growth_year_loop(
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 ensure_checkpoint_schema(conn)
+                if prof:
+                    t_nd = tpc()
                 seed_nondetailed_from_active_settlements(
                     conn,
                     ctx,
@@ -2151,19 +2153,34 @@ def _run_population_growth_year_loop(
                     population_scale=passive_population_scale,
                     start_person_id=ctx.next_person_id,
                 )
+                if prof:
+                    simulation_timing.accumulate(
+                        "nondetailed.seed_topup",
+                        tpc() - t_nd,
+                    )
+                    t_nd = tpc()
                 overflow_births = add_nondetailed_births_from_place_counts(
                     conn,
                     passive_births_by_place,
                     year=year,
                     start_person_id=ctx.next_person_id,
                 )
+                if prof:
+                    simulation_timing.accumulate(
+                        "nondetailed.overflow_births",
+                        tpc() - t_nd,
+                    )
                 conn.commit()
             ctx.invalidate_mixed_population_cache()
+            if prof:
+                t_nd = tpc()
             ctx.last_nondetailed_tick_result = run_nondetailed_sql_annual_tick_for_save(
                 ctx.save_db_path,
                 year=year,
                 start_person_id=int(ctx.next_person_id),
             )
+            if prof:
+                simulation_timing.accumulate("nondetailed.sql_tick", tpc() - t_nd)
             ctx.invalidate_mixed_population_cache()
             if overflow_births:
                 ctx.last_nondetailed_tick_result = replace(
@@ -2174,21 +2191,40 @@ def _run_population_growth_year_loop(
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 ensure_checkpoint_schema(conn)
+                if prof:
+                    t_nd = tpc()
                 economy_result = apply_nondetailed_job_family_economy_effects(
                     conn,
                     ctx,
                     year=year,
                 )
+                if prof:
+                    simulation_timing.accumulate(
+                        "nondetailed.job_family_economy",
+                        tpc() - t_nd,
+                    )
+                    t_nd = tpc()
                 resource_mortality_result = apply_nondetailed_resource_mortality(
                     conn,
                     ctx,
                     year=year,
                 )
+                if prof:
+                    simulation_timing.accumulate(
+                        "nondetailed.resource_mortality",
+                        tpc() - t_nd,
+                    )
+                    t_nd = tpc()
                 migration_result = run_nondetailed_sql_migration(
                     conn,
                     ctx,
                     year=year,
                 )
+                if prof:
+                    simulation_timing.accumulate(
+                        "nondetailed.sql_migration",
+                        tpc() - t_nd,
+                    )
                 ctx._nondetailed_sql_migration_year = int(year)
                 conn.commit()
             ctx.invalidate_mixed_population_cache()

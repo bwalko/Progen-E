@@ -287,6 +287,10 @@ Completion boundary:
   should survive in plausible numbers, some chronically distressed small sites
   may abandon, and large high-capacity settlements should carry higher
   non-detailed:detailed ratios without reducing detailed representation.
+- Run this as a clean reset or from a checkpoint made after the duplicate
+  re-establishment fix. The 2026-06-24 default save reached year 1059 with
+  hundreds of duplicate active same-slot organic settlements and should not be
+  used as distribution or runtime evidence.
 - Pre-performance-fix attempts should not be treated as current evidence: the
   300-year command timed out after 300 seconds before a progress line, and a
   30-year version timed out after 600 seconds before a complete checkpoint.

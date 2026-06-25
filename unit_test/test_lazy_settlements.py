@@ -91,6 +91,58 @@ class TestLazySettlements(unittest.TestCase):
             finally:
                 ctx.finalize_run()
 
+    def test_reestablish_reuses_existing_active_same_site_slot(self) -> None:
+        from library.simulation_context import SimulationContext
+        from pathlib import Path
+        import tempfile
+        from library.config_import import load_all_csvs_into_sqlite
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext(
+                db_path=cfg,
+                save_db_path=root / "save.sqlite",
+                world="default",
+                simulation_start_year=1000,
+                history_equivalent_start_year=1000,
+                current_year=1005,
+            )
+            try:
+                old = SettlementState(
+                    region_id="boreas_west",
+                    settlement_id="boreas_west:s1",
+                    site_slot=1,
+                    status="abandoned",
+                    abandoned_sim_year=1002,
+                    display_name="Oldtown",
+                    region_display_name="Boreas West",
+                    local_geography_json="{}",
+                )
+                active = SettlementState(
+                    region_id="boreas_west",
+                    settlement_id="boreas_west:s2",
+                    site_slot=1,
+                    status="active",
+                    display_name="Oldtown",
+                    region_display_name="Boreas West",
+                    local_geography_json="{}",
+                )
+                ctx.settlements_by_id[old.settlement_id] = old
+                ctx.settlements_by_id[active.settlement_id] = active
+                ctx.rebuild_settlement_region_index()
+
+                reused = ctx.reestablish_from_abandoned(old)
+
+                self.assertEqual(reused.settlement_id, active.settlement_id)
+                self.assertEqual(
+                    len(ctx.active_settlements_in_region("boreas_west")),
+                    1,
+                )
+            finally:
+                ctx.finalize_run()
+
     def test_additional_settlements_share_multi_slot_region_geography(self) -> None:
         from library.simulation_context import SimulationContext
         from pathlib import Path

@@ -3961,3 +3961,61 @@ completion.
 - The full `unit_test.test_population_growth_determinism` module timed out on
   this laptop after 180 seconds before producing a pass/fail result; the two
   touched floor regressions passed directly.
+
+## 2026-06-24 - Duplicate Settlement Re-establishment Guard
+
+### Fixes
+
+- Found the 1050-1059 runtime spike was dominated by runaway generic
+  `founding_reason='organic'` settlement rows, not by the ordinary
+  `birth_spinoff` satellite path. A consistent year-1059 snapshot showed
+  duplicate active same-slot settlements concentrated in two regions:
+  `aeria_eastwater_river` had 88 active slot-1 rows and
+  `aeria_midland_basin` had 68 active slot-1 rows.
+- Changed `reestablish_from_abandoned()` so an abandoned site reuses an
+  already-active settlement in the same region and `site_slot` instead of
+  creating another active row for the same physical site.
+- Made ordinary birth-spinoff cooldown resume-safe by deriving the most recent
+  saved `birth_spinoff` founding year from settlement rows when the in-memory
+  cooldown dictionary is empty after checkpoint load.
+- Split the broad nondetailed yearly timing bucket into subphases
+  (`nondetailed.seed_topup`, `nondetailed.sql_tick`,
+  `nondetailed.resource_mortality`, `nondetailed.sql_migration`, etc.) so
+  future late-year profiles identify the exact hot subphase.
+
+### Validation
+
+- Reproduced the symptom on a consistent copied checkpoint: one profiled year
+  from 1049 to 1050 took 72.4s wall, with `runner.nondetailed_directory`
+  totaling 43.7s and active settlement count already high.
+- Consistent year-1059 snapshot showed 259 active settlements, 68 abandoned
+  settlements, 4,321 detailed alive, and 23,050 non-detailed alive; the
+  duplicated active same-slot rows explain why the detailed floor and
+  nondetailed reconciliation became increasingly expensive.
+- `python -m py_compile library/simulation_context.py library/population_growth_runner.py unit_test/test_lazy_settlements.py unit_test/test_simulation_migration.py unit_test/test_population_growth_nondetailed_runner.py`
+- `python -m unittest unit_test.test_lazy_settlements unit_test.test_population_growth_nondetailed_runner unit_test.test_simulation_migration`
+
+## 2026-06-24 - Gradio Browser Launcher Recovery
+
+### Fixes
+
+- Replaced the fragile inline Python selection in `start_gradio_data_browser.cmd`
+  with a maintained PowerShell launcher that creates and reuses
+  `temp\gradio_browser_venv`, installs `requirements.txt` when needed, stops an
+  old listener on port 7860, starts the browser app, and only opens the browser
+  after the local service responds.
+- Deferred the initial world-map render during Gradio app construction. The app
+  no longer blocks startup on the default world map; the Map tab still renders
+  the map explicitly through Render Map.
+- Made `utils/gradio_data_browser.py` keep the Gradio process alive explicitly
+  after `launch()` and log `launch_start` / `launch_ready` lifecycle events.
+
+### Validation
+
+- Confirmed the pre-fix launcher could start Python while failing to bind the
+  Gradio service because the known Python candidates did not have `gradio`
+  installed after reboot/session restart.
+- `python -m py_compile utils/gradio_data_browser.py`
+- PowerShell syntax check for `utils/start_gradio_data_browser.ps1`.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File utils\start_gradio_data_browser.ps1 -World default -HostName 127.0.0.1 -Port 7860 -NoBrowser`
+- Verified `http://127.0.0.1:7860` returned HTTP 200 after the launcher exited.

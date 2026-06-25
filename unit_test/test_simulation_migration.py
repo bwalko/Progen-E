@@ -308,6 +308,51 @@ class TestSimulationMigration(unittest.TestCase):
                 self.assertEqual(satellite.founding_reason, "birth_spinoff")
                 self.assertEqual(satellite.mother_settlement_id, st.settlement_id)
 
+    def test_satellite_founding_cooldown_uses_saved_spinoff_rows(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=19,
+                flush_run_store=False,
+            ) as ctx:
+                rid = "aeria_north"
+                st = ctx.ensure_active_settlement_for_region(rid)
+                existing = ctx.create_additional_active_settlement(
+                    rid,
+                    founding_reason="birth_spinoff",
+                    mother_settlement_id=st.settlement_id,
+                )
+                ctx.settlements_by_id[existing.settlement_id] = replace(
+                    existing,
+                    founded_sim_year=998,
+                )
+                self._add_simple_adults(
+                    ctx,
+                    count=1100,
+                    region_id=rid,
+                    settlement_id=st.settlement_id,
+                    year=1000,
+                )
+
+                satellite = ctx.maybe_found_ordinary_satellite_settlement(
+                    rid,
+                    year=1000,
+                    region_population=5000,
+                    region_cap=10000,
+                )
+
+                self.assertIsNone(satellite)
+                self.assertEqual(len(ctx.active_settlements_in_region(rid)), 2)
+
     def test_married_couple_migrates_together(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
