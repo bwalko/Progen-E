@@ -1346,6 +1346,8 @@ def _motive_clause(payload: Mapping[str, Any]) -> str:
     motive = _motive(payload)
     if motive == "unknown":
         return ""
+    if _crime_context_value(payload, "motive_prose") not in (None, "") or payload.get("motive_prose"):
+        return f"; {motive}"
     return f"; motive {motive}"
 
 
@@ -1724,7 +1726,22 @@ def _kind(payload: Mapping[str, Any]) -> str:
 
 
 def _motive(payload: Mapping[str, Any]) -> str:
+    for key in ("motive_prose", "motive_detail"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            return _label(value)
+    for key in ("motive_prose", "motive_detail"):
+        value = _crime_context_value(payload, key)
+        if value not in (None, ""):
+            return _label(value)
     return _label(payload.get("motive") or "unknown")
+
+
+def _crime_context_value(payload: Mapping[str, Any], key: str) -> Any:
+    context = payload.get("crime_context")
+    if isinstance(context, Mapping):
+        return context.get(key)
+    return None
 
 
 def _label(value: object) -> str:

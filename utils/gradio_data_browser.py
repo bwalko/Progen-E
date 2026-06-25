@@ -6085,8 +6085,8 @@ def _event_murder_sentence(
     killer = _short_person_for_event(con, world, killer_id, focus_person_id)
     victim = _short_person_for_event(con, world, victim_id, focus_person_id)
     incident_kind = str(payload.get("incident_kind") or "").strip().replace("_", " ")
-    motive = str(payload.get("motive") or "").strip().replace("_", " ")
-    context = [part for part in (incident_kind, f"motive: {motive}" if motive else "") if part]
+    motive = _event_crime_motive_text(payload)
+    context = [part for part in (incident_kind, motive) if part]
     tail = f"; {'; '.join(context)}" if context else ""
     if _same_person_id(victim_id, focus_person_id):
         return f"{victim} was killed by {killer}{tail}."
@@ -6106,10 +6106,18 @@ def _event_murder_sentence_html(
     killer = _short_person_html_for_event(con, world, killer_id, focus_person_id)
     victim = _short_person_html_for_event(con, world, victim_id, focus_person_id)
     incident_kind = str(payload.get("incident_kind") or "").strip().replace("_", " ")
-    motive = str(payload.get("motive") or "").strip().replace("_", " ")
+    motive = _event_crime_motive_text(payload)
+    motive_category = _event_label_text(
+        payload.get("motive_category")
+        or _event_crime_context_value(payload, "motive_category"),
+        "",
+    )
     details = _event_details_html(
         ("kind", incident_kind),
         ("motive", motive),
+        ("motive category", motive_category),
+        ("justice pressure", _fmt_number(payload.get("justice_pressure_score"), 3)),
+        ("retaliation risk", _fmt_number(payload.get("retaliation_risk_score"), 3)),
         ("place", _event_place_text(con, world, payload)),
     )
     if _same_person_id(victim_id, focus_person_id):
@@ -6122,6 +6130,21 @@ def _event_murder_sentence_html(
 def _event_label_text(value: object, default: str = "unknown") -> str:
     text = str(value or "").strip()
     return text.replace("_", " ") if text else default
+
+
+def _event_crime_context_value(payload: dict[str, object], key: str) -> object:
+    context = payload.get("crime_context")
+    if isinstance(context, dict):
+        return context.get(key)
+    return None
+
+
+def _event_crime_motive_text(payload: dict[str, object]) -> str:
+    for key in ("motive_prose", "motive_detail"):
+        value = payload.get(key) or _event_crime_context_value(payload, key)
+        if value not in (None, ""):
+            return _event_label_text(value, "")
+    return _event_label_text(payload.get("motive"), "")
 
 
 def _event_place_text(con: sqlite3.Connection, world: str, payload: dict[str, object]) -> str:

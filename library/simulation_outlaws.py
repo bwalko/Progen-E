@@ -1323,20 +1323,49 @@ def outlaw_case_from_murder(
     importance = float(getattr(incident, "historical_importance", 0.0) or 0.0)
     kind = str(getattr(incident, "incident_kind", "murder") or "murder")
     kind_bonus = 0.08 if kind in {"predatory_murder", "ambush_killing", "kin_killing"} else 0.0
+    raw_context = getattr(incident, "crime_context", None)
+    if raw_context is not None and hasattr(raw_context, "payload"):
+        crime_context = raw_context.payload()
+    elif isinstance(raw_context, dict):
+        crime_context = dict(raw_context)
+    else:
+        crime_context = {}
+    justice_pressure = clamp01(crime_context.get("justice_pressure_score", 0.0) or 0.0)
+    witness_power = clamp01(crime_context.get("witness_status_power_01", 0.0) or 0.0)
+    kin_power = clamp01(crime_context.get("victim_kin_power_01", 0.0) or 0.0)
+    seen_identified = bool(crime_context.get("seen_identified", bool(witness_ids)))
+    base_knownness = 0.35 + len(witness_ids) * 0.12 + importance * 0.35
+    context_knownness = (
+        0.24
+        + (0.22 if seen_identified else 0.0)
+        + min(0.20, len(witness_ids) * 0.07)
+        + witness_power * 0.14
+        + kin_power * 0.10
+        + justice_pressure * 0.18
+    )
     case = open_outlaw_case(
         ctx,
         year=int(year),
         accused=getattr(incident, "killer"),
         offense_type="murder",
         offense_kind=kind,
-        severity_01=0.76 + importance * 0.22 + kind_bonus,
-        knownness_01=0.35 + len(witness_ids) * 0.12 + importance * 0.35,
+        severity_01=0.74 + importance * 0.18 + kind_bonus + justice_pressure * 0.10,
+        knownness_01=max(base_knownness, context_knownness),
         source_event_key=(
             f"murder:{getattr(incident.killer, 'person_id')}:"
             f"{getattr(incident.victim, 'person_id')}:{int(year)}"
         ),
         victim_person_id=int(getattr(incident.victim, "person_id")),
-        details={"source_role": "murder_outlaw_case", "witness_count": len(witness_ids)},
+        details={
+            "source_role": "murder_outlaw_case",
+            "witness_count": len(witness_ids),
+            "crime_context": crime_context,
+            "justice_pressure_score": round(float(justice_pressure), 5),
+            "retaliation_risk_score": round(
+                float(crime_context.get("retaliation_risk_score", 0.0) or 0.0), 5
+            ),
+            "seen_identified": seen_identified,
+        },
     )
     return None if case is None else _case_event_payload(case, event_type="outlaw_case_opened")
 

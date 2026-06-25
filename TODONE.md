@@ -4288,3 +4288,39 @@ completion.
   `test_settlement_move_event_uses_normalized_move_details`,
   `test_job_seeker_migration_keeps_route_details_for_display`, and
   `test_compact_job_seeker_migration_uses_related_move_rows`.
+
+## 2026-06-25 - Serious Crime Context V1
+
+### Enhancements
+
+- Added a lightweight `SeriousCrimeContext` for detailed murder incidents that
+  records backend motive category, visible motive detail/prose, victim/offender,
+  place, witness count/identities/status, direct victim kin count/power,
+  offender boldness/ruthlessness/fear, offender-victim relationship,
+  seen/identified status, justice pressure, and retaliation risk.
+- Kept the context bounded to the selected murder participants, detailed
+  witnesses, direct parents/partner, and the already capped local murder sample;
+  no new all-person crime or witness scanning loop was added.
+- Preserved `settlement_grievance` as a backend motive category while displaying
+  clearer visible prose such as a long-running neighborhood feud or debt
+  dispute.
+- Fed justice, witness, kin, and identification context into the existing
+  murder-to-outlaw-case bridge by raising case knownness/severity through the
+  current outlaw pursuit formulas and storing the context in case details.
+- Updated event prose and Gradio murder cards to prefer `motive_prose` /
+  `motive_detail` over raw backend motive categories.
+
+### Validation
+
+- `python -m py_compile library\simulation_incidents.py
+  library\simulation_outlaws.py library\event_prose.py
+  utils\gradio_data_browser.py`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_murder_context_records_clear_motive_and_justice_drivers
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_recorded_murder_payload_and_outlaw_case_use_crime_context
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_partner_murder_closes_relationship_state`
+- `python -m unittest
+  unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_polity_law_profiles_change_case_tuning`
+- Full `unit_test.test_simulation_incidents` was attempted on this laptop but
+  timed out after 180 seconds, so validation used the focused regression slice
+  above.

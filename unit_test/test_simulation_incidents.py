@@ -19,17 +19,20 @@ from library.incident_rates import (
     clear_incident_rate_cache,
     incident_rate_for_year,
 )
+from library.event_prose import render_event_admin_summary
 from library.event_scoring import EventScoringContext
 from library.simulation_context import SimulationContext
 from library.simulation_incidents import (
     MurderIncident,
     _apply_murder_consequences,
+    _build_serious_crime_context,
     _build_incident_scoring_facts,
     _incident_context_map,
     _knowledge_culture_kind,
     _knowledge_domain,
     _murder_annual_event_cap,
     _murder_settlement_trial_count,
+    _record_murder_incident,
     knowledge_culture_propensity,
     MURDER_PROPENSITY_THRESHOLD,
     property_crime_propensity,
@@ -754,6 +757,172 @@ class TestSimulationIncidents(unittest.TestCase):
             self.assertIsNone(killer.person.partner_person_id)
             self.assertIsNone(victim.person.partner_person_id)
             self.assertNotIn(victim.person_id, ctx.current_people_ids)
+
+    def test_murder_context_records_clear_motive_and_justice_drivers(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            killer = self._add_adult(
+                ctx,
+                genome=VIOLENT_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            victim = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            witness = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            witness.person = replace(
+                witness.person,
+                social_standing_01=1.0,
+                household_prosperity=4.0,
+                job_prosperity_01=1.0,
+            )
+            kin = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            kin.father_id = victim.person_id
+            kin.person = replace(
+                kin.person,
+                social_standing_01=0.8,
+                household_prosperity=3.0,
+                job_prosperity_01=0.8,
+            )
+            facts = _build_incident_scoring_facts(ctx, 1001)
+
+            context = _build_serious_crime_context(
+                ctx,
+                facts,
+                year=1001,
+                killer=killer,
+                victim=victim,
+                incident_kind="feud_killing",
+                motive_category="settlement_grievance",
+                witness_person_ids=(witness.person_id,),
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                local_records=(killer, victim, witness, kin),
+                pressure=0.4,
+            )
+
+            self.assertEqual(context.motive_category, "settlement_grievance")
+            self.assertEqual(context.motive_detail, "neighborhood_feud")
+            self.assertEqual(
+                context.motive_prose,
+                "killed after a long-running neighborhood feud",
+            )
+            self.assertNotIn("settlement grievance", context.motive_prose)
+            self.assertEqual(context.witness_count, 1)
+            self.assertEqual(context.witness_person_ids, (witness.person_id,))
+            self.assertTrue(context.seen_identified)
+            self.assertGreater(context.witness_status_power_01, 0.6)
+            self.assertEqual(context.victim_kin_count, 1)
+            self.assertGreater(context.victim_kin_power_01, 0.45)
+            self.assertGreater(context.justice_pressure_score, 0.65)
+            self.assertGreater(context.retaliation_risk_score, 0.45)
+
+    def test_recorded_murder_payload_and_outlaw_case_use_crime_context(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            killer = self._add_adult(
+                ctx,
+                genome=VIOLENT_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            victim = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            witness = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            facts = _build_incident_scoring_facts(ctx, 1001)
+            crime_context = _build_serious_crime_context(
+                ctx,
+                facts,
+                year=1001,
+                killer=killer,
+                victim=victim,
+                incident_kind="feud_killing",
+                motive_category="settlement_grievance",
+                witness_person_ids=(witness.person_id,),
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                local_records=(killer, victim, witness),
+                pressure=0.4,
+            )
+            incident = MurderIncident(
+                killer=killer,
+                victim=victim,
+                incident_kind="feud_killing",
+                motive="settlement_grievance",
+                witness_person_ids=(witness.person_id,),
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                actor_propensity=0.9,
+                resource_pressure=0.4,
+                historical_importance=0.7,
+                genome_signals={},
+                crime_context=crime_context,
+            )
+
+            _record_murder_incident(ctx, 1001, incident)
+
+            murder_payload = next(
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "murder"
+            )
+            self.assertEqual(murder_payload["motive"], "settlement_grievance")
+            self.assertEqual(
+                murder_payload["motive_prose"],
+                "killed after a long-running neighborhood feud",
+            )
+            self.assertEqual(
+                murder_payload["crime_context"]["motive_category"],
+                "settlement_grievance",
+            )
+            outlaw_case = next(iter(ctx.outlaw_cases.values()))
+            self.assertEqual(
+                outlaw_case.details["crime_context"]["motive_detail"],
+                "neighborhood_feud",
+            )
+            self.assertGreater(outlaw_case.knownness_01, 0.55)
+            summary = render_event_admin_summary(
+                {
+                    "id": 1,
+                    "sim_year": 1001,
+                    "event_type": "murder",
+                    "payload_json": json.dumps(murder_payload),
+                }
+            ).prose
+            self.assertIn("killed after a long-running neighborhood feud", summary)
+            self.assertNotIn("settlement grievance", summary)
 
     def test_forced_murder_tick_allows_population_scaled_multiple_events(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

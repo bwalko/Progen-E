@@ -103,6 +103,56 @@ LEGAL_FALLOUT_SCANDAL_KINDS: frozenset[str] = frozenset(
 
 
 @dataclass(frozen=True)
+class SeriousCrimeContext:
+    motive_category: str
+    motive_detail: str
+    motive_prose: str
+    victim_person_id: int
+    offender_person_id: int
+    settlement_id: str
+    region_id: str
+    witness_count: int
+    witness_person_ids: tuple[int, ...]
+    witness_social_status: str
+    witness_status_power_01: float
+    victim_kin_count: int
+    victim_kin_status: str
+    victim_kin_power_01: float
+    offender_boldness_01: float
+    offender_ruthlessness_01: float
+    offender_fear_panic_01: float
+    offender_relationship_to_victim: str
+    seen_identified: bool
+    justice_pressure_score: float
+    retaliation_risk_score: float
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "motive_category": self.motive_category,
+            "motive_detail": self.motive_detail,
+            "motive_prose": self.motive_prose,
+            "victim_person_id": int(self.victim_person_id),
+            "offender_person_id": int(self.offender_person_id),
+            "settlement_id": self.settlement_id,
+            "region_id": self.region_id,
+            "witness_count": int(self.witness_count),
+            "witness_person_ids": [int(pid) for pid in self.witness_person_ids],
+            "witness_social_status": self.witness_social_status,
+            "witness_status_power_01": round(float(self.witness_status_power_01), 5),
+            "victim_kin_count": int(self.victim_kin_count),
+            "victim_kin_status": self.victim_kin_status,
+            "victim_kin_power_01": round(float(self.victim_kin_power_01), 5),
+            "offender_boldness_01": round(float(self.offender_boldness_01), 5),
+            "offender_ruthlessness_01": round(float(self.offender_ruthlessness_01), 5),
+            "offender_fear_panic_01": round(float(self.offender_fear_panic_01), 5),
+            "offender_relationship_to_victim": self.offender_relationship_to_victim,
+            "seen_identified": bool(self.seen_identified),
+            "justice_pressure_score": round(float(self.justice_pressure_score), 5),
+            "retaliation_risk_score": round(float(self.retaliation_risk_score), 5),
+        }
+
+
+@dataclass(frozen=True)
 class MurderIncident:
     killer: "SimulationPersonRecord"
     victim: "SimulationPersonRecord"
@@ -117,6 +167,7 @@ class MurderIncident:
     genome_signals: dict[str, float]
     serial_predator_propensity: float = 0.0
     previous_murder_count: int = 0
+    crime_context: SeriousCrimeContext | None = None
 
 
 @dataclass(frozen=True)
@@ -411,6 +462,256 @@ def _relationship_motive(
     if kp.job and vp.job and str(kp.job).strip() == str(vp.job).strip():
         return "work_rivalry", 1.35
     return "settlement_grievance", 1.0
+
+
+def _record_status_power(
+    facts: IncidentScoringFacts,
+    rec: "SimulationPersonRecord | None",
+) -> float:
+    if rec is None:
+        return 0.0
+    person = rec.person
+    standing = _clamp(float(person.social_standing_01 or 0.0))
+    prosperity = _clamp(float(person.household_prosperity or 0.0) / 4.0)
+    job_prosperity = _clamp(float(person.job_prosperity_01 or 0.0))
+    office = 0.0
+    pid = int(rec.person_id)
+    if pid in facts.office_holder_ids:
+        office += 0.18
+    if pid in facts.ruler_ids:
+        office += 0.18
+    return _clamp(standing * 0.46 + prosperity * 0.22 + job_prosperity * 0.14 + office)
+
+
+def _status_label(power: float, *, plural: bool = False) -> str:
+    value = float(power)
+    if value >= 0.72:
+        return "powerful witnesses" if plural else "powerful kin"
+    if value >= 0.48:
+        return "high-status witnesses" if plural else "high-status kin"
+    if value >= 0.24:
+        return "local householders" if plural else "local kin"
+    return "low-status witnesses" if plural else "minor kin"
+
+
+def _offender_boldness(killer: "SimulationPersonRecord") -> float:
+    return _clamp(
+        _positive_extreme(killer, "courage") * 0.42
+        + _positive_extreme(killer, "assertiveness") * 0.36
+        + _positive_extreme(killer, "ambition") * 0.12
+        + _composite_score(killer, "force_get_way_desire") * 0.10
+    )
+
+
+def _offender_ruthlessness(killer: "SimulationPersonRecord") -> float:
+    return _clamp(
+        _negative_extreme(killer, "empathy") * 0.28
+        + _negative_extreme(killer, "justice") * 0.24
+        + _negative_extreme(killer, "temperance") * 0.12
+        + _positive_extreme(killer, "ambition") * 0.10
+        + _composite_score(killer, "psychopathy") * 0.16
+        + _composite_score(killer, "ruthless_ambition") * 0.10
+    )
+
+
+def _offender_fear_panic(killer: "SimulationPersonRecord", pressure: float) -> float:
+    return _clamp(
+        _negative_extreme(killer, "courage") * 0.34
+        + _positive_extreme(killer, "neurochemical") * 0.28
+        + _negative_extreme(killer, "discipline") * 0.16
+        + _clamp(float(pressure) - 0.70) * 0.22
+    )
+
+
+def _relationship_to_victim(
+    ctx: "SimulationContext",
+    killer: "SimulationPersonRecord",
+    victim: "SimulationPersonRecord",
+    motive_category: str,
+) -> str:
+    pair = {int(killer.person_id), int(victim.person_id)}
+    if (
+        killer.person.partner_person_id == victim.person_id
+        or victim.person.partner_person_id == killer.person_id
+        or any({int(a), int(b)} == pair for a, b in ctx.couples)
+    ):
+        return "partner"
+    if (
+        int(victim.person_id) in ctx.paramour_ids_for_person(killer.person_id)
+        or int(killer.person_id) in ctx.paramour_ids_for_person(victim.person_id)
+    ):
+        return "paramour"
+    if (
+        killer.father_id == victim.person_id
+        or killer.mother_id == victim.person_id
+        or victim.father_id == killer.person_id
+        or victim.mother_id == killer.person_id
+    ):
+        return "kin"
+    if motive_category == "work_rivalry":
+        return "work_rival"
+    return "neighbor"
+
+
+def _murder_motive_detail(
+    killer: "SimulationPersonRecord",
+    victim: "SimulationPersonRecord",
+    *,
+    motive_category: str,
+    incident_kind: str,
+    pressure: float,
+) -> str:
+    kind = str(incident_kind or "").strip()
+    if motive_category in {"partner_conflict", "kin_conflict"}:
+        return "household_grievance"
+    if motive_category == "paramour_conflict":
+        return "intimate_rivalry"
+    if motive_category == "work_rivalry":
+        return "workplace_rivalry"
+    if kind in {"feud_killing", "feud_murder"}:
+        return "neighborhood_feud"
+    if kind in {"rash_brawl_killing"}:
+        return "deliberate_quarrel"
+    exposure_pressure = (
+        _negative_extreme(killer, "honesty")
+        + _negative_extreme(killer, "justice")
+        + _positive_extreme(victim, "justice")
+        + _positive_extreme(victim, "perception")
+    )
+    if kind in {"ambush_killing", "predatory_murder"} and exposure_pressure >= 1.10:
+        return "exposure_threat"
+    if float(pressure) >= 0.95:
+        return "debt_dispute"
+    return "neighborhood_feud"
+
+
+def _murder_motive_prose(detail: str) -> str:
+    return {
+        "neighborhood_feud": "killed after a long-running neighborhood feud",
+        "debt_dispute": "murdered during a dispute over debts",
+        "exposure_threat": "ambushed after threatening to expose fraud",
+        "deliberate_quarrel": "killed in a quarrel that turned deliberate",
+        "household_grievance": "slain amid a bitter household grievance",
+        "intimate_rivalry": "killed after a jealous intimate rivalry",
+        "workplace_rivalry": "killed after a bitter working rivalry",
+    }.get(str(detail or "").strip(), "killed after a local grievance hardened into violence")
+
+
+def _direct_victim_kin_records(
+    ctx: "SimulationContext",
+    victim: "SimulationPersonRecord",
+    local_records: list["SimulationPersonRecord"] | tuple["SimulationPersonRecord", ...],
+) -> tuple["SimulationPersonRecord", ...]:
+    victim_id = int(victim.person_id)
+    kin: dict[int, "SimulationPersonRecord"] = {}
+    for pid in (
+        victim.father_id,
+        victim.mother_id,
+        victim.person.partner_person_id,
+    ):
+        if pid is None:
+            continue
+        rec = ctx.id_to_record.get(int(pid))
+        if rec is not None:
+            kin[int(pid)] = rec
+    for rec in local_records:
+        if rec.person_id == victim_id:
+            continue
+        if rec.father_id == victim_id or rec.mother_id == victim_id:
+            kin[int(rec.person_id)] = rec
+    return tuple(kin[pid] for pid in sorted(kin))
+
+
+def _build_serious_crime_context(
+    ctx: "SimulationContext",
+    facts: IncidentScoringFacts,
+    *,
+    year: int,
+    killer: "SimulationPersonRecord",
+    victim: "SimulationPersonRecord",
+    incident_kind: str,
+    motive_category: str,
+    witness_person_ids: tuple[int, ...],
+    settlement_id: str,
+    region_id: str,
+    local_records: list["SimulationPersonRecord"] | tuple["SimulationPersonRecord", ...],
+    pressure: float,
+) -> SeriousCrimeContext:
+    witness_records = [
+        ctx.id_to_record.get(int(pid))
+        for pid in tuple(witness_person_ids or ())
+        if int(pid) in ctx.id_to_record
+    ]
+    witness_power = max(
+        (_record_status_power(facts, rec) for rec in witness_records if rec is not None),
+        default=0.0,
+    )
+    kin_records = _direct_victim_kin_records(ctx, victim, local_records)
+    kin_power = max((_record_status_power(facts, rec) for rec in kin_records), default=0.0)
+    victim_power = _record_status_power(facts, victim)
+    boldness = _offender_boldness(killer)
+    ruthlessness = _offender_ruthlessness(killer)
+    fear_panic = _offender_fear_panic(killer, pressure)
+    relationship = _relationship_to_victim(ctx, killer, victim, motive_category)
+    detail = _murder_motive_detail(
+        killer,
+        victim,
+        motive_category=motive_category,
+        incident_kind=incident_kind,
+        pressure=pressure,
+    )
+    seen = len(tuple(witness_person_ids or ())) > 0
+    justice_pressure = _clamp(
+        0.18
+        + (0.22 if seen else 0.0)
+        + min(0.24, len(tuple(witness_person_ids or ())) * 0.08)
+        + witness_power * 0.18
+        + min(0.18, len(kin_records) * 0.06)
+        + kin_power * 0.18
+        + victim_power * 0.08
+    )
+    relationship_heat = {
+        "partner": 0.18,
+        "paramour": 0.16,
+        "kin": 0.20,
+        "work_rival": 0.10,
+        "neighbor": 0.06,
+    }.get(relationship, 0.06)
+    retaliation_risk = _clamp(
+        0.10
+        + min(0.24, len(kin_records) * 0.08)
+        + kin_power * 0.30
+        + relationship_heat
+        + (0.10 if seen else 0.0)
+        + (0.10 if detail in {"neighborhood_feud", "household_grievance"} else 0.0)
+    )
+    return SeriousCrimeContext(
+        motive_category=str(motive_category or "").strip() or "unknown",
+        motive_detail=detail,
+        motive_prose=_murder_motive_prose(detail),
+        victim_person_id=int(victim.person_id),
+        offender_person_id=int(killer.person_id),
+        settlement_id=str(settlement_id or "").strip(),
+        region_id=str(region_id or "").strip(),
+        witness_count=len(tuple(witness_person_ids or ())),
+        witness_person_ids=tuple(int(pid) for pid in tuple(witness_person_ids or ())),
+        witness_social_status=(
+            _status_label(witness_power, plural=True)
+            if witness_records
+            else "no detailed witnesses"
+        ),
+        witness_status_power_01=witness_power,
+        victim_kin_count=len(kin_records),
+        victim_kin_status=_status_label(kin_power, plural=False) if kin_records else "no detailed kin",
+        victim_kin_power_01=kin_power,
+        offender_boldness_01=boldness,
+        offender_ruthlessness_01=ruthlessness,
+        offender_fear_panic_01=fear_panic,
+        offender_relationship_to_victim=relationship,
+        seen_identified=seen,
+        justice_pressure_score=justice_pressure,
+        retaliation_risk_score=retaliation_risk,
+    )
 
 
 def _incident_kind(
@@ -1306,28 +1607,46 @@ def _maybe_murder_in_settlement(
         rng=rng,
     )
     region_id = _residence_region_id(ctx, killer)
+    serial_score = serial_propensities.get(int(killer.person_id), 0.0)
+    incident_kind = _incident_kind(
+        ctx,
+        killer,
+        motive,
+        serial_score,
+        rng,
+    )
+    historical_importance = _historical_importance(
+        killer, victim, len(witness_ids)
+    )
+    crime_context = _build_serious_crime_context(
+        ctx,
+        facts,
+        year=int(year),
+        killer=killer,
+        victim=victim,
+        incident_kind=incident_kind,
+        motive_category=motive,
+        witness_person_ids=witness_ids,
+        settlement_id=settlement_id,
+        region_id=region_id,
+        local_records=adults,
+        pressure=pressure,
+    )
     return MurderIncident(
         killer=killer,
         victim=victim,
-        incident_kind=_incident_kind(
-            ctx,
-            killer,
-            motive,
-            serial_propensities.get(int(killer.person_id), 0.0),
-            rng,
-        ),
+        incident_kind=incident_kind,
         motive=motive,
         witness_person_ids=witness_ids,
         settlement_id=settlement_id,
         region_id=region_id,
         actor_propensity=propensities[killer.person_id],
-        serial_predator_propensity=serial_propensities.get(int(killer.person_id), 0.0),
+        serial_predator_propensity=serial_score,
         previous_murder_count=previous_murders.get(int(killer.person_id), 0),
         resource_pressure=pressure,
-        historical_importance=_historical_importance(
-            killer, victim, len(witness_ids)
-        ),
+        historical_importance=historical_importance,
         genome_signals=_genome_signal_payload(killer),
+        crime_context=crime_context,
     )
 
 
@@ -3533,33 +3852,51 @@ def _record_murder_incident(
     ctx: "SimulationContext", year: int, incident: MurderIncident
 ) -> None:
     consequences = _apply_murder_consequences(ctx, int(year), incident)
+    crime_context = (
+        incident.crime_context.payload()
+        if incident.crime_context is not None
+        else None
+    )
+    payload = {
+        "year": int(year),
+        "event_type": "murder",
+        "incident_kind": incident.incident_kind,
+        "motive": incident.motive,
+        "killer_person_id": int(incident.killer.person_id),
+        "victim_person_id": int(incident.victim.person_id),
+        "witness_person_ids": list(incident.witness_person_ids),
+        "settlement_id": incident.settlement_id,
+        "region_id": incident.region_id,
+        "actor_violent_propensity": round(incident.actor_propensity, 5),
+        "serial_predator_propensity": round(
+            incident.serial_predator_propensity, 5
+        ),
+        "previous_murder_count": int(incident.previous_murder_count),
+        "serial_predator_candidate": bool(
+            incident.serial_predator_propensity >= 0.62
+            or int(incident.previous_murder_count) >= 2
+        ),
+        "resource_pressure": round(incident.resource_pressure, 5),
+        "historical_importance": round(incident.historical_importance, 5),
+        "consequences": consequences,
+        "genome_signals": incident.genome_signals,
+    }
+    if crime_context is not None:
+        payload.update(
+            {
+                "crime_context": crime_context,
+                "motive_category": crime_context["motive_category"],
+                "motive_detail": crime_context["motive_detail"],
+                "motive_prose": crime_context["motive_prose"],
+                "justice_pressure_score": crime_context["justice_pressure_score"],
+                "retaliation_risk_score": crime_context["retaliation_risk_score"],
+                "seen_identified": crime_context["seen_identified"],
+            }
+        )
     ctx._record_simulation_event(
         int(year),
         "murder",
-        {
-            "year": int(year),
-            "event_type": "murder",
-            "incident_kind": incident.incident_kind,
-            "motive": incident.motive,
-            "killer_person_id": int(incident.killer.person_id),
-            "victim_person_id": int(incident.victim.person_id),
-            "witness_person_ids": list(incident.witness_person_ids),
-            "settlement_id": incident.settlement_id,
-            "region_id": incident.region_id,
-            "actor_violent_propensity": round(incident.actor_propensity, 5),
-            "serial_predator_propensity": round(
-                incident.serial_predator_propensity, 5
-            ),
-            "previous_murder_count": int(incident.previous_murder_count),
-            "serial_predator_candidate": bool(
-                incident.serial_predator_propensity >= 0.62
-                or int(incident.previous_murder_count) >= 2
-            ),
-            "resource_pressure": round(incident.resource_pressure, 5),
-            "historical_importance": round(incident.historical_importance, 5),
-            "consequences": consequences,
-            "genome_signals": incident.genome_signals,
-        },
+        payload,
     )
 
 
