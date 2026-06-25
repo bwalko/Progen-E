@@ -37,6 +37,7 @@ from library.world_map_geometry import (
 from library.world_save import read_world_map_seed, write_world_map_seed
 from library.world_map_svg import (
     FeatureMapOverlay,
+    PolityMapOverlay,
     SettlementMapOverlay,
     WorldMapOverlays,
     _coastline_marker_screen_point,
@@ -666,7 +667,15 @@ class TestWorldMapGeometry(unittest.TestCase):
                     status="active",
                 )
             ],
-            polities_by_region_id={},
+            polities_by_region_id={
+                cell.region_id: PolityMapOverlay(
+                    region_id=cell.region_id,
+                    polity_id="p1",
+                    polity_name="Test Realm",
+                    polity_type_id="realm",
+                    color="#755d95",
+                )
+            },
             features=[
                 FeatureMapOverlay(
                     feature_id=f"{cell.region_id}:f1",
@@ -683,6 +692,15 @@ class TestWorldMapGeometry(unittest.TestCase):
         svg = render_world_map_svg(geometry, overlays=overlays, max_feature_labels=0)
 
         self.assertIn('class="settlement active"', svg)
+        self.assertIn('class="polity-layer map-overlay-layer" data-map-overlay-layer="polities"', svg)
+        self.assertIn('class="polity-territory"', svg)
+        self.assertIn('data-polity-id="p1"', svg)
+        self.assertIn('data-polity-name="Test Realm"', svg)
+        self.assertIn("<title>Test Realm (realm)</title>", svg)
+        self.assertIn('class="polity-label"', svg)
+        self.assertIn(">Test Realm</text>", svg)
+        first_micro_line = next(line for line in svg.splitlines() if 'class="micro-cell ' in line)
+        self.assertNotIn("data-polity-id", first_micro_line)
         self.assertIn(f'data-settlement-id="{cell.region_id}:s1"', svg)
         self.assertIn(f'data-feature-id="{cell.region_id}:f1"', svg)
         self.assertIn('data-feature-name="Bluewater"', svg)

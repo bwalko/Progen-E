@@ -5345,6 +5345,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             try:
                 shown = render_world_map_html("test", include_overlays=True, include_roads=True)
                 hidden = render_world_map_html("test", include_overlays=True, include_roads=False)
+                polities_hidden = render_world_map_html("test", include_overlays=True, include_polities=False)
             finally:
                 gdb._db_path = original_db_path
                 gdb._cached_world_map_geometry = original_geometry_cache
@@ -5355,8 +5356,18 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("data-road-usage=", shown)
         self.assertIn('data-road-actual="3.0000"', shown)
         self.assertIn("Map Routes", shown)
-        self.assertNotIn('class="road road-line"', hidden)
-        self.assertNotIn("data-road-usage", hidden)
+        self.assertIn('data-routes-visible="1"', shown)
+        self.assertIn('data-routes-visible="0"', hidden)
+        self.assertIn('data-polities-visible="1"', shown)
+        self.assertIn('data-polities-visible="0"', polities_hidden)
+        self.assertIn('class="road road-line"', hidden)
+        self.assertIn("data-road-usage", hidden)
+        self.assertIn('data-map-overlay-layer="routes"', hidden)
+        self.assertIn('data-map-overlay-layer="settlements"', hidden)
+        self.assertIn('[data-routes-visible="0"] svg [data-map-overlay-layer="routes"]', gdb.APP_CSS)
+        self.assertIn('[data-polities-visible="0"] svg [data-map-overlay-layer="polities"]', gdb.APP_CSS)
+        self.assertIn("dataset.routesVisible=enabled", gdb._world_map_toggle_routes_js())
+        self.assertIn("dataset.politiesVisible=enabled", gdb._world_map_toggle_polities_js())
 
     def test_world_map_html_renders_outlaw_refuges_and_selection_detail(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -5527,9 +5538,12 @@ class GradioDataBrowserEventTests(unittest.TestCase):
     def test_world_map_click_handler_accepts_towns_and_features(self) -> None:
         onclick = html.unescape(gdb._world_map_click_onclick())
 
-        self.assertIn("if(!town&&!region&&!route&&!refuge&&!feature){return true;}", onclick)
+        self.assertIn("if(!town&&!region&&!route&&!refuge&&!feature&&!polity){return true;}", onclick)
         self.assertIn("const town=target.closest", onclick)
         self.assertIn("const feature=", onclick)
+        self.assertIn("const polity=", onclick)
+        self.assertIn("view:'Polities'", onclick)
+        self.assertIn("polity.dataset.polityName", onclick)
 
     def test_world_map_overlays_read_named_features_from_local_geography(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

@@ -4373,3 +4373,33 @@ completion.
   unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_places_browser_batches_counts_and_filters_saved_world`
 - `python -m unittest
   unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_empty_polity_detail_explains_current_save_has_none`
+
+## 2026-06-25 - Gradio World Map Overlay Layers
+
+### Enhancements
+
+- Split world-map SVG overlays into explicit layer groups for routes, polity
+  territories, features, outlaw refuges, and settlements while preserving the
+  existing route wrapper markup used by map-rendering regressions.
+- Changed the Gradio Routes checkbox to toggle the rendered route layer through
+  DOM state and CSS instead of requesting a fresh Python render of the full SVG.
+- Changed polity shading from terrain fill coloration into a distinct
+  `polity-layer` with visible polity labels, hover titles, metadata, a separate
+  Polities checkbox, and click-through to the existing polity detail sheet.
+- Kept the cached map HTML/SVG shared across route visibility states; route
+  and polity visibility are now applied as lightweight `data-*` attributes on
+  the map card.
+
+### Validation
+
+- `python -m py_compile library\world_map_svg.py
+  utils\gradio_data_browser.py unit_test\test_gradio_data_browser.py
+  unit_test\test_world_map_geometry.py unit_test\test_world_map_roads.py`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_roads_and_checkbox_hides_them
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_click_handler_accepts_towns_and_features
+  unit_test.test_world_map_geometry.TestWorldMapGeometry.test_debug_svg_renderer_outputs_settlement_and_polity_overlays
+  unit_test.test_world_map_roads.TestWorldMapRoads.test_cross_continent_sea_route_uses_water_polyline_not_land_road
+  unit_test.test_world_map_roads.TestWorldMapRoads.test_terrain_route_uses_polygon_boundary_corner_waypoints`
+- `python -c "from utils.gradio_data_browser import build_app; app =
+  build_app('default'); print(type(app).__name__)"`

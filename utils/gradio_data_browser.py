@@ -681,6 +681,14 @@ body.dark .place-sheet,
 .world-map-card svg:active {
     cursor: grabbing;
 }
+.world-map-card[data-routes-visible="0"] svg [data-map-overlay-layer="routes"] {
+    display: none;
+    pointer-events: none;
+}
+.world-map-card[data-polities-visible="0"] svg [data-map-overlay-layer="polities"] {
+    display: none;
+    pointer-events: none;
+}
 .map-controls {
     display: flex;
     gap: 8px;
@@ -695,6 +703,7 @@ body.dark .place-sheet,
     cursor: pointer;
 }
 .world-map-card [data-feature-id],
+.world-map-card [data-polity-id],
 .world-map-card [data-region-id],
 .world-map-card [data-region-label],
 .world-map-card [data-settlement-id] {
@@ -1245,6 +1254,7 @@ def render_world_map_html(
     labels: bool = True,
     include_inactive_settlements: bool = False,
     include_roads: bool = True,
+    include_polities: bool = True,
 ) -> str:
     world_id = (world or "").strip() or "default"
     cfg = _db_path(world_id, "Config DB")
@@ -1255,17 +1265,25 @@ def render_world_map_html(
             "</div>"
         )
     save = _db_path(world_id, "Save DB")
-    return _render_world_map_html_cached(
+    rendered = _render_world_map_html_cached(
         world_id,
         bool(include_overlays),
         bool(include_inactive_settlements),
-        bool(include_roads),
         bool(noisy_edges),
         bool(labels),
         str(cfg),
         _sqlite_file_fingerprint(cfg),
         str(save),
         _sqlite_file_fingerprint(save),
+    )
+    return rendered.replace(
+        'data-routes-visible="1"',
+        f'data-routes-visible="{1 if include_roads else 0}"',
+        1,
+    ).replace(
+        'data-polities-visible="1"',
+        f'data-polities-visible="{1 if include_polities else 0}"',
+        1,
     )
 
 
@@ -1274,7 +1292,6 @@ def _render_world_map_html_cached(
     world_id: str,
     include_overlays: bool,
     include_inactive_settlements: bool,
-    include_roads: bool,
     noisy_edges: bool,
     labels: bool,
     cfg_path: str,
@@ -1297,7 +1314,7 @@ def _render_world_map_html_cached(
                 geometry=geometry,
                 save_db_path=save,
                 include_inactive_settlements=include_inactive_settlements,
-                include_roads=include_roads,
+                include_roads=True,
             )
             if include_overlays
             else None
@@ -1320,7 +1337,7 @@ def _render_world_map_html_cached(
         overlay_text = "active and inactive settlements plus polities"
     else:
         overlay_text = "active settlements and polities" if include_overlays else "base geography only"
-    if include_overlays and include_roads:
+    if include_overlays:
         overlay_text = overlay_text.replace("settlements", "settlements, roads and sea lanes")
     if include_overlays:
         overlay_text = overlay_text.replace("polities", "polities and outlaw refuges")
@@ -1337,13 +1354,34 @@ def _render_world_map_html_cached(
         '</div>'
     )
     return (
-        f'<div class="place-sheet world-map-card" onclick="{_world_map_click_onclick()}">'
+        '<div class="place-sheet world-map-card" data-routes-visible="1" data-polities-visible="1" '
+        f'onclick="{_world_map_click_onclick()}">'
         f"<h2>{html.escape(world_id)} World Map</h2>"
         f'<p class="place-muted">Generated polygon geography; showing {html.escape(overlay_text)}. '
         "Click a region, settlement, outlaw refuge, or named feature to open its detail sheet. Use the mouse wheel or drag to zoom and pan.</p>"
         f"{controls}"
         f"{svg}"
         "</div>"
+    )
+
+
+def _world_map_toggle_routes_js() -> str:
+    return (
+        "(visible)=>{"
+        "const enabled=visible?'1':'0';"
+        "document.querySelectorAll('.world-map-card').forEach(card=>{card.dataset.routesVisible=enabled;});"
+        "return [];"
+        "}"
+    )
+
+
+def _world_map_toggle_polities_js() -> str:
+    return (
+        "(visible)=>{"
+        "const enabled=visible?'1':'0';"
+        "document.querySelectorAll('.world-map-card').forEach(card=>{card.dataset.politiesVisible=enabled;});"
+        "return [];"
+        "}"
     )
 
 
@@ -1357,17 +1395,18 @@ def _world_map_click_onclick() -> str:
             "const town=target.closest('[data-settlement-id]');"
             "const refuge=town?null:target.closest('[data-outlaw-refuge-id]');"
             "const feature=(town||refuge)?null:target.closest('[data-feature-id]');"
-            "const route=(town||refuge||feature)?null:target.closest('[data-map-layer]');"
-            "const region=town||refuge||feature||route?null:target.closest('[data-region-id],[data-region-label]');"
+            "const polity=(town||refuge||feature)?null:target.closest('[data-polity-id]');"
+            "const route=(town||refuge||feature||polity)?null:target.closest('[data-map-layer]');"
+            "const region=town||refuge||feature||polity||route?null:target.closest('[data-region-id],[data-region-label]');"
             "const routeValue=route?{view:'Map Routes',layer:route.dataset.mapLayer||'',river_id:route.dataset.riverId||'',class_name:route.getAttribute('class')||'',from_settlement_id:route.dataset.roadFromSettlementId||route.dataset.seaRouteFromSettlementId||'',to_settlement_id:route.dataset.roadToSettlementId||route.dataset.seaRouteToSettlementId||'',regions:route.dataset.seaRouteRegions||'',usage:route.dataset.roadUsage||route.dataset.seaRouteUsage||'',actual_usage:route.dataset.roadActual||route.dataset.seaRouteActual||'',implied_usage:route.dataset.roadImplied||route.dataset.seaRouteImplied||''}:null;"
-            "if(!town&&!region&&!route&&!refuge&&!feature){return true;}"
-            "const id=town?town.dataset.settlementId:(refuge?refuge.dataset.outlawRefugeId:(feature?feature.dataset.featureId:(route?(routeValue.river_id||((routeValue.from_settlement_id||'?')+'->'+(routeValue.to_settlement_id||'?'))):(region.dataset.regionId||region.dataset.regionLabel))));"
+            "if(!town&&!region&&!route&&!refuge&&!feature&&!polity){return true;}"
+            "const id=town?town.dataset.settlementId:(refuge?refuge.dataset.outlawRefugeId:(feature?feature.dataset.featureId:(polity?polity.dataset.polityId:(route?(routeValue.river_id||((routeValue.from_settlement_id||'?')+'->'+(routeValue.to_settlement_id||'?'))):(region.dataset.regionId||region.dataset.regionLabel)))));"
             "if(!id){return true;}"
             "event.preventDefault();event.stopPropagation();"
             "const input=document.querySelector('#map-open-selection textarea,#map-open-selection input');"
             "const button=document.querySelector('#map-open-button button,#map-open-button');"
             "if(input&&button){"
-            "const value=JSON.stringify(route?Object.assign({id:id},routeValue):(refuge?{view:'Outlaw Refuges',id:id,region_id:refuge.dataset.regionId||'',name:refuge.dataset.outlawRefugeName||'',near_settlement_id:refuge.dataset.nearSettlementId||''}:(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||'',named:feature.dataset.featureNamed||'0'}:{view:town?'Towns':'Regions',id:id})));"
+            "const value=JSON.stringify(route?Object.assign({id:id},routeValue):(refuge?{view:'Outlaw Refuges',id:id,region_id:refuge.dataset.regionId||'',name:refuge.dataset.outlawRefugeName||'',near_settlement_id:refuge.dataset.nearSettlementId||''}:(feature?{view:'Features',id:id,region_id:feature.dataset.regionId||'',name:feature.dataset.featureName||'',kind:feature.dataset.featureKind||'',etymology:feature.dataset.featureEtymology||'',named:feature.dataset.featureNamed||'0'}:(polity?{view:'Polities',id:id,name:polity.dataset.polityName||'',type:polity.dataset.polityTypeId||''}:{view:town?'Towns':'Regions',id:id}))));"
             "const descriptor=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value');"
             "if(descriptor&&descriptor.set){descriptor.set.call(input,value);}else{input.value=value;}"
             "input.dispatchEvent(new Event('input',{bubbles:true}));"
@@ -14293,6 +14332,8 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
     item_id = str(selection.get("id") or "").strip()
     if view == "Outlaw Refuges" and item_id:
         return render_outlaw_refuge_detail(world, item_id, open_target="map")
+    if view == "Polities" and item_id:
+        return render_polity_outputs(world, item_id, open_target="map")
     if view == "Map Routes" and item_id:
         layer = str(selection.get("layer") or "").strip()
         layer_title = {
@@ -14383,6 +14424,7 @@ def render_world_map_with_detail_reset(
     noisy_edges: bool = True,
     labels: bool = True,
     include_roads: bool = True,
+    include_polities: bool = True,
 ) -> tuple[str, str]:
     return (
         render_world_map_html(
@@ -14392,6 +14434,7 @@ def render_world_map_with_detail_reset(
             labels=labels,
             include_inactive_settlements=include_inactive_settlements,
             include_roads=include_roads,
+            include_polities=include_polities,
         ),
         '<div class="place-sheet muted">Click a region, settlement, outlaw refuge, or named feature on the map to inspect it.</div>',
     )
@@ -15267,8 +15310,9 @@ def build_app(default_world: str = "default") -> gr.Blocks:
         with gr.Tab("World Map") as world_map_tab:
             with gr.Row(elem_classes=["world-browser"]):
                 map_world = gr.Dropdown(worlds, value=initial_world, label="World")
-                map_include_overlays = gr.Checkbox(value=True, label="Settlements and Polities")
+                map_include_overlays = gr.Checkbox(value=True, label="Places")
                 map_include_inactive_settlements = gr.Checkbox(value=False, label="Inactive Settlements")
+                map_include_polities = gr.Checkbox(value=True, label="Polities")
                 map_include_roads = gr.Checkbox(value=True, label="Routes")
                 map_noisy_edges = gr.Checkbox(value=True, label="Noisy Edges")
                 map_labels = gr.Checkbox(value=True, label="Labels")
@@ -15691,11 +15735,30 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             map_noisy_edges,
             map_labels,
             map_include_roads,
+            map_include_polities,
         ]
         map_outputs = [world_map_html, map_sheet]
         map_refresh.click(render_world_map_with_detail_reset, map_inputs, map_outputs)
-        for map_input in map_inputs:
+        for map_input in [
+            map_world,
+            map_include_overlays,
+            map_include_inactive_settlements,
+            map_noisy_edges,
+            map_labels,
+        ]:
             map_input.change(render_world_map_with_detail_reset, map_inputs, map_outputs)
+        map_include_roads.change(
+            fn=None,
+            inputs=map_include_roads,
+            outputs=None,
+            js=_world_map_toggle_routes_js(),
+        )
+        map_include_polities.change(
+            fn=None,
+            inputs=map_include_polities,
+            outputs=None,
+            js=_world_map_toggle_polities_js(),
+        )
         map_open_button.click(render_world_map_selection_detail, [map_world, map_open_selection], map_sheet)
         map_person_open_button.click(
             render_map_linked_person_sheet,
