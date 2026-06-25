@@ -4344,3 +4344,32 @@ completion.
 - `python -m py_compile utils\gradio_data_browser.py
   unit_test\test_gradio_data_browser.py`
 - `python -m unittest unit_test.test_gradio_data_browser -k recent_history`
+
+## 2026-06-25 - Polity Browser Presentation Cleanup
+
+### Fixes
+
+- Reworked Gradio polity sheets so Territory, Offices, Ruler Timeline, Office
+  History, and Recent History render readable labels instead of raw IDs or raw
+  fallback prose.
+- Territory rows now show held-place display names and held-since years.
+- Office lists now show filled seats first, readable office titles, settlement
+  display names for scoped seats, holder birth years, and a compact vacant-seat
+  count instead of listing vacant alderman seats.
+- Office history now renders readable office names and settlement names, with
+  cleaner current-ruler and ended-by wording.
+- Polity Recent History now presents `polity_named` events as "The polity
+  received its name." instead of repeating the event type or unknown-place text.
+- Empty city-state notes now show "No city-state structure yet."
+
+### Validation
+
+- `python -m py_compile utils\gradio_data_browser.py
+  unit_test\test_gradio_data_browser.py`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_place_sheets_include_recent_history
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_places_browser_batches_counts_and_filters_saved_world`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_empty_polity_detail_explains_current_save_has_none`

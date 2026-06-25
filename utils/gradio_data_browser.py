@@ -2480,6 +2480,8 @@ def _recent_history_sentence(
     event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
     if event_type in {"outlaw_flight", "outlaw_refuge_joined"}:
         return _recent_history_outlaw_sentence(con, world, event_type, payload)
+    if event_type == "polity_named":
+        return "The polity received its name."
     sentence = _event_sentence(con, world, event, None)
     raw_label = event_type.replace("_", " ")
     readable_label = _recent_history_event_label(event_type)
@@ -12185,21 +12187,70 @@ def _office_holder_label_from_history(
     return str(name or "Unknown")
 
 
+def _mapping_value(row: sqlite3.Row | dict[str, object], key: str, default: object = "") -> object:
+    if isinstance(row, sqlite3.Row):
+        return row[key] if key in row.keys() else default
+    return row.get(key, default)
+
+
+def _office_title_label(title_id: object) -> str:
+    title = str(title_id or "").strip()
+    if not title:
+        return "Office"
+    return _display_title(title)
+
+
+def _office_end_reason_label(reason: object) -> str:
+    text = str(reason or "").strip().replace("_", " ")
+    return text or "unknown reason"
+
+
+def _office_scope_label(
+    con: sqlite3.Connection | None,
+    world: str,
+    row: sqlite3.Row | dict[str, object],
+    *,
+    snapshot: dict[str, object] | None = None,
+) -> str:
+    scope = str(_mapping_value(row, "scope_settlement_id") or "").strip()
+    if not scope:
+        return ""
+    if snapshot is not None:
+        return _snapshot_settlement_name(snapshot, scope)
+    if con is not None:
+        return _settlement_name(con, world, scope)
+    return scope
+
+
 def _office_history_item(
     row: sqlite3.Row | dict[str, object],
     *,
     holder_label: str,
     include_office: bool,
+    office_label: str = "",
+    scope_label: str = "",
 ) -> str:
-    getter = row.__getitem__ if isinstance(row, sqlite3.Row) else row.get
-    office = str(getter("title_id") or getter("office_id") or "office")
-    scope = str(getter("scope_settlement_id") or "").strip()
-    span = _office_span_label(getter("start_sim_year"), getter("end_sim_year"))
-    reason = str(getter("end_reason") or "").strip()
-    status = "current" if getter("end_sim_year") in (None, "") else f"ended: {reason or 'unknown'}"
-    office_part = f"{office}: " if include_office else ""
-    scope_part = f" at {scope}" if scope else ""
-    return f"{span}: {office_part}{holder_label}{scope_part} ({status})"
+    span = _office_span_label(
+        _mapping_value(row, "start_sim_year"),
+        _mapping_value(row, "end_sim_year"),
+    )
+    current = _mapping_value(row, "end_sim_year") in (None, "")
+    reason = _mapping_value(row, "end_reason")
+    tail = ""
+    if include_office:
+        office = office_label or _office_title_label(
+            _mapping_value(row, "title_id") or _mapping_value(row, "office_id")
+        )
+        tail = f", {office}"
+        if scope_label:
+            tail += f" of {scope_label}"
+        if not current:
+            tail += f", ended by {_office_end_reason_label(reason)}"
+    elif current:
+        tail = ", current ruler"
+    elif reason not in (None, ""):
+        tail = f", ended by {_office_end_reason_label(reason)}"
+    return f"{span}: {holder_label}{tail}"
 
 
 def _head_office_history(
@@ -12265,6 +12316,34 @@ def _snapshot_region_display_name(snapshot: dict[str, object], region_id: object
         if label:
             return label
     return _display_title(rid)
+
+
+def _polity_territory_item(target: object, since_year: object) -> str:
+    target_text = str(target or "").strip()
+    if not target_text:
+        target_text = "Unrecorded territory"
+    return f"{target_text}, held since {_format_year(since_year)}"
+
+
+def _office_seat_sort_key(seat: sqlite3.Row | dict[str, object]) -> tuple[int, str, str, int]:
+    holder = _mapping_value(seat, "holder_person_id")
+    return (
+        0 if holder not in (None, "") else 1,
+        str(_mapping_value(seat, "title_id") or ""),
+        str(_mapping_value(seat, "scope_settlement_id") or ""),
+        _safe_int(_mapping_value(seat, "slot_index"), 0),
+    )
+
+
+def _office_seat_item(
+    seat: sqlite3.Row | dict[str, object],
+    holder_label: str,
+    scope_label: str,
+) -> str:
+    title_id = str(_mapping_value(seat, "title_id") or "").strip()
+    title = "Alderman" if title_id == "settlement_alderman" else _office_title_label(title_id)
+    place_part = f", {scope_label}" if scope_label else ""
+    return f"{title}{place_part}: {holder_label}"
 
 
 def _snapshot_person_job(person: dict[str, object]) -> str:
@@ -13538,14 +13617,19 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
             target = _snapshot_settlement_name(snapshot, target)
         elif terr.get("target_kind") == "region":
             target = _snapshot_region_display_name(snapshot, target)
-        territory_items.append(
-            f"{terr.get('target_kind')}: {target} since {_format_year(terr.get('since_sim_year'))}"
-        )
+        territory_items.append(_polity_territory_item(target, terr.get("since_sim_year")))
     seat_items = []
-    for seat in seats[:16]:
-        holder = _snapshot_person_link_text(snapshot, seat.get("holder_person_id")) if seat.get("holder_person_id") else "vacant"
-        scope = f" at {_snapshot_settlement_name(snapshot, seat.get('scope_settlement_id'))}" if seat.get("scope_settlement_id") else ""
-        seat_items.append(f"{seat.get('title_id')}{scope}: {holder}")
+    vacant_seats = sum(1 for seat in seats if seat.get("holder_person_id") in (None, ""))
+    for seat in sorted(seats, key=_office_seat_sort_key):
+        if seat.get("holder_person_id") in (None, ""):
+            continue
+        holder = _snapshot_person_link_text(snapshot, seat.get("holder_person_id"))
+        scope = _office_scope_label(None, str(snapshot.get("world") or ""), seat, snapshot=snapshot)
+        seat_items.append(_office_seat_item(seat, holder, scope))
+        if len(seat_items) >= 16:
+            break
+    if vacant_seats:
+        seat_items.append(f"Vacant seats: {vacant_seats}")
     office_history = sorted(
         [
             row
@@ -13586,6 +13670,13 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
                 snapshot=snapshot,
             ),
             include_office=True,
+            office_label=_office_title_label(hist.get("title_id") or hist.get("office_id")),
+            scope_label=_office_scope_label(
+                None,
+                str(snapshot.get("world") or ""),
+                hist,
+                snapshot=snapshot,
+            ),
         )
         for hist in sorted(
             office_history,
@@ -13618,7 +13709,7 @@ def _render_polity_sheet_from_snapshot(snapshot: dict[str, object], polity_id: s
         f'<div class="place-grid">{cards}</div>'
         '<div class="place-columns">'
         f'<section><h3>Territory</h3>{_ul(territory_items)}</section>'
-        f'<section><h3>City-State</h3>{_ul(city_state_items)}</section>'
+        f'<section><h3>City-State</h3>{_ul(city_state_items, "No city-state structure yet.")}</section>'
         f'<section><h3>Offices</h3>{_ul(seat_items)}</section>'
         f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
         f'<section><h3>Ruler Timeline</h3>{_ul(ruler_items)}</section>'
@@ -14046,12 +14137,19 @@ def _render_polity_sheet(
             target = _settlement_name(con, world, target)
         elif terr["target_kind"] == "region":
             target = _history_region_label(con, world, target)
-        territory_items.append(f"{terr['target_kind']}: {target} since {_format_year(terr['since_sim_year'])}")
+        territory_items.append(_polity_territory_item(target, terr["since_sim_year"]))
     seat_items = []
-    for seat in seats[:16]:
-        holder = _person_link_text(con, world, seat["holder_person_id"]) if seat["holder_person_id"] else "vacant"
-        scope = f" at {_settlement_name(con, world, seat['scope_settlement_id'])}" if seat["scope_settlement_id"] else ""
-        seat_items.append(f"{seat['title_id']}{scope}: {holder}")
+    vacant_seats = sum(1 for seat in seats if seat["holder_person_id"] in (None, ""))
+    for seat in sorted(seats, key=_office_seat_sort_key):
+        if seat["holder_person_id"] in (None, ""):
+            continue
+        holder = _person_link_text(con, world, seat["holder_person_id"])
+        scope = _office_scope_label(con, world, seat)
+        seat_items.append(_office_seat_item(seat, holder, scope))
+        if len(seat_items) >= 16:
+            break
+    if vacant_seats:
+        seat_items.append(f"Vacant seats: {vacant_seats}")
     office_history = _office_history_rows(con, pid)
     ruler_history = _head_office_history(world, row, seats, office_history)
     ruler_items = [
@@ -14067,6 +14165,8 @@ def _render_polity_sheet(
             hist,
             holder_label=_office_holder_label_from_history(con, world, hist),
             include_office=True,
+            office_label=_office_title_label(hist["title_id"] if "title_id" in hist.keys() else hist["office_id"]),
+            scope_label=_office_scope_label(con, world, hist),
         )
         for hist in sorted(
             office_history,
@@ -14103,7 +14203,7 @@ def _render_polity_sheet(
         f'<div class="place-grid">{cards}</div>'
         '<div class="place-columns">'
         f'<section><h3>Territory</h3>{_ul(territory_items)}</section>'
-        f'<section><h3>City-State</h3>{_ul(city_state_items)}</section>'
+        f'<section><h3>City-State</h3>{_ul(city_state_items, "No city-state structure yet.")}</section>'
         f'<section><h3>Offices</h3>{_ul(seat_items)}</section>'
         f'<section><h3>Vassals</h3>{_ul(vassal_items)}</section>'
         f'<section><h3>Ruler Timeline</h3>{_ul(ruler_items)}</section>'

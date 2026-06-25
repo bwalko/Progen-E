@@ -2102,9 +2102,25 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         ensure_government_schema(con)
         con.execute(
             """
+            CREATE TABLE simulation_settlements (
+                settlement_id TEXT PRIMARY KEY,
+                display_name TEXT
+            )
+            """
+        )
+        con.execute("INSERT INTO simulation_settlements VALUES ('r1:s1', 'Simonkren')")
+        con.execute(
+            """
             INSERT INTO simulation_polities (
-                polity_id, polity_type_id, name, founded_sim_year
-            ) VALUES (1, 'city_state', 'Northrealm', 1000)
+                polity_id, polity_type_id, name, founded_sim_year, capital_settlement_id
+            ) VALUES (1, 'city_state', 'Northrealm', 1000, 'r1:s1')
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO simulation_polity_territory (
+                polity_id, target_kind, target_id, since_sim_year
+            ) VALUES (1, 'settlement', 'r1:s1', 1000)
             """
         )
         con.execute(
@@ -2136,7 +2152,16 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             """
             INSERT INTO simulation_office_seats (
                 seat_id, polity_id, title_id, slot_index, status
-            ) VALUES (10, 1, 'king', 0, 'active')
+            ) VALUES (10, 1, 'count', 0, 'active')
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO simulation_office_seats (
+                seat_id, polity_id, title_id, slot_index, scope_settlement_id, status
+            ) VALUES
+                (11, 1, 'settlement_alderman', 0, 'r1:s1', 'active'),
+                (12, 1, 'settlement_alderman', 1, 'r1:s1', 'active')
             """
         )
         append_office_holding(
@@ -2164,11 +2189,47 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             start_sim_year=1005,
             ensure_schema=False,
         )
+        append_office_holding(
+            con,
+            world="test",
+            seat_id=11,
+            holder_person_id=1,
+            start_sim_year=1006,
+            ensure_schema=False,
+        )
+        close_office_holding(
+            con,
+            world="test",
+            seat_id=11,
+            holder_person_id=1,
+            end_sim_year=1008,
+            end_reason="term_expiry",
+            ensure_schema=False,
+        )
+        append_office_holding(
+            con,
+            world="test",
+            seat_id=11,
+            holder_person_id=1,
+            start_sim_year=1009,
+            ensure_schema=False,
+        )
+        con.execute("UPDATE simulation_office_seats SET holder_person_id = 2 WHERE seat_id = 10")
+        con.execute("UPDATE simulation_office_seats SET holder_person_id = 1 WHERE seat_id = 11")
+        con.execute(
+            """
+            INSERT INTO simulation_events (world, sim_year, event_type, payload_json)
+            VALUES ('test', 1000, 'polity_named', ?)
+            """,
+            (json.dumps({"polity_id": 1}),),
+        )
+        _add_memory_events_readable_view(con)
 
         html = _render_polity_sheet(con, "test", "1")
 
         self.assertIn("Ruler Timeline", html)
         self.assertIn("Office History", html)
+        self.assertIn("Simonkren, held since 1000", html)
         self.assertIn("City-State", html)
         self.assertIn("Autonomy: hegemon", html)
         self.assertIn("Occupation: liberated", html)
@@ -2178,10 +2239,33 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Office legitimacy: contested", html)
         self.assertIn("Latest civic work: storehouse", html)
         self.assertIn("1000-1004", html)
-        self.assertIn("ended: death", html)
+        self.assertIn("ended by death", html)
         self.assertIn("1005-present", html)
         self.assertIn("Ada Forge", html)
         self.assertIn("Bea Forge", html)
+        self.assertIn("Count: Bea Forge (b. 8)", html)
+        self.assertIn("Alderman, Simonkren: Ada Forge (b. 0)", html)
+        self.assertIn("Vacant seats: 1", html)
+        self.assertIn("1005-present: Bea Forge (b. 8), current ruler", html)
+        self.assertIn("1009-present: Ada Forge (b. 0), Settlement Alderman of Simonkren", html)
+        self.assertIn(
+            "1006-1008: Ada Forge (b. 0), Settlement Alderman of Simonkren, ended by term expiry",
+            html,
+        )
+        self.assertIn("1000: The polity received its name.", html)
+        self.assertNotIn("settlement_alderman", html)
+        self.assertNotIn("r1:s1", html)
+        self.assertNotIn("polity named at an unknown place", html)
+
+        con.execute(
+            """
+            INSERT INTO simulation_polities (
+                polity_id, polity_type_id, name, founded_sim_year
+            ) VALUES (2, 'county', 'Southrealm', 1001)
+            """
+        )
+        plain_html = _render_polity_sheet(con, "test", "2")
+        self.assertIn("No city-state structure yet.", plain_html)
 
     def test_property_crime_event_cards_use_payload_details(self) -> None:
         con = _memory_save()
