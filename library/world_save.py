@@ -8512,6 +8512,18 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         include_trait_slots = not bool(_trait_slots_from_config(ctx.db_path))
         for st in ctx.settlements_by_id.values():
             _lookup_or_insert_settlement_key(conn, st.settlement_id, st.region_id)
+        person_column_names = (
+            "person_id",
+            "is_founder",
+            "father_id",
+            "mother_id",
+            "is_alive",
+            *_PERSON_CHECKPOINT_COLUMNS,
+            "person_json",
+        )
+        person_cols_sql = ", ".join(person_column_names)
+        person_placeholders = ", ".join("?" for _ in person_column_names)
+        person_rows: list[tuple[object, ...]] = []
         for rec in ctx.people:
             person_cols, payload = _person_checkpoint_payload(
                 rec.person,
@@ -8519,33 +8531,24 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                 include_trait_slots=include_trait_slots,
                 conn=conn,
             )
-            column_names = (
-                "person_id",
-                "is_founder",
-                "father_id",
-                "mother_id",
-                "is_alive",
-                *_PERSON_CHECKPOINT_COLUMNS,
-                "person_json",
+            person_rows.append(
+                (
+                    rec.person_id,
+                    1 if rec.is_founder else 0,
+                    rec.father_id,
+                    rec.mother_id,
+                    1 if rec.person_id in alive else 0,
+                    *(person_cols[c] for c in _PERSON_CHECKPOINT_COLUMNS),
+                    payload,
+                )
             )
-            values = (
-                rec.person_id,
-                1 if rec.is_founder else 0,
-                rec.father_id,
-                rec.mother_id,
-                1 if rec.person_id in alive else 0,
-                *(person_cols[c] for c in _PERSON_CHECKPOINT_COLUMNS),
-                payload,
-            )
-            cols_sql = ", ".join(column_names)
-            placeholders = ", ".join("?" for _ in column_names)
-            cur.execute(
-                f"""
-                INSERT OR REPLACE INTO simulation_people ({cols_sql})
-                VALUES ({placeholders})
-                """,
-                values,
-            )
+        cur.executemany(
+            f"""
+            INSERT OR REPLACE INTO simulation_people ({person_cols_sql})
+            VALUES ({person_placeholders})
+            """,
+            person_rows,
+        )
         t0 = _profile_accumulate("checkpoint.snapshot_people", t0)
 
         _sync_household_service_contracts(conn, ctx)
@@ -8586,14 +8589,17 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         )
         passive_cols_sql = ", ".join(passive_column_names)
         passive_placeholders = ", ".join("?" for _ in passive_column_names)
-        for rec in getattr(ctx, "passive_people", {}).values():
-            cur.execute(
-                f"""
-                INSERT OR REPLACE INTO simulation_people_light ({passive_cols_sql})
-                VALUES ({passive_placeholders})
-                """,
-                _passive_person_values(conn, rec),
-            )
+        passive_rows = [
+            _passive_person_values(conn, rec)
+            for rec in getattr(ctx, "passive_people", {}).values()
+        ]
+        cur.executemany(
+            f"""
+            INSERT OR REPLACE INTO simulation_people_light ({passive_cols_sql})
+            VALUES ({passive_placeholders})
+            """,
+            passive_rows,
+        )
         t0 = _profile_accumulate("checkpoint.snapshot_passive_people", t0)
 
         cohort_column_names = (
@@ -8612,14 +8618,17 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         )
         cohort_cols_sql = ", ".join(cohort_column_names)
         cohort_placeholders = ", ".join("?" for _ in cohort_column_names)
-        for cohort in getattr(ctx, "passive_cohorts", []):
-            cur.execute(
-                f"""
-                INSERT OR REPLACE INTO simulation_cohorts ({cohort_cols_sql})
-                VALUES ({cohort_placeholders})
-                """,
-                _passive_cohort_values(conn, cohort),
-            )
+        cohort_rows = [
+            _passive_cohort_values(conn, cohort)
+            for cohort in getattr(ctx, "passive_cohorts", [])
+        ]
+        cur.executemany(
+            f"""
+            INSERT OR REPLACE INTO simulation_cohorts ({cohort_cols_sql})
+            VALUES ({cohort_placeholders})
+            """,
+            cohort_rows,
+        )
         t0 = _profile_accumulate("checkpoint.snapshot_passive_cohorts", t0)
 
         _flush_passive_promotion_log_entries(
@@ -8628,6 +8637,7 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         t0 = _profile_accumulate("checkpoint.snapshot_promotion_log", t0)
 
         by_region: dict[str, list[SettlementState]] = defaultdict(list)
+        settlement_rows: list[tuple[object, ...]] = []
         for settlement_id, st in ctx.settlements_by_id.items():
             by_region[st.region_id].append(st)
             settlement_key = _lookup_or_insert_settlement_key(
@@ -8636,22 +8646,7 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
             region_key = _lookup_or_insert_region_key(conn, st.region_id)
             if settlement_key is None or region_key is None:
                 continue
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO simulation_settlements (
-                    settlement_key, region_key, level, population_cap, household_cap,
-                    food_pressure, prosperity_pool, stability, market_pull,
-                    display_name, etymology,
-                    name_category_primary, name_category_secondary,
-                    name_culture_primary, name_culture_secondary,
-                    local_geography_json,
-                    founded_sim_year, abandoned_sim_year, status,
-                    consecutive_empty_years, site_slot,
-                    founding_reason, mother_settlement_id, trade_network_id,
-                    autonomy_level
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+            settlement_rows.append(
                 (
                     settlement_key,
                     region_key,
@@ -8680,23 +8675,33 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                     st.autonomy_level,
                 ),
             )
+        cur.executemany(
+            """
+            INSERT OR REPLACE INTO simulation_settlements (
+                settlement_key, region_key, level, population_cap, household_cap,
+                food_pressure, prosperity_pool, stability, market_pull,
+                display_name, etymology,
+                name_category_primary, name_category_secondary,
+                name_culture_primary, name_culture_secondary,
+                local_geography_json,
+                founded_sim_year, abandoned_sim_year, status,
+                consecutive_empty_years, site_slot,
+                founding_reason, mother_settlement_id, trade_network_id,
+                autonomy_level
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            settlement_rows,
+        )
 
+        region_rows: list[tuple[object, ...]] = []
         for region_id, bucket in by_region.items():
             tot_pop, tot_hh, fp, stb, mp = _aggregate_region_metrics(bucket)
             r_label = _resolve_region_display_name_for_checkpoint(ctx, region_id, bucket[0])
             region_key = _lookup_or_insert_region_key(conn, region_id)
             if region_key is None:
                 continue
-            cur.execute(
-                """
-                INSERT INTO simulation_regions (
-                    region_key, region_display_name,
-                    total_population_cap, total_household_cap,
-                    food_pressure, stability, market_pull,
-                    prosperity_pool, treasury_balance
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+            region_rows.append(
                 (
                     region_key,
                     r_label,
@@ -8713,35 +8718,58 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
                     ),
                 ),
             )
+        cur.executemany(
+            """
+            INSERT INTO simulation_regions (
+                region_key, region_display_name,
+                total_population_cap, total_household_cap,
+                food_pressure, stability, market_pull,
+                prosperity_pool, treasury_balance
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            region_rows,
+        )
         t0 = _profile_accumulate("checkpoint.snapshot_settlements_regions", t0)
 
-        for i, (a_id, b_id) in enumerate(ctx.couples):
-            convention = getattr(ctx, "surname_conventions_by_pair", {}).get(
-                tuple(sorted((int(a_id), int(b_id))))
+        surname_conventions = getattr(ctx, "surname_conventions_by_pair", {})
+        couple_rows = [
+            (
+                i,
+                a_id,
+                b_id,
+                surname_conventions.get(tuple(sorted((int(a_id), int(b_id))))),
             )
-            cur.execute(
-                """
-                INSERT INTO simulation_couples (
-                    sort_order, person_a_id, person_b_id, surname_convention
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                (i, a_id, b_id, convention),
+            for i, (a_id, b_id) in enumerate(ctx.couples)
+        ]
+        cur.executemany(
+            """
+            INSERT INTO simulation_couples (
+                sort_order, person_a_id, person_b_id, surname_convention
             )
+            VALUES (?, ?, ?, ?)
+            """,
+            couple_rows,
+        )
 
-        for i, (a_id, b_id) in enumerate(ctx.paramours):
-            convention = getattr(ctx, "surname_conventions_by_pair", {}).get(
-                tuple(sorted((int(a_id), int(b_id))))
+        paramour_rows = [
+            (
+                i,
+                a_id,
+                b_id,
+                surname_conventions.get(tuple(sorted((int(a_id), int(b_id))))),
             )
-            cur.execute(
-                """
-                INSERT INTO simulation_paramours (
-                    sort_order, person_a_id, person_b_id, surname_convention
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                (i, a_id, b_id, convention),
+            for i, (a_id, b_id) in enumerate(ctx.paramours)
+        ]
+        cur.executemany(
+            """
+            INSERT INTO simulation_paramours (
+                sort_order, person_a_id, person_b_id, surname_convention
             )
+            VALUES (?, ?, ?, ?)
+            """,
+            paramour_rows,
+        )
         t0 = _profile_accumulate("checkpoint.snapshot_relationships", t0)
 
         from library.government_checkpoint import checkpoint_government as _checkpoint_gov

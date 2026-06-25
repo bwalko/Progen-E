@@ -4094,3 +4094,28 @@ completion.
   `python -m unittest unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_custody_blocks_ordinary_residence_until_release`
   and
   `python -m unittest unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_custody_can_end_in_death_or_escape_before_release`
+
+## 2026-06-25 - Checkpoint Snapshot Bulk Writes
+
+### Fixes
+
+- Converted low-risk checkpoint snapshot insert loops in `library.world_save`
+  from per-row `execute` calls to batched `executemany` writes for detailed
+  people, passive people, passive cohorts, settlements, regions, couples, and
+  paramours.
+- Left higher-risk annual simulation loops alone: the non-detailed directory
+  annual tick already uses set-based SQL for deaths, jobs, partnerships, births,
+  and grouped settlement counts, while current remaining performance TODOs point
+  at incident generation and career reassignment rather than checkpoint row
+  insertion.
+
+### Validation
+
+- `python -m py_compile library\world_save.py`
+- `python -m unittest
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_checkpoint_roundtrip_one_person
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_passive_people_checkpoint_roundtrip
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_couple_surname_convention_roundtrip_on_resume`
+- `python utils\run_population_simulation.py --world-id codex_bulkwrite_probe
+  --years 1 --seed 424242 --reset-world --profile-last-years 1
+  --skip-timing-log --skip-report-files --passive-population-scale 0`
