@@ -3995,6 +3995,44 @@ completion.
 - `python -m py_compile library/simulation_context.py library/population_growth_runner.py unit_test/test_lazy_settlements.py unit_test/test_simulation_migration.py unit_test/test_population_growth_nondetailed_runner.py`
 - `python -m unittest unit_test.test_lazy_settlements unit_test.test_population_growth_nondetailed_runner unit_test.test_simulation_migration`
 
+## 2026-06-25 - Regional Service Villages And Bounded Satellite Fill
+
+### Enhancements
+
+- Added a service-village founding route for ordinary civic settlements:
+  - `regional_service_village` satellites can appear when a region's expected
+    background population can support more local farm/resource/religious/route
+    niches, even before the main settlement reaches the old overcrowding-only
+    threshold;
+  - the service route uses a capped regional target and a short cooldown, so it
+    can add village diversity without recreating the duplicate-settlement
+    runtime problem;
+  - pressure-driven satellites still use `birth_spinoff`, preserving the
+    distinction between family/crowding splits and regional-service villages.
+- Wired directory-backed population runs to attempt bounded service-satellite
+  founding before yearly `simulation_people_nondetailed` top-up, so newly
+  available villages can receive residents in the same year.
+- Added role-aware population balancing for non-detailed residents:
+  - young service villages and birth spin-offs receive a small non-detailed
+    viability floor;
+  - minor-role destinations use a soft cap during SQL migration, so hamlets,
+    refuges, monasteries, farming clusters, and fishing/reed villages stop
+    attracting background migrants once they are already full for their role.
+
+### Validation
+
+- `python -m py_compile library\settlement_affordances.py library\simulation_context.py library\nondetailed_population.py library\population_growth_runner.py unit_test\test_nondetailed_population.py unit_test\test_simulation_migration.py`
+- Focused regression slice:
+  `python -m unittest unit_test.test_simulation_migration.TestSimulationMigration.test_service_village_founding_uses_regional_hinterland_need unit_test.test_simulation_migration.TestSimulationMigration.test_ordinary_satellite_founding_ignores_outlaw_refuges unit_test.test_nondetailed_population.TestNondetailedPopulation.test_seed_top_up_gives_young_service_village_small_floor unit_test.test_nondetailed_population.TestNondetailedPopulation.test_set_based_nondetailed_migration_skips_full_minor_village`
+- Short directory smoke:
+  `python utils\run_population_simulation.py --world-id temp_service_village_smoke --reset-world --years 3 --starting-couples 10 --seed 20260625 --use-nondetailed-directory --skip-report-files --skip-timing-log`
+  completed in 59.47s with 34 detailed and 2,516 non-detailed living people.
+  The resulting save had 8 active settlements across 5 regions: 5 towns and
+  3 hamlets, with 3 regions already hosting 2 active civic settlements.
+- The broader `python -m unittest unit_test.test_simulation_migration
+  unit_test.test_nondetailed_population` run timed out after 184s on this
+  laptop before producing a pass/fail report; the focused slice above passed.
+
 ## 2026-06-24 - Gradio Browser Launcher Recovery
 
 ### Fixes

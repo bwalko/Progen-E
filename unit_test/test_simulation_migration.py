@@ -273,6 +273,46 @@ class TestSimulationMigration(unittest.TestCase):
                 self.assertIsNone(again)
                 self.assertEqual(len(ctx.active_settlements_in_region(rid)), 2)
 
+    def test_service_village_founding_uses_regional_hinterland_need(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=17,
+                flush_run_store=False,
+            ) as ctx:
+                rid = "aeria_north"
+                st = ctx.ensure_active_settlement_for_region(rid)
+                self._add_simple_adults(
+                    ctx,
+                    count=30,
+                    region_id=rid,
+                    settlement_id=st.settlement_id,
+                    year=1000,
+                )
+
+                with patch.object(ctx, "active_settlement_in_same_map_polygon", return_value=None):
+                    satellite = ctx.maybe_found_ordinary_satellite_settlement(
+                        rid,
+                        year=1000,
+                        region_population=22_000,
+                        region_cap=22_000,
+                    )
+
+                self.assertIsNotNone(satellite)
+                self.assertEqual(len(ctx.active_settlements_in_region(rid)), 2)
+                self.assertEqual(satellite.founding_reason, "regional_service_village")
+                self.assertEqual(satellite.mother_settlement_id, st.settlement_id)
+                self.assertGreater(int(satellite.site_slot), 1)
+
     def test_migration_tick_founds_local_satellite_before_outflow(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)

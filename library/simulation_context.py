@@ -2893,29 +2893,26 @@ class SimulationContext:
             )
         except (TypeError, ValueError):
             return None
-        remaining_headroom = cap_eff - pop
-        if pop <= 0 or remaining_headroom <= max(24, cap_eff // 100):
+        actual_pop = self.mixed_population_count_in_region(rid)
+        headroom_pop = actual_pop if pop >= cap_eff else pop
+        remaining_headroom = cap_eff - headroom_pop
+        if pop <= 0 or headroom_pop <= 0 or remaining_headroom <= max(24, cap_eff // 100):
             return None
         max_civic_sites = max(1, min(6, pop // 1000 + 1))
         if len(active) >= max_civic_sites:
             return None
         sim_y = int(year)
+        satellite_reasons = {"birth_spinoff", "regional_service_village"}
         saved_last_y = max(
             (
                 int(st.founded_sim_year)
                 for st in self.settlements_by_id.values()
                 if st.region_id == rid
-                and (st.founding_reason or "").strip().lower() == "birth_spinoff"
+                and (st.founding_reason or "").strip().lower() in satellite_reasons
                 and st.founded_sim_year is not None
             ),
             default=-10**9,
         )
-        last_y = max(
-            int(self.last_spinoff_sim_year_by_region.get(rid, -10**9)),
-            saved_last_y,
-        )
-        if sim_y - last_y < int(self.spinoff_cooldown_years):
-            return None
         mixed_by_sid = self.mixed_population_counts_by_settlement()
 
         def _mixed_count(st: SettlementState) -> int:
@@ -2935,6 +2932,14 @@ class SimulationContext:
         )
         mother_pop = _mixed_count(mother)
         site_factor = settlement_site_capacity_factor(mother, ctx=self, year=sim_y)
+        expected_population = max(0, int(region_population or 0), int(mother_pop))
+        try:
+            from library.settlement_affordances import regional_service_settlement_target
+
+            service_target = regional_service_settlement_target(cap_eff, expected_population)
+        except Exception:
+            service_target = 1
+        underserved_service_sites = len(active) < int(service_target)
         local_load_threshold = min(
             1000,
             max(
@@ -2942,16 +2947,38 @@ class SimulationContext:
                 int(round(cap_eff * 0.18 * max(0.1, float(site_factor)))),
             ),
         )
-        min_mother_pop = max(
+        pressure_min_mother_pop = max(
             int(self.spinoff_min_mother_settlement_population),
             local_load_threshold,
         )
-        if mother_pop < min_mother_pop:
+        pressure_ready = mother_pop >= pressure_min_mother_pop
+        service_min_mother_pop = max(
+            int(self.spinoff_min_mother_settlement_population),
+            min(70, max(12, int(round(cap_eff * 0.0012)))),
+        )
+        service_ready = (
+            underserved_service_sites
+            and expected_population >= max(160, cap_eff // 12)
+            and mother_pop >= service_min_mother_pop
+        )
+        if not pressure_ready and not service_ready:
             return None
+        last_y = max(
+            int(self.last_spinoff_sim_year_by_region.get(rid, -10**9)),
+            saved_last_y,
+        )
+        cooldown_years = (
+            max(1, min(2, int(self.spinoff_cooldown_years)))
+            if service_ready and not pressure_ready
+            else int(self.spinoff_cooldown_years)
+        )
+        if sim_y - last_y < cooldown_years:
+            return None
+        founding_reason = "regional_service_village" if service_ready and not pressure_ready else "birth_spinoff"
         before_ids = set(self.settlements_by_id)
         satellite = self.create_additional_active_settlement(
             rid,
-            founding_reason="birth_spinoff",
+            founding_reason=founding_reason,
             mother_settlement_id=mother.settlement_id,
         )
         if satellite.settlement_id in before_ids:

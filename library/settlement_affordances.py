@@ -430,7 +430,7 @@ def build_settlement_affordance_profile(
 
     import_capacity = _clamp(trade * 0.55 + water * 0.22 + gov * 0.24 + (0.10 if has_sea_route else 0.0))
     volatility = _clamp(extraction * 0.30 + climate * 0.24 + terrain * 0.16 + max(0.0, 0.40 - agriculture) * 0.26)
-    if founding_reason in {"commercial_outpost", "birth_spinoff"}:
+    if founding_reason in {"commercial_outpost", "birth_spinoff", "regional_service_village"}:
         volatility = _clamp(volatility + 0.08)
 
     variation = _stable_unit(f"{rid}|{sid}|{slot}|{founding_reason}")
@@ -475,6 +475,8 @@ def build_settlement_affordance_profile(
         ceiling = min(ceiling, 0.68)
     if founding_reason == "birth_spinoff":
         ceiling *= 0.78
+    elif founding_reason == "regional_service_village":
+        ceiling *= 0.70
     if str(getattr(settlement, "autonomy_level", "") or "").strip().lower() == "district":
         ceiling *= 0.90
     ceiling *= 0.88 + variation * 0.28
@@ -664,6 +666,69 @@ def growth_invariant_cap(profile: SettlementAffordanceProfile, target_count: int
     return min(target, max(40, soft_cap))
 
 
+def regional_service_settlement_target(region_cap: int, region_population: int) -> int:
+    """Approximate how many ordinary civic settlements a region can productively host."""
+    cap = max(1, int(region_cap))
+    pop = max(0, int(region_population))
+    if cap < 300 or pop < 90:
+        return 1
+    max_by_cap = min(6, max(1, 1 + cap // 5_000))
+    service_pop = max(160, cap // max(1, max_by_cap))
+    return min(max_by_cap, max(1, 1 + pop // service_pop))
+
+
+def settlement_role_soft_cap(
+    profile: SettlementAffordanceProfile,
+    *,
+    region_cap: int,
+) -> int:
+    """Soft mixed-population cap used to keep minor niches village-sized."""
+    cap = max(1, int(region_cap))
+    base = int(round(cap * 0.18 * profile.population_ceiling_multiplier))
+    role_caps = {
+        "hamlet": 70,
+        "refuge_settlement": 90,
+        "fishing_reed_village": 120,
+        "farming_village_cluster": 160,
+        "monastery": 180,
+        "pilgrimage_village": 220,
+        "logging_town": 260,
+    }
+    if profile.selected_role in role_caps:
+        base = min(base, role_caps[profile.selected_role])
+    if profile.selected_role == "extraction_town" and profile.import_capacity < 0.35:
+        base = min(base, 220)
+    return max(24, base)
+
+
+def young_satellite_viability_floor(
+    profile: SettlementAffordanceProfile,
+    settlement: Any,
+    *,
+    year: int,
+) -> int:
+    """Small non-detailed floor so fresh villages exist without becoming towns."""
+    slot = max(1, int(getattr(settlement, "site_slot", 1) or 1))
+    founded = getattr(settlement, "founded_sim_year", None)
+    if slot <= 1 or founded is None:
+        return 0
+    age = max(0, int(year) - int(founded))
+    if age > 6:
+        return 0
+    reason = str(getattr(settlement, "founding_reason", "") or "").strip().lower()
+    if reason == "regional_service_village":
+        base = 14 + min(18, age * 3)
+    elif reason == "birth_spinoff":
+        base = 10 + min(15, age * 3)
+    else:
+        return 0
+    if profile.selected_role in {"farming_village_cluster", "logging_town", "fishing_reed_village"}:
+        base += 8
+    elif profile.selected_role in {"monastery", "refuge_settlement", "hamlet"}:
+        base -= 3
+    return max(6, min(42, base))
+
+
 def new_settlement_backfill_cap(
     profile: SettlementAffordanceProfile,
     settlement: Any,
@@ -693,6 +758,8 @@ def new_settlement_backfill_cap(
         role_cap = 12 + age * 4 + detail * 2
     else:
         role_cap = 22 + age * 8 + detail * 3
+    if str(getattr(settlement, "founding_reason", "") or "").strip().lower() == "regional_service_village":
+        role_cap = min(role_cap, 26 + age * 5 + detail * 2)
     if age == 0:
         return min(49, max(1, first_year, min(role_cap, 49)))
     return max(1, role_cap)

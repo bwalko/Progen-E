@@ -2053,6 +2053,49 @@ def _record_profile_scale_snapshot(
         simulation_timing.record_gauge(year, label, metric, value)
 
 
+def _found_service_satellites_for_directory_topup(
+    ctx: SimulationContext,
+    *,
+    year: int,
+    population_scale: float,
+) -> int:
+    """Create a bounded set of village niches before non-detailed top-up runs."""
+    if population_scale <= 0.0 or not ctx.settlements_by_id:
+        return 0
+    founded = 0
+    region_ids = sorted(
+        {
+            str(st.region_id or "").strip()
+            for st in ctx.settlements_by_id.values()
+            if (st.status or "").strip().lower() == "active"
+        }
+    )
+    for rid in region_ids:
+        if not rid:
+            continue
+        try:
+            cap = max(1, int(ctx.effective_regional_population_cap(rid)))
+        except Exception:
+            continue
+        try:
+            current_pop = int(ctx.mixed_population_count_in_region(rid))
+        except Exception:
+            current_pop = 0
+        expected_pop = max(current_pop, int(round(cap * max(0.0, float(population_scale)))))
+        try:
+            satellite = ctx.maybe_found_ordinary_satellite_settlement(
+                rid,
+                year=int(year),
+                region_population=expected_pop,
+                region_cap=cap,
+            )
+        except (AttributeError, LookupError, ValueError):
+            satellite = None
+        if satellite is not None:
+            founded += 1
+    return founded
+
+
 def _run_population_growth_year_loop(
     ctx: SimulationContext,
     *,
@@ -2145,6 +2188,26 @@ def _run_population_growth_year_loop(
                 conn.row_factory = sqlite3.Row
                 ensure_checkpoint_schema(conn)
                 if prof:
+                    t_nd = tpc()
+                founded_satellites = _found_service_satellites_for_directory_topup(
+                    ctx,
+                    year=year,
+                    population_scale=passive_population_scale,
+                )
+                if founded_satellites:
+                    ctx.invalidate_mixed_population_cache()
+                    ctx.sync_settlement_resident_counts()
+                if prof:
+                    simulation_timing.record_gauge(
+                        year,
+                        "nondetailed",
+                        "service_satellites_founded",
+                        founded_satellites,
+                    )
+                    simulation_timing.accumulate(
+                        "nondetailed.service_satellite_founding",
+                        tpc() - t_nd,
+                    )
                     t_nd = tpc()
                 seed_nondetailed_from_active_settlements(
                     conn,

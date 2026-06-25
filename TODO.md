@@ -282,10 +282,11 @@ Completion boundary:
 
 - Remaining long validation: run the requested 100-couple / 300-year temp-world
   smoke when a long calibration window is acceptable:
-  `python utils/run_population_simulation.py --world-id temp_mixed_pop_scale_probe --reset-world --years 300 --starting-couples 100 --seed 20260624 --skip-report-files --skip-timing-log --progress`.
+  `python utils/run_population_simulation.py --world-id temp_mixed_pop_scale_probe --reset-world --years 300 --starting-couples 100 --seed 20260624 --use-nondetailed-directory --skip-report-files --skip-timing-log --progress`.
 - Include settlement distribution in the acceptance check: hamlets/villages
   should survive in plausible numbers, some chronically distressed small sites
-  may abandon, and large high-capacity settlements should carry higher
+  may abandon, regional-service and birth-spinoff founding reasons should be
+  visible, and large high-capacity settlements should carry higher
   non-detailed:detailed ratios without reducing detailed representation.
 - Run this as a clean reset or from a checkpoint made after the duplicate
   re-establishment fix. The 2026-06-24 default save reached year 1059 with

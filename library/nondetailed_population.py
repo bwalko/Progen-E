@@ -17,6 +17,8 @@ from library.settlement_affordances import (
     cached_settlement_affordance_profile,
     growth_invariant_cap,
     new_settlement_backfill_cap,
+    settlement_role_soft_cap,
+    young_satellite_viability_floor,
 )
 from library.settlements import settlement_attraction_score
 
@@ -956,11 +958,17 @@ def _pick_nondetailed_destination(ctx: object, source_st: object, *, year: int, 
                 else max(0, int(getattr(st, "resident_count", 0) or 0))
             )
             region_cap = max(1, int(ctx.effective_regional_population_cap(profile.region_id)))
-            soft_site_cap = max(
-                24,
-                int(round(region_cap * 0.18 * profile.population_ceiling_multiplier)),
-            )
-            headroom = _clamp(1.15 - residents / soft_site_cap, 0.18, 1.35)
+            soft_site_cap = settlement_role_soft_cap(profile, region_cap=region_cap)
+            if residents >= int(round(soft_site_cap * 1.08)):
+                if profile.selected_role in {
+                    "hamlet",
+                    "refuge_settlement",
+                    "fishing_reed_village",
+                    "farming_village_cluster",
+                    "monastery",
+                }:
+                    continue
+            headroom = _clamp(1.18 - residents / soft_site_cap, 0.08, 1.42)
             score *= headroom * (0.82 + profile.migration_pull * 0.38)
         except Exception:
             pass
@@ -1091,6 +1099,9 @@ def seed_nondetailed_from_active_settlements(
                 )
                 if cap is not None:
                     target_count = min(target_count, max(0, cap - detailed_alive))
+                floor = young_satellite_viability_floor(profile, st, year=year)
+                if floor > 0:
+                    target_count = max(target_count, floor)
             target_count = int(round(target_count * _resource_topup_multiplier(st)))
             count = max(0, target_count - existing_alive)
             if count <= 0:

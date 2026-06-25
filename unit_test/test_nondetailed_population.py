@@ -507,6 +507,80 @@ class TestNondetailedPopulation(unittest.TestCase):
                 max(1, counts.get(small, 0)) / 3,
             )
 
+    def test_seed_top_up_gives_young_service_village_small_floor(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_service_village",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            ctx.effective_regional_population_cap = lambda region_id: 5000
+            hub = "r1:s1"
+            village = "r1:s2"
+            ctx.settlements_by_id[hub] = SettlementState(
+                settlement_id=hub,
+                region_id="r1",
+                site_slot=1,
+                resident_count=30,
+                household_cap=7,
+                food_pressure=0.1,
+                prosperity_pool=1.4,
+                stability=0.8,
+                market_pull=0.7,
+            )
+            ctx.settlements_by_id[village] = SettlementState(
+                settlement_id=village,
+                region_id="r1",
+                site_slot=2,
+                resident_count=0,
+                household_cap=0,
+                food_pressure=0.1,
+                prosperity_pool=0.9,
+                stability=0.6,
+                market_pull=0.05,
+                founded_sim_year=1000,
+                founding_reason="regional_service_village",
+                mother_settlement_id=hub,
+            )
+
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                inserted = seed_nondetailed_from_active_settlements(
+                    conn,
+                    ctx,
+                    year=1000,
+                    population_scale=1.0,
+                    start_person_id=ctx.next_person_id,
+                )
+                conn.commit()
+                counts = {
+                    str(row["settlement_id"]): int(row["c"])
+                    for row in conn.execute(
+                        """
+                        SELECT sl.settlement_id, COUNT(*) AS c
+                        FROM simulation_people_nondetailed p
+                        JOIN simulation_settlement_lookup sl
+                          ON sl.settlement_key = p.current_settlement_key
+                        WHERE p.is_alive = 1
+                        GROUP BY sl.settlement_id
+                        """
+                    )
+                }
+
+            self.assertGreater(inserted, 0)
+            self.assertGreaterEqual(counts.get(village, 0), 10)
+            self.assertLessEqual(counts.get(village, 0), 42)
+            self.assertGreater(counts.get(hub, 0), counts.get(village, 0))
+
     def test_context_counts_and_promotion_use_nondetailed_directory(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
@@ -1202,6 +1276,117 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertGreater(result.moved, 0)
             self.assertLessEqual(result.moved, 20)
             self.assertGreater(dest_count, 1)
+
+    def test_set_based_nondetailed_migration_skips_full_minor_village(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_minor_village_cap",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            ctx.effective_regional_population_cap = lambda region_id: 5000
+            source = "r1:s1"
+            hamlet = "r1:s2"
+            town = "r1:s3"
+            ctx.settlements_by_id[source] = SettlementState(
+                settlement_id=source,
+                region_id="r1",
+                site_slot=1,
+                resident_count=260,
+                household_cap=58,
+                food_pressure=1.2,
+                prosperity_pool=0.35,
+                stability=0.3,
+                market_pull=0.1,
+            )
+            ctx.settlements_by_id[hamlet] = SettlementState(
+                settlement_id=hamlet,
+                region_id="r1",
+                site_slot=2,
+                resident_count=90,
+                household_cap=20,
+                food_pressure=0.05,
+                prosperity_pool=1.5,
+                stability=0.8,
+                market_pull=0.7,
+                founded_sim_year=990,
+                founding_reason="regional_service_village",
+            )
+            ctx.settlements_by_id[town] = SettlementState(
+                settlement_id=town,
+                region_id="r1",
+                site_slot=3,
+                resident_count=10,
+                household_cap=3,
+                food_pressure=0.05,
+                prosperity_pool=1.4,
+                stability=0.8,
+                market_pull=0.8,
+            )
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                for i in range(240):
+                    add_nondetailed_person(
+                        conn,
+                        NondetailedPersonSeed(
+                            birthyear=970 + (i % 20),
+                            gender="Male" if i % 2 else "Female",
+                            region_id="r1",
+                            settlement_id=source,
+                            job_family="food",
+                        ),
+                        person_id=8000 + i,
+                    )
+                for i in range(90):
+                    add_nondetailed_person(
+                        conn,
+                        NondetailedPersonSeed(
+                            birthyear=970,
+                            gender="Female" if i % 2 else "Male",
+                            region_id="r1",
+                            settlement_id=hamlet,
+                            job_family="food",
+                        ),
+                        person_id=9000 + i,
+                    )
+                add_nondetailed_person(
+                    conn,
+                    NondetailedPersonSeed(
+                        birthyear=970,
+                        gender="Female",
+                        region_id="r1",
+                        settlement_id=town,
+                        job_family="trade",
+                    ),
+                    person_id=9500,
+                )
+                conn.commit()
+                result = run_nondetailed_sql_migration(conn, ctx, year=1000)
+                conn.commit()
+                counts = {
+                    str(row["current_settlement_id"]): int(row["c"])
+                    for row in conn.execute(
+                        """
+                        SELECT current_settlement_id, COUNT(*) AS c
+                        FROM simulation_people_nondetailed_readable
+                        WHERE is_alive = 1
+                        GROUP BY current_settlement_id
+                        """
+                    )
+                }
+
+            self.assertGreater(result.moved, 0)
+            self.assertEqual(counts.get(hamlet, 0), 90)
+            self.assertGreater(counts.get(town, 0), 1)
 
 
 if __name__ == "__main__":
