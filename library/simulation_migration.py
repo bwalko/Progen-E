@@ -187,6 +187,15 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
         pop = int(resource_facts.region_population.get(rid, 0))
         if cap <= 0 or pop <= 0:
             continue
+        try:
+            ctx.maybe_found_ordinary_satellite_settlement(
+                rid,
+                year=int(year),
+                region_population=pop,
+                region_cap=cap,
+            )
+        except (AttributeError, LookupError, ValueError):
+            pass
         pressure = float(pop) / float(cap)
         if pressure < MIGRATION_PRESSURE_THRESHOLD:
             continue

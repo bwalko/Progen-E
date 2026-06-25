@@ -3904,3 +3904,25 @@ completion.
   0.68s and no `build_world_map_geometry` call in the profiled year.
 - Passed:
   `python -m unittest unit_test.test_save_checkpoint.TestSaveCheckpoint.test_checkpoint_load_does_not_refresh_all_local_geographies unit_test.test_save_checkpoint.TestSaveCheckpoint.test_ensure_checkpoint_schema_skips_repeated_full_setup_per_connection`
+
+## 2026-06-24 - Ordinary Settlement Satellite Founding
+
+### Enhancements
+
+- Added a civic-only ordinary satellite founding path before annual
+  resource-pressure migration. Strong populated regions can now add local
+  `birth_spinoff` settlements from active civic settlements when the region has
+  remaining headroom and the main settlement is carrying enough mixed
+  population.
+- Kept outlaw refuges outside the civic founding path. The new check reads only
+  `SettlementState` rows from `simulation_settlements`; `simulation_outlaw_refuges`
+  remain separate special-purpose sites and do not satisfy local settlement
+  density.
+- Extended `create_additional_active_settlement()` callers so birth spin-offs
+  persist `founding_reason='birth_spinoff'` and `mother_settlement_id` instead
+  of appearing as generic organic settlements.
+
+### Validation
+
+- `python -m py_compile library/simulation_context.py library/simulation_migration.py unit_test/test_simulation_migration.py`
+- `python -m unittest unit_test.test_simulation_migration`

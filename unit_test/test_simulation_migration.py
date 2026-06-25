@@ -17,6 +17,7 @@ from library.simulation_migration import (
     MIGRATION_PRESSURE_THRESHOLD,
     simulation_migration_annual_tick,
 )
+from library.simulation_outlaws import SimulationOutlawRefuge
 
 
 class TestSimulationMigration(unittest.TestCase):
@@ -209,7 +210,103 @@ class TestSimulationMigration(unittest.TestCase):
                     len(ctx.active_settlements_in_region(rid)),
                     active_before + 1,
                 )
+                new_st = ctx.settlements_by_id[str(s3)]
+                self.assertEqual(new_st.founding_reason, "birth_spinoff")
+                self.assertEqual(new_st.mother_settlement_id, sid)
                 self.assertEqual(ctx.spinoff_pending_families_by_region.get(rid, 0), 0)
+
+    def test_ordinary_satellite_founding_ignores_outlaw_refuges(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=17,
+                flush_run_store=False,
+            ) as ctx:
+                rid = "aeria_north"
+                st = ctx.ensure_active_settlement_for_region(rid)
+                ctx.outlaw_refuges[f"outlaw_refuge:{rid}:1"] = SimulationOutlawRefuge(
+                    refuge_id=f"outlaw_refuge:{rid}:1",
+                    region_id=rid,
+                    near_settlement_id=st.settlement_id,
+                    founded_year=1000,
+                )
+                self._add_simple_adults(
+                    ctx,
+                    count=1100,
+                    region_id=rid,
+                    settlement_id=st.settlement_id,
+                    year=1000,
+                )
+                active_before = ctx.active_settlements_in_region(rid)
+                self.assertEqual(len(active_before), 1)
+                self.assertEqual(len(ctx.outlaw_refuges), 1)
+
+                satellite = ctx.maybe_found_ordinary_satellite_settlement(
+                    rid,
+                    year=1000,
+                    region_population=ctx.mixed_population_count_in_region(rid),
+                    region_cap=5000,
+                )
+
+                self.assertIsNotNone(satellite)
+                self.assertEqual(len(ctx.active_settlements_in_region(rid)), 2)
+                self.assertEqual(len(ctx.outlaw_refuges), 1)
+                self.assertEqual(satellite.founding_reason, "birth_spinoff")
+                self.assertEqual(satellite.mother_settlement_id, st.settlement_id)
+                self.assertGreater(int(satellite.site_slot), 1)
+
+                again = ctx.maybe_found_ordinary_satellite_settlement(
+                    rid,
+                    year=1000,
+                    region_population=ctx.mixed_population_count_in_region(rid),
+                    region_cap=5000,
+                )
+                self.assertIsNone(again)
+                self.assertEqual(len(ctx.active_settlements_in_region(rid)), 2)
+
+    def test_migration_tick_founds_local_satellite_before_outflow(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                placename_rng_salt=18,
+                flush_run_store=False,
+            ) as ctx:
+                rid = "aeria_north"
+                st = ctx.ensure_active_settlement_for_region(rid)
+                ctx.region_effective_cap_multiplier[rid] = 5.0
+                self._add_simple_adults(
+                    ctx,
+                    count=1100,
+                    region_id=rid,
+                    settlement_id=st.settlement_id,
+                    year=1000,
+                )
+
+                simulation_migration_annual_tick(ctx, 1000)
+
+                active = ctx.active_settlements_in_region(rid)
+                self.assertEqual(len(active), 2)
+                satellite = [s for s in active if int(s.site_slot) > 1][0]
+                self.assertEqual(satellite.founding_reason, "birth_spinoff")
+                self.assertEqual(satellite.mother_settlement_id, st.settlement_id)
 
     def test_married_couple_migrates_together(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

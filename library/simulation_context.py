@@ -2791,7 +2791,13 @@ class SimulationContext:
                 return st
         return None
 
-    def create_additional_active_settlement(self, region_id: str) -> SettlementState:
+    def create_additional_active_settlement(
+        self,
+        region_id: str,
+        *,
+        founding_reason: str = "organic",
+        mother_settlement_id: str | None = None,
+    ) -> SettlementState:
         rid = (region_id or "").strip()
         region = get_region(rid, world=self.world, db_path=self.db_path)
         slot = self.max_site_slot_in_region(rid) + 1
@@ -2835,11 +2841,103 @@ class SimulationContext:
             founded_sim_year=year,
             status="active",
             consecutive_empty_years=0,
+            founding_reason=founding_reason,
+            mother_settlement_id=mother_settlement_id,
         )
         self.settlements_by_id[sid] = st
         self._set_region_local_geography(rid, geo_json)
         self.rebuild_settlement_region_index()
         return st
+
+    def maybe_found_ordinary_satellite_settlement(
+        self,
+        region_id: str,
+        *,
+        year: int,
+        region_population: int | None = None,
+        region_cap: int | None = None,
+    ) -> SettlementState | None:
+        """Found a civic satellite when one town is carrying too much local population.
+
+        This deliberately uses only ordinary ``SettlementState`` rows. Outlaw
+        refuges remain special-purpose places and never satisfy civic settlement
+        density, caps, or migration-target structure.
+        """
+        rid = (region_id or "").strip()
+        if not rid:
+            return None
+        active = self.active_settlements_in_region(rid)
+        if not active:
+            return None
+        try:
+            cap_eff = (
+                max(1, int(region_cap))
+                if region_cap is not None
+                else max(1, int(self.effective_regional_population_cap(rid)))
+            )
+        except (LookupError, TypeError, ValueError):
+            return None
+        try:
+            pop = (
+                max(0, int(region_population))
+                if region_population is not None
+                else max(0, int(self.mixed_population_count_in_region(rid)))
+            )
+        except (TypeError, ValueError):
+            return None
+        remaining_headroom = cap_eff - pop
+        if pop <= 0 or remaining_headroom <= max(24, cap_eff // 100):
+            return None
+        max_civic_sites = max(1, min(6, pop // 1000 + 1))
+        if len(active) >= max_civic_sites:
+            return None
+        sim_y = int(year)
+        last_y = int(self.last_spinoff_sim_year_by_region.get(rid, -10**9))
+        if sim_y - last_y < int(self.spinoff_cooldown_years):
+            return None
+        mixed_by_sid = self.mixed_population_counts_by_settlement()
+
+        def _mixed_count(st: SettlementState) -> int:
+            return max(
+                0,
+                int(
+                    mixed_by_sid.get(
+                        st.settlement_id,
+                        getattr(st, "resident_count", 0) or 0,
+                    )
+                ),
+            )
+
+        mother = max(
+            active,
+            key=lambda st: (_mixed_count(st), -int(st.site_slot), st.settlement_id),
+        )
+        mother_pop = _mixed_count(mother)
+        site_factor = settlement_site_capacity_factor(mother, ctx=self, year=sim_y)
+        local_load_threshold = min(
+            1000,
+            max(
+                250,
+                int(round(cap_eff * 0.18 * max(0.1, float(site_factor)))),
+            ),
+        )
+        min_mother_pop = max(
+            int(self.spinoff_min_mother_settlement_population),
+            local_load_threshold,
+        )
+        if mother_pop < min_mother_pop:
+            return None
+        before_ids = set(self.settlements_by_id)
+        satellite = self.create_additional_active_settlement(
+            rid,
+            founding_reason="birth_spinoff",
+            mother_settlement_id=mother.settlement_id,
+        )
+        if satellite.settlement_id in before_ids:
+            return None
+        self.last_spinoff_sim_year_by_region[rid] = sim_y
+        self.spinoff_pending_families_by_region.pop(rid, None)
+        return satellite
 
     def maybe_spin_off_birth_settlement(
         self,
@@ -2921,7 +3019,11 @@ class SimulationContext:
         if nxt < req:
             return rid, mother_settlement_id
         self.spinoff_pending_families_by_region[rid] = 0
-        new_st = self.create_additional_active_settlement(rid)
+        new_st = self.create_additional_active_settlement(
+            rid,
+            founding_reason="birth_spinoff",
+            mother_settlement_id=mother_sid or None,
+        )
         self.last_spinoff_sim_year_by_region[rid] = sim_y
         return rid, new_st.settlement_id
 
