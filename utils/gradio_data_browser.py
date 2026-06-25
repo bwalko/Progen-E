@@ -1072,6 +1072,9 @@ body.dark .person-sheet,
 .history-bar-refuge {
     background: #7a4d58;
 }
+.history-bar-custody {
+    background: #4f5f6f;
+}
 .history-bar:hover,
 .history-bar:focus {
     background: var(--person-sheet-link-hover);
@@ -7407,7 +7410,10 @@ def _settlement_history_entries(
         settlement_row = _lookup_settlement(con, world, sid)
         rid = str(region_id or "").strip() or _settlement_region_id(con, world, sid)
         open_entry = {
+            "residence_kind": "civic",
             "settlement_id": sid,
+            "place_id": sid,
+            "place_label": _settlement_name(con, world, sid) or sid,
             "settlement_name": _settlement_name(con, world, sid) or sid,
             "region_id": rid,
             "region": _history_region_label(con, world, rid) if rid else "",
@@ -7484,6 +7490,15 @@ def _settlement_history_entries(
 
 
 def _settlement_history_label(entry: dict[str, object]) -> str:
+    return str(
+        entry.get("place_label")
+        or entry.get("settlement_name")
+        or entry.get("settlement_id")
+        or "Unknown"
+    ).strip()
+
+
+def _settlement_history_detail(entry: dict[str, object]) -> str:
     parts = [
         str(entry.get("settlement_name") or entry.get("settlement_id") or "Unknown").strip(),
         str(entry.get("type") or "").strip(),
@@ -7516,7 +7531,7 @@ def _settlement_history_lines(entries: list[dict[str, object]]) -> list[str]:
         return ["- No settlement residence history."]
     return [
         f"- {_history_year_range(entry.get('start_year'), entry.get('end_year'))}: "
-        f"{_settlement_history_label(entry)}; reason {entry.get('reason') or 'unknown'}"
+        f"{_settlement_history_detail(entry)}; reason {entry.get('reason') or 'unknown'}"
         for entry in entries
     ]
 
@@ -7577,7 +7592,10 @@ def _outlaw_refuge_history_entries(
         close_open(year, "unknown")
         nearby_id = payload.get("near_settlement_id") or payload.get("settlement_id")
         open_entry = {
+            "residence_kind": "refuge",
             "refuge_id": rid,
+            "place_id": rid,
+            "place_label": _outlaw_refuge_label(con, world, payload),
             "refuge_name": _outlaw_refuge_label(con, world, payload),
             "near_settlement_id": nearby_id,
             "near_settlement": _settlement_name(con, world, nearby_id) or str(nearby_id or ""),
@@ -7620,6 +7638,15 @@ def _outlaw_refuge_history_entries(
 
 
 def _outlaw_refuge_history_label(entry: dict[str, object]) -> str:
+    return str(
+        entry.get("place_label")
+        or entry.get("refuge_name")
+        or entry.get("refuge_id")
+        or "Unknown refuge"
+    ).strip()
+
+
+def _outlaw_refuge_history_detail(entry: dict[str, object]) -> str:
     name = str(entry.get("refuge_name") or entry.get("refuge_id") or "Unknown refuge").strip()
     near = str(entry.get("near_settlement") or entry.get("near_settlement_id") or "").strip()
     return f"{name} near {near}" if near else name
@@ -7638,7 +7665,7 @@ def _outlaw_refuge_history_items_html(
         row_key=lambda entry: str(entry.get("refuge_id") or ""),
         row_label_html=lambda entry: html.escape(_outlaw_refuge_history_label(entry)),
         bar_label_text=lambda entry: (
-            f"{_outlaw_refuge_history_label(entry)}; entered by "
+            f"{_outlaw_refuge_history_detail(entry)}; entered by "
             f"{entry.get('entered_by') or 'unknown'}; exited by "
             f"{entry.get('exited_by') or 'unknown'}"
         ),
@@ -7651,8 +7678,202 @@ def _outlaw_refuge_history_lines(entries: list[dict[str, object]]) -> list[str]:
         return ["- No outlaw refuge residence history."]
     return [
         f"- {_history_year_range(entry.get('start_year'), entry.get('end_year'))}: "
-        f"{_outlaw_refuge_history_label(entry)}; entered by {entry.get('entered_by') or 'unknown'}; "
+        f"{_outlaw_refuge_history_detail(entry)}; entered by {entry.get('entered_by') or 'unknown'}; "
         f"exited by {entry.get('exited_by') or 'unknown'}"
+        for entry in entries
+    ]
+
+
+def _custody_exit_label(event_type: str) -> str:
+    return {
+        "outlaw_returned": "returned",
+        "outlaw_forgotten": "returned",
+        "outlaw_bought_off": "returned",
+        "outlaw_escape": "escaped",
+        "outlaw_died_in_custody": "death",
+        "death": "death",
+    }.get(event_type, "unknown")
+
+
+def _custody_history_entries(
+    con: sqlite3.Connection,
+    world: str,
+    events: list[sqlite3.Row],
+    person: dict[str, object],
+    current_year: int | None,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    open_entry: dict[str, object] | None = None
+    open_end_year = _history_open_end_year(person, current_year)
+
+    def close_open(year: int | None, exited_by: str) -> None:
+        nonlocal open_entry
+        if open_entry is None:
+            return
+        start = _history_int(open_entry.get("start_year"))
+        end = year if year is not None else open_end_year
+        if start is not None and end is not None and int(end) < start:
+            end = start
+        open_entry["end_year"] = end
+        open_entry["exited_by"] = exited_by or "unknown"
+        entries.append(open_entry)
+        open_entry = None
+
+    def open_custody(payload: dict[str, object], year: int | None) -> None:
+        nonlocal open_entry
+        site_id = str(
+            payload.get("custody_site_settlement_id")
+            or payload.get("outlaw_custody_site_settlement_id")
+            or payload.get("settlement_id")
+            or payload.get("to_settlement_id")
+            or ""
+        ).strip()
+        custody_id = str(
+            payload.get("custody_id")
+            or payload.get("outlaw_custody_id")
+            or site_id
+            or "custody"
+        ).strip()
+        if open_entry is not None and str(open_entry.get("place_id") or "") == custody_id:
+            return
+        close_open(year, "unknown")
+        site_name = _settlement_name(con, world, site_id) if site_id else ""
+        place_label = f"{site_name or 'Unknown'} gaol"
+        rid = str(payload.get("custody_region_id") or payload.get("region_id") or "").strip()
+        if not rid and site_id:
+            rid = _settlement_region_id(con, world, site_id)
+        open_entry = {
+            "residence_kind": "custody",
+            "place_id": custody_id,
+            "settlement_id": site_id,
+            "place_label": place_label,
+            "settlement_name": site_name or site_id or "Unknown",
+            "region_id": rid,
+            "region": _history_region_label(con, world, rid) if rid else "",
+            "type": "jail/gaol",
+            "start_year": year,
+            "end_year": None,
+            "entered_by": "captured",
+            "exited_by": "unknown",
+        }
+
+    for event in events:
+        event_type = str(event["event_type"] or "").strip()
+        payload = _event_readable_place_payload(
+            con,
+            event,
+            _load_json_object(event["payload_json"]),
+        )
+        year = _event_year(event)
+        if event_type == "outlaw_captured":
+            open_custody(payload, year)
+        elif event_type in {
+            "outlaw_returned",
+            "outlaw_forgotten",
+            "outlaw_bought_off",
+            "outlaw_escape",
+            "outlaw_died_in_custody",
+            "death",
+        }:
+            close_open(year, _custody_exit_label(event_type))
+
+    current_custody_id = str(person.get("outlaw_custody_id") or "").strip()
+    if current_custody_id and open_entry is None:
+        open_custody(
+            {
+                "outlaw_custody_id": current_custody_id,
+                "outlaw_custody_site_settlement_id": person.get("outlaw_custody_site_settlement_id"),
+                "custody_region_id": person.get("birthplace_region_id"),
+            },
+            _history_int(person.get("outlaw_custody_start_year")),
+        )
+    close_open(open_end_year, "unknown")
+    return entries
+
+
+def _residence_history_entries(
+    settlement_entries: list[dict[str, object]],
+    refuge_entries: list[dict[str, object]],
+    custody_entries: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    entries = [
+        *settlement_entries,
+        *refuge_entries,
+        *custody_entries,
+    ]
+    return sorted(
+        entries,
+        key=lambda entry: (
+            _history_int(entry.get("start_year"))
+            if _history_int(entry.get("start_year")) is not None
+            else -10**12,
+            _history_int(entry.get("end_year"))
+            if _history_int(entry.get("end_year")) is not None
+            else 10**12,
+            str(entry.get("residence_kind") or ""),
+            str(entry.get("place_label") or ""),
+        ),
+    )
+
+
+def _residence_history_label(entry: dict[str, object]) -> str:
+    return str(entry.get("place_label") or "Unknown").strip() or "Unknown"
+
+
+def _residence_history_detail(entry: dict[str, object]) -> str:
+    kind = str(entry.get("residence_kind") or "civic")
+    if kind == "refuge":
+        return (
+            f"{_outlaw_refuge_history_detail(entry)}; outlaw refuge; entered by "
+            f"{entry.get('entered_by') or 'unknown'}; exited by "
+            f"{entry.get('exited_by') or 'unknown'}"
+        )
+    if kind == "custody":
+        region = str(entry.get("region") or entry.get("region_id") or "").strip()
+        region_tail = f"; region {region}" if region else ""
+        return (
+            f"{entry.get('settlement_name') or 'Unknown'} jail/gaol; custody"
+            f"{region_tail}; entered by {entry.get('entered_by') or 'unknown'}; "
+            f"exited by {entry.get('exited_by') or 'unknown'}"
+        )
+    detail = _settlement_history_detail(entry)
+    return f"{detail}; reason {entry.get('reason') or 'unknown'}"
+
+
+def _residence_history_items_html(
+    entries: list[dict[str, object]],
+    person: dict[str, object] | None = None,
+    current_year: int | None = None,
+) -> list[str]:
+    return _history_lifespan_grid_html(
+        entries,
+        person=person,
+        current_year=current_year,
+        empty_text="No residence history",
+        row_key=lambda entry: (
+            f"{entry.get('residence_kind') or 'civic'}:"
+            f"{entry.get('place_id') or entry.get('place_label') or ''}"
+        ),
+        row_label_html=lambda entry: html.escape(_residence_history_label(entry)),
+        bar_label_text=_residence_history_detail,
+        bar_class=lambda entry: (
+            "history-bar-custody"
+            if str(entry.get("residence_kind") or "") == "custody"
+            else (
+                "history-bar-refuge"
+                if str(entry.get("residence_kind") or "") == "refuge"
+                else ""
+            )
+        ),
+    )
+
+
+def _residence_history_lines(entries: list[dict[str, object]]) -> list[str]:
+    if not entries:
+        return ["- No residence history."]
+    return [
+        f"- {_history_year_range(entry.get('start_year'), entry.get('end_year'))}: "
+        f"{_residence_history_detail(entry)}"
         for entry in entries
     ]
 
@@ -9754,6 +9975,18 @@ def _render_person_sheet(
         person,
         current_year,
     )
+    custody_history = _custody_history_entries(
+        con,
+        world,
+        raw_events,
+        person,
+        current_year,
+    )
+    residence_history = _residence_history_entries(
+        settlement_history,
+        outlaw_refuge_history,
+        custody_history,
+    )
     partner_history = _cap_relationship_entries_at_other_deaths(con, world, partner_history)
     paramour_history = _cap_relationship_entries_at_other_deaths(con, world, paramour_history)
     relationship_history = _combined_relationship_history_entries(
@@ -9793,13 +10026,8 @@ def _render_person_sheet(
         con, world, knowledge_effect_rows, row["person_id"]
     )
     job_items = _job_history_items_html(job_history, person, current_year)
-    settlement_items = _settlement_history_items_html(
-        settlement_history,
-        person,
-        current_year,
-    )
-    outlaw_refuge_items = _outlaw_refuge_history_items_html(
-        outlaw_refuge_history,
+    residence_items = _residence_history_items_html(
+        residence_history,
         person,
         current_year,
     )
@@ -10041,13 +10269,9 @@ def _render_person_sheet(
         <h3 id="person-{row['person_id']}-job-history" class="section-title">Job History</h3>
         <div class="history-list">{''.join(job_items)}</div>
       </section>
-      <section aria-labelledby="person-{row['person_id']}-settlement-history">
-        <h3 id="person-{row['person_id']}-settlement-history" class="section-title">Settlement Timeline</h3>
-        <div class="history-list">{''.join(settlement_items)}</div>
-      </section>
-      <section aria-labelledby="person-{row['person_id']}-outlaw-refuge-history">
-        <h3 id="person-{row['person_id']}-outlaw-refuge-history" class="section-title">Outlaw Refuge Timeline</h3>
-        <div class="history-list">{''.join(outlaw_refuge_items)}</div>
+      <section aria-labelledby="person-{row['person_id']}-residence-history">
+        <h3 id="person-{row['person_id']}-residence-history" class="section-title">Residence Timeline</h3>
+        <div class="history-list">{''.join(residence_items)}</div>
       </section>
       <section aria-labelledby="person-{row['person_id']}-relationship-history">
         <h3 id="person-{row['person_id']}-relationship-history" class="section-title">Relationship History</h3>
@@ -10136,6 +10360,18 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
         person,
         current_year,
     )
+    custody_history = _custody_history_entries(
+        con,
+        world,
+        raw_events,
+        person,
+        current_year,
+    )
+    residence_history = _residence_history_entries(
+        settlement_history,
+        outlaw_refuge_history,
+        custody_history,
+    )
     partner_history = _cap_relationship_entries_at_other_deaths(con, world, partner_history)
     paramour_history = _cap_relationship_entries_at_other_deaths(con, world, paramour_history)
     relationship_history = _combined_relationship_history_entries(
@@ -10169,8 +10405,7 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
         con, world, knowledge_effect_rows, row["person_id"]
     )
     job_history_lines = _job_history_lines(job_history)
-    settlement_history_lines = _settlement_history_lines(settlement_history)
-    outlaw_refuge_history_lines = _outlaw_refuge_history_lines(outlaw_refuge_history)
+    residence_history_lines = _residence_history_lines(residence_history)
     relationship_history_lines = _combined_relationship_history_lines(
         con,
         world,
@@ -10258,11 +10493,8 @@ def _render_person_share_text(con: sqlite3.Connection, world: str, row: sqlite3.
             "Job History:",
             *job_history_lines,
             "",
-            "Settlement Timeline:",
-            *settlement_history_lines,
-            "",
-            "Outlaw Refuge Timeline:",
-            *outlaw_refuge_history_lines,
+            "Residence Timeline:",
+            *residence_history_lines,
             "",
             "Relationship History:",
             *relationship_history_lines,

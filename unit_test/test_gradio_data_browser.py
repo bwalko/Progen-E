@@ -2675,21 +2675,28 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         sheet = gdb._render_person_sheet(con, "test", row, person)
         share = gdb._render_person_share_text(con, "test", row, person)
 
-        self.assertLess(sheet.index("Settlement Timeline"), sheet.index(">Events</h3>"))
-        self.assertLess(sheet.index("Outlaw Refuge Timeline"), sheet.index(">Events</h3>"))
-        settlement_section = sheet[
-            sheet.index("Settlement Timeline"):sheet.index("Outlaw Refuge Timeline")
-        ]
-        refuge_section = sheet[
-            sheet.index("Outlaw Refuge Timeline"):sheet.index("Relationship History")
+        self.assertLess(sheet.index("Residence Timeline"), sheet.index(">Events</h3>"))
+        self.assertNotIn("Settlement Timeline", sheet)
+        self.assertNotIn("Outlaw Refuge Timeline", sheet)
+        residence_section = sheet[
+            sheet.index("Residence Timeline"):sheet.index("Relationship History")
         ]
         events_section = sheet[sheet.index(">Events</h3>"):]
-        self.assertIn("Fordham - hamlet - River Country", settlement_section)
-        self.assertIn("Eastford - town - River Country", settlement_section)
-        self.assertIn("reason job-seeker migration", settlement_section)
-        self.assertIn("The Blackthorn Crag near Fordham", refuge_section)
-        self.assertIn("entered by outlaw flight", refuge_section)
-        self.assertIn("exited by captured", refuge_section)
+        self.assertIn('history-row-label">Fordham</div>', residence_section)
+        self.assertIn('history-row-label">Eastford</div>', residence_section)
+        self.assertIn('history-row-label">The Blackthorn Crag</div>', residence_section)
+        self.assertIn('history-row-label">Fordham gaol</div>', residence_section)
+        self.assertNotIn('history-row-label">Fordham - hamlet', residence_section)
+        self.assertNotIn('history-row-label">Eastford - town', residence_section)
+        self.assertIn("Fordham - hamlet - River Country; reason birth/backfill", residence_section)
+        self.assertIn("Eastford - town - River Country; reason job-seeker migration", residence_section)
+        self.assertIn("The Blackthorn Crag near Fordham; outlaw refuge", residence_section)
+        self.assertIn("entered by outlaw flight", residence_section)
+        self.assertIn("exited by captured", residence_section)
+        self.assertIn("Fordham jail/gaol; custody", residence_section)
+        self.assertIn("entered by captured", residence_section)
+        self.assertIn("exited by returned", residence_section)
+        self.assertIn("history-bar-custody", residence_section)
         self.assertNotIn("Settlement Move Planned", events_section)
         self.assertNotIn("Job Seeker Migration", events_section)
         self.assertNotIn("Settlement Moved", events_section)
@@ -2697,10 +2704,14 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertNotIn("Outlaw Refuge Joined", events_section)
         self.assertIn("Outlaw Captured", events_section)
         self.assertIn("Outlaw Returned", events_section)
-        self.assertIn("Settlement Timeline:\n- 0-1006: Fordham - hamlet - River Country", share)
+        self.assertIn("Residence Timeline:\n- 0-1006: Fordham - hamlet - River Country", share)
         self.assertIn("- 1006-1008: Eastford - town - River Country; reason job-seeker migration", share)
         self.assertIn(
-            "Outlaw Refuge Timeline:\n- 1008-1010: The Blackthorn Crag near Fordham; entered by outlaw flight; exited by captured",
+            "- 1008-1010: The Blackthorn Crag near Fordham; outlaw refuge; entered by outlaw flight; exited by captured",
+            share,
+        )
+        self.assertIn(
+            "- 1010-1012: Fordham jail/gaol; custody",
             share,
         )
 

@@ -4062,14 +4062,14 @@ completion.
 
 ### Enhancements
 
-- Added person-sheet `Settlement Timeline` and `Outlaw Refuge Timeline`
-  sections using the existing Job History timeline renderer.
-- Settlement residence now summarizes place, region, role/type, start/end
-  years, and readable reasons such as birth/backfill, household move,
-  job-seeker migration, custody transfer, and return from outlawry.
-- Outlaw refuge residence is shown separately from ordinary civic settlement
-  residence, with refuge name, nearby settlement, entered-by, and exited-by
-  labels.
+- Added a single person-sheet `Residence Timeline` using the existing Job
+  History timeline renderer.
+- Residence spans now combine ordinary civic residence, outlaw refuge residence,
+  and custody residence in one timeline.
+- Timeline row labels use compact place names only, while hover/share details
+  preserve region, role/type, start/end years, readable move reasons, refuge
+  entered/exited labels, and custody jail/gaol labels with a distinct custody
+  color.
 - Kept raw movement/refuge events in `save.sqlite`, but hid routine
   `settlement_move_planned`, `settlement_moved`, `job_seeker_migration`,
   `outlaw_flight`, and `outlaw_refuge_joined` rows from the person event feed
@@ -4088,6 +4088,10 @@ completion.
 
 - `python -m py_compile utils\gradio_data_browser.py library\simulation_context.py`
 - `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_promotes_residence_timelines_over_move_event_spam unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_custody_drops_queued_ordinary_migration_until_release`
+- Follow-up residence-timeline merge:
+  `python -m py_compile utils\gradio_data_browser.py`
+  and
+  `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_promotes_residence_timelines_over_move_event_spam`
 - Neighboring browser tests:
   `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_has_combined_relationship_history_section unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_relationship_history_caps_open_span_at_other_person_death unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_outlaw_custody_surfaces_in_person_views`
 - Neighboring custody tests:
