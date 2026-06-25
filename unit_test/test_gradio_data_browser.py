@@ -995,6 +995,22 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         headers = list(table["headers"])  # type: ignore[index]
         return [dict(zip(headers, row)) for row in table["value"]]  # type: ignore[index]
 
+    def test_simulation_run_log_is_newest_first_and_bounded(self) -> None:
+        lines: list[str] = []
+
+        gdb._append_sim_run_log(lines, "00:00:01", "First visible step.", line_limit=3)
+        gdb._append_sim_output_line(lines, "child process line", line_limit=3)
+        gdb._append_sim_run_log(lines, "00:00:03", "Latest visible step.", line_limit=3)
+        gdb._append_sim_run_log(lines, "00:00:04", "Newest kept step.", line_limit=3)
+
+        output = gdb._sim_output_newest_first(lines)
+
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(output.startswith("[00:00:04] Newest kept step."))
+        self.assertIn("[00:00:03] Latest visible step.", output)
+        self.assertIn("child process line", output)
+        self.assertNotIn("First visible step", output)
+
     def test_history_browser_loads_public_rumor_and_lost_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "save.sqlite"

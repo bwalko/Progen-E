@@ -4182,3 +4182,41 @@ completion.
   `http://127.0.0.1:7860`.
 - `temp\gradio_data_browser.log` recorded `launch_ready` for the venv Python
   process.
+
+## 2026-06-25 - Simulation Runner Live Output Heartbeats
+
+### Enhancements
+
+- Made the Gradio Run Simulation output panel include parent-generated log
+  lines, so it shows a starting line, periodic still-running heartbeats, readable
+  progress-marker notes, and a final completion/failure line even when the
+  simulator process is quiet between save/checkpoint output.
+- Kept the existing newest-first output behavior and capped retained output
+  lines to avoid long runs growing Gradio state without bound.
+
+### Validation
+
+- `python -m py_compile utils\gradio_data_browser.py
+  unit_test\test_gradio_data_browser.py`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_simulation_run_log_is_newest_first_and_bounded`
+- Gradio venv import/build smoke:
+  `python -c "from utils.gradio_data_browser import build_app; app=build_app('default'); print('build_app ok', len(app.fns))"`
+
+## 2026-06-25 - Gradio Starlette Warning Cleanup
+
+### Fixes
+
+- Added a narrowly targeted warning filter in `utils.gradio_data_browser` for
+  Gradio's third-party Starlette deprecation warning about
+  `HTTP_422_UNPROCESSABLE_ENTITY` being renamed to
+  `HTTP_422_UNPROCESSABLE_CONTENT`.
+- The filter matches only that specific message from `gradio.routes`, leaving
+  other Starlette/Gradio warnings visible.
+
+### Validation
+
+- Gradio venv syntax check:
+  `python -m py_compile utils\gradio_data_browser.py`
+- Gradio venv import check:
+  `python -c "import warnings; warnings.simplefilter('default'); import utils.gradio_data_browser as gdb; print('import ok', gdb.StarletteDeprecationWarning.__name__)"`

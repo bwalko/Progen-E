@@ -17,10 +17,26 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterator, Iterable
+
+try:
+    from starlette.exceptions import StarletteDeprecationWarning
+except Exception:
+    StarletteDeprecationWarning = Warning
+
+warnings.filterwarnings(
+    "ignore",
+    message=(
+        r"'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated\. "
+        r"Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead\."
+    ),
+    category=StarletteDeprecationWarning,
+    module=r"gradio\.routes",
+)
 
 import gradio as gr
 
@@ -40,6 +56,8 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SIM_PROGRESS_RE = re.compile(
     r"SIM_PROGRESS\s+year=(?P<year>-?\d+)\s+end_year=(?P<end_year>-?\d+)\s+elapsed=(?P<elapsed>\d{2}:\d{2}:\d{2})"
 )
+SIM_RUN_HEARTBEAT_SECONDS = 5.0
+SIM_RUN_OUTPUT_LINE_LIMIT = 300
 LEGACY_SCORE_COLUMNS = [
     "Beauty",
     "Scholar",
@@ -13850,6 +13868,26 @@ def _elapsed_hhmmss(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+def _append_sim_output_line(lines: list[str], line: str, *, line_limit: int = SIM_RUN_OUTPUT_LINE_LIMIT) -> None:
+    lines.append(line if line.endswith("\n") else f"{line}\n")
+    if len(lines) > line_limit:
+        del lines[: len(lines) - line_limit]
+
+
+def _append_sim_run_log(
+    lines: list[str],
+    elapsed: str,
+    message: str,
+    *,
+    line_limit: int = SIM_RUN_OUTPUT_LINE_LIMIT,
+) -> None:
+    _append_sim_output_line(lines, f"[{elapsed}] {message}", line_limit=line_limit)
+
+
+def _sim_output_newest_first(lines: list[str]) -> str:
+    return "".join(reversed(lines))
+
+
 def _sim_progress_html(
     current_year: int, end_year: int, elapsed: str, *, start_year: int
 ) -> str:
@@ -13922,10 +13960,16 @@ def run_simulation_from_ui(
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
     start_t = time.perf_counter()
+    _append_sim_run_log(
+        stdout_lines,
+        "00:00:00",
+        f"Starting simulation for world '{world_id or 'default'}': "
+        f"year {_format_year(start_int)} through {_format_year(end_year)}.",
+    )
     yield (
         f"Simulation starting. Elapsed 00:00:00. Year {_format_year(start_int)} / {_format_year(end_year)}.",
         command_text,
-        "",
+        _sim_output_newest_first(stdout_lines),
         "",
         _sim_progress_html(start_int, end_year, "00:00:00", start_year=start_int),
     )
@@ -13955,30 +13999,49 @@ def run_simulation_from_ui(
     current_year = start_int
     expected_end = end_year
     last_emit = 0.0
+    last_heartbeat = start_t
+    last_process_output = start_t
     while proc.poll() is None or not stream_q.empty():
         changed = False
         try:
             stream_name, line = stream_q.get(timeout=0.25)
         except queue.Empty:
             stream_name, line = "", ""
+        now = time.perf_counter()
+        elapsed = _elapsed_hhmmss(now - start_t)
         if line:
             changed = True
+            last_process_output = now
+            last_heartbeat = now
             if stream_name == "stderr":
                 stderr_lines.append(line)
             else:
-                stdout_lines.append(line)
+                _append_sim_output_line(stdout_lines, line)
                 match = SIM_PROGRESS_RE.search(line)
                 if match:
                     current_year = int(match.group("year"))
                     expected_end = int(match.group("end_year"))
-        now = time.perf_counter()
-        elapsed = _elapsed_hhmmss(now - start_t)
+                    _append_sim_run_log(
+                        stdout_lines,
+                        elapsed,
+                        f"Progress marker reached: year {_format_year(current_year)} / {_format_year(expected_end)}.",
+                    )
+        elif now - last_heartbeat >= SIM_RUN_HEARTBEAT_SECONDS:
+            changed = True
+            last_heartbeat = now
+            quiet_for = max(0, int(now - last_process_output))
+            _append_sim_run_log(
+                stdout_lines,
+                elapsed,
+                f"Still running: year {_format_year(current_year)} / {_format_year(expected_end)}; "
+                f"{quiet_for}s since last simulator output.",
+            )
         if changed or now - last_emit >= 1.0:
             last_emit = now
             yield (
                 f"Running. Elapsed {elapsed}. Year {_format_year(current_year)} / {_format_year(expected_end)}.",
                 command_text,
-                "".join(reversed(stdout_lines)),
+                _sim_output_newest_first(stdout_lines),
                 "".join(stderr_lines),
                 _sim_progress_html(
                     current_year, expected_end, elapsed, start_year=start_int
@@ -13992,10 +14055,19 @@ def run_simulation_from_ui(
         if return_code == 0
         else f"Simulation failed with exit code {return_code}. Elapsed {elapsed}."
     )
+    _append_sim_run_log(
+        stdout_lines,
+        elapsed,
+        (
+            f"Simulation finished at year {_format_year(end_year)}."
+            if return_code == 0
+            else f"Simulation failed with exit code {return_code} at year {_format_year(current_year)}."
+        ),
+    )
     yield (
         final_status,
         command_text,
-        "".join(reversed(stdout_lines)),
+        _sim_output_newest_first(stdout_lines),
         "".join(stderr_lines),
         _sim_progress_html(
             end_year if return_code == 0 else current_year,

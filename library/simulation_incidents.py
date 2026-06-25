@@ -1026,8 +1026,22 @@ def _incident_priority_pool(
     by_id = {int(rec.person_id): rec for rec in sampled}
     priority_scores: dict[int, float] = {}
     priority_cap = min(limit, max(12, limit // 3))
+    probe_limit = min(len(residents), max(limit, limit * 2))
+    seed = ctx._stable_decision_seed(
+        "|".join(
+            (
+                str(ctx.world),
+                str(ctx.placename_rng_salt),
+                str(int(year)),
+                str(int(stream) + 1),
+                f"settlement:{settlement_id}:{event_key}:priority",
+                str(len(residents)),
+            )
+        )
+    )
+    priority_probe = random.Random(seed).sample(residents, probe_limit)
     candidates: list[tuple[float, int, "SimulationPersonRecord"]] = []
-    for rec in residents:
+    for rec in priority_probe:
         pid = int(rec.person_id)
         try:
             score = float(priority_score(rec))
@@ -1183,6 +1197,19 @@ def _maybe_murder_in_settlement(
     scoring_facts: IncidentScoringFacts | None = None,
     population_count: int | None = None,
 ) -> MurderIncident | None:
+    pressure = _settlement_pressure(ctx, year, settlement_id)
+    scarcity = _clamp((pressure - 0.75) / 0.75)
+    chance_roll = rng.random()
+    if chance_roll >= _murder_chance_from_propensity(
+        adults_count=max(
+            min(len(residents), MURDER_SETTLEMENT_SAMPLE_CAP),
+            int(population_count or len(residents)),
+        ),
+        scarcity=scarcity,
+        max_propensity=1.0,
+        rate=rate,
+    ):
+        return None
     sampled = _incident_priority_pool(
         ctx,
         residents,
@@ -1199,16 +1226,6 @@ def _maybe_murder_in_settlement(
         if rec.person_id not in already_dead and _adult_alive(rec, year)
     ]
     if len(adults) < 2:
-        return None
-    pressure = _settlement_pressure(ctx, year, settlement_id)
-    scarcity = _clamp((pressure - 0.75) / 0.75)
-    chance_roll = rng.random()
-    if chance_roll >= _murder_chance_from_propensity(
-        adults_count=max(len(adults), int(population_count or len(adults))),
-        scarcity=scarcity,
-        max_propensity=1.0,
-        rate=rate,
-    ):
         return None
     facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
     contexts = _incident_context_map(
@@ -2852,19 +2869,6 @@ def _maybe_public_virtue_in_settlement(
     rate: IncidentRateParams | None = None,
     scoring_facts: IncidentScoringFacts | None = None,
 ) -> PublicVirtueIncident | None:
-    sampled = _incident_priority_pool(
-        ctx,
-        residents,
-        year=year,
-        settlement_id=settlement_id,
-        event_key="public_virtue",
-        stream=VIRTUE_SAMPLE_STREAM,
-        cap=VIRTUE_SETTLEMENT_SAMPLE_CAP,
-        priority_score=_virtue_priority_score,
-    )
-    adults = [rec for rec in sampled if _adult_alive(rec, year)]
-    if len(adults) < 2:
-        return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     hardship = _clamp((pressure - 0.45) / 1.0)
     chance_roll = rng.random()
@@ -2878,10 +2882,23 @@ def _maybe_public_virtue_in_settlement(
         propensity_base=0.35,
         propensity_weight=2.2,
         max_propensity=1.0,
-        adults_count=len(adults),
+        adults_count=min(len(residents), VIRTUE_SETTLEMENT_SAMPLE_CAP),
         chance_cap=VIRTUE_SETTLEMENT_CHANCE_CAP,
         rate=rate,
     ):
+        return None
+    sampled = _incident_priority_pool(
+        ctx,
+        residents,
+        year=year,
+        settlement_id=settlement_id,
+        event_key="public_virtue",
+        stream=VIRTUE_SAMPLE_STREAM,
+        cap=VIRTUE_SETTLEMENT_SAMPLE_CAP,
+        priority_score=_virtue_priority_score,
+    )
+    adults = [rec for rec in sampled if _adult_alive(rec, year)]
+    if len(adults) < 2:
         return None
     facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
     contexts = _incident_context_map(
@@ -2987,19 +3004,6 @@ def _maybe_knowledge_culture_in_settlement(
     rate: IncidentRateParams | None = None,
     scoring_facts: IncidentScoringFacts | None = None,
 ) -> KnowledgeCultureIncident | None:
-    sampled = _incident_priority_pool(
-        ctx,
-        residents,
-        year=year,
-        settlement_id=settlement_id,
-        event_key="knowledge_culture",
-        stream=KNOWLEDGE_SAMPLE_STREAM,
-        cap=KNOWLEDGE_SETTLEMENT_SAMPLE_CAP,
-        priority_score=_knowledge_priority_score,
-    )
-    adults = [rec for rec in sampled if _adult_alive(rec, year)]
-    if len(adults) < 2:
-        return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     prosperity_factor = max(0.0, 1.0 - min(1.4, pressure))
     chance_roll = rng.random()
@@ -3013,10 +3017,23 @@ def _maybe_knowledge_culture_in_settlement(
         propensity_base=0.35,
         propensity_weight=2.5,
         max_propensity=1.0,
-        adults_count=len(adults),
+        adults_count=min(len(residents), KNOWLEDGE_SETTLEMENT_SAMPLE_CAP),
         chance_cap=KNOWLEDGE_SETTLEMENT_CHANCE_CAP,
         rate=rate,
     ):
+        return None
+    sampled = _incident_priority_pool(
+        ctx,
+        residents,
+        year=year,
+        settlement_id=settlement_id,
+        event_key="knowledge_culture",
+        stream=KNOWLEDGE_SAMPLE_STREAM,
+        cap=KNOWLEDGE_SETTLEMENT_SAMPLE_CAP,
+        priority_score=_knowledge_priority_score,
+    )
+    adults = [rec for rec in sampled if _adult_alive(rec, year)]
+    if len(adults) < 2:
         return None
     facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
     contexts = _incident_context_map(
@@ -3127,19 +3144,6 @@ def _maybe_property_crime_in_settlement(
     rate: IncidentRateParams | None = None,
     scoring_facts: IncidentScoringFacts | None = None,
 ) -> TheftFraudIncident | None:
-    sampled = _incident_priority_pool(
-        ctx,
-        residents,
-        year=year,
-        settlement_id=settlement_id,
-        event_key="property_crime",
-        stream=THEFT_SAMPLE_STREAM,
-        cap=THEFT_SETTLEMENT_SAMPLE_CAP,
-        priority_score=_property_crime_priority_score,
-    )
-    adults = [rec for rec in sampled if _adult_alive(rec, year)]
-    if len(adults) < 2:
-        return None
     pressure = _settlement_pressure(ctx, year, settlement_id)
     scarcity = _clamp((pressure - 0.65) / 0.85)
     chance_roll = rng.random()
@@ -3153,10 +3157,23 @@ def _maybe_property_crime_in_settlement(
         propensity_base=0.35,
         propensity_weight=2.4,
         max_propensity=1.0,
-        adults_count=len(adults),
+        adults_count=min(len(residents), THEFT_SETTLEMENT_SAMPLE_CAP),
         chance_cap=THEFT_SETTLEMENT_CHANCE_CAP,
         rate=rate,
     ):
+        return None
+    sampled = _incident_priority_pool(
+        ctx,
+        residents,
+        year=year,
+        settlement_id=settlement_id,
+        event_key="property_crime",
+        stream=THEFT_SAMPLE_STREAM,
+        cap=THEFT_SETTLEMENT_SAMPLE_CAP,
+        priority_score=_property_crime_priority_score,
+    )
+    adults = [rec for rec in sampled if _adult_alive(rec, year)]
+    if len(adults) < 2:
         return None
     facts = scoring_facts or _build_incident_scoring_facts(ctx, year)
     contexts = _incident_context_map(
