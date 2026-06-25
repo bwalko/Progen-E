@@ -902,6 +902,26 @@ body.dark .person-sheet,
     border-radius: 999px;
     background: var(--person-sheet-legacy-fill) !important;
 }
+.composite-score-detail {
+    color: var(--person-sheet-muted) !important;
+    font-size: 12px;
+    line-height: 1.35;
+    margin-top: 8px;
+}
+.composite-score-detail summary {
+    cursor: pointer;
+    font-weight: 700;
+}
+.composite-score-detail ul {
+    margin: 6px 0 0 16px;
+    padding: 0;
+}
+.composite-score-detail li {
+    margin: 3px 0;
+}
+.composite-score-detail strong {
+    color: var(--person-sheet-title) !important;
+}
 .pill-list {
     display: flex;
     flex-wrap: wrap;
@@ -9192,6 +9212,7 @@ def _composite_score_entries(
                 "display_name": meta.get("display_name") or _display_title(rating_id),
                 "notes": meta.get("notes") or "",
                 "order": int(meta.get("order") or default_order),
+                "row": dict(meta.get("row") or {}),
                 "score": float(score),
             }
         )
@@ -9282,6 +9303,177 @@ def _unknown_composite_score_entries(
     return age, unknown
 
 
+def _format_composite_detail_number(value: object, *, digits: int = 3) -> str:
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return "unavailable"
+
+
+def _composite_rating_recipe_components(row: dict[str, object]) -> list[dict[str, object]]:
+    components: list[dict[str, object]] = []
+    for index in range(1, 7):
+        trait = str(row.get(f"component_{index}_trait") or "").strip()
+        if not trait:
+            continue
+        components.append(
+            {
+                "trait": trait,
+                "position": str(row.get(f"component_{index}_position") or "optimal"),
+                "weight": row.get(f"component_{index}_weight") or 1.0,
+            }
+        )
+    return components
+
+
+def _render_composite_score_detail(
+    entry: dict[str, object],
+    person: dict[str, object],
+) -> str:
+    row = dict(entry.get("row") or {})
+    score_text = _format_composite_score(entry.get("score"))
+    if not row:
+        return (
+            '<details class="composite-score-detail">'
+            '<summary>Details</summary>'
+            '<ul>'
+            f'<li><strong>Final normalized score:</strong> {html.escape(score_text)}</li>'
+            '<li>Detail recipe unavailable for this saved score.</li>'
+            '</ul>'
+            '</details>'
+        )
+
+    values = _composite_trait_values_for_person(person)
+    trace: dict[str, object] | None = None
+    if values:
+        try:
+            from library.genome_composites import explain_composite_rating_row_for_traits
+
+            trace = explain_composite_rating_row_for_traits(values, row, person=person)
+        except Exception:
+            trace = None
+
+    items = [f'<li><strong>Final normalized score:</strong> {html.escape(score_text)}</li>']
+    if trace:
+        components = trace.get("components") or []
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            trait = html.escape(str(component.get("trait") or ""))
+            position = html.escape(str(component.get("position") or "optimal"))
+            raw = _format_composite_detail_number(component.get("raw_value"))
+            normalized = _format_composite_detail_number(component.get("normalized_score"))
+            curved = _format_composite_detail_number(component.get("curved_score"))
+            weight = _format_composite_detail_number(component.get("weight"))
+            contribution = _format_composite_detail_number(
+                component.get("weighted_contribution")
+            )
+            items.append(
+                "<li>"
+                f"{trait} ({position}): raw value {html.escape(raw)}; "
+                f"normalized {html.escape(normalized)}; "
+                f"curved {html.escape(curved)} x weight {html.escape(weight)} "
+                f"= {html.escape(contribution)}"
+                "</li>"
+            )
+        items.append(
+            "<li>"
+            "<strong>Normalization/blend:</strong> "
+            f"geometric fit {html.escape(_format_composite_detail_number(trace.get('geometric_fit')))}, "
+            f"capped average {html.escape(_format_composite_detail_number(trace.get('average_fit')))}, "
+            f"coherence exponent {html.escape(_format_composite_detail_number(trace.get('coherence_exponent')))}, "
+            f"base {html.escape(_format_composite_detail_number(trace.get('base_score')))}"
+            "</li>"
+        )
+        disqualifiers = trace.get("disqualifiers") or []
+        if disqualifiers:
+            for disqualifier in disqualifiers:
+                if not isinstance(disqualifier, dict):
+                    continue
+                trait = html.escape(str(disqualifier.get("trait") or ""))
+                position = html.escape(str(disqualifier.get("position") or "optimal"))
+                raw = _format_composite_detail_number(disqualifier.get("raw_value"))
+                normalized = _format_composite_detail_number(
+                    disqualifier.get("normalized_score")
+                )
+                weight = _format_composite_detail_number(disqualifier.get("weight"))
+                multiplier = _format_composite_detail_number(
+                    disqualifier.get("multiplier")
+                )
+                items.append(
+                    "<li>"
+                    "<strong>Disqualifier:</strong> "
+                    f"{trait} ({position}) raw value {html.escape(raw)}; "
+                    f"normalized {html.escape(normalized)} x weight {html.escape(weight)} "
+                    f"-> multiplier {html.escape(multiplier)}"
+                    "</li>"
+                )
+        modifiers = trace.get("modifiers") or []
+        if modifiers:
+            for modifier in modifiers:
+                if not isinstance(modifier, dict):
+                    continue
+                if modifier.get("kind") == "context_bonus":
+                    field = html.escape(str(modifier.get("field") or ""))
+                    target = html.escape(str(modifier.get("target") or ""))
+                    bonus = _format_composite_detail_number(
+                        modifier.get("configured_bonus")
+                    )
+                    items.append(
+                        "<li>"
+                        "<strong>Special modifier:</strong> "
+                        f"{field} matches {target}; configured bonus +{html.escape(bonus)}"
+                        "</li>"
+                    )
+                elif modifier.get("kind") == "context_bonus_total":
+                    bonus = _format_composite_detail_number(modifier.get("bonus"))
+                    multiplier = _format_composite_detail_number(
+                        modifier.get("multiplier")
+                    )
+                    addition = _format_composite_detail_number(
+                        modifier.get("addition")
+                    )
+                    items.append(
+                        "<li>"
+                        "<strong>Special modifier total:</strong> "
+                        f"+{html.escape(bonus)} x {html.escape(multiplier)} "
+                        f"= +{html.escape(addition)}"
+                        "</li>"
+                    )
+        else:
+            items.append("<li><strong>Special modifiers:</strong> none</li>")
+        items.append(
+            "<li>"
+            "<strong>Final floor/clamp:</strong> "
+            f"raw final {html.escape(_format_composite_detail_number(trace.get('final_before_floor')))}; "
+            f"score floor result {html.escape(_format_composite_detail_number(trace.get('final_score')))}"
+            "</li>"
+        )
+    else:
+        for component in _composite_rating_recipe_components(row):
+            trait = html.escape(str(component.get("trait") or ""))
+            position = html.escape(str(component.get("position") or "optimal"))
+            weight = _format_composite_detail_number(component.get("weight"))
+            items.append(
+                "<li>"
+                f"{trait} ({position}): raw value unavailable; "
+                f"weight {html.escape(weight)}"
+                "</li>"
+            )
+        items.append(
+            "<li>"
+            "<strong>Normalization/blend:</strong> requires genome or mind/body values."
+            "</li>"
+        )
+        items.append("<li><strong>Special modifiers:</strong> unavailable</li>")
+    return (
+        '<details class="composite-score-detail">'
+        '<summary>Details</summary>'
+        f'<ul>{"".join(items)}</ul>'
+        '</details>'
+    )
+
+
 def _render_composite_score_section(
     person_id: object,
     person: dict[str, object],
@@ -9314,6 +9506,7 @@ def _render_composite_score_section(
             label = str(entry["display_name"])
             notes = str(entry.get("notes") or "").strip()
             tooltip = notes or f"Rating ID: {rating_id}"
+            detail_html = _render_composite_score_detail(entry, person)
             cards.append(
                 '<div class="legacy-score composite-score">'
                 '<div class="legacy-score-head">'
@@ -9324,6 +9517,7 @@ def _render_composite_score_section(
                 '<div class="legacy-track" aria-hidden="true">'
                 f'<div class="legacy-fill" style="width: {fill_score * 100:.1f}%"></div>'
                 '</div>'
+                f'{detail_html}'
                 '</div>'
             )
         body = f'<div class="legacy-grid composite-score-grid">{"".join(cards)}</div>'

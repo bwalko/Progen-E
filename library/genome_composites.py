@@ -293,6 +293,167 @@ def _rating_context_bonus(row: Mapping[str, Any], person: object | None) -> floa
     return bonus
 
 
+def _rating_component_raw_value(
+    trait_values: Mapping[str, float],
+    trait: str,
+    *,
+    person: object | None = None,
+) -> float | None:
+    trait_s = str(trait or "").strip()
+    if not trait_s:
+        return None
+    if trait_s.endswith("_01"):
+        if person is not None:
+            raw = _person_field(person, trait_s)
+            if raw is not None:
+                try:
+                    return float(raw)
+                except (TypeError, ValueError):
+                    pass
+        if trait_s in trait_values:
+            return float(trait_values[trait_s])
+        return None
+    if trait_s not in trait_values:
+        return None
+    return float(trait_values[trait_s])
+
+
+def explain_composite_rating_row_for_traits(
+    trait_values: Mapping[str, float],
+    row: Mapping[str, Any],
+    *,
+    person: object | None = None,
+) -> dict[str, Any] | None:
+    """Return a trace of the numeric composite rating calculation."""
+    components: list[dict[str, Any]] = []
+    comp_scores: list[tuple[float, float]] = []
+    for trait_key, pos_key, weight_key in _RATING_COMPONENT_KEYS:
+        trait = str(row.get(trait_key) or "").strip()
+        if not trait:
+            continue
+        weight = max(0.0, _float_from_row(row, weight_key, 1.0))
+        if weight <= 0.0:
+            continue
+        position = str(row.get(pos_key) or "optimal")
+        raw_value = _rating_component_raw_value(trait_values, trait, person=person)
+        score = _score_rating_component(
+            trait_values,
+            trait,
+            position,
+            person=person,
+        )
+        floored = _score_floor(score)
+        curved = floored ** _RATING_COMPONENT_CURVE_EXPONENT
+        components.append(
+            {
+                "trait": trait,
+                "position": position,
+                "raw_value": raw_value,
+                "normalized_score": float(score),
+                "curve_exponent": _RATING_COMPONENT_CURVE_EXPONENT,
+                "curved_score": float(curved),
+                "weight": float(weight),
+                "weighted_contribution": float(curved * weight),
+            }
+        )
+        comp_scores.append((curved, weight))
+
+    if not comp_scores:
+        return None
+
+    weight_total = sum(w for _score, w in comp_scores)
+    if weight_total <= 0.0:
+        return None
+    log_total = sum(
+        math.log(max(_RATING_GEOMEAN_FLOOR, score)) * weight
+        for score, weight in comp_scores
+    )
+    geometric_fit = math.exp(log_total / weight_total)
+    average_fit = (
+        sum(min(1.0, score) * weight for score, weight in comp_scores) / weight_total
+    )
+    final = geometric_fit * (average_fit ** _RATING_COHERENCE_EXPONENT)
+    base_score = final
+
+    disqualifiers: list[dict[str, Any]] = []
+    for trait_key, pos_key, weight_key in _RATING_DISQUALIFIER_KEYS:
+        trait = str(row.get(trait_key) or "").strip()
+        if not trait:
+            continue
+        weight = max(0.0, _float_from_row(row, weight_key, 1.0))
+        if weight <= 0.0:
+            continue
+        position = str(row.get(pos_key) or "optimal")
+        raw_value = _rating_component_raw_value(trait_values, trait, person=person)
+        score = _score_rating_component(
+            trait_values,
+            trait,
+            position,
+            person=person,
+        )
+        multiplier = max(0.0, 1.0 - _clamp01(score) * min(1.0, weight))
+        final *= multiplier
+        disqualifiers.append(
+            {
+                "trait": trait,
+                "position": position,
+                "raw_value": raw_value,
+                "normalized_score": float(score),
+                "weight": float(weight),
+                "multiplier": float(multiplier),
+            }
+        )
+
+    modifiers: list[dict[str, Any]] = []
+    bonus = 0.0
+    if person is not None:
+        for field, target, row_key in _RATING_CONTEXT_BONUS_KEYS:
+            actual = str(_person_field(person, field) or "").strip().lower()
+            configured_bonus = max(0.0, _float_from_row(row, row_key, 0.0))
+            if actual == target and configured_bonus > 0.0:
+                bonus += configured_bonus
+                modifiers.append(
+                    {
+                        "kind": "context_bonus",
+                        "field": field,
+                        "target": target,
+                        "actual": actual,
+                        "configured_bonus": float(configured_bonus),
+                    }
+                )
+    bonus_multiplier = 0.0
+    bonus_addition = 0.0
+    if bonus:
+        bonus_multiplier = _RATING_CONTEXT_BONUS_MIN_MULTIPLIER + (
+            1.0 - _RATING_CONTEXT_BONUS_MIN_MULTIPLIER
+        ) * min(1.0, max(0.0, final))
+        bonus_addition = bonus * bonus_multiplier
+        final += bonus_addition
+        modifiers.append(
+            {
+                "kind": "context_bonus_total",
+                "bonus": float(bonus),
+                "multiplier": float(bonus_multiplier),
+                "addition": float(bonus_addition),
+            }
+        )
+
+    if not math.isfinite(final):
+        return None
+    return {
+        "components": components,
+        "weight_total": float(weight_total),
+        "geometric_fit": float(geometric_fit),
+        "average_fit": float(average_fit),
+        "coherence_exponent": _RATING_COHERENCE_EXPONENT,
+        "base_score": float(base_score),
+        "disqualifiers": disqualifiers,
+        "modifiers": modifiers,
+        "final_before_floor": float(final),
+        "final_score": float(_score_floor(final)),
+    }
+
+
 def composite_row_name(row: dict[str, Any]) -> str:
     """Lowercase display label from config: ``composite_name``, else ``short_definition``.
 

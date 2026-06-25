@@ -4237,3 +4237,54 @@ completion.
   `python -m py_compile utils\gradio_data_browser.py`
 - Gradio venv import check:
   `python -c "import warnings; warnings.simplefilter('default'); import utils.gradio_data_browser as gdb; print('import ok', gdb.StarletteDeprecationWarning.__name__)"`
+
+## 2026-06-25 - Non-Detailed Economy Ownership Cleanup
+
+### Fixes
+
+- Removed the duplicate non-detailed job-family economy application from the
+  detailed economy tick; the population runner's explicit
+  `nondetailed_job_family_economy` phase remains the single owner.
+- Added an economy regression test that fails if
+  `simulation_economy_annual_tick` starts invoking
+  `apply_nondetailed_job_family_economy_effects` again.
+
+### Validation
+
+- `python -m py_compile library\simulation_economy.py
+  unit_test\test_simulation_economy.py
+  unit_test\test_population_growth_nondetailed_runner.py`
+- `python -m unittest unit_test.test_simulation_economy
+  unit_test.test_population_growth_nondetailed_runner`
+
+## 2026-06-25 - Composite Trait Score Transparency
+
+### Enhancements
+
+- Added normally closed `Details` disclosures to each Gradio person-sheet
+  composite trait score card.
+- Composite details now show the final normalized score, configured input
+  components, raw component values when available, weights, weighted
+  contributions, nonlinear blend/floor steps, disqualifiers, and context
+  modifiers such as body/mind bonuses.
+- Persisted-only score rows without genome/mind-body values still show the
+  configured recipe and mark raw values as unavailable instead of inventing
+  missing inputs.
+
+### Validation
+
+- `python -m py_compile library\genome_composites.py
+  utils\gradio_data_browser.py unit_test\test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_and_share_show_composite_trait_scores
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_falls_back_to_computed_composite_scores
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_marks_unrevealed_composite_scores_unknown
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_composite_score_parsers_preserve_above_one_values
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_people_browser_shows_and_sorts_top_composite_score
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_composite_scores_browser_hides_scores_before_reveal_age
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_composite_scores_browser_shows_scores_after_reveal_age`
+- `python -m unittest unit_test.test_genome_composite_profiles`
+- Full `unit_test.test_gradio_data_browser` still has pre-existing/non-composite
+  migration-event display failures in
+  `test_settlement_move_event_uses_normalized_move_details`,
+  `test_job_seeker_migration_keeps_route_details_for_display`, and
+  `test_compact_job_seeker_migration_uses_related_move_rows`.

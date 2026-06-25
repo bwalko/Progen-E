@@ -234,6 +234,73 @@ class TestSimulationEconomy(unittest.TestCase):
         finally:
             db_path.unlink(missing_ok=True)
 
+    def test_economy_tick_does_not_apply_nondetailed_job_family_effects(self) -> None:
+        rid = "fixture_region"
+        sid = f"{rid}:s1"
+        st = SettlementState(
+            region_id=rid,
+            settlement_id=sid,
+            resident_count=0,
+            prosperity_pool=1.0,
+            food_pressure=0.2,
+            stability=0.7,
+            market_pull=0.1,
+        )
+        with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+            db_path = Path(tmp.name)
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.execute(
+                """
+                CREATE TABLE job_economics (
+                    job_key TEXT,
+                    era TEXT,
+                    row_kind TEXT,
+                    pool_draw REAL,
+                    wage_yield REAL,
+                    value_add REAL,
+                    tax_rate REAL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO job_economics (job_key, era, row_kind, pool_draw, wage_yield, value_add, tax_rate)
+                VALUES ('*', 'modern', 'base', 0.21, 0.31, 0.29, 0.078)
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            ctx = SimulationContext(
+                db_path=db_path,
+                save_db_path=db_path,
+                current_year=2000,
+                simulation_start_year=2000,
+                history_equivalent_start_year=2000,
+            )
+            ctx.settlements_by_id = {sid: st}
+            ctx.settlement_ids_by_region = {rid: [sid]}
+            ctx.region_prosperity_pool = {rid: 1.0}
+            ctx.region_treasury_balance = {rid: 0.0}
+
+            with (
+                patch.object(
+                    SimulationContext,
+                    "effective_regional_population_cap",
+                    lambda self, region_id: 1000,
+                ),
+                patch(
+                    "library.nondetailed_population.apply_nondetailed_job_family_economy_effects",
+                    side_effect=AssertionError(
+                        "non-detailed job-family economy is owned by the population runner"
+                    ),
+                ),
+            ):
+                simulation_economy_annual_tick(ctx, 2000)
+        finally:
+            db_path.unlink(missing_ok=True)
+
     def test_economy_tick_updates_household_prosperity_and_purseholder(self) -> None:
         rid = "fixture_region"
         sid = f"{rid}:s1"

@@ -739,41 +739,6 @@ def simulation_economy_annual_tick(ctx: "SimulationContext", year: int) -> None:
         simulation_timing.accumulate("economy.worker_markets", tpc() - t0)
         t0 = tpc()
 
-    try:
-        import sqlite3
-        from contextlib import closing
-        from library.nondetailed_population import (
-            apply_nondetailed_job_family_economy_effects,
-        )
-        from library.world_save import ensure_checkpoint_schema
-
-        with closing(sqlite3.connect(ctx.save_db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            ensure_checkpoint_schema(conn)
-            nd_result = apply_nondetailed_job_family_economy_effects(
-                conn,
-                ctx,
-                year=y,
-            )
-        if prof:
-            simulation_timing.record_gauge(
-                y,
-                "economy",
-                "nondetailed_job_family_settlements",
-                nd_result.affected_settlements,
-            )
-            simulation_timing.record_gauge(
-                y,
-                "economy",
-                "nondetailed_job_family_population",
-                nd_result.total_population_seen,
-            )
-    except sqlite3.Error:
-        nd_result = None
-    if prof:
-        simulation_timing.accumulate("economy.nondetailed_job_families", tpc() - t0)
-        t0 = tpc()
-
     _update_household_prosperity(ctx, y, care_indexes=care_indexes)
     if prof:
         simulation_timing.accumulate("economy.household_prosperity", tpc() - t0)
