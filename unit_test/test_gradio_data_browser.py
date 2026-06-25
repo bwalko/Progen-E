@@ -4340,14 +4340,64 @@ class GradioDataBrowserEventTests(unittest.TestCase):
 
     def test_place_sheets_include_recent_history(self) -> None:
         con = _memory_place_save()
-        con.execute(
+        con.executemany(
             """
             insert into simulation_events (world, sim_year, event_type, payload_json)
-            values (
-                'test', 42, 'public_virtue',
-                '{"person_id": 1, "target_person_id": 2, "settlement_id": "r1:s1", "region_id": "r1", "virtue_kind": "well_repair"}'
-            )
-            """
+            values (?, ?, ?, ?)
+            """,
+            [
+                (
+                    "test",
+                    42,
+                    "public_virtue",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "target_person_id": 2,
+                            "settlement_id": "r1:s1",
+                            "region_id": "r1",
+                            "virtue_kind": "well_repair",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    43,
+                    "outlaw_flight",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "settlement_id": "r1:s1",
+                            "from_settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    44,
+                    "outlaw_refuge_joined",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "settlement_id": "r1:s1",
+                            "near_settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    45,
+                    "nondetailed_job_family_economy_effect",
+                    json.dumps(
+                        {
+                            "settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+            ],
         )
         _add_memory_events_readable_view(con)
 
@@ -4355,9 +4405,15 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         town_html = _render_town_sheet(con, "test", "r1:s1")
 
         self.assertIn("Recent History", region_html)
-        self.assertIn("public virtue", region_html)
+        self.assertIn("42: Public Virtue: Ada Forge.", region_html)
+        self.assertIn("43: Ada Forge fled ordinary settlement life from Fordham.", region_html)
+        self.assertIn("44: Ada Forge joined an outlaw refuge near Fordham.", region_html)
+        self.assertIn("45: Local job families shifted the economy at Fordham.", region_html)
+        self.assertNotIn("outlaw flight -", region_html)
+        self.assertNotIn("outlaw refuge joined -", region_html)
+        self.assertNotIn("nondetailed job family economy effect", region_html)
         self.assertIn("Recent History", town_html)
-        self.assertIn("public virtue", town_html)
+        self.assertIn("Public Virtue", town_html)
 
     def test_discovery_browser_loads_eventful_places_and_recent_history(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -4398,7 +4454,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("eventful settlements", place_status)
         self.assertEqual(place_table["value"][0][1], "Fordham")
         self.assertIn("recent history", history_status)
-        self.assertIn("public virtue", history_table["value"][0][1])
+        self.assertEqual("Public Virtue", history_table["value"][0][1])
 
     def test_generated_region_map_preserves_region_aspect_ratio(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

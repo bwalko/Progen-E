@@ -4324,3 +4324,23 @@ completion.
 - Full `unit_test.test_simulation_incidents` was attempted on this laptop but
   timed out after 180 seconds, so validation used the focused regression slice
   above.
+
+## 2026-06-25 - Region Recent History Presentation
+
+### Fixes
+
+- Reworked Gradio place-sheet Recent History rendering to stop composing
+  duplicate `year: type - year: type` strings.
+- Recent history now uses readable sentences for outlaw flight/refuge events,
+  title-case labels for fallback event types, and local settlement names where
+  available.
+- Aggregated low-value non-detailed job-family economy tick events into a
+  single local economy sentence per year instead of showing the raw event type.
+- Updated Discover-tab Recent History labels to use readable title case and
+  suppress raw non-detailed economy ticks by default.
+
+### Validation
+
+- `python -m py_compile utils\gradio_data_browser.py
+  unit_test\test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_gradio_data_browser -k recent_history`

@@ -1965,6 +1965,21 @@ def _display_title(value: object) -> str:
     return " ".join(part.capitalize() for part in _display_token(value).split())
 
 
+_RECENT_HISTORY_EVENT_LABELS = {
+    "nondetailed_job_family_economy_effect": "Local Economy Shift",
+    "outlaw_flight": "Outlaw Flight",
+    "outlaw_refuge_joined": "Outlaw Refuge Joined",
+}
+_RECENT_HISTORY_ECONOMY_EVENT_TYPES = {"nondetailed_job_family_economy_effect"}
+
+
+def _recent_history_event_label(event_type: object) -> str:
+    key = str(event_type or "").strip()
+    if not key:
+        return "Event"
+    return _RECENT_HISTORY_EVENT_LABELS.get(key, _display_title(key))
+
+
 def _history_settlement_label(
     con: sqlite3.Connection,
     world: str,
@@ -2410,23 +2425,139 @@ def _place_recent_history_items(
     fetch_ids = sorted(event_ids)
     if len(fetch_ids) > 900:
         fetch_ids = fetch_ids[-900:]
+    placeholders = ",".join("?" for _ in fetch_ids)
     try:
-        summaries = load_admin_event_summaries(
-            con,
-            event_ids=fetch_ids,
-            limit=max(limit, len(fetch_ids)),
-            offset=0,
-        )
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM simulation_events
+            WHERE id IN ({placeholders})
+            """,
+            fetch_ids,
+        ).fetchall()
     except sqlite3.Error:
         return []
-    summaries.sort(key=lambda summary: (summary.sim_year, summary.event_id), reverse=True)
-    return [
-        (
-            f"{_format_year(summary.sim_year)}: "
-            f"{summary.event_type.replace('_', ' ')} - {summary.prose}"
+    return _format_place_recent_history_items(con, world, rows, limit=limit)
+
+
+def _recent_history_person(
+    con: sqlite3.Connection,
+    world: str,
+    payload: dict[str, object],
+) -> str:
+    for key in (
+        "accused_person_id",
+        "person_id",
+        "primary_person_id",
+        "creator_person_id",
+        "benefactor_person_id",
+        "perpetrator_person_id",
+    ):
+        if payload.get(key) not in (None, ""):
+            return _short_person(con, world, payload.get(key))
+    return "Someone"
+
+
+def _recent_history_outlaw_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    event_type: str,
+    payload: dict[str, object],
+) -> str:
+    person = _recent_history_person(con, world, payload)
+    place = _event_place_text(con, world, payload)
+    if event_type == "outlaw_refuge_joined":
+        return f"{person} joined an outlaw refuge near {place}."
+    return f"{person} fled ordinary settlement life from {place}."
+
+
+def _recent_history_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    event: sqlite3.Row,
+) -> str:
+    payload = _event_readable_place_payload(con, event, _load_json_object(event["payload_json"]))
+    event_type = str(event["event_type"] or payload.get("event_type") or "").strip()
+    if event_type in {"outlaw_flight", "outlaw_refuge_joined"}:
+        return _recent_history_outlaw_sentence(con, world, event_type, payload)
+    sentence = _event_sentence(con, world, event, None)
+    raw_label = event_type.replace("_", " ")
+    readable_label = _recent_history_event_label(event_type)
+    if sentence.lower().startswith(f"{raw_label.lower()}:"):
+        return f"{readable_label}:{sentence.split(':', 1)[1]}"
+    return sentence
+
+
+def _recent_history_economy_sentence(
+    con: sqlite3.Connection,
+    world: str,
+    settlement_ids: set[str],
+) -> str:
+    labels = sorted(
+        {
+            _history_settlement_label(con, world, settlement_id)
+            for settlement_id in settlement_ids
+            if str(settlement_id or "").strip()
+        }
+    )
+    labels = [label for label in labels if label]
+    if len(labels) == 1:
+        return f"Local job families shifted the economy at {labels[0]}."
+    if len(labels) > 1:
+        return f"Local job families shifted the economy across {len(labels)} settlements."
+    return "Local job families shifted the economy."
+
+
+def _format_place_recent_history_items(
+    con: sqlite3.Connection,
+    world: str,
+    events: Iterable[sqlite3.Row],
+    *,
+    limit: int,
+) -> list[str]:
+    rendered: list[tuple[int, int, str]] = []
+    economy_by_year: dict[int, dict[str, object]] = {}
+    for event in events:
+        event_type = str(event["event_type"] or "").strip()
+        year = _event_year(event)
+        event_id = _event_id(event) or 0
+        sort_year = year if year is not None else -10**9
+        year_text = _format_year(year)
+        if event_type in _RECENT_HISTORY_ECONOMY_EVENT_TYPES:
+            payload = _event_readable_place_payload(
+                con,
+                event,
+                _load_json_object(event["payload_json"]),
+            )
+            bucket = economy_by_year.setdefault(
+                sort_year,
+                {"event_id": event_id, "settlement_ids": set()},
+            )
+            bucket["event_id"] = max(int(bucket["event_id"]), event_id)
+            settlement_id = str(payload.get("settlement_id") or "").strip()
+            if settlement_id:
+                bucket["settlement_ids"].add(settlement_id)
+            continue
+        rendered.append(
+            (
+                sort_year,
+                event_id,
+                f"{year_text}: {_recent_history_sentence(con, world, event)}",
+            )
         )
-        for summary in summaries[:limit]
-    ]
+    for sort_year, bucket in economy_by_year.items():
+        year_text = _format_year(sort_year if sort_year != -10**9 else None)
+        settlement_ids = bucket["settlement_ids"]
+        assert isinstance(settlement_ids, set)
+        rendered.append(
+            (
+                sort_year,
+                int(bucket["event_id"]),
+                f"{year_text}: {_recent_history_economy_sentence(con, world, settlement_ids)}",
+            )
+        )
+    rendered.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [text for _year, _event_id, text in rendered[:limit]]
 
 
 def _place_recent_history_section(
@@ -11267,12 +11398,13 @@ def _discovery_recent_history_rows(
     rows = [
         {
             "Kind": "Event",
-            "Name": summary.event_type.replace("_", " "),
+            "Name": _recent_history_event_label(summary.event_type),
             "ID": summary.event_id,
             "Score": _format_year(summary.sim_year),
             "Context": summary.prose,
         }
         for summary in summaries
+        if summary.event_type not in _RECENT_HISTORY_ECONOMY_EVENT_TYPES
     ]
     return [row for row in rows if _discovery_row_matches(row, search)][:limit]
 
