@@ -4159,3 +4159,26 @@ completion.
   unit_test.test_simulation_careers.TestSimulationCareers.test_annual_tick_assigns_at_era_specific_age
   unit_test.test_simulation_careers.TestSimulationCareers.test_job_loss_and_rehire_are_logged_as_events
   unit_test.test_simulation_careers.TestSimulationCareers.test_job_seeker_migration_moves_household_and_logs_events`
+
+## 2026-06-25 - Gradio Launcher Dependency Repair
+
+### Fixes
+
+- Made `utils/start_gradio_data_browser.ps1` rewrite
+  `temp/gradio_setup_current.log` at the start of each run with UTF-8 text, log
+  the exact Python command being run, and keep installer output mirrored to the
+  console and setup log.
+- Changed the Gradio browser dependency install to bypass pip's cache, disable
+  the version check, and prefer wheels so a corrupt cache entry does not stop
+  first-run setup at the `numpy` metadata download step.
+- Added a direct recovery hint for deleting `temp\gradio_browser_venv` if the
+  dependency install completes but imports still fail.
+
+### Validation
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File
+  utils\start_gradio_data_browser.ps1 -World default -HostName 127.0.0.1 -Port
+  7860 -NoBrowser` reported the Gradio Data Browser running at
+  `http://127.0.0.1:7860`.
+- `temp\gradio_data_browser.log` recorded `launch_ready` for the venv Python
+  process.

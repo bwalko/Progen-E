@@ -17,6 +17,11 @@ $AppLog = Join-Path $TempDir "gradio_data_browser.log"
 $PidPath = Join-Path $TempDir "gradio_data_browser.pid"
 
 New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
+Set-Content -Path $SetupLog -Value @(
+  "Gradio browser setup started: $(Get-Date -Format o)"
+  "Project root: $ProjectRoot"
+  "Requirements: $Requirements"
+) -Encoding UTF8
 
 function Invoke-LoggedPython {
   param(
@@ -27,9 +32,15 @@ function Invoke-LoggedPython {
 
   Push-Location $ProjectRoot
   try {
-    & $Python @Arguments 2>&1 | Tee-Object -FilePath $LogPath -Append
-    if ($LASTEXITCODE -ne 0) {
-      throw "Python command failed with exit code ${LASTEXITCODE}: $Python $($Arguments -join ' ')"
+    Add-Content -Path $LogPath -Value "" -Encoding UTF8
+    Add-Content -Path $LogPath -Value ">> $Python $($Arguments -join ' ')" -Encoding UTF8
+    & $Python @Arguments 2>&1 | ForEach-Object {
+      $_ | Out-File -FilePath $LogPath -Append -Encoding UTF8
+      Write-Host $_
+    }
+    $ExitCode = $LASTEXITCODE
+    if ($ExitCode -ne 0) {
+      throw "Python command failed with exit code ${ExitCode}: $Python $($Arguments -join ' ')"
     }
   } finally {
     Pop-Location
@@ -96,10 +107,19 @@ function Ensure-BrowserEnvironment {
   }
 
   Write-Host "Installing Gradio browser dependencies from requirements.txt..."
-  Invoke-LoggedPython $VenvPython @("-m", "pip", "install", "-r", $Requirements) $SetupLog
+  Invoke-LoggedPython $VenvPython @(
+    "-m",
+    "pip",
+    "install",
+    "--disable-pip-version-check",
+    "--no-cache-dir",
+    "--prefer-binary",
+    "-r",
+    $Requirements
+  ) $SetupLog
 
   if (-not (Test-BrowserPython $VenvPython)) {
-    throw "The Gradio browser environment was created, but the app dependencies still do not import. See $SetupLog"
+    throw "The Gradio browser environment was created, but the app dependencies still do not import. Delete temp\gradio_browser_venv to force a fresh environment, then rerun start_gradio_data_browser.cmd. See $SetupLog"
   }
 
   return $VenvPython
