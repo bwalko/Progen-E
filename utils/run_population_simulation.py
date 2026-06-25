@@ -278,7 +278,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--progress",
         action="store_true",
-        help="Print SIM_PROGRESS lines after each yearly save for streaming UIs.",
+        help="Print SIM_PHASE and SIM_PROGRESS lines for streaming UIs.",
     )
     p.add_argument(
         "--profile-last-years",
@@ -398,6 +398,15 @@ def main() -> None:
             flush=True,
         )
 
+    def _print_phase(year: int, phase: str) -> None:
+        if not args.progress:
+            return
+        elapsed_text = _elapsed_hhmmss(time.perf_counter() - t0)
+        print(
+            f"SIM_PHASE year={int(year)} end_year={end_year} phase={phase} elapsed={elapsed_text}",
+            flush=True,
+        )
+
     with sc.SimulationContext.create(
         world_id=args.world_id.strip(),
         world="default",
@@ -428,6 +437,7 @@ def main() -> None:
                 detailed_active_soft_cap=soft_cap,
                 use_nondetailed_directory=bool(args.use_nondetailed_directory),
                 progress_callback=_print_progress,
+                phase_callback=_print_phase,
                 print_timing_report=False,
             )
         else:
@@ -443,6 +453,7 @@ def main() -> None:
                 detailed_active_soft_cap=soft_cap,
                 use_nondetailed_directory=bool(args.use_nondetailed_directory),
                 progress_callback=_print_progress,
+                phase_callback=_print_phase,
                 print_timing_report=False,
             )
         end_year = actual_start_year + int(args.years) - 1

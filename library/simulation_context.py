@@ -10,7 +10,7 @@ from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 from uuid import uuid4
 
 import numpy as np
@@ -3133,11 +3133,17 @@ class SimulationContext:
         mortality_rates: dict[str, float],
         evolve_settlements_this_tick: bool = True,
         persist_to_save: bool = True,
+        phase_callback: Callable[[int, str], None] | None = None,
     ) -> None:
         prof = simulation_timing.active_for_year(year)
         tpc = time.perf_counter
         self.current_year = year
 
+        def phase(label: str) -> None:
+            if phase_callback is not None:
+                phase_callback(year, label)
+
+        phase("apply_pending_settlement_moves")
         if prof:
             t0 = tpc()
         self.apply_pending_settlement_moves(year)
@@ -3145,12 +3151,14 @@ class SimulationContext:
             simulation_timing.accumulate("summary.apply_pending_moves", tpc() - t0)
 
         if evolve_settlements_this_tick:
+            phase("evolve_settlements")
             if prof:
                 t0 = tpc()
             self.evolve_settlements_one_year()
             if prof:
                 simulation_timing.accumulate("summary.evolve_settlements", tpc() - t0)
         if persist_to_save:
+            phase("set_world_year")
             if prof:
                 t0 = tpc()
             set_world_current_year(
@@ -3161,6 +3169,7 @@ class SimulationContext:
             )
             if prof:
                 simulation_timing.accumulate("summary.set_world_year", tpc() - t0)
+        phase("refresh_life_stages")
         if prof:
             t0 = tpc()
         self.refresh_current_people_life_stages(year)
@@ -3172,25 +3181,30 @@ class SimulationContext:
         from library.simulation_social import simulation_social_annual_tick
         from library.simulation_trade_networks import simulation_trade_networks_annual_tick
 
+        phase("mind_body")
         if prof:
             t0 = tpc()
         simulation_mind_body_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.mind_body", tpc() - t0)
+        phase("careers")
         if prof:
             t0 = tpc()
         simulation_careers_annual_tick(self, year)
         # Careers has its own exclusive inner profile phases.
+        phase("migration")
         if prof:
             t0 = tpc()
         simulation_migration_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.migration", tpc() - t0)
+        phase("trade_networks")
         if prof:
             t0 = tpc()
         simulation_trade_networks_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.trade_networks", tpc() - t0)
+        phase("social")
         if prof:
             t0 = tpc()
         simulation_social_annual_tick(self, year)
@@ -3204,6 +3218,7 @@ class SimulationContext:
         # pooled draws use final residence.
         from library.simulation_household_care import simulation_household_care_annual_tick
 
+        phase("household_care")
         if prof:
             t0 = tpc()
         simulation_household_care_annual_tick(self, year)
@@ -3211,6 +3226,7 @@ class SimulationContext:
             simulation_timing.accumulate("summary.household_care", tpc() - t0)
         from library.simulation_incidents import simulation_incidents_annual_tick
 
+        phase("incidents")
         if prof:
             t0 = tpc()
         simulation_incidents_annual_tick(self, year)
@@ -3220,6 +3236,7 @@ class SimulationContext:
             simulation_remarkable_archetypes_annual_tick,
         )
 
+        phase("remarkable_archetypes")
         if prof:
             t0 = tpc()
         simulation_remarkable_archetypes_annual_tick(self, year)
@@ -3227,6 +3244,7 @@ class SimulationContext:
             simulation_timing.accumulate("summary.remarkable_archetypes", tpc() - t0)
         from library.simulation_outlaws import simulation_outlaws_annual_tick
 
+        phase("outlaws")
         if prof:
             t0 = tpc()
         simulation_outlaws_annual_tick(self, year)
@@ -3234,6 +3252,7 @@ class SimulationContext:
             simulation_timing.accumulate("summary.outlaws", tpc() - t0)
         from library.simulation_innovation import simulation_innovation_annual_tick
 
+        phase("innovation")
         if prof:
             t0 = tpc()
         simulation_innovation_annual_tick(self, year)
@@ -3241,12 +3260,14 @@ class SimulationContext:
             simulation_timing.accumulate("summary.innovation", tpc() - t0)
         from library.simulation_government import simulation_government_annual_tick
 
+        phase("government")
         if prof:
             t0 = tpc()
         simulation_government_annual_tick(self, year)
         # Government has its own exclusive inner profile phases.
         from library.simulation_city_states import simulation_city_states_annual_tick
 
+        phase("city_states")
         if prof:
             t0 = tpc()
         simulation_city_states_annual_tick(self, year)
@@ -3254,12 +3275,14 @@ class SimulationContext:
             simulation_timing.accumulate("summary.city_states", tpc() - t0)
         from library.simulation_economy import simulation_economy_annual_tick
 
+        phase("economy")
         if prof:
             t0 = tpc()
         simulation_economy_annual_tick(self, year)
         if prof:
             simulation_timing.accumulate("summary.economy", tpc() - t0)
         if self.file_store is not None:
+            phase("stage_year_summary")
             if prof:
                 t0 = tpc()
             latest_cohort_year = max(
@@ -3341,11 +3364,13 @@ class SimulationContext:
             if prof:
                 simulation_timing.accumulate("file_store.flush_if_due", tpc() - t0)
         if persist_to_save:
+            phase("checkpoint_save")
             checkpoint_simulation_to_save(
                 self, full_snapshot=self._should_checkpoint_snapshot(year)
             )
             if prof:
                 t0 = tpc()
+            phase("event_consequences")
             event_consequence_annual_tick_for_save(
                 self.save_db_path,
                 config_db_path=self.db_path,
@@ -3358,6 +3383,7 @@ class SimulationContext:
                 event_memory_lifecycle_annual_tick_for_save,
             )
 
+            phase("event_memory_lifecycle")
             if prof:
                 t0 = tpc()
             event_memory_lifecycle_annual_tick_for_save(

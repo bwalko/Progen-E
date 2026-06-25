@@ -4188,18 +4188,31 @@ completion.
 ### Enhancements
 
 - Made the Gradio Run Simulation output panel include parent-generated log
-  lines, so it shows a starting line, periodic still-running heartbeats, readable
-  progress-marker notes, and a final completion/failure line even when the
-  simulator process is quiet between save/checkpoint output.
+  lines, so it shows a starting line, readable phase/progress notes, and a final
+  completion/failure line in the newest-first output box.
+- Added cheap `SIM_PHASE` markers behind the existing `--progress` flag for
+  coarse annual simulation phases such as births, mortality, non-detailed SQL
+  work, careers, migration, incidents, government, economy, checkpoint save,
+  and event-memory lifecycle work.
+- Taught the Gradio runner to render `SIM_PHASE` protocol lines as readable
+  output rows like `Year 1000: running incidents.` rather than dumping raw
+  machine lines.
+- Kept a sparse five-minute fallback heartbeat for cases where a process emits
+  no simulator phase/progress output at all.
 - Kept the existing newest-first output behavior and capped retained output
   lines to avoid long runs growing Gradio state without bound.
 
 ### Validation
 
 - `python -m py_compile utils\gradio_data_browser.py
-  unit_test\test_gradio_data_browser.py`
+  unit_test\test_gradio_data_browser.py library\simulation_context.py
+  library\population_growth_runner.py utils\run_population_simulation.py`
 - `python -m unittest
-  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_simulation_run_log_is_newest_first_and_bounded`
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_simulation_run_log_is_newest_first_and_bounded
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_simulation_phase_label_formats_known_and_unknown_keys`
+- One-year disposable CLI smoke with `--progress` verified visible `SIM_PHASE`
+  lines from the annual loop and `SimulationContext.record_year_summary`, then
+  the generated `worlds\codex_phase_probe` folder was removed.
 - Gradio venv import/build smoke:
   `python -c "from utils.gradio_data_browser import build_app; app=build_app('default'); print('build_app ok', len(app.fns))"`
 

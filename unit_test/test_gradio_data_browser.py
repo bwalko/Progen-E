@@ -1011,6 +1011,21 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("child process line", output)
         self.assertNotIn("First visible step", output)
 
+    def test_simulation_phase_label_formats_known_and_unknown_keys(self) -> None:
+        self.assertEqual(gdb._sim_phase_label("nondetailed_sql_tick"), "non-detailed SQL tick")
+        self.assertEqual(gdb._sim_phase_label("custom_alpha_phase"), "custom alpha phase")
+
+    def test_simulation_phase_protocol_line_parses_for_ui_output(self) -> None:
+        match = gdb.SIM_PHASE_RE.search(
+            "SIM_PHASE year=1000 end_year=1099 phase=incidents elapsed=00:00:12"
+        )
+
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertEqual(match.group("year"), "1000")
+        self.assertEqual(match.group("end_year"), "1099")
+        self.assertEqual(gdb._sim_phase_label(match.group("phase")), "incidents")
+
     def test_history_browser_loads_public_rumor_and_lost_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "save.sqlite"

@@ -2106,10 +2106,13 @@ def _run_population_growth_year_loop(
     detailed_active_soft_cap: int | None,
     use_nondetailed_directory: bool = False,
     progress_callback: Callable[[int], None] | None,
+    phase_callback: Callable[[int, str], None] | None = None,
 ) -> None:
     end_exclusive = int(start_year) + int(duration_years)
     for year in range(int(start_year), end_exclusive):
         ctx.current_year = year
+        if phase_callback is not None:
+            phase_callback(year, "year_start")
         move_event_start = len(ctx._pending_simulation_events)
         ctx.apply_pending_settlement_moves(year)
         migration_arrivals = _migration_arrivals_by_settlement_from_events(
@@ -2122,6 +2125,8 @@ def _run_population_growth_year_loop(
 
         if prof:
             t0 = tpc()
+        if phase_callback is not None:
+            phase_callback(year, "migration_context_promotion")
         promoted_for_migration = (
             0
             if use_nondetailed_directory
@@ -2143,20 +2148,28 @@ def _run_population_growth_year_loop(
 
         if prof:
             t0 = tpc()
+        if phase_callback is not None:
+            phase_callback(year, "group_people_by_settlement")
         people_by_settlement = ctx.current_people_by_settlement()
         if prof:
             simulation_timing.accumulate("runner.group_current_by_settlement", tpc() - t0)
             t0 = tpc()
+        if phase_callback is not None:
+            phase_callback(year, "resource_facts")
         resource_facts = ctx.annual_resource_facts(year)
         if prof:
             simulation_timing.accumulate("births.resource_facts", tpc() - t0)
             t0 = tpc()
+        if phase_callback is not None:
+            phase_callback(year, "partner_pairing")
         pair_people_by_settlement_then_region(
             ctx, year, people_by_settlement, resource_facts=resource_facts
         )
         if prof:
             simulation_timing.accumulate("runner.pairing", tpc() - t0)
             t0 = tpc()
+        if phase_callback is not None:
+            phase_callback(year, "births")
         births_count = births_by_settlement(
             ctx,
             year,
@@ -2170,6 +2183,8 @@ def _run_population_growth_year_loop(
 
         if prof:
             t0 = tpc()
+        if phase_callback is not None:
+            phase_callback(year, "mortality")
         mortality_rates = apply_annual_mortality(ctx, year)
         if prof:
             simulation_timing.accumulate("runner.mortality", tpc() - t0)
@@ -2183,6 +2198,8 @@ def _run_population_growth_year_loop(
         if prof:
             t0 = tpc()
         if use_nondetailed_directory:
+            if phase_callback is not None:
+                phase_callback(year, "nondetailed_directory_topup")
             overflow_births = 0
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                 conn.row_factory = sqlite3.Row
@@ -2237,6 +2254,8 @@ def _run_population_growth_year_loop(
             ctx.invalidate_mixed_population_cache()
             if prof:
                 t_nd = tpc()
+            if phase_callback is not None:
+                phase_callback(year, "nondetailed_sql_tick")
             ctx.last_nondetailed_tick_result = run_nondetailed_sql_annual_tick_for_save(
                 ctx.save_db_path,
                 year=year,
@@ -2256,6 +2275,8 @@ def _run_population_growth_year_loop(
                 ensure_checkpoint_schema(conn)
                 if prof:
                     t_nd = tpc()
+                if phase_callback is not None:
+                    phase_callback(year, "nondetailed_job_family_economy")
                 economy_result = apply_nondetailed_job_family_economy_effects(
                     conn,
                     ctx,
@@ -2267,6 +2288,8 @@ def _run_population_growth_year_loop(
                         tpc() - t_nd,
                     )
                     t_nd = tpc()
+                if phase_callback is not None:
+                    phase_callback(year, "nondetailed_resource_mortality")
                 resource_mortality_result = apply_nondetailed_resource_mortality(
                     conn,
                     ctx,
@@ -2278,6 +2301,8 @@ def _run_population_growth_year_loop(
                         tpc() - t_nd,
                     )
                     t_nd = tpc()
+                if phase_callback is not None:
+                    phase_callback(year, "nondetailed_migration")
                 migration_result = run_nondetailed_sql_migration(
                     conn,
                     ctx,
@@ -2325,8 +2350,12 @@ def _run_population_growth_year_loop(
                     int(ctx.next_person_id),
                     next_global_person_id(conn, minimum=int(ctx.next_person_id)),
                 )
+            if phase_callback is not None:
+                phase_callback(year, "detailed_floor")
             ensure_detailed_floor_for_active_settlements(ctx, year)
         else:
+            if phase_callback is not None:
+                phase_callback(year, "passive_cohorts")
             refresh_passive_background_cohorts(
                 ctx,
                 year,
@@ -2334,6 +2363,8 @@ def _run_population_growth_year_loop(
                 extra_newborns_by_place=passive_births_by_place,
             )
             ctx.invalidate_mixed_population_cache()
+            if phase_callback is not None:
+                phase_callback(year, "detailed_floor")
             ensure_detailed_floor_for_active_settlements(ctx, year)
         if prof:
             simulation_timing.accumulate(
@@ -2345,12 +2376,15 @@ def _run_population_growth_year_loop(
 
         persist_to_save = ctx._should_checkpoint_snapshot(year)
         _record_profile_scale_snapshot(ctx, year, "before_summary")
+        if phase_callback is not None:
+            phase_callback(year, "record_year_summary")
         ctx.record_year_summary(
             year=year,
             births_count=births_count,
             deaths_count=int(mortality_rates["deaths_count"]) + childbirth_maternal_deaths,
             mortality_rates=mortality_rates,
             persist_to_save=persist_to_save,
+            phase_callback=phase_callback,
         )
         _record_profile_scale_snapshot(ctx, year, "after_summary")
         if progress_callback is not None and (
@@ -2370,6 +2404,7 @@ def run_population_growth_simulation(
     detailed_active_soft_cap: int | None = None,
     use_nondetailed_directory: bool = False,
     progress_callback: Callable[[int], None] | None = None,
+    phase_callback: Callable[[int, str], None] | None = None,
     print_timing_report: bool = True,
 ) -> None:
     """Drive the canonical population-growth yearly loop until ``finalize_run`` (context exit)."""
@@ -2410,6 +2445,7 @@ def run_population_growth_simulation(
         detailed_active_soft_cap=detailed_active_soft_cap,
         use_nondetailed_directory=bool(use_nondetailed_directory),
         progress_callback=progress_callback,
+        phase_callback=phase_callback,
     )
 
     if print_timing_report:
@@ -2425,6 +2461,7 @@ def continue_population_growth_simulation(
     detailed_active_soft_cap: int | None = None,
     use_nondetailed_directory: bool = False,
     progress_callback: Callable[[int], None] | None = None,
+    phase_callback: Callable[[int, str], None] | None = None,
     print_timing_report: bool = True,
 ) -> int:
     """Continue an already-loaded save without adding founders.
@@ -2459,6 +2496,7 @@ def continue_population_growth_simulation(
         detailed_active_soft_cap=detailed_active_soft_cap,
         use_nondetailed_directory=bool(use_nondetailed_directory),
         progress_callback=progress_callback,
+        phase_callback=phase_callback,
     )
 
     if print_timing_report:

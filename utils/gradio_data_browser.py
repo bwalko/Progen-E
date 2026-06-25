@@ -56,8 +56,49 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SIM_PROGRESS_RE = re.compile(
     r"SIM_PROGRESS\s+year=(?P<year>-?\d+)\s+end_year=(?P<end_year>-?\d+)\s+elapsed=(?P<elapsed>\d{2}:\d{2}:\d{2})"
 )
-SIM_RUN_HEARTBEAT_SECONDS = 5.0
+SIM_PHASE_RE = re.compile(
+    r"SIM_PHASE\s+year=(?P<year>-?\d+)\s+end_year=(?P<end_year>-?\d+)\s+phase=(?P<phase>[A-Za-z0-9_:-]+)\s+elapsed=(?P<elapsed>\d{2}:\d{2}:\d{2})"
+)
+SIM_RUN_HEARTBEAT_SECONDS = 300.0
 SIM_RUN_OUTPUT_LINE_LIMIT = 300
+SIM_PHASE_LABELS = {
+    "year_start": "starting year",
+    "migration_context_promotion": "migration context promotion",
+    "group_people_by_settlement": "grouping people by settlement",
+    "resource_facts": "resource facts",
+    "partner_pairing": "partner pairing",
+    "births": "births",
+    "mortality": "mortality",
+    "nondetailed_directory_topup": "non-detailed directory top-up",
+    "nondetailed_sql_tick": "non-detailed SQL tick",
+    "nondetailed_job_family_economy": "non-detailed job-family economy",
+    "nondetailed_resource_mortality": "non-detailed resource mortality",
+    "nondetailed_migration": "non-detailed migration",
+    "passive_cohorts": "passive cohorts",
+    "detailed_floor": "detailed floor",
+    "record_year_summary": "year summary",
+    "apply_pending_settlement_moves": "applying settlement moves",
+    "evolve_settlements": "settlement evolution",
+    "set_world_year": "saving world year",
+    "refresh_life_stages": "refreshing life stages",
+    "mind_body": "mind/body updates",
+    "careers": "careers",
+    "migration": "migration",
+    "trade_networks": "trade networks",
+    "social": "social relationships",
+    "household_care": "household care",
+    "incidents": "incidents",
+    "remarkable_archetypes": "remarkable archetypes",
+    "outlaws": "outlaws",
+    "innovation": "innovation",
+    "government": "government",
+    "city_states": "city-states",
+    "economy": "economy",
+    "stage_year_summary": "staging year summary",
+    "checkpoint_save": "checkpoint save",
+    "event_consequences": "event consequences",
+    "event_memory_lifecycle": "event memory lifecycle",
+}
 LEGACY_SCORE_COLUMNS = [
     "Beauty",
     "Scholar",
@@ -13888,6 +13929,11 @@ def _sim_output_newest_first(lines: list[str]) -> str:
     return "".join(reversed(lines))
 
 
+def _sim_phase_label(phase: str) -> str:
+    key = str(phase or "").strip()
+    return SIM_PHASE_LABELS.get(key, key.replace("_", " ") or "simulation phase")
+
+
 def _sim_progress_html(
     current_year: int, end_year: int, elapsed: str, *, start_year: int
 ) -> str:
@@ -14016,16 +14062,27 @@ def run_simulation_from_ui(
             if stream_name == "stderr":
                 stderr_lines.append(line)
             else:
-                _append_sim_output_line(stdout_lines, line)
+                phase_match = SIM_PHASE_RE.search(line)
                 match = SIM_PROGRESS_RE.search(line)
-                if match:
+                if phase_match:
+                    current_year = int(phase_match.group("year"))
+                    expected_end = int(phase_match.group("end_year"))
+                    _append_sim_run_log(
+                        stdout_lines,
+                        elapsed,
+                        f"Year {_format_year(current_year)}: running {_sim_phase_label(phase_match.group('phase'))}.",
+                    )
+                elif match:
                     current_year = int(match.group("year"))
                     expected_end = int(match.group("end_year"))
                     _append_sim_run_log(
                         stdout_lines,
                         elapsed,
-                        f"Progress marker reached: year {_format_year(current_year)} / {_format_year(expected_end)}.",
+                        f"Year {_format_year(current_year)} save/progress marker reached "
+                        f"({_format_year(current_year)} / {_format_year(expected_end)}).",
                     )
+                else:
+                    _append_sim_output_line(stdout_lines, line)
         elif now - last_heartbeat >= SIM_RUN_HEARTBEAT_SECONDS:
             changed = True
             last_heartbeat = now
@@ -14033,8 +14090,8 @@ def run_simulation_from_ui(
             _append_sim_run_log(
                 stdout_lines,
                 elapsed,
-                f"Still running: year {_format_year(current_year)} / {_format_year(expected_end)}; "
-                f"{quiet_for}s since last simulator output.",
+                f"No simulator phase/progress output for {_elapsed_hhmmss(quiet_for)}. "
+                f"Last reported progress: year {_format_year(current_year)} / {_format_year(expected_end)}.",
             )
         if changed or now - last_emit >= 1.0:
             last_emit = now
