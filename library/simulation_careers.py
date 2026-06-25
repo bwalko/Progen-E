@@ -1216,6 +1216,21 @@ def _prestige_target_match(
     return _clamp(score, 0.0, 1.0)
 
 
+def _has_prestige_local_target_option(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord"
+) -> bool:
+    st = _residence_settlement_state(ctx, rec)
+    if st is None:
+        return False
+    pop = int(getattr(st, "resident_count", 0) or 0)
+    market = float(getattr(st, "market_pull", 0.0) or 0.0)
+    return any(
+        pop >= int(target.min_population)
+        and market >= float(target.min_market_pull)
+        for target in PRESTIGE_TARGETS
+    )
+
+
 def _prestige_candidate_score(
     ctx: "SimulationContext",
     rec: "SimulationPersonRecord",
@@ -1515,6 +1530,8 @@ def _prestige_mobility_pass(
             continue
         market_type = (rec.person.job_market_type or "settlement_market").strip().lower()
         if market_type in {"household_care", "vice", "criminal"}:
+            continue
+        if not _has_prestige_local_target_option(ctx, rec):
             continue
         patronage = _patronage_strength_for_client(ctx, int(rec.person_id))
         score = _prestige_candidate_score(
@@ -3647,9 +3664,12 @@ def _household_labor_pre_assignment_pass(
     archetypes = JobArchetypeCatalog.load(ctx.db_path)
     care_indexes = career_facts.care_indexes
     assigned = 0
-    for rec, fitness, pressure, traits in eligible:
-        if rec.person.job:
-            continue
+    jobless = [
+        (rec, fitness, pressure, traits)
+        for rec, fitness, pressure, traits in eligible
+        if not rec.person.job
+    ]
+    for rec, fitness, pressure, traits in jobless:
         duty = career_facts.duty_for(ctx, rec, year)
         kin_bonus = career_facts.kinship_bonus_for(ctx, rec, year)
         care_pull = _primary_childcare_pull(rec.person, duty, kin_bonus)
@@ -3680,7 +3700,7 @@ def _household_labor_pre_assignment_pass(
                 assigned += 1
 
     demands = _service_demand_anchors(ctx, year, care_indexes)
-    for rec, fitness, pressure, traits in eligible:
+    for rec, fitness, pressure, traits in jobless:
         if rec.person.job:
             continue
         if _maybe_assign_domestic_service(
@@ -4095,7 +4115,12 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
         t0 = tpc()
 
     lost_count = 0
-    for rec, fitness, pressure, _traits in eligible:
+    employed_before_loss = [
+        (rec, fitness, pressure, traits)
+        for rec, fitness, pressure, traits in eligible
+        if bool(rec.person.job)
+    ]
+    for rec, fitness, pressure, _traits in employed_before_loss:
         if maybe_lose_job(
             ctx,
             rec,
@@ -4131,17 +4156,21 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
         simulation_timing.accumulate("careers.market_snapshot", tpc() - t0)
         t0 = tpc()
     assigned_count = 0
-    assign_skipped_job_lost = 0
-    assign_skipped_employed = 0
-    assign_considered = 0
-    for rec, fitness, pressure, traits in eligible:
-        if rec.person.job_lost_year == int(year):
-            assign_skipped_job_lost += 1
-            continue
-        if rec.person.job:
-            assign_skipped_employed += 1
-            continue
-        assign_considered += 1
+    assign_skipped_job_lost = sum(
+        1 for rec, _fitness, _pressure, _traits in eligible
+        if rec.person.job_lost_year == int(year)
+    )
+    assign_skipped_employed = sum(
+        1 for rec, _fitness, _pressure, _traits in eligible
+        if rec.person.job_lost_year != int(year) and bool(rec.person.job)
+    )
+    assignment_candidates = [
+        (rec, fitness, pressure, traits)
+        for rec, fitness, pressure, traits in eligible
+        if rec.person.job_lost_year != int(year) and not rec.person.job
+    ]
+    assign_considered = len(assignment_candidates)
+    for rec, fitness, pressure, traits in assignment_candidates:
         if maybe_assign_or_rehire(
             ctx,
             rec,
@@ -4189,7 +4218,12 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
         t0 = tpc()
 
     migrated_count = 0
-    for rec, fitness, pressure, _traits in eligible:
+    migration_candidates = [
+        (rec, fitness, pressure, traits)
+        for rec, fitness, pressure, traits in eligible
+        if not rec.person.job and rec.person.employment_status == "unemployed"
+    ]
+    for rec, fitness, pressure, _traits in migration_candidates:
         if maybe_migrate_job_seeker_household(
             ctx,
             rec,

@@ -13,6 +13,7 @@ from library.event_catalog import choose_event_catalog_kind
 from library.event_scoring import (
     EventScoringContext,
     clamp01 as _clamp,
+    composite_score as _composite_score,
     contextual_propensity_by_person_id,
     eligible_records_by_threshold,
     ideal_strength as _ideal_strength,
@@ -1001,6 +1002,138 @@ def _incident_context_map(
     }
 
 
+def _incident_priority_pool(
+    ctx: "SimulationContext",
+    residents: list["SimulationPersonRecord"],
+    *,
+    year: int,
+    settlement_id: str,
+    event_key: str,
+    stream: int,
+    cap: int,
+    priority_score,
+) -> list["SimulationPersonRecord"]:
+    sampled = ctx.decision_sample_records(
+        residents,
+        year=year,
+        scope=f"settlement:{settlement_id}:{event_key}",
+        stream=stream,
+        cap=cap,
+    )
+    limit = int(cap or 0)
+    if limit <= 0 or len(residents) <= limit:
+        return sampled
+    by_id = {int(rec.person_id): rec for rec in sampled}
+    priority_scores: dict[int, float] = {}
+    priority_cap = min(limit, max(12, limit // 3))
+    candidates: list[tuple[float, int, "SimulationPersonRecord"]] = []
+    for rec in residents:
+        pid = int(rec.person_id)
+        try:
+            score = float(priority_score(rec))
+        except (TypeError, ValueError):
+            score = 0.0
+        if score <= 0.0:
+            continue
+        priority_scores[pid] = score
+        if pid not in by_id:
+            candidates.append((score, pid, rec))
+    if candidates:
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        for score, pid, rec in candidates[:priority_cap]:
+            by_id[pid] = rec
+            priority_scores[pid] = score
+    if len(by_id) <= limit:
+        return sorted(by_id.values(), key=lambda rec: int(rec.person_id))
+    ranked = sorted(
+        by_id.values(),
+        key=lambda rec: (
+            -priority_scores.get(int(rec.person_id), 0.0),
+            int(rec.person_id),
+        ),
+    )
+    return sorted(ranked[:limit], key=lambda rec: int(rec.person_id))
+
+
+def _violent_incident_priority_score(rec: "SimulationPersonRecord") -> float:
+    return max(
+        _composite_score(rec, "psychopathy"),
+        _composite_score(rec, "evil_done_desire"),
+        _composite_score(rec, "force_get_way_desire"),
+        _composite_score(rec, "revenge_desire") * 0.9,
+        _composite_score(rec, "insanity") * 0.8,
+        _positive_extreme(rec, "aggression") * 0.75,
+        _negative_extreme(rec, "empathy") * 0.65,
+        _negative_extreme(rec, "temperance") * 0.55,
+    )
+
+
+def _property_crime_priority_score(rec: "SimulationPersonRecord") -> float:
+    outlaw_status = str(getattr(rec.person, "outlaw_status", "") or "").strip().lower()
+    outlaw_bonus = 1.0 if outlaw_status in {OUTLAW_STATUS_WANTED, OUTLAW_STATUS_FUGITIVE} else 0.0
+    return max(
+        outlaw_bonus,
+        _composite_score(rec, "survival_need"),
+        _composite_score(rec, "evil_done_desire") * 0.85,
+        _composite_score(rec, "lie_or_cheat_willingness") * 0.75,
+        _composite_score(rec, "force_get_way_desire") * 0.65,
+        _positive_extreme(rec, "ambition") * 0.55,
+        _negative_extreme(rec, "honesty") * 0.65,
+        _negative_extreme(rec, "temperance") * 0.55,
+    )
+
+
+def _scandal_priority_ids(ctx: "SimulationContext") -> set[int]:
+    ids: set[int] = set()
+    for a_id, b_id in getattr(ctx, "paramours", ()):
+        ids.add(int(a_id))
+        ids.add(int(b_id))
+    return ids
+
+
+def _scandal_priority_score(
+    rec: "SimulationPersonRecord", paramour_ids: set[int]
+) -> float:
+    paramour_bonus = 1.0 if int(rec.person_id) in paramour_ids else 0.0
+    return max(
+        paramour_bonus,
+        _positive_extreme(rec, "mating drive") * 0.75,
+        _positive_extreme(rec, "persuasion") * 0.45,
+        _negative_extreme(rec, "loyalty") * 0.75,
+        _negative_extreme(rec, "honesty") * 0.55,
+        _negative_extreme(rec, "modesty") * 0.45,
+    )
+
+
+def _virtue_priority_score(rec: "SimulationPersonRecord") -> float:
+    return max(
+        _composite_score(rec, "good_done_desire"),
+        _composite_score(rec, "honest_work_desire") * 0.7,
+        _positive_extreme(rec, "generosity") * 0.7,
+        _ideal_strength(rec, "honesty") * 0.55,
+        _ideal_strength(rec, "civics") * 0.55,
+        _ideal_strength(rec, "nurturance") * 0.55,
+        _ideal_strength(rec, "patience") * 0.45,
+    )
+
+
+def _knowledge_priority_score(rec: "SimulationPersonRecord") -> float:
+    job = str(rec.person.job or "").strip().lower()
+    role_bonus = 0.55 if any(
+        token in job
+        for token in ("scholar", "scribe", "priest", "physician", "teacher", "artisan")
+    ) else 0.0
+    return max(
+        role_bonus,
+        _positive_extreme(rec, "curiosity") * 0.75,
+        _positive_extreme(rec, "creativity") * 0.75,
+        _positive_extreme(rec, "ideation") * 0.65,
+        _ideal_strength(rec, "focus") * 0.55,
+        _ideal_strength(rec, "perception") * 0.45,
+        _ideal_strength(rec, "memory") * 0.45,
+    )
+
+
 def _choose_witnesses(
     residents: list["SimulationPersonRecord"],
     *,
@@ -1050,12 +1183,15 @@ def _maybe_murder_in_settlement(
     scoring_facts: IncidentScoringFacts | None = None,
     population_count: int | None = None,
 ) -> MurderIncident | None:
-    sampled = ctx.decision_sample_records(
+    sampled = _incident_priority_pool(
+        ctx,
         residents,
         year=year,
-        scope=f"settlement:{settlement_id}:murder",
+        settlement_id=settlement_id,
+        event_key="murder",
         stream=MURDER_SAMPLE_STREAM,
         cap=MURDER_SETTLEMENT_SAMPLE_CAP,
+        priority_score=_violent_incident_priority_score,
     )
     adults = [
         rec
@@ -2559,12 +2695,16 @@ def _maybe_affair_scandal_in_settlement(
     rate: IncidentRateParams | None = None,
     scoring_facts: IncidentScoringFacts | None = None,
 ) -> AffairScandalIncident | None:
-    sampled = ctx.decision_sample_records(
+    paramour_ids = _scandal_priority_ids(ctx)
+    sampled = _incident_priority_pool(
+        ctx,
         residents,
         year=year,
-        scope=f"settlement:{settlement_id}:affair_scandal",
+        settlement_id=settlement_id,
+        event_key="affair_scandal",
         stream=SCANDAL_SAMPLE_STREAM,
         cap=SCANDAL_SETTLEMENT_SAMPLE_CAP,
+        priority_score=lambda rec: _scandal_priority_score(rec, paramour_ids),
     )
     sampled_ids = {int(rec.person_id) for rec in sampled if _adult_alive(rec, year)}
     if len(sampled_ids) < 2:
@@ -2712,12 +2852,15 @@ def _maybe_public_virtue_in_settlement(
     rate: IncidentRateParams | None = None,
     scoring_facts: IncidentScoringFacts | None = None,
 ) -> PublicVirtueIncident | None:
-    sampled = ctx.decision_sample_records(
+    sampled = _incident_priority_pool(
+        ctx,
         residents,
         year=year,
-        scope=f"settlement:{settlement_id}:public_virtue",
+        settlement_id=settlement_id,
+        event_key="public_virtue",
         stream=VIRTUE_SAMPLE_STREAM,
         cap=VIRTUE_SETTLEMENT_SAMPLE_CAP,
+        priority_score=_virtue_priority_score,
     )
     adults = [rec for rec in sampled if _adult_alive(rec, year)]
     if len(adults) < 2:
@@ -2844,12 +2987,15 @@ def _maybe_knowledge_culture_in_settlement(
     rate: IncidentRateParams | None = None,
     scoring_facts: IncidentScoringFacts | None = None,
 ) -> KnowledgeCultureIncident | None:
-    sampled = ctx.decision_sample_records(
+    sampled = _incident_priority_pool(
+        ctx,
         residents,
         year=year,
-        scope=f"settlement:{settlement_id}:knowledge_culture",
+        settlement_id=settlement_id,
+        event_key="knowledge_culture",
         stream=KNOWLEDGE_SAMPLE_STREAM,
         cap=KNOWLEDGE_SETTLEMENT_SAMPLE_CAP,
+        priority_score=_knowledge_priority_score,
     )
     adults = [rec for rec in sampled if _adult_alive(rec, year)]
     if len(adults) < 2:
@@ -2981,12 +3127,15 @@ def _maybe_property_crime_in_settlement(
     rate: IncidentRateParams | None = None,
     scoring_facts: IncidentScoringFacts | None = None,
 ) -> TheftFraudIncident | None:
-    sampled = ctx.decision_sample_records(
+    sampled = _incident_priority_pool(
+        ctx,
         residents,
         year=year,
-        scope=f"settlement:{settlement_id}:property_crime",
+        settlement_id=settlement_id,
+        event_key="property_crime",
         stream=THEFT_SAMPLE_STREAM,
         cap=THEFT_SETTLEMENT_SAMPLE_CAP,
+        priority_score=_property_crime_priority_score,
     )
     adults = [rec for rec in sampled if _adult_alive(rec, year)]
     if len(adults) < 2:
@@ -3574,6 +3723,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     murder_count = 0
     property_crime_count = 0
     outlaw_property_crime_count = 0
+    property_crime_actor_ids: set[int] = set()
     scandal_count = 0
     public_virtue_count = 0
     knowledge_culture_count = 0
@@ -3675,6 +3825,9 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
             if property_crime is not None:
                 _record_property_crime_incident(ctx, y, property_crime)
                 property_crime_count += 1
+                property_crime_actor_ids.add(
+                    int(property_crime.perpetrator.person_id)
+                )
         if scandal_count < scandal_event_limit:
             scandal = _maybe_affair_scandal_in_settlement(
                 ctx,
@@ -3717,13 +3870,17 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
     outlaw_crime_candidates = [
         rec
         for rec in ctx.iter_current_people(sorted_by_id=True)
-        if _eligible_outlaw_property_crime_actor(ctx, rec, y)
+        if int(rec.person_id) not in property_crime_actor_ids
+        and _eligible_outlaw_property_crime_actor(ctx, rec, y)
     ]
     outlaw_crime_limit = _outlaw_property_crime_event_limit(
         len(outlaw_crime_candidates), property_crime_rate
     )
     for rec in outlaw_crime_candidates:
-        if outlaw_property_crime_count >= outlaw_crime_limit:
+        if (
+            property_crime_count >= property_crime_event_limit
+            or outlaw_property_crime_count >= outlaw_crime_limit
+        ):
             break
         property_crime = _maybe_outlaw_property_crime(
             ctx,
@@ -3739,6 +3896,7 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
         _record_property_crime_incident(ctx, y, property_crime)
         property_crime_count += 1
         outlaw_property_crime_count += 1
+        property_crime_actor_ids.add(int(property_crime.perpetrator.person_id))
     detailed_murder_count = murder_count
     population_items = [
         (sid, max(0, int(population)))

@@ -4119,3 +4119,43 @@ completion.
 - `python utils\run_population_simulation.py --world-id codex_bulkwrite_probe
   --years 1 --seed 424242 --reset-world --profile-last-years 1
   --skip-timing-log --skip-report-files --passive-population-scale 0`
+
+## 2026-06-25 - Incident And Career Candidate Filtering
+
+### Enhancements
+
+- Added bounded priority-fill incident candidate pools in
+  `library.simulation_incidents`:
+  - murder and property-crime settlement samples now preserve the deterministic
+    random caps while making room for high-risk composite/trait profiles;
+  - affair scandal samples now prioritize active paramour participants;
+  - public virtue and knowledge/culture samples now prioritize prosocial,
+    creative, scholarly, and relevant role signals.
+- Kept detailed incident event volume governed by existing chance/rate/cap
+  gates; the priority pools only change which detailed people are worth
+  scoring inside the bounded sample.
+- Prevented a same-year duplicate property-crime edge case where a standard
+  property crime could create a wanted outlaw case and the outlaw-crime sub-pass
+  could immediately emit a second property crime for the same actor in the same
+  annual tick.
+- Trimmed low-value career loop work in `library.simulation_careers`:
+  - job loss now iterates only employed eligible people;
+  - assignment/rehire and migration now use exact jobless/unemployed buckets;
+  - household labor reuses a jobless bucket for pre-assignment passes;
+  - prestige mobility skips expensive scoring where no local prestige target can
+    possibly be selected.
+
+### Validation
+
+- `python -m py_compile library\simulation_incidents.py
+  library\simulation_careers.py`
+- `python -m unittest unit_test.test_simulation_incident_helpers`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_murder_tick_records_event_kills_victim_and_persists_rumor
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_property_crime_records_nonlethal_rumor
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_affair_scandal_records_rumored_household_scandal
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_public_virtue_records_public_known_good_deed
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_knowledge_culture_records_public_known_breakthrough
+  unit_test.test_simulation_careers.TestSimulationCareers.test_annual_tick_assigns_at_era_specific_age
+  unit_test.test_simulation_careers.TestSimulationCareers.test_job_loss_and_rehire_are_logged_as_events
+  unit_test.test_simulation_careers.TestSimulationCareers.test_job_seeker_migration_moves_household_and_logs_events`

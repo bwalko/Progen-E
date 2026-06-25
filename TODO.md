@@ -127,13 +127,10 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
   flushing, household-care indexes, job migration, government scoring, and
   trade networks.
 
-- Next concrete performance pass: profile/optimize incident generation or
-  career reassignment as the next measured hot path. The government candidate
-  scoring cheap-filter pass from this batch is complete; see `TODONE.md`.
-
-- Run another fresh full 250-year / 250-couple production-scale timing
-  comparison only after the next meaningful performance changes; use the
-  1,089.742 second `prod_timing_250_foreground` row as the current baseline.
+- Next concrete performance step: run another fresh full 250-year /
+  250-couple production-scale timing comparison against the 1,089.742 second
+  `prod_timing_250_foreground` baseline, now that incident generation and
+  career reassignment have had a bounded optimization pass.
 
 ### Hybrid Population Architecture
 
