@@ -28,6 +28,10 @@ def make_settlement_id(region_id: str, seq: int) -> str:
 ABANDON_EMPTY_GRACE_YEARS = 3
 # After grace, abandon probability is min(1, excess * slope) per year.
 ABANDON_PROB_PER_EXCESS_YEAR = 0.2
+ABANDON_DISTRESS_MAX_RESIDENTS = 250
+ABANDON_DISTRESS_FOOD_PRESSURE = 1.65
+ABANDON_DISTRESS_STABILITY = 0.12
+ABANDON_DISTRESS_PROSPERITY = 0.18
 
 
 def roll_abandon_this_year(consecutive_empty_years: int, rng: random.Random) -> bool:
@@ -37,6 +41,31 @@ def roll_abandon_this_year(consecutive_empty_years: int, rng: random.Random) -> 
     excess = consecutive_empty_years - ABANDON_EMPTY_GRACE_YEARS
     p = min(1.0, excess * ABANDON_PROB_PER_EXCESS_YEAR)
     return rng.random() < p
+
+
+def settlement_distress_counts_as_vacancy(
+    state: "SettlementState",
+    *,
+    resident_count: int | None = None,
+) -> bool:
+    """Return true when a small active settlement is failing despite nonzero residents."""
+    pop = (
+        max(0, int(resident_count))
+        if resident_count is not None
+        else max(0, int(getattr(state, "resident_count", 0) or 0))
+    )
+    if pop <= 0:
+        return True
+    if pop > ABANDON_DISTRESS_MAX_RESIDENTS:
+        return False
+    food = _clamp(_metric_value(state, "food_pressure", 0.0), 0.0, 2.0)
+    stability = _clamp(_metric_value(state, "stability", 0.5), 0.0, 1.0)
+    prosperity = _clamp(_metric_value(state, "prosperity_pool", 1.0), 0.0, 3.0)
+    return (
+        food >= ABANDON_DISTRESS_FOOD_PRESSURE
+        and stability <= ABANDON_DISTRESS_STABILITY
+        and prosperity <= ABANDON_DISTRESS_PROSPERITY
+    )
 
 
 def next_settlement_sequence(region_id: str, existing_ids: list[str]) -> int:
@@ -130,6 +159,16 @@ def classify_settlement_level(resident_count: int) -> str:
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(float(lo), min(float(hi), float(value)))
+
+
+def _metric_value(state: object, name: str, default: float) -> float:
+    raw = getattr(state, name, None)
+    if raw is None or raw == "":
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _stable_unit_interval(text: str) -> float:

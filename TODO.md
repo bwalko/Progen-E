@@ -283,6 +283,10 @@ Completion boundary:
 - Remaining long validation: run the requested 100-couple / 300-year temp-world
   smoke when a long calibration window is acceptable:
   `python utils/run_population_simulation.py --world-id temp_mixed_pop_scale_probe --reset-world --years 300 --starting-couples 100 --seed 20260624 --skip-report-files --skip-timing-log --progress`.
+- Include settlement distribution in the acceptance check: hamlets/villages
+  should survive in plausible numbers, some chronically distressed small sites
+  may abandon, and large high-capacity settlements should carry higher
+  non-detailed:detailed ratios without reducing detailed representation.
 - Pre-performance-fix attempts should not be treated as current evidence: the
   300-year command timed out after 300 seconds before a progress line, and a
   30-year version timed out after 600 seconds before a complete checkpoint.

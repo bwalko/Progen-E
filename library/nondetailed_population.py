@@ -57,6 +57,16 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(float(lo), min(float(hi), float(value)))
 
 
+def _metric_value(obj: object, name: str, default: float) -> float:
+    raw = getattr(obj, name, None)
+    if raw is None or raw == "":
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 @dataclass(frozen=True)
 class NondetailedPersonSeed:
     birthyear: int
@@ -99,6 +109,13 @@ class NondetailedEconomyResult:
     elapsed_seconds: float = 0.0
 
 
+@dataclass(frozen=True)
+class NondetailedResourceMortalityResult:
+    deaths: int = 0
+    affected_settlements: int = 0
+    elapsed_seconds: float = 0.0
+
+
 def normalize_nondetailed_job_family(value: object) -> str:
     raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
@@ -135,6 +152,26 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def nondetailed_target_ratio_for_site_capacity(site_capacity: int | float) -> float:
+    """Target non-detailed residents per detailed resident rises with site capacity."""
+    cap = max(1.0, float(site_capacity))
+    ratio = 6.0 + ((cap / 60.0) ** 0.85) * 8.0
+    return _clamp(ratio, 8.0, 800.0)
+
+
+def _resource_topup_multiplier(settlement: object) -> float:
+    food = _clamp(_metric_value(settlement, "food_pressure", 0.0), 0.0, 2.0)
+    stability = _clamp(_metric_value(settlement, "stability", 0.5), 0.0, 1.0)
+    prosperity = _clamp(_metric_value(settlement, "prosperity_pool", 1.0), 0.0, 1.0)
+    if food <= 0.90 and stability >= 0.35 and prosperity >= 0.40:
+        return 1.0
+    scarcity = _clamp((food - 0.90) / 1.10, 0.0, 1.0)
+    instability = _clamp((0.35 - stability) / 0.35, 0.0, 1.0)
+    poverty = _clamp((0.40 - prosperity) / 0.40, 0.0, 1.0)
+    distress = max(scarcity, instability, poverty)
+    return _clamp(1.0 - distress * 0.88, 0.04, 1.0)
 
 
 def max_global_person_id(conn: sqlite3.Connection) -> int:
@@ -596,6 +633,109 @@ def apply_nondetailed_job_family_economy_effects(
     )
 
 
+def apply_nondetailed_resource_mortality(
+    conn: sqlite3.Connection,
+    ctx: object,
+    *,
+    year: int,
+    max_deaths_per_settlement: int = 1_000,
+) -> NondetailedResourceMortalityResult:
+    """Cull background residents from settlements under severe resource distress."""
+    started = time.perf_counter()
+    counts = nondetailed_counts_by_settlement(conn)
+    if not counts:
+        return NondetailedResourceMortalityResult()
+    deaths_total = 0
+    affected = 0
+    for sid, pop in sorted(counts.items()):
+        st = getattr(ctx, "settlements_by_id", {}).get(sid)
+        if st is None or str(getattr(st, "status", "") or "").strip().lower() != "active":
+            continue
+        pop_i = max(0, int(pop))
+        if pop_i <= 0:
+            continue
+        food = _clamp(_metric_value(st, "food_pressure", 0.0), 0.0, 2.0)
+        stability = _clamp(_metric_value(st, "stability", 0.5), 0.0, 1.0)
+        prosperity = _clamp(_metric_value(st, "prosperity_pool", 1.0), 0.0, 1.0)
+        distress = max(
+            0.0,
+            (food - 1.05) * 0.90,
+            (0.28 - stability) * 1.40,
+            (0.35 - prosperity) * 1.00,
+        )
+        if distress <= 0.0:
+            continue
+        death_share = min(0.09, distress * 0.035)
+        deaths = min(
+            int(max_deaths_per_settlement),
+            max(1, int(math.ceil(pop_i * death_share))),
+        )
+        conn.execute("DROP TABLE IF EXISTS temp_nondetailed_resource_deaths")
+        conn.execute(
+            """
+            CREATE TEMP TABLE temp_nondetailed_resource_deaths AS
+            SELECT person_id
+            FROM simulation_people_nondetailed
+            WHERE is_alive = 1
+              AND current_settlement_key = (
+                SELECT settlement_key
+                FROM simulation_settlement_lookup
+                WHERE settlement_id = ?
+              )
+            ORDER BY ((person_id * 1103515245 + ?) % 2147483647), person_id
+            LIMIT ?
+            """,
+            (sid, int(year) + 17, int(deaths)),
+        )
+        conn.execute(
+            """
+            UPDATE simulation_people_nondetailed
+            SET is_alive = 0,
+                deathyear = ?,
+                is_partnered = 0,
+                partner_person_id = NULL
+            WHERE person_id IN (SELECT person_id FROM temp_nondetailed_resource_deaths)
+            """,
+            (int(year),),
+        )
+        killed = int(conn.execute("SELECT changes()").fetchone()[0])
+        if killed <= 0:
+            continue
+        conn.execute(
+            """
+            UPDATE simulation_people_nondetailed
+            SET is_partnered = 0,
+                partner_person_id = NULL
+            WHERE is_alive = 1
+              AND partner_person_id IN (
+                SELECT person_id FROM temp_nondetailed_resource_deaths
+              )
+            """
+        )
+        deaths_total += killed
+        affected += 1
+        if hasattr(ctx, "_record_simulation_event"):
+            ctx._record_simulation_event(
+                int(year),
+                "nondetailed_resource_mortality",
+                {
+                    "settlement_id": sid,
+                    "region_id": getattr(st, "region_id", None),
+                    "death_count": killed,
+                    "alive_before": pop_i,
+                    "food_pressure": round(food, 4),
+                    "stability": round(stability, 4),
+                    "prosperity_pool": round(prosperity, 4),
+                    "distress": round(distress, 4),
+                },
+            )
+    return NondetailedResourceMortalityResult(
+        deaths=deaths_total,
+        affected_settlements=affected,
+        elapsed_seconds=time.perf_counter() - started,
+    )
+
+
 def run_nondetailed_sql_migration(
     conn: sqlite3.Connection,
     ctx: object,
@@ -676,13 +816,15 @@ def run_nondetailed_sql_migration(
             cap = max(1, int(pop))
         region_pop = int(mixed_region_counts.get(rid, 0))
         regional_pressure = region_pop / cap
-        food_pressure = float(getattr(st, "food_pressure", 0.0) or 0.0)
-        prosperity = float(getattr(st, "prosperity_pool", 1.0) or 1.0)
+        food_pressure = _metric_value(st, "food_pressure", 0.0)
+        prosperity = _metric_value(st, "prosperity_pool", 1.0)
+        stability = _metric_value(st, "stability", 0.5)
         source_pressure = max(
             0.0,
-            regional_pressure - 0.88,
-            food_pressure - 0.72,
-            0.65 - prosperity,
+            regional_pressure - 0.84,
+            (food_pressure - 0.62) * 1.15,
+            (0.70 - prosperity) * 0.95,
+            (0.42 - stability) * 1.10,
         )
         if source_pressure <= 0.0:
             continue
@@ -691,7 +833,7 @@ def run_nondetailed_sql_migration(
             continue
         migrants = min(
             int(max_migrants_per_settlement),
-            max(1, int(math.ceil(int(pop) * min(0.035, source_pressure * 0.025)))),
+            max(1, int(math.ceil(int(pop) * min(0.095, source_pressure * 0.055)))),
         )
         conn.execute("DROP TABLE IF EXISTS temp_nondetailed_migrants")
         conn.execute(
@@ -927,13 +1069,20 @@ def seed_nondetailed_from_active_settlements(
             target_count = max(0, int(round(target * weight / total_weight)))
             sid = str(getattr(st, "settlement_id", "") or "").strip()
             existing_alive = int(current_by_settlement.get(sid, 0))
+            detailed_alive = 0
+            try:
+                detailed_alive = int(ctx.count_alive_in_settlement(sid))
+            except Exception:
+                detailed_alive = max(0, int(getattr(st, "resident_count", 0) or 0))
+            ratio_cap = int(
+                round(
+                    max(3, detailed_alive)
+                    * nondetailed_target_ratio_for_site_capacity(target_count)
+                )
+            )
+            target_count = min(target_count, max(0, ratio_cap))
             if profile is not None:
                 target_count = growth_invariant_cap(profile, target_count)
-                detailed_alive = 0
-                try:
-                    detailed_alive = int(ctx.count_alive_in_settlement(sid))
-                except Exception:
-                    detailed_alive = max(0, int(getattr(st, "resident_count", 0) or 0))
                 cap = new_settlement_backfill_cap(
                     profile,
                     st,
@@ -942,6 +1091,7 @@ def seed_nondetailed_from_active_settlements(
                 )
                 if cap is not None:
                     target_count = min(target_count, max(0, cap - detailed_alive))
+            target_count = int(round(target_count * _resource_topup_multiplier(st)))
             count = max(0, target_count - existing_alive)
             if count <= 0:
                 continue

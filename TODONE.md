@@ -3926,3 +3926,38 @@ completion.
 
 - `python -m py_compile library/simulation_context.py library/simulation_migration.py unit_test/test_simulation_migration.py`
 - `python -m unittest unit_test.test_simulation_migration`
+
+## 2026-06-24 - Resource-Bounded Settlement Scale
+
+### Enhancements
+
+- Changed SQLite city-directory top-up so non-detailed targets scale by local
+  site capacity and current detailed representation. Larger, healthier
+  high-capacity settlements can support higher non-detailed:detailed ratios,
+  while small sites no longer refill to large town/city sizes just because
+  regional cap exists.
+- Added resource-health gating to non-detailed top-up. High food pressure, low
+  stability, and low prosperity sharply reduce background refill until the
+  settlement recovers.
+- Added non-detailed resource mortality and stronger resource-driven
+  non-detailed migration pressure so Food, Stability, Market, and Prosperity
+  affect population movement/loss instead of acting as mostly descriptive
+  metrics.
+- Let chronically distressed small settlements count as vacancy-like for
+  abandonment rolls, so abandoned settlements can return without requiring exact
+  zero residents first.
+- Raised the detailed floor for large mixed-population settlements, preserving
+  detailed representation while allowing larger places to carry more
+  non-detailed background population.
+
+### Validation
+
+- Default-save read-only projection, year 1099: active settlements were still
+  31 cities / 4 towns before rerun; under the new refill rule the smallest
+  distressed satellite `boreas_east:s2` would cap non-detailed top-up at 9
+  instead of refilling its current 171 non-detailed residents.
+- `python -m py_compile library/settlements.py library/simulation_context.py library/nondetailed_population.py library/population_growth_runner.py unit_test/test_lazy_settlements.py unit_test/test_nondetailed_population.py unit_test/test_population_growth_nondetailed_runner.py unit_test/test_population_growth_determinism.py`
+- `python -m unittest unit_test.test_nondetailed_population unit_test.test_lazy_settlements unit_test.test_population_growth_nondetailed_runner unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_large_mixed_settlement_raises_detailed_floor unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_detailed_floor_promotes_from_passive_cohorts`
+- The full `unit_test.test_population_growth_determinism` module timed out on
+  this laptop after 180 seconds before producing a pass/fail result; the two
+  touched floor regressions passed directly.

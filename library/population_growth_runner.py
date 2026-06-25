@@ -30,7 +30,9 @@ from library.passive_population import (
 from library.nondetailed_population import (
     add_nondetailed_births_from_place_counts,
     apply_nondetailed_job_family_economy_effects,
+    apply_nondetailed_resource_mortality,
     next_global_person_id,
+    nondetailed_alive_count,
     run_nondetailed_sql_annual_tick_for_save,
     run_nondetailed_sql_migration,
     seed_nondetailed_from_active_settlements,
@@ -74,6 +76,11 @@ PASSIVE_MIGRATION_CONTEXT_REASONS: frozenset[str] = frozenset(
     {"resource_pressure_migration", "job_seeker_migration"}
 )
 MIN_DETAILED_RESIDENTS_PER_ACTIVE_SETTLEMENT = 2
+LARGE_SETTLEMENT_DETAIL_FLOORS: tuple[tuple[int, int], ...] = (
+    (3000, 10),
+    (1000, 6),
+    (350, 4),
+)
 PARTNER_FORMATION_MAX_AGE = 70
 PARTNER_FORMATION_MAX_AGE_GAP = 35
 BIRTH_RELATIONSHIP_SPOUSE = "spouse"
@@ -1543,7 +1550,16 @@ def ensure_detailed_floor_for_active_settlements(
     for sid, st in sorted(ctx.settlements_by_id.items()):
         if (st.status or "").strip().lower() != "active":
             continue
-        needed = minimum - len(by_settlement.get(sid, ()))
+        settlement_minimum = minimum
+        try:
+            mixed_count = int(ctx.mixed_population_count_in_settlement(sid))
+        except Exception:
+            mixed_count = max(0, int(getattr(st, "resident_count", 0) or 0))
+        for threshold, floor in LARGE_SETTLEMENT_DETAIL_FLOORS:
+            if mixed_count >= int(threshold):
+                settlement_minimum = max(settlement_minimum, int(floor))
+                break
+        needed = settlement_minimum - len(by_settlement.get(sid, ()))
         if needed <= 0:
             continue
         for i in range(needed):
@@ -1554,7 +1570,7 @@ def ensure_detailed_floor_for_active_settlements(
                 settlement_id=sid,
                 min_age=18,
                 reason="settlement_detail_floor",
-                source={"settlement_id": sid, "minimum": minimum},
+                source={"settlement_id": sid, "minimum": settlement_minimum},
             )
             if promoted is None:
                 promoted = _generate_detail_floor_person(
@@ -2163,6 +2179,11 @@ def _run_population_growth_year_loop(
                     ctx,
                     year=year,
                 )
+                resource_mortality_result = apply_nondetailed_resource_mortality(
+                    conn,
+                    ctx,
+                    year=year,
+                )
                 migration_result = run_nondetailed_sql_migration(
                     conn,
                     ctx,
@@ -2171,12 +2192,28 @@ def _run_population_growth_year_loop(
                 ctx._nondetailed_sql_migration_year = int(year)
                 conn.commit()
             ctx.invalidate_mixed_population_cache()
+            if int(resource_mortality_result.deaths) > 0:
+                with closing(sqlite3.connect(ctx.save_db_path)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    alive_after_resource_mortality = nondetailed_alive_count(conn)
+                ctx.last_nondetailed_tick_result = replace(
+                    ctx.last_nondetailed_tick_result,
+                    deaths=int(ctx.last_nondetailed_tick_result.deaths)
+                    + int(resource_mortality_result.deaths),
+                    alive_after=int(alive_after_resource_mortality),
+                )
             if prof:
                 simulation_timing.record_gauge(
                     year,
                     "nondetailed",
                     "economy_affected_settlements",
                     economy_result.affected_settlements,
+                )
+                simulation_timing.record_gauge(
+                    year,
+                    "nondetailed",
+                    "resource_mortality_deaths",
+                    resource_mortality_result.deaths,
                 )
                 simulation_timing.record_gauge(
                     year,

@@ -49,6 +49,7 @@ from library.settlements import (
     make_settlement_id,
     next_settlement_sequence,
     roll_abandon_this_year,
+    settlement_distress_counts_as_vacancy,
     settlement_attraction_score,
     settlement_site_capacity_factor,
 )
@@ -3394,8 +3395,12 @@ class SimulationContext:
                 next_by_id[sid] = state
                 continue
             rc = max(0, int(state.resident_count))
-            ce = 0 if rc > 0 else int(state.consecutive_empty_years) + 1
-            if rc == 0 and roll_abandon_this_year(ce, rng):
+            vacancy_like = settlement_distress_counts_as_vacancy(
+                state,
+                resident_count=rc,
+            )
+            ce = 0 if not vacancy_like else int(state.consecutive_empty_years) + 1
+            if vacancy_like and roll_abandon_this_year(ce, rng):
                 next_by_id[sid] = replace(
                     state,
                     status="abandoned",

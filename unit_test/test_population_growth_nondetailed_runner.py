@@ -12,6 +12,7 @@ from library.config_import import load_all_csvs_into_sqlite
 from library.nondetailed_population import (
     NondetailedEconomyResult,
     NondetailedMigrationResult,
+    NondetailedResourceMortalityResult,
     NondetailedTickResult,
     nondetailed_alive_count,
 )
@@ -90,6 +91,10 @@ class TestPopulationGrowthNondetailedRunner(unittest.TestCase):
                     ),
                 ) as economy,
                 patch(
+                    "library.population_growth_runner.apply_nondetailed_resource_mortality",
+                    return_value=NondetailedResourceMortalityResult(),
+                ) as resource_mortality,
+                patch(
                     "library.population_growth_runner.run_nondetailed_sql_migration",
                     return_value=NondetailedMigrationResult(
                         moved=7,
@@ -115,6 +120,7 @@ class TestPopulationGrowthNondetailedRunner(unittest.TestCase):
             seed.assert_called_once()
             tick.assert_called_once_with(save, year=1000, start_person_id=1)
             economy.assert_called_once()
+            resource_mortality.assert_called_once()
             migration.assert_called_once()
             self.assertEqual(ctx.last_nondetailed_tick_result.alive_after, 25)
             with sqlite3.connect(save) as conn:

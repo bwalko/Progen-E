@@ -11,6 +11,7 @@ from library.settlements import (
     ABANDON_EMPTY_GRACE_YEARS,
     SettlementState,
     roll_abandon_this_year,
+    settlement_distress_counts_as_vacancy,
 )
 
 
@@ -29,6 +30,27 @@ class TestLazySettlements(unittest.TestCase):
         self.assertTrue(
             roll_abandon_this_year(ABANDON_EMPTY_GRACE_YEARS + 50, rng)
         )
+
+    def test_small_extreme_distress_counts_as_vacancy(self) -> None:
+        failing = SettlementState(
+            region_id="r1",
+            settlement_id="r1:s1",
+            resident_count=80,
+            food_pressure=1.9,
+            stability=0.05,
+            prosperity_pool=0.08,
+        )
+        large = SettlementState(
+            region_id="r1",
+            settlement_id="r1:s2",
+            resident_count=800,
+            food_pressure=1.9,
+            stability=0.05,
+            prosperity_pool=0.08,
+        )
+
+        self.assertTrue(settlement_distress_counts_as_vacancy(failing))
+        self.assertFalse(settlement_distress_counts_as_vacancy(large))
 
     def test_reestablish_new_id_same_site_slot(self) -> None:
         from library.simulation_context import SimulationContext

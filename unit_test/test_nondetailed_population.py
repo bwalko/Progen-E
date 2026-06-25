@@ -10,8 +10,10 @@ from library.nondetailed_population import (
     add_nondetailed_births_from_place_counts,
     add_nondetailed_person,
     apply_nondetailed_job_family_economy_effects,
+    apply_nondetailed_resource_mortality,
     nondetailed_alive_count,
     nondetailed_job_counts_by_settlement,
+    nondetailed_target_ratio_for_site_capacity,
     run_nondetailed_sql_migration,
     run_nondetailed_sql_annual_tick,
     seed_nondetailed_from_active_settlements,
@@ -28,6 +30,15 @@ from library.world_save import ensure_checkpoint_schema
 
 
 class TestNondetailedPopulation(unittest.TestCase):
+    def test_capacity_ratio_increases_for_larger_sites(self) -> None:
+        hamlet_ratio = nondetailed_target_ratio_for_site_capacity(80)
+        town_ratio = nondetailed_target_ratio_for_site_capacity(800)
+        city_ratio = nondetailed_target_ratio_for_site_capacity(4000)
+
+        self.assertLess(hamlet_ratio, town_ratio)
+        self.assertLess(town_ratio, city_ratio)
+        self.assertGreaterEqual(hamlet_ratio, 8.0)
+
     def test_detailed_cap_overflow_births_insert_directory_newborns(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             save = Path(td) / "save.sqlite"
@@ -406,6 +417,95 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertGreater(by_settlement.get("r1:s1", 0), 0)
             self.assertGreater(by_settlement.get("r1:s2", 0), 0)
             self.assertGreaterEqual(int(prime_age), 10)
+
+    def test_seed_top_up_scales_by_capacity_and_resource_health(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_capacity_ratio",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            ctx.effective_regional_population_cap = lambda region_id: 3000
+            small = "r1:s1"
+            large = "r1:s2"
+            ctx.settlements_by_id[small] = SettlementState(
+                settlement_id=small,
+                region_id="r1",
+                resident_count=3,
+                household_cap=1,
+                food_pressure=1.9,
+                stability=0.04,
+                prosperity_pool=0.06,
+                market_pull=0.0,
+            )
+            ctx.settlements_by_id[large] = SettlementState(
+                settlement_id=large,
+                region_id="r1",
+                resident_count=12,
+                household_cap=3,
+                food_pressure=0.1,
+                stability=0.8,
+                prosperity_pool=1.4,
+                market_pull=0.7,
+            )
+            for sid, count in ((small, 3), (large, 12)):
+                for i in range(count):
+                    ctx.add_person(
+                        person=Person(
+                            first_name=f"Detail{i}",
+                            last_name=sid,
+                            gender="Female" if i % 2 else "Male",
+                            ethnic="Human",
+                            species="Human",
+                            birthyear=970,
+                            birthplace_region_id="r1",
+                            birthplace_settlement_id=sid,
+                            current_settlement_id=sid,
+                            min_fertility_age=18,
+                        ),
+                        is_founder=False,
+                    )
+
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                inserted = seed_nondetailed_from_active_settlements(
+                    conn,
+                    ctx,
+                    year=1000,
+                    population_scale=1.0,
+                    start_person_id=ctx.next_person_id,
+                )
+                conn.commit()
+                counts = {
+                    str(row["settlement_id"]): int(row["c"])
+                    for row in conn.execute(
+                        """
+                        SELECT sl.settlement_id, COUNT(*) AS c
+                        FROM simulation_people_nondetailed p
+                        JOIN simulation_settlement_lookup sl
+                          ON sl.settlement_key = p.current_settlement_key
+                        WHERE p.is_alive = 1
+                        GROUP BY sl.settlement_id
+                        """
+                    )
+                }
+
+            self.assertGreater(inserted, 0)
+            self.assertLessEqual(counts.get(small, 0), 12)
+            self.assertGreater(counts.get(large, 0), counts.get(small, 0) * 3)
+            self.assertGreater(
+                counts.get(large, 0) / 12,
+                max(1, counts.get(small, 0)) / 3,
+            )
 
     def test_context_counts_and_promotion_use_nondetailed_directory(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -964,6 +1064,64 @@ class TestNondetailedPopulation(unittest.TestCase):
             self.assertLessEqual(abs(float(payload["market_pull_delta"])), 0.03)
             self.assertLessEqual(abs(float(payload["stability_delta"])), 0.04)
 
+    def test_resource_distress_kills_some_nondetailed_residents(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=save,
+                world_id="nondetailed_resource_mortality",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            sid = "r1:s1"
+            ctx.settlements_by_id[sid] = SettlementState(
+                settlement_id=sid,
+                region_id="r1",
+                level="settlement",
+                resident_count=100,
+                household_cap=20,
+                food_pressure=1.9,
+                prosperity_pool=0.08,
+                stability=0.04,
+                market_pull=0.1,
+            )
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                for i in range(100):
+                    add_nondetailed_person(
+                        conn,
+                        NondetailedPersonSeed(
+                            birthyear=970 + (i % 20),
+                            gender="Male" if i % 2 else "Female",
+                            region_id="r1",
+                            settlement_id=sid,
+                            job_family="food",
+                        ),
+                        person_id=6000 + i,
+                    )
+                conn.commit()
+                result = apply_nondetailed_resource_mortality(conn, ctx, year=1000)
+                conn.commit()
+                alive_after = nondetailed_alive_count(conn)
+
+            self.assertGreater(result.deaths, 0)
+            self.assertEqual(result.affected_settlements, 1)
+            self.assertEqual(alive_after, 100 - result.deaths)
+            self.assertTrue(
+                any(
+                    event_type == "nondetailed_resource_mortality"
+                    and payload.get("settlement_id") == sid
+                    for _year, event_type, payload in ctx._pending_simulation_events
+                )
+            )
+
     def test_set_based_nondetailed_migration_moves_to_attractive_existing_settlement(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
@@ -1042,7 +1200,7 @@ class TestNondetailedPopulation(unittest.TestCase):
                 ).fetchone()["c"]
 
             self.assertGreater(result.moved, 0)
-            self.assertLessEqual(result.moved, 7)
+            self.assertLessEqual(result.moved, 20)
             self.assertGreater(dest_count, 1)
 
 

@@ -325,6 +325,48 @@ class TestPopulationGrowthDeterminism(unittest.TestCase):
                 )
             )
 
+    def test_large_mixed_settlement_raises_detailed_floor(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="default",
+                world="default",
+                start_year=START_YEAR,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            sid = "region:s1"
+            ctx.settlements_by_id[sid] = SettlementState(
+                region_id="region",
+                settlement_id=sid,
+                status="active",
+            )
+            ctx.add_passive_cohort(
+                PassiveCohort(
+                    sim_year=START_YEAR,
+                    region_id="region",
+                    settlement_id=sid,
+                    age_band="25",
+                    gender="Female",
+                    species="",
+                    culture="",
+                    job_family="farm",
+                    status_bucket="single",
+                    population_count=1200,
+                )
+            )
+
+            created = ensure_detailed_floor_for_active_settlements(ctx, START_YEAR)
+
+            self.assertEqual(created, 6)
+            self.assertEqual(len(ctx.current_people_by_settlement().get(sid, ())), 6)
+            self.assertEqual(sum(c.population_count for c in ctx.passive_cohorts), 1194)
+
     def test_passive_cohorts_age_birth_die_and_keep_counts_deterministic(self) -> None:
         ctx = SimulationContext(
             db_path=Path("unused-config.sqlite"),
