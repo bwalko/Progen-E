@@ -1095,6 +1095,95 @@ class TestSimulationOutlaws(unittest.TestCase):
                 [event_type for _year, event_type, _payload in ctx._pending_simulation_events],
             )
 
+    def test_custody_drops_queued_ordinary_migration_until_release(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            origin = ctx.ensure_active_settlement_for_region("aeria_north")
+            destination = ctx.ensure_active_settlement_for_region("aeria_south")
+            accused = self._add_adult(
+                ctx,
+                settlement_id=origin.settlement_id,
+                region_id=origin.region_id,
+            )
+            self.assertTrue(
+                ctx.queue_person_move_to_settlement(
+                    accused.person_id,
+                    destination.settlement_id,
+                    move_reason="job_seeker_migration",
+                    requested_year=1001,
+                    apply_year=1003,
+                    source_event="job_seeker_migration",
+                )
+            )
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=accused,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.70,
+                knownness_01=0.65,
+                source_event_key="test:custody:queued-move",
+                target_person_id=accused.person_id,
+            )
+            self.assertIsNotNone(case)
+            flee_to_refuge(ctx, case.case_key, year=1001)
+            resolve_outlaw_case(ctx, case.case_key, year=1002, resolution="captured")
+            custody_id = str(accused.person.outlaw_custody_id)
+            custody = ctx.outlaw_custodies[custody_id]
+
+            self.assertFalse(
+                ctx.queue_person_move_to_settlement(
+                    accused.person_id,
+                    destination.settlement_id,
+                    move_reason="household_move",
+                    requested_year=1002,
+                    apply_year=1003,
+                    source_event="household_move",
+                )
+            )
+            applied = ctx.apply_pending_settlement_moves(1003)
+
+            self.assertEqual(applied, 0)
+            self.assertEqual(accused.person.outlaw_status, OUTLAW_STATUS_IMPRISONED)
+            self.assertEqual(accused.person.current_settlement_id, origin.settlement_id)
+            self.assertNotEqual(accused.person.current_settlement_id, destination.settlement_id)
+            self.assertIn(
+                "settlement_move_dropped",
+                [event_type for _year, event_type, _payload in ctx._pending_simulation_events],
+            )
+            self.assertNotIn(
+                "settlement_moved",
+                [
+                    event_type
+                    for year, event_type, payload in ctx._pending_simulation_events
+                    if year == 1003
+                    and payload.get("person_id") == accused.person_id
+                    and payload.get("to_settlement_id") == destination.settlement_id
+                ],
+            )
+
+            simulation_outlaws_annual_tick(
+                ctx,
+                int(custody.expected_release_year or 1004),
+            )
+            self.assertEqual(ctx.outlaw_custodies[custody_id].status, "released")
+            self.assertIsNone(accused.person.outlaw_custody_id)
+            self.assertTrue(
+                ctx.queue_person_move_to_settlement(
+                    accused.person_id,
+                    destination.settlement_id,
+                    move_reason="household_move",
+                    requested_year=int(custody.expected_release_year or 1004),
+                    apply_year=int(custody.expected_release_year or 1004) + 1,
+                    source_event="household_move",
+                )
+            )
+            ctx.apply_pending_settlement_moves(
+                int(custody.expected_release_year or 1004) + 1
+            )
+            self.assertEqual(accused.person.current_settlement_id, destination.settlement_id)
+
     def test_custody_can_end_in_death_or_escape_before_release(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             ctx = self._context(Path(td))

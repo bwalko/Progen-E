@@ -99,6 +99,30 @@ from library.world_save import (
 DEFAULT_DECISION_SAMPLE_SIZE = 1_000
 MAX_ACTIVE_PARAMOURS_PER_PERSON = 3
 
+_OUTLAW_ABSENCE_MOVE_REASONS = {
+    "custody_transfer",
+    "custody_site_transfer",
+    "escaped_custody",
+    "exile",
+    "forced_displacement",
+    "outlaw_flight",
+    "outlaw_returned",
+    "released_from_custody",
+    "return_from_outlawry",
+}
+
+
+def _allows_outlaw_absence_settlement_move(
+    move_reason: str | None,
+    source_event: str | None,
+) -> bool:
+    values = {
+        str(move_reason or "").strip().lower(),
+        str(source_event or "").strip().lower(),
+    }
+    values.discard("")
+    return bool(values & _OUTLAW_ABSENCE_MOVE_REASONS)
+
 
 @dataclass
 class SimulationPersonRecord:
@@ -1812,6 +1836,11 @@ class SimulationContext:
             raise LookupError(
                 f"queue_person_move_to_settlement: person {person_id} not alive"
             )
+        if is_outlaw_absent(rec.person) and not _allows_outlaw_absence_settlement_move(
+            move_reason,
+            source_event,
+        ):
+            return False
         old_sid = (rec.person.current_settlement_id or "").strip() or None
         if old_sid == sid:
             return False
@@ -1940,6 +1969,13 @@ class SimulationContext:
         rec = self.id_to_record.get(person_id)
         if rec is None or person_id not in self.current_people_ids:
             raise LookupError(f"move_person_to_settlement: person {person_id} not alive")
+        if is_outlaw_absent(rec.person) and not _allows_outlaw_absence_settlement_move(
+            move_reason,
+            source_event,
+        ):
+            raise LookupError(
+                f"move_person_to_settlement: person {person_id} is unavailable for ordinary residence moves"
+            )
         old_sid = (rec.person.current_settlement_id or "").strip() or None
         if old_sid == sid:
             return

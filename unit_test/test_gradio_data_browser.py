@@ -2505,6 +2505,174 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("- 103-112: Paramour - Cato Vale", share)
         self.assertNotIn("Paramour History:", share)
 
+    def test_person_sheet_promotes_residence_timelines_over_move_event_spam(self) -> None:
+        con = _memory_outlaw_place_save()
+        _attach_empty_genome_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, 1020)")
+        con.execute(
+            """
+            insert into simulation_settlements values (
+                'r1:s2', 'r1', 'town', 20, 5, 0.22, 0.69, 0.12,
+                'Eastford', 'east ford', 'Directional', null, 'Middle English', null,
+                ?, 4, null, 'active', 0, 2, 1.1
+            )
+            """,
+            (
+                json.dumps(
+                    {
+                        "features": [],
+                        "settlements": [{"settlement_slot": 1, "x": 0.65, "y": 0.48}],
+                    }
+                ),
+            ),
+        )
+        con.executemany(
+            """
+            insert into simulation_events (world, sim_year, event_type, payload_json)
+            values (?, ?, ?, ?)
+            """,
+            [
+                (
+                    "test",
+                    1005,
+                    "settlement_move_planned",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "from_settlement_id": "r1:s1",
+                            "to_settlement_id": "r1:s2",
+                            "from_region_id": "r1",
+                            "to_region_id": "r1",
+                            "move_reason": "job_seeker_migration",
+                            "apply_year": 1006,
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    1005,
+                    "job_seeker_migration",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "moved_person_ids": [1],
+                            "from_settlement_id": "r1:s1",
+                            "to_settlement_id": "r1:s2",
+                            "from_region_id": "r1",
+                            "to_region_id": "r1",
+                            "move_reason": "job_seeker_migration",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    1006,
+                    "settlement_moved",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "from_settlement_id": "r1:s1",
+                            "to_settlement_id": "r1:s2",
+                            "from_region_id": "r1",
+                            "to_region_id": "r1",
+                            "move_reason": "job_seeker_migration",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    1008,
+                    "outlaw_flight",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "accused_person_id": 1,
+                            "outlaw_refuge_id": "outlaw_refuge:r1:1",
+                            "outlaw_refuge_display_name": "The Blackthorn Crag",
+                            "near_settlement_id": "r1:s1",
+                            "region_id": "r1",
+                            "flight_reason": "outlaw_flight",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    1008,
+                    "outlaw_refuge_joined",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "accused_person_id": 1,
+                            "outlaw_refuge_id": "outlaw_refuge:r1:1",
+                            "outlaw_refuge_display_name": "The Blackthorn Crag",
+                            "near_settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    1010,
+                    "outlaw_captured",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "accused_person_id": 1,
+                            "settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    1012,
+                    "outlaw_returned",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "accused_person_id": 1,
+                            "settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+            ],
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+
+        sheet = gdb._render_person_sheet(con, "test", row, person)
+        share = gdb._render_person_share_text(con, "test", row, person)
+
+        self.assertLess(sheet.index("Settlement Timeline"), sheet.index(">Events</h3>"))
+        self.assertLess(sheet.index("Outlaw Refuge Timeline"), sheet.index(">Events</h3>"))
+        settlement_section = sheet[
+            sheet.index("Settlement Timeline"):sheet.index("Outlaw Refuge Timeline")
+        ]
+        refuge_section = sheet[
+            sheet.index("Outlaw Refuge Timeline"):sheet.index("Relationship History")
+        ]
+        events_section = sheet[sheet.index(">Events</h3>"):]
+        self.assertIn("Fordham - hamlet - River Country", settlement_section)
+        self.assertIn("Eastford - town - River Country", settlement_section)
+        self.assertIn("reason job-seeker migration", settlement_section)
+        self.assertIn("The Blackthorn Crag near Fordham", refuge_section)
+        self.assertIn("entered by outlaw flight", refuge_section)
+        self.assertIn("exited by captured", refuge_section)
+        self.assertNotIn("Settlement Move Planned", events_section)
+        self.assertNotIn("Job Seeker Migration", events_section)
+        self.assertNotIn("Settlement Moved", events_section)
+        self.assertNotIn("Outlaw Flight", events_section)
+        self.assertNotIn("Outlaw Refuge Joined", events_section)
+        self.assertIn("Outlaw Captured", events_section)
+        self.assertIn("Outlaw Returned", events_section)
+        self.assertIn("Settlement Timeline:\n- 0-1006: Fordham - hamlet - River Country", share)
+        self.assertIn("- 1006-1008: Eastford - town - River Country; reason job-seeker migration", share)
+        self.assertIn(
+            "Outlaw Refuge Timeline:\n- 1008-1010: The Blackthorn Crag near Fordham; entered by outlaw flight; exited by captured",
+            share,
+        )
+
     def test_relationship_history_caps_open_span_at_other_person_death(self) -> None:
         con = _memory_save()
         _attach_empty_genome_config(con)

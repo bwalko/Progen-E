@@ -4057,3 +4057,40 @@ completion.
 - PowerShell syntax check for `utils/start_gradio_data_browser.ps1`.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File utils\start_gradio_data_browser.ps1 -World default -HostName 127.0.0.1 -Port 7860 -NoBrowser`
 - Verified `http://127.0.0.1:7860` returned HTTP 200 after the launcher exited.
+
+## 2026-06-25 - Person Browser Residence Timeline Cleanup
+
+### Enhancements
+
+- Added person-sheet `Settlement Timeline` and `Outlaw Refuge Timeline`
+  sections using the existing Job History timeline renderer.
+- Settlement residence now summarizes place, region, role/type, start/end
+  years, and readable reasons such as birth/backfill, household move,
+  job-seeker migration, custody transfer, and return from outlawry.
+- Outlaw refuge residence is shown separately from ordinary civic settlement
+  residence, with refuge name, nearby settlement, entered-by, and exited-by
+  labels.
+- Kept raw movement/refuge events in `save.sqlite`, but hid routine
+  `settlement_move_planned`, `settlement_moved`, `job_seeker_migration`,
+  `outlaw_flight`, and `outlaw_refuge_joined` rows from the person event feed
+  when they are better represented by the timelines.
+
+### Fixes
+
+- Blocked ordinary queued settlement moves for people who are absent because of
+  fugitive or imprisoned outlaw state, while allowing explicit legal/outlaw
+  transfer reasons.
+- Already queued ordinary moves are dropped at apply time if the person has
+  since entered custody, preventing captive people from continuing job-seeker
+  or household migration.
+
+### Validation
+
+- `python -m py_compile utils\gradio_data_browser.py library\simulation_context.py`
+- `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_promotes_residence_timelines_over_move_event_spam unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_custody_drops_queued_ordinary_migration_until_release`
+- Neighboring browser tests:
+  `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_sheet_has_combined_relationship_history_section unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_relationship_history_caps_open_span_at_other_person_death unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_person_outlaw_custody_surfaces_in_person_views`
+- Neighboring custody tests:
+  `python -m unittest unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_custody_blocks_ordinary_residence_until_release`
+  and
+  `python -m unittest unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_custody_can_end_in_death_or_escape_before_release`
