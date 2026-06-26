@@ -4624,3 +4624,68 @@ completion.
   --reset-world --years 3 --starting-couples 10 --seed 20260625
   --use-nondetailed-directory --skip-report-files --skip-timing-log`;
   elapsed `19.13s`, ending with 34 detailed alive and 2,511 non-detailed alive.
+
+## 2026-06-26 - Late-Run Timing Diagnostics And Marriage Promotion Speedup
+
+### Diagnostics
+
+- Stopped the active 100-couple / 200-year simulator process before querying the
+  live save. The default save was at year 1169 with 1,961 alive detailed people,
+  39,868 alive non-detailed people, 110,608 total non-detailed directory rows,
+  577,017 simulation events, and 147,806 normalized move rows.
+- Re-ran the implicated phases against copied saves under `temp/` so the live
+  `worlds/default/save.sqlite` checkpoint was not mutated by diagnostics.
+- The copied-save phase harness showed the UI progress trace had over-attributed
+  time to non-detailed migration: cold `run_nondetailed_sql_migration` took
+  `0.61s`, and the full ordered phase harness measured non-detailed migration at
+  `0.26s`.
+- The true copied-save hot spots were checkpoint read models and spouse
+  promotion: `checkpoint_snapshot` `57.07s`
+  (`checkpoint.snapshot_person_almanack` `46.87s`,
+  `checkpoint.snapshot_person_archive_scores` `8.86s`),
+  `pairing.passive_promote.scan` `8.32s`, and `social.form_paramours` `6.76s`.
+- Almanack subdiagnostics found broad cache rebuild work: roughly 222K metric
+  accumulators before writes, with the largest compute chunks in strange-record
+  metrics, crossroads metrics, and event metrics.
+
+### Fixes
+
+- Added shared-save-connection plumbing for marriage-into-detailed-family
+  promotion so the yearly passive/non-detailed spouse scan no longer opens a new
+  SQLite connection and reruns checkpoint schema/view setup for every promoted
+  spouse candidate.
+- Copied-save pairing instrumentation improved from `8.68s` to `1.42s`; the
+  promotion-call portion dropped from `7.87s` to `0.57s` while producing the same
+  16 spouse promotions and 483 total couples in the harness.
+
+### Validation
+
+- `python -m py_compile library/passive_population.py
+  library/population_growth_runner.py
+  unit_test/test_population_growth_nondetailed_runner.py`
+- `python -m unittest unit_test.test_population_growth_nondetailed_runner`
+
+## 2026-06-26 - Defer Almanack Refresh During Annual Checkpoints
+
+### Fixes
+
+- Added a `refresh_person_almanack` switch to full checkpoint persistence.
+  Direct/final checkpoints keep the default `True`, while the annual simulator
+  checkpoint path passes `False`.
+- Preserved existing Gradio/on-demand behavior: the Almanack tab can still
+  rebuild rankings via `refresh_person_almanack_for_file`, and `finalize_run()`
+  still writes a full final snapshot with Almanack refreshed.
+- Copied-save checkpoint timing on the year-1169 default save dropped from the
+  earlier `57.07s` checkpoint harness to `9.67s` with Almanack skipped. The
+  remaining checkpoint cost is now dominated by
+  `checkpoint.snapshot_person_archive_scores` at `8.70s`.
+
+### Validation
+
+- `python -m py_compile library/world_save.py library/simulation_context.py
+  unit_test/test_save_checkpoint.py`
+- `python -m unittest
+  unit_test.test_save_checkpoint.TestSaveCheckpoint.test_checkpoint_can_defer_person_almanack_refresh`
+- `python -m unittest unit_test.test_population_growth_nondetailed_runner`
+- Attempted adjacent save-checkpoint roundtrip validation with bundled Python,
+  but it requires optional `shapely` for world-map geometry in context preload.

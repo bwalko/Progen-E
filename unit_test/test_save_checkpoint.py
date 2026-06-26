@@ -1845,6 +1845,64 @@ class TestSaveCheckpoint(unittest.TestCase):
                 self.assertEqual(ctx2.people[0].person.genome, p.genome)
                 self.assertTrue(ctx2.settlements_by_id)
 
+    def test_checkpoint_can_defer_person_almanack_refresh(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="isolate",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            rec = ctx.add_person(
+                person=generate_person_random(
+                    simulation_context=ctx,
+                    simulation_year=1000,
+                ),
+                is_founder=True,
+            )
+            ctx._record_simulation_event(
+                1000,
+                "property_crime",
+                {
+                    "perpetrator_person_id": int(rec.person_id),
+                    "target_person_id": int(rec.person_id),
+                    "loss_value": 0.5,
+                },
+            )
+
+            checkpoint_simulation_to_save(
+                ctx,
+                full_snapshot=True,
+                refresh_person_almanack=False,
+            )
+            with closing(sqlite3.connect(sav)) as conn:
+                skipped_count = conn.execute(
+                    "SELECT COUNT(*) FROM simulation_person_almanack_metrics"
+                ).fetchone()[0]
+            self.assertEqual(skipped_count, 0)
+
+            checkpoint_simulation_to_save(ctx, full_snapshot=True)
+            with closing(sqlite3.connect(sav)) as conn:
+                almanack = conn.execute(
+                    """
+                    SELECT metric_value, metric_count
+                    FROM simulation_person_almanack_metrics
+                    WHERE person_id = ?
+                      AND metric_key = 'property_crimes_committed'
+                    """,
+                    (int(rec.person_id),),
+                ).fetchone()
+            self.assertIsNotNone(almanack)
+            self.assertEqual(int(almanack[1]), 1)
+
     def test_start_year_clears_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)

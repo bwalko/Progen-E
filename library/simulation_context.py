@@ -3367,7 +3367,9 @@ class SimulationContext:
         if persist_to_save:
             phase("checkpoint_save")
             checkpoint_simulation_to_save(
-                self, full_snapshot=self._should_checkpoint_snapshot(year)
+                self,
+                full_snapshot=self._should_checkpoint_snapshot(year),
+                refresh_person_almanack=False,
             )
             if prof:
                 t0 = tpc()

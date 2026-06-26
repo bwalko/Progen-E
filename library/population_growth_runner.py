@@ -1076,74 +1076,87 @@ def _promote_passive_spouses_for_unpaired_detailed(
         simulation_timing.accumulate("pairing.passive_promote.index", tpc() - t0)
         t0 = tpc()
     promotions = 0
-    for sid in sorted(by_settlement.keys()):
-        st = ctx.settlements_by_id.get(sid)
-        rid = (st.region_id or "").strip() if st is not None else ""
-        records = sorted(by_settlement[sid], key=lambda rec: int(rec.person_id))
-        for rec in records:
-            if promotions >= PASSIVE_MARRIAGE_PROMOTION_CAP_PER_YEAR:
-                if prof:
-                    simulation_timing.accumulate("pairing.passive_promote.scan", tpc() - t0)
-                return
-            if (
-                rec.is_founder
-                or rec.person_id in paired_ids
-                or not _eligible_for_partner_formation(rec, year)
-            ):
-                continue
-            offer_probability, attraction_score = _passive_marriage_offer_probability(
-                ctx,
-                int(year),
-                rec,
-                resource_facts=resource_facts,
-            )
-            offer_rng = deterministic_pair_rng(
-                int(year),
-                int(getattr(ctx, "placename_rng_salt", 0)),
-                int(rec.person_id),
-                0,
-                stream=PASSIVE_MARRIAGE_OFFER_RNG_STREAM,
-            )
-            if offer_rng.random() >= offer_probability:
-                continue
-            spouse_gender = _opposite_binary_gender(rec.person.gender)
-            if spouse_gender is None:
-                continue
-            min_age = int(rec.person.min_fertility_age or 16)
-            source_age = _partner_formation_age(rec, int(year))
-            spouse_max_age = min(
-                NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE,
-                source_age + PARTNER_FORMATION_MAX_AGE_GAP,
-            )
-            promoted = promote_passive_candidate_for_marriage(
-                ctx,
-                year=int(year),
-                gender=spouse_gender,
-                settlement_id=sid,
-                region_id=rid or None,
-                min_age=min_age,
-                max_age=spouse_max_age,
-                source={
-                    "detailed_person_id": int(rec.person_id),
-                    "detailed_settlement_id": sid,
-                },
-                candidate_index=candidate_index,
-            )
-            if promoted is None:
-                continue
-            ctx.add_couple(rec.person_id, promoted.person_id)
-            ctx._pending_simulation_events[-1][2].update(
-                {
-                    "passive_promotion_reason": "marriage_into_detailed_family",
-                    "attraction_fit_score": round(attraction_score, 4),
-                    "formation_probability": round(offer_probability, 4),
-                }
-            )
-            paired_ids.add(rec.person_id)
-            paired_ids.add(promoted.person_id)
-            promotions += 1
-    if prof:
-        simulation_timing.accumulate("pairing.passive_promote.scan", tpc() - t0)
+    own_conn: sqlite3.Connection | None = None
+    save_conn: sqlite3.Connection | None = None
+    save_path = getattr(ctx, "save_db_path", None)
+    if save_path is not None and Path(save_path).exists():
+        own_conn = sqlite3.connect(save_path)
+        own_conn.row_factory = sqlite3.Row
+        save_conn = own_conn
+    try:
+        for sid in sorted(by_settlement.keys()):
+            st = ctx.settlements_by_id.get(sid)
+            rid = (st.region_id or "").strip() if st is not None else ""
+            records = sorted(by_settlement[sid], key=lambda rec: int(rec.person_id))
+            for rec in records:
+                if promotions >= PASSIVE_MARRIAGE_PROMOTION_CAP_PER_YEAR:
+                    return
+                if (
+                    rec.is_founder
+                    or rec.person_id in paired_ids
+                    or not _eligible_for_partner_formation(rec, year)
+                ):
+                    continue
+                offer_probability, attraction_score = _passive_marriage_offer_probability(
+                    ctx,
+                    int(year),
+                    rec,
+                    resource_facts=resource_facts,
+                )
+                offer_rng = deterministic_pair_rng(
+                    int(year),
+                    int(getattr(ctx, "placename_rng_salt", 0)),
+                    int(rec.person_id),
+                    0,
+                    stream=PASSIVE_MARRIAGE_OFFER_RNG_STREAM,
+                )
+                if offer_rng.random() >= offer_probability:
+                    continue
+                spouse_gender = _opposite_binary_gender(rec.person.gender)
+                if spouse_gender is None:
+                    continue
+                min_age = int(rec.person.min_fertility_age or 16)
+                source_age = _partner_formation_age(rec, int(year))
+                spouse_max_age = min(
+                    NONDETAILED_MARRIAGE_PROMOTION_MAX_AGE,
+                    source_age + PARTNER_FORMATION_MAX_AGE_GAP,
+                )
+                promoted = promote_passive_candidate_for_marriage(
+                    ctx,
+                    year=int(year),
+                    gender=spouse_gender,
+                    settlement_id=sid,
+                    region_id=rid or None,
+                    min_age=min_age,
+                    max_age=spouse_max_age,
+                    source={
+                        "detailed_person_id": int(rec.person_id),
+                        "detailed_settlement_id": sid,
+                    },
+                    candidate_index=candidate_index,
+                    save_conn=save_conn,
+                )
+                if promoted is None:
+                    continue
+                ctx.add_couple(rec.person_id, promoted.person_id)
+                ctx._pending_simulation_events[-1][2].update(
+                    {
+                        "passive_promotion_reason": "marriage_into_detailed_family",
+                        "attraction_fit_score": round(attraction_score, 4),
+                        "formation_probability": round(offer_probability, 4),
+                    }
+                )
+                paired_ids.add(rec.person_id)
+                paired_ids.add(promoted.person_id)
+                promotions += 1
+    finally:
+        if own_conn is not None:
+            try:
+                own_conn.commit()
+            finally:
+                own_conn.close()
+        if prof:
+            simulation_timing.accumulate("pairing.passive_promote.scan", tpc() - t0)
 
 
 def pair_people_by_settlement_then_region(

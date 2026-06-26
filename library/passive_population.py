@@ -647,6 +647,7 @@ def promote_passive_candidate_for_marriage(
     reason: str = "marriage_into_detailed_family",
     source: dict[str, Any] | None = None,
     candidate_index: PassiveMarriageCandidateIndex | None = None,
+    save_conn: Any | None = None,
 ) -> Any | None:
     """Promote one single adult from aggregate cohorts as a detailed spouse."""
     wanted_gender = normalize_passive_gender(gender)
@@ -667,6 +668,7 @@ def promote_passive_candidate_for_marriage(
         require_unpartnered=True,
         source=source,
         selector="marriage",
+        save_conn=save_conn,
     )
     if nondetailed is not None:
         return nondetailed

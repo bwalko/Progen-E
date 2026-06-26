@@ -16,11 +16,41 @@ from library.nondetailed_population import (
     NondetailedTickResult,
     nondetailed_alive_count,
 )
+from library.passive_population import promote_passive_candidate_for_marriage
 from library.population_growth_runner import _run_population_growth_year_loop
 from library.simulation_context import SimulationContext
 
 
 class TestPopulationGrowthNondetailedRunner(unittest.TestCase):
+    def test_marriage_promotion_reuses_supplied_save_connection(self) -> None:
+        class FakeContext:
+            world = "default"
+            placename_rng_salt = 0
+            passive_cohorts: list[object] = []
+
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def promote_nondetailed_people(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                return ["promoted"]
+
+        ctx = FakeContext()
+        save_conn = object()
+
+        promoted = promote_passive_candidate_for_marriage(
+            ctx,
+            year=1000,
+            gender="Female",
+            settlement_id="r1:s1",
+            min_age=18,
+            candidate_index={},
+            save_conn=save_conn,
+        )
+
+        self.assertEqual(promoted, "promoted")
+        self.assertIs(ctx.calls[0]["conn"], save_conn)
+
     def test_nondetailed_year_runs_demographics_economy_and_migration(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)

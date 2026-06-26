@@ -8737,7 +8737,11 @@ def _flush_passive_promotion_log_entries(
         )
 
 
-def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
+def checkpoint_simulation_snapshot(
+    ctx: "SimulationContext",
+    *,
+    refresh_person_almanack: bool = True,
+) -> None:
     """Upsert archival rows for people and settlements; rewrite derived snapshot slices.
 
     ``simulation_people`` / ``simulation_settlements`` keep historical rows (``INSERT OR
@@ -9053,13 +9057,16 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         )
         t0 = _profile_accumulate("checkpoint.snapshot_person_archive_scores", t0)
 
-        from library.person_almanack import refresh_person_almanack
+        if refresh_person_almanack:
+            from library.person_almanack import refresh_person_almanack
 
-        almanack_rows = refresh_person_almanack(conn, simulation_year=year)
-        simulation_timing.record_gauge(
-            year, "checkpoint", "person_almanack_metric_rows", almanack_rows
-        )
-        t0 = _profile_accumulate("checkpoint.snapshot_person_almanack", t0)
+            almanack_rows = refresh_person_almanack(conn, simulation_year=year)
+            simulation_timing.record_gauge(
+                year, "checkpoint", "person_almanack_metric_rows", almanack_rows
+            )
+            t0 = _profile_accumulate("checkpoint.snapshot_person_almanack", t0)
+        else:
+            t0 = _profile_accumulate("checkpoint.snapshot_person_almanack.skipped", t0)
 
         cur.execute(
             """
@@ -9128,17 +9135,25 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
 
 
 def checkpoint_simulation_to_save(
-    ctx: "SimulationContext", *, full_snapshot: bool = True
+    ctx: "SimulationContext",
+    *,
+    full_snapshot: bool = True,
+    refresh_person_almanack: bool = True,
 ) -> None:
     """Flush pending events; optionally write full snapshot tables to ``save.sqlite``.
 
     When ``full_snapshot`` is false, still writes ``simulation_meta`` for
     ``next_person_id``, cap multipliers, region display label overrides, naming
     aux state, and settlement spinoff accrual so resume stays aligned with RAM between full snapshots.
+    ``refresh_person_almanack`` controls the expensive derived Almanack ranking
+    cache only; the Gradio browser can still rebuild it on demand.
     """
     flush_pending_simulation_events(ctx)
     if full_snapshot:
-        checkpoint_simulation_snapshot(ctx)
+        checkpoint_simulation_snapshot(
+            ctx,
+            refresh_person_almanack=bool(refresh_person_almanack),
+        )
     else:
         flush_simulation_meta_checkpoint(ctx)
 

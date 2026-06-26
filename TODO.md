@@ -361,6 +361,14 @@ Important invariant:
 
 ### Proposed Milestones
 
-1. Use late-year profiling to confirm the next hot path for ~15K active people.
-2. Get 15K active people / 10 late years under 5 minutes.
+1. Make `refresh_person_archive_scores` incremental/source-event gated or
+   final/on-demand only. `refresh_person_almanack` is already deferred during
+   annual checkpoints and refreshed at finalization/on demand; on the copied
+   year-1169 default save, checkpoint time with Almanack skipped dropped from
+   `57.07s` to `9.67s`, leaving `checkpoint.snapshot_person_archive_scores`
+   as the dominant remaining checkpoint cost at `8.70s`.
+2. Re-profile the same late-save slice after archive-score refresh is deferred
+   or incremental. Target: the 100-couple / 200-year run should no longer spend
+   most checkpoint years rebuilding browser ranking caches.
+3. Get 15K active people / 10 late years under 5 minutes.
 
