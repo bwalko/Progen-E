@@ -25,7 +25,7 @@ Track behavior/documentation mismatches that can confuse future sessions.
 
 - Fresh simulations no longer pre-seed one settlement per region. A settlement row appears when someone is assigned there (founders, random births, offspring paths).
 - The SQLite column `simulation_settlements.population_cap` still stores the **resident census snapshot**, not a capacity limit.
-- Abandoned settlements remain in `settlements_by_id` / the checkpoint for history; empty-site abandonment uses escalating rolls controlled by `library/settlements.py` (`ABANDON_*` constants).
+- Abandoned settlements remain in `settlements_by_id` / the checkpoint for history; abandonment uses mixed directory viability (`detailed_alive + nondetailed_alive`) and escalating rolls in `library/settlements.py` (`ABANDON_*` constants). Lack of detailed residents alone never abandons a site; viable low-resolution settlements promote ~1% of directory residents per year (`settlement_low_resolution_sample`).
 - Re-establishing a ghost town creates a **new** `settlement_id` (and founding year), optionally copying name/geo from the abandoned row at the same `site_slot`.
 
 ## Residence vs birthplace; partners and paramours; litter mortality

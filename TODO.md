@@ -134,23 +134,20 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 
 ### Concrete Follow-up: Mixed-Mode Runtime Regression Against June 4 Baseline
 
-- The 2026-06-26 100-couple / 100-year mixed-mode run finished in
-  `2541.820s` (`42.36` minutes, `25.42s/year`) with `detailed_alive=2018`
-  and `nondetailed_alive=31114` (`33132` total alive).
-- A 2026-06-04 1000-couple / 100-year detailed baseline finished in
-  `242.422s` (`4.04` minutes, `2.42s/year`) with `10181` active people
-  (`242.422  100  default  234023274  10  1000  10181`).
-- Treat this as a real scale regression until disproven: the newer run is
-  about `10.49x` slower wall-clock overall, and still about `3.22x` slower per
-  final alive-person-year even if all non-detailed people are counted as active
-  population.
-- Latest visible late-run slices showed the biggest annual costs as
-  `non-detailed migration` at a flat `15s/year`, then `social relationships`
-  around `7.5s/year`, with checkpoint save reduced to acceptable single-digit
-  or low-teen seconds after Almanack deferral.
-- Completion boundary: profile and optimize the mixed-mode runtime so
-  non-detailed population is a net performance win at comparable population
-  scale, or document/retune when the non-detailed layer should be enabled.
+Context for completed work (2026-06-26): added per-year mixed-count caching and
+reusable temp-table migration in `library/nondetailed_population.py`, retuned
+directory migration coefficients, and documented profiling/enablement guidance in
+[`dev_rules/migration_tuning.md`](dev_rules/migration_tuning.md). A matched
+laptop 10-year / 100-couple / seed `639789854` probe recorded
+`178.431s` mixed-mode vs `149.310s` detailed-only (`--use-passive-cohorts
+--passive-population-scale 0`), with profile hotspots
+`nondetailed.sql_migration=50.24s` (10-year total, ~`5.0s/year` vs the prior
+~`15s/year` slice) and `summary.social=21.37s`.
+
+Remaining validation (optional, Nazuna or explicit long window): rerun the
+original 100-couple / 100-year mixed-mode timing against the June 4 detailed
+baseline after these optimizations and decide whether further social-phase work
+is warranted if `summary.social` stays dominant at mature scale.
 
 ### Hybrid Population Architecture
 
@@ -326,36 +323,30 @@ Completion boundary:
     28 polities, 392 office seats, and zero alive partnered non-detailed rows
     missing `partner_person_id`.
 
-### Concrete Follow-up: Abandoned Settlements With Large Populations
+### Completed Context: Settlement Abandonment Mixed Viability (2026-06-26)
 
-- Latest save has 68 abandoned settlements, and all of them reportedly still
-  have fairly large populations.
-- Investigate whether abandonment status is failing to evacuate/depopulate
-  non-detailed residents, whether population counts are being read from stale
-  settlement state, or whether abandoned status is being applied too broadly to
-  viable settlements.
-- Completion boundary: produce a save-backed audit table listing abandoned
-  settlements, detailed alive counts, non-detailed alive counts, settlement
-  capacity/status/founding reason, and the transition year/reason where
-  available; then fix the smallest confirmed logic error or add a concrete
-  calibration TODO if the behavior is intentional but implausibly tuned.
+Abandonment now requires directory mixed viability (`detailed_alive +
+nondetailed_alive`), sustained distress, demographic collapse, or explicit
+absorption — not merely zero detailed residents. Viable low-resolution settlements
+promote ~1% directory samples (`settlement_low_resolution_sample`). Audit TSV
+categories: `abandoned_empty`, `abandoned_economic`,
+`promoted_low_resolution_sample`. See `TODONE.md`.
 
-### Concrete Follow-up: Over-Fluid Residence And Migration Churn
+### Completed Context: Abandoned Settlements Audit And Evacuation (2026-06-26)
 
-- Latest browser inspection shows residence timelines where frequent moves look
-  like the norm rather than exceptional life events; people appear to change
-  settlements repeatedly across ordinary adult life.
-- Migration should remain possible, but the default pattern should not make
-  nearly every person move nearly every year. Treat this as a plausibility bug
-  and a likely contributor to simulation churn/runtime until measured.
-- Audit detailed and non-detailed movement rates separately: annual move share,
-  moves per lifetime, same-region vs long-distance moves, return moves, moves
-  caused by settlement abandonment, marriage, office/patronage, resource
-  pressure, and generic job/resource migration.
-- Completion boundary: add a save-backed movement-rate diagnostic, compare the
-  current run against a target range, and retune the broadest overactive
-  movement source without blocking necessary migration from distressed or
-  abandoned settlements.
+Save-backed audit utility `utils/util_audit_abandoned_settlements.py` confirmed
+abandoned settlements could still show large `nondetailed_alive` counts because
+abandonment did not relocate directory residents. `evolve_settlements_one_year`
+now evacuates non-detailed SQL rows and queues detailed household moves before
+marking a site `abandoned` (after the mixed-viability gate above).
+
+### Completed Context: Movement-Rate Audit And Directory Migration Retune (2026-06-26)
+
+Save-backed `utils/util_audit_movement_rates.py` measures detailed vs
+non-detailed move shares. Pre-fix audits on the year-1029 save showed
+`nondetailed_migrant_share_vs_alive_end≈0.95`. Directory migration constants
+were retuned downward in `library/nondetailed_population.py`; see
+[`dev_rules/migration_tuning.md`](dev_rules/migration_tuning.md).
 
 ### Completed Context: Passive-To-Detailed Promotion V1
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import re
 from dataclasses import dataclass, field
@@ -24,14 +25,168 @@ def make_settlement_id(region_id: str, seq: int) -> str:
     return f"{rid}:s{max(1, int(seq))}"
 
 
-# Vacancy before abandon rolls begin (years with zero residents while still active).
+# Vacancy before abandon rolls begin (years with zero/low mixed residents while active).
 ABANDON_EMPTY_GRACE_YEARS = 3
 # After grace, abandon probability is min(1, excess * slope) per year.
 ABANDON_PROB_PER_EXCESS_YEAR = 0.2
+# Mixed directory population below this counts as demographically collapsing.
+ABANDON_MIXED_POP_THRESHOLD = 5
+# Consecutive years of sustained economic distress before collapse rolls begin.
+ABANDON_DISTRESS_GRACE_YEARS = ABANDON_EMPTY_GRACE_YEARS
+# Share of alive non-detailed residents promoted when a viable site stays low-resolution.
+ABANDON_LOW_RESOLUTION_PROMOTION_SHARE = 0.01
 ABANDON_DISTRESS_MAX_RESIDENTS = 250
 ABANDON_DISTRESS_FOOD_PRESSURE = 1.65
 ABANDON_DISTRESS_STABILITY = 0.12
 ABANDON_DISTRESS_PROSPERITY = 0.18
+SETTLEMENT_ABSORPTION_FOUNDING_REASONS = frozenset(
+    {
+        "absorbed",
+        "merged",
+        "settlement_merged",
+        "settlement_absorbed",
+    }
+)
+
+
+@dataclass(frozen=True)
+class SettlementAbandonmentDecision:
+    """Annual abandonment / low-resolution sampling outcome for one active settlement."""
+
+    should_abandon: bool
+    abandon_reason: str
+    next_consecutive_risk_years: int
+    should_promote_sample: bool
+    promotion_count: int
+
+
+def directory_mixed_alive(*, detailed_alive: int, nondetailed_alive: int) -> int:
+    """Viability census: detailed RAM residents plus SQL city-directory residents."""
+    return max(0, int(detailed_alive)) + max(0, int(nondetailed_alive))
+
+
+def settlement_is_explicitly_absorbed(state: "SettlementState") -> bool:
+    reason = (getattr(state, "founding_reason", "") or "").strip().lower()
+    return reason in SETTLEMENT_ABSORPTION_FOUNDING_REASONS
+
+
+def low_resolution_promotion_count(nondetailed_alive: int) -> int:
+    alive = max(0, int(nondetailed_alive))
+    if alive <= 0:
+        return 0
+    return max(1, int(math.ceil(alive * ABANDON_LOW_RESOLUTION_PROMOTION_SHARE)))
+
+
+def settlement_economic_distress_this_year(
+    state: "SettlementState",
+    *,
+    mixed_alive: int,
+) -> bool:
+    """Severe settlement-level distress from food pressure, stability, and prosperity."""
+    pop = max(0, int(mixed_alive))
+    if pop <= 0:
+        return False
+    food = _clamp(_metric_value(state, "food_pressure", 0.0), 0.0, 2.0)
+    stability = _clamp(_metric_value(state, "stability", 0.5), 0.0, 1.0)
+    prosperity = _clamp(_metric_value(state, "prosperity_pool", 1.0), 0.0, 3.0)
+    return (
+        food >= ABANDON_DISTRESS_FOOD_PRESSURE
+        and stability <= ABANDON_DISTRESS_STABILITY
+        and prosperity <= ABANDON_DISTRESS_PROSPERITY
+    )
+
+
+def settlement_abandon_risk_this_year(
+    *,
+    mixed_alive: int,
+    economic_distress: bool,
+) -> bool:
+    """Whether this year extends the consecutive abandon-risk streak."""
+    pop = max(0, int(mixed_alive))
+    if pop <= 0:
+        return True
+    if pop < ABANDON_MIXED_POP_THRESHOLD:
+        return True
+    return bool(economic_distress)
+
+
+def evaluate_settlement_abandonment(
+    state: "SettlementState",
+    *,
+    detailed_alive: int,
+    nondetailed_alive: int,
+    rng: random.Random,
+) -> SettlementAbandonmentDecision:
+    """Decide abandonment or low-resolution promotion using mixed directory viability."""
+    detailed_alive_i = max(0, int(detailed_alive))
+    nondetailed_alive_i = max(0, int(nondetailed_alive))
+    mixed_alive = directory_mixed_alive(
+        detailed_alive=detailed_alive_i,
+        nondetailed_alive=nondetailed_alive_i,
+    )
+    prior_risk = max(0, int(getattr(state, "consecutive_empty_years", 0) or 0))
+
+    if settlement_is_explicitly_absorbed(state):
+        return SettlementAbandonmentDecision(
+            should_abandon=True,
+            abandon_reason="absorbed",
+            next_consecutive_risk_years=0,
+            should_promote_sample=False,
+            promotion_count=0,
+        )
+
+    economic_distress = settlement_economic_distress_this_year(
+        state,
+        mixed_alive=mixed_alive,
+    )
+    abandon_risk = settlement_abandon_risk_this_year(
+        mixed_alive=mixed_alive,
+        economic_distress=economic_distress,
+    )
+    next_risk = prior_risk + 1 if abandon_risk else 0
+
+    demographic_collapse = mixed_alive <= 0 or mixed_alive < ABANDON_MIXED_POP_THRESHOLD
+    sustained_distress = (
+        mixed_alive >= ABANDON_MIXED_POP_THRESHOLD
+        and economic_distress
+        and next_risk > ABANDON_DISTRESS_GRACE_YEARS
+    )
+    eligible_for_roll = demographic_collapse or sustained_distress
+
+    should_abandon = False
+    abandon_reason = ""
+    if eligible_for_roll and roll_abandon_this_year(next_risk, rng):
+        should_abandon = True
+        if demographic_collapse:
+            abandon_reason = "empty"
+        else:
+            abandon_reason = "economic"
+
+    should_promote = False
+    promotion_count = 0
+    if (
+        not should_abandon
+        and detailed_alive_i == 0
+        and nondetailed_alive_i > 0
+        and mixed_alive >= ABANDON_MIXED_POP_THRESHOLD
+        and not sustained_distress
+    ):
+        legacy_vacancy = settlement_distress_counts_as_vacancy(
+            state,
+            resident_count=detailed_alive_i,
+        )
+        legacy_eligible = legacy_vacancy and prior_risk > ABANDON_EMPTY_GRACE_YEARS
+        if legacy_eligible or not economic_distress:
+            should_promote = True
+            promotion_count = low_resolution_promotion_count(nondetailed_alive_i)
+
+    return SettlementAbandonmentDecision(
+        should_abandon=should_abandon,
+        abandon_reason=abandon_reason,
+        next_consecutive_risk_years=next_risk,
+        should_promote_sample=should_promote,
+        promotion_count=promotion_count,
+    )
 
 
 def roll_abandon_this_year(consecutive_empty_years: int, rng: random.Random) -> bool:
@@ -48,7 +203,7 @@ def settlement_distress_counts_as_vacancy(
     *,
     resident_count: int | None = None,
 ) -> bool:
-    """Return true when a small active settlement is failing despite nonzero residents."""
+    """Legacy detailed-only vacancy/distress signal (tests and promotion guardrails)."""
     pop = (
         max(0, int(resident_count))
         if resident_count is not None

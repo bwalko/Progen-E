@@ -46,10 +46,9 @@ from library.random_traits import (
 from library.settlements import (
     SettlementState,
     evolve_settlement,
+    evaluate_settlement_abandonment,
     make_settlement_id,
     next_settlement_sequence,
-    roll_abandon_this_year,
-    settlement_distress_counts_as_vacancy,
     settlement_attraction_score,
     settlement_site_capacity_factor,
 )
@@ -3464,6 +3463,74 @@ class SimulationContext:
         self.settlements_by_id = {}
         self.settlement_ids_by_region = {}
 
+    def _evacuate_residents_for_abandoned_settlement(
+        self,
+        source_sid: str,
+        state: SettlementState,
+        *,
+        year: int,
+        rng: random.Random,
+    ) -> str | None:
+        """Relocate detailed and non-detailed residents before a settlement is abandoned."""
+        from library.nondetailed_population import (
+            evacuate_nondetailed_from_settlement,
+            pick_active_evacuation_destination,
+        )
+        from library.world_save import ensure_checkpoint_schema
+
+        dest = pick_active_evacuation_destination(self, state, year=int(year), rng=rng)
+        if dest is None:
+            return None
+        dest_sid = str(dest.settlement_id)
+        queued_heads: set[int] = set()
+        for rec in self.current_people_by_settlement().get(source_sid, []):
+            pid = int(rec.person_id)
+            if pid in queued_heads:
+                continue
+            try:
+                moved = self.queue_household_move_to_settlement(
+                    pid,
+                    dest_sid,
+                    move_reason="settlement_abandoned",
+                    requested_year=int(year),
+                    apply_year=int(year) + 1,
+                    source_event="settlement_abandoned",
+                    group_id=f"abandon:{source_sid}:{year}",
+                )
+            except (ValueError, LookupError):
+                continue
+            queued_heads.update(int(x) for x in moved)
+        try:
+            with closing(sqlite3.connect(self.save_db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                moved_nd = evacuate_nondetailed_from_settlement(
+                    conn,
+                    source_sid,
+                    dest_sid,
+                    source_region_id=state.region_id,
+                    destination_region_id=getattr(dest, "region_id", None),
+                )
+                conn.commit()
+            if moved_nd > 0:
+                self.invalidate_mixed_population_cache()
+                if hasattr(self, "_record_simulation_event"):
+                    self._record_simulation_event(
+                        int(year),
+                        "nondetailed_settlement_migration",
+                        {
+                            "from_settlement_id": source_sid,
+                            "to_settlement_id": dest_sid,
+                            "from_region_id": state.region_id,
+                            "to_region_id": getattr(dest, "region_id", None),
+                            "migrant_count": int(moved_nd),
+                            "move_reason": "settlement_abandoned",
+                        },
+                    )
+        except sqlite3.Error:
+            pass
+        return dest_sid
+
     def evolve_settlements_one_year(self) -> None:
         if not self.settlements_by_id:
             return
@@ -3476,6 +3543,11 @@ class SimulationContext:
         )
         next_by_id: dict[str, SettlementState] = {}
         abandon_year = int(self.current_year or self.simulation_start_year)
+        detailed_by_settlement = {
+            str(sid): int(count)
+            for sid, count in self.alive_census_cache().count_by_settlement.items()
+        }
+        nondetailed_by_settlement = self.nondetailed_population_counts_by_settlement()
         connectivity_by_region: dict[str, float] = {}
         capacity_by_settlement: dict[str, int] = {}
         active_by_region: dict[str, list[SettlementState]] = {}
@@ -3520,12 +3592,68 @@ class SimulationContext:
                 next_by_id[sid] = state
                 continue
             rc = max(0, int(state.resident_count))
-            vacancy_like = settlement_distress_counts_as_vacancy(
+            detailed_alive = int(detailed_by_settlement.get(sid, 0))
+            nondetailed_alive = int(nondetailed_by_settlement.get(sid, 0))
+            decision = evaluate_settlement_abandonment(
                 state,
-                resident_count=rc,
+                detailed_alive=detailed_alive,
+                nondetailed_alive=nondetailed_alive,
+                rng=rng,
             )
-            ce = 0 if not vacancy_like else int(state.consecutive_empty_years) + 1
-            if vacancy_like and roll_abandon_this_year(ce, rng):
+            if decision.should_promote_sample and decision.promotion_count > 0:
+                promoted = self.promote_nondetailed_people(
+                    year=abandon_year,
+                    reason="settlement_low_resolution_sample",
+                    settlement_id=sid,
+                    limit=int(decision.promotion_count),
+                    source={
+                        "settlement_id": sid,
+                        "detailed_alive": detailed_alive,
+                        "nondetailed_alive": nondetailed_alive,
+                        "promotion_share": decision.promotion_count,
+                    },
+                )
+                if promoted and hasattr(self, "_record_simulation_event"):
+                    self._record_simulation_event(
+                        abandon_year,
+                        "settlement_low_resolution_sample",
+                        {
+                            "settlement_id": sid,
+                            "region_id": state.region_id,
+                            "detailed_alive": detailed_alive,
+                            "nondetailed_alive": nondetailed_alive,
+                            "promoted_count": len(promoted),
+                            "reason": "settlement_low_resolution_sample",
+                        },
+                    )
+                detailed_alive = int(detailed_by_settlement.get(sid, 0)) + len(promoted)
+                nondetailed_alive = max(
+                    0,
+                    nondetailed_alive - len(promoted),
+                )
+                detailed_by_settlement[sid] = detailed_alive
+                rc = detailed_alive + nondetailed_alive
+            if decision.should_abandon:
+                self._evacuate_residents_for_abandoned_settlement(
+                    sid,
+                    state,
+                    year=abandon_year,
+                    rng=rng,
+                )
+                if hasattr(self, "_record_simulation_event"):
+                    self._record_simulation_event(
+                        abandon_year,
+                        "settlement_abandoned",
+                        {
+                            "settlement_id": sid,
+                            "region_id": state.region_id,
+                            "abandon_reason": decision.abandon_reason,
+                            "detailed_alive": detailed_alive,
+                            "nondetailed_alive": nondetailed_alive,
+                            "mixed_alive": detailed_alive + nondetailed_alive,
+                            "consecutive_risk_years": decision.next_consecutive_risk_years,
+                        },
+                    )
                 next_by_id[sid] = replace(
                     state,
                     status="abandoned",
@@ -3548,7 +3676,10 @@ class SimulationContext:
                 max(1, int(self.effective_regional_population_cap(state.region_id))),
             )
             evolved = evolve_settlement(
-                replace(state, consecutive_empty_years=ce),
+                replace(
+                    state,
+                    consecutive_empty_years=decision.next_consecutive_risk_years,
+                ),
                 resident_count=rc,
                 carrying_capacity=eff_cap,
                 connectivity_score=connectivity,

@@ -8,10 +8,15 @@ import unittest
 
 from library.config_import import refresh_world_config_from_csv
 from library.settlements import (
+    ABANDON_DISTRESS_GRACE_YEARS,
     ABANDON_EMPTY_GRACE_YEARS,
     SettlementState,
+    directory_mixed_alive,
+    evaluate_settlement_abandonment,
+    low_resolution_promotion_count,
     roll_abandon_this_year,
     settlement_distress_counts_as_vacancy,
+    settlement_economic_distress_this_year,
 )
 
 
@@ -51,6 +56,147 @@ class TestLazySettlements(unittest.TestCase):
 
         self.assertTrue(settlement_distress_counts_as_vacancy(failing))
         self.assertFalse(settlement_distress_counts_as_vacancy(large))
+
+    def test_mixed_viability_blocks_detailed_only_empty_abandon(self) -> None:
+        viable = SettlementState(
+            region_id="boreas_west",
+            settlement_id="boreas_west:s8",
+            food_pressure=0.4,
+            stability=0.8,
+            prosperity_pool=1.4,
+            consecutive_empty_years=ABANDON_EMPTY_GRACE_YEARS + 2,
+        )
+        decision = evaluate_settlement_abandonment(
+            viable,
+            detailed_alive=0,
+            nondetailed_alive=220,
+            rng=random.Random(0),
+        )
+        self.assertFalse(decision.should_abandon)
+        self.assertTrue(decision.should_promote_sample)
+        self.assertEqual(low_resolution_promotion_count(220), 3)
+
+    def test_sustained_distress_can_abandon_meaningful_mixed_population(self) -> None:
+        distressed = SettlementState(
+            region_id="boreas_west",
+            settlement_id="boreas_west:s9",
+            food_pressure=1.9,
+            stability=0.05,
+            prosperity_pool=0.08,
+            consecutive_empty_years=ABANDON_DISTRESS_GRACE_YEARS + 2,
+        )
+        self.assertTrue(
+            settlement_economic_distress_this_year(
+                distressed,
+                mixed_alive=directory_mixed_alive(
+                    detailed_alive=40,
+                    nondetailed_alive=10,
+                ),
+            )
+        )
+        decision = evaluate_settlement_abandonment(
+            distressed,
+            detailed_alive=40,
+            nondetailed_alive=10,
+            rng=random.Random(1),
+        )
+        self.assertTrue(decision.should_abandon)
+        self.assertEqual(decision.abandon_reason, "economic")
+
+    def test_truly_empty_settlement_can_abandon(self) -> None:
+        empty = SettlementState(
+            region_id="boreas_west",
+            settlement_id="boreas_west:s10",
+            consecutive_empty_years=ABANDON_EMPTY_GRACE_YEARS + 20,
+        )
+        decision = evaluate_settlement_abandonment(
+            empty,
+            detailed_alive=0,
+            nondetailed_alive=0,
+            rng=random.Random(2),
+        )
+        self.assertTrue(decision.should_abandon)
+        self.assertEqual(decision.abandon_reason, "empty")
+
+    def test_viable_low_resolution_settlement_promotes_sample(self) -> None:
+        from contextlib import closing
+        from pathlib import Path
+        import sqlite3
+        import tempfile
+
+        from library.config_import import load_all_csvs_into_sqlite
+        from library.nondetailed_population import (
+            NondetailedPersonSeed,
+            add_nondetailed_person,
+            nondetailed_counts_by_settlement,
+        )
+        from library.simulation_context import SimulationContext
+        from library.world_save import ensure_checkpoint_schema
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext(
+                db_path=cfg,
+                save_db_path=save,
+                world="default",
+                simulation_start_year=1000,
+                history_equivalent_start_year=1000,
+                current_year=1010,
+            )
+            try:
+                dest = ctx.ensure_active_settlement_for_region("boreas_west")
+                low_res = SettlementState(
+                    region_id="boreas_west",
+                    region_display_name="Boreas West",
+                    settlement_id="boreas_west:s8",
+                    site_slot=8,
+                    status="active",
+                    resident_count=0,
+                    food_pressure=0.4,
+                    stability=0.8,
+                    prosperity_pool=1.4,
+                    consecutive_empty_years=ABANDON_EMPTY_GRACE_YEARS + 2,
+                )
+                ctx.settlements_by_id[low_res.settlement_id] = low_res
+                ctx.rebuild_settlement_region_index()
+                with closing(sqlite3.connect(save)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    ensure_checkpoint_schema(conn)
+                    conn.execute(
+                        "INSERT OR IGNORE INTO simulation_settlement_lookup(settlement_id, region_key) "
+                        "SELECT ?, region_key FROM simulation_settlement_lookup WHERE settlement_id = ?",
+                        (low_res.settlement_id, dest.settlement_id),
+                    )
+                    for pid in range(601, 821):
+                        add_nondetailed_person(
+                            conn,
+                            NondetailedPersonSeed(
+                                birthyear=980,
+                                gender="Female" if pid % 2 else "Male",
+                                region_id="boreas_west",
+                                settlement_id=low_res.settlement_id,
+                            ),
+                            person_id=pid,
+                        )
+                    conn.commit()
+
+                ctx.evolve_settlements_one_year()
+
+                kept = ctx.settlements_by_id[low_res.settlement_id]
+                self.assertEqual((kept.status or "").strip().lower(), "active")
+                detailed_here = ctx.count_alive_in_settlement(low_res.settlement_id)
+                self.assertGreaterEqual(detailed_here, 2)
+                self.assertLessEqual(detailed_here, 4)
+                with closing(sqlite3.connect(save)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    ensure_checkpoint_schema(conn)
+                    counts = nondetailed_counts_by_settlement(conn)
+                self.assertGreaterEqual(counts.get(low_res.settlement_id, 0), 216)
+            finally:
+                ctx.finalize_run()
 
     def test_reestablish_new_id_same_site_slot(self) -> None:
         from library.simulation_context import SimulationContext
@@ -269,6 +415,97 @@ class TestLazySettlements(unittest.TestCase):
 
                 self.assertIsNotNone(existing)
                 self.assertEqual(existing.settlement_id, first.settlement_id)
+            finally:
+                ctx.finalize_run()
+
+    def test_abandonment_evacuates_nondetailed_residents(self) -> None:
+        from contextlib import closing
+        from pathlib import Path
+        import sqlite3
+        import tempfile
+        from unittest.mock import patch
+
+        from library.config_import import load_all_csvs_into_sqlite
+        from library.nondetailed_population import (
+            NondetailedPersonSeed,
+            add_nondetailed_person,
+            nondetailed_counts_by_settlement,
+        )
+        from library.simulation_context import SimulationContext
+        from library.world_save import ensure_checkpoint_schema
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            save = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            ctx = SimulationContext(
+                db_path=cfg,
+                save_db_path=save,
+                world="default",
+                simulation_start_year=1000,
+                history_equivalent_start_year=1000,
+                current_year=1010,
+            )
+            try:
+                dest = ctx.ensure_active_settlement_for_region("boreas_west")
+                distressed = SettlementState(
+                    region_id="boreas_west",
+                    region_display_name="Boreas West",
+                    settlement_id="boreas_west:s9",
+                    site_slot=9,
+                    status="active",
+                    resident_count=40,
+                    food_pressure=1.9,
+                    stability=0.05,
+                    prosperity_pool=0.08,
+                    consecutive_empty_years=ABANDON_DISTRESS_GRACE_YEARS + 2,
+                )
+                ctx.settlements_by_id[distressed.settlement_id] = distressed
+                ctx.rebuild_settlement_region_index()
+                with closing(sqlite3.connect(save)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    ensure_checkpoint_schema(conn)
+                    conn.execute(
+                        "INSERT OR IGNORE INTO simulation_settlement_lookup(settlement_id, region_key) "
+                        "SELECT ?, region_key FROM simulation_settlement_lookup WHERE settlement_id = ?",
+                        (distressed.settlement_id, dest.settlement_id),
+                    )
+                    for pid in range(501, 511):
+                        add_nondetailed_person(
+                            conn,
+                            NondetailedPersonSeed(
+                                birthyear=980,
+                                gender="Female" if pid % 2 else "Male",
+                                region_id="boreas_west",
+                                settlement_id=distressed.settlement_id,
+                            ),
+                            person_id=pid,
+                        )
+                    conn.commit()
+
+                with patch(
+                    "library.settlements.roll_abandon_this_year",
+                    return_value=True,
+                ):
+                    ctx.evolve_settlements_one_year()
+
+                abandoned = ctx.settlements_by_id[distressed.settlement_id]
+                self.assertEqual((abandoned.status or "").strip().lower(), "abandoned")
+                with closing(sqlite3.connect(save)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    ensure_checkpoint_schema(conn)
+                    counts = nondetailed_counts_by_settlement(conn)
+                self.assertEqual(counts.get(distressed.settlement_id, 0), 0)
+                self.assertEqual(sum(counts.values()), 10)
+                self.assertGreater(
+                    sum(
+                        count
+                        for sid, count in counts.items()
+                        if sid != distressed.settlement_id
+                    ),
+                    0,
+                )
             finally:
                 ctx.finalize_run()
 

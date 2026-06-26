@@ -4689,3 +4689,70 @@ completion.
 - `python -m unittest unit_test.test_population_growth_nondetailed_runner`
 - Attempted adjacent save-checkpoint roundtrip validation with bundled Python,
   but it requires optional `shapely` for world-map geometry in context preload.
+
+## Mixed-Mode Performance, Abandonment Evacuation, And Migration Audits (2026-06-26)
+
+### Enhancements
+
+- Added `utils/util_audit_abandoned_settlements.py` (TSV per abandoned
+  settlement: checkpoint status, detailed/nondetailed/mixed alive, distress
+  metrics).
+- Added `utils/util_audit_movement_rates.py` (summary + yearly TSV for detailed
+  `simulation_event_moves_readable` and `nondetailed_settlement_migration`
+  events).
+- `evolve_settlements_one_year` now evacuates city-directory residents and
+  queues detailed household moves before marking a settlement `abandoned`
+  (`pick_active_evacuation_destination`, `evacuate_nondetailed_from_settlement`).
+- Optimized `run_nondetailed_sql_migration`: cache mixed settlement counts once
+  per year, reuse `temp_nondetailed_migrants`, pass caches into destination
+  scoring.
+- Retuned non-detailed migration constants (`NONDETAILED_MIGRATION_*` in
+  `library/nondetailed_population.py`) after movement audit showed near-total
+  annual directory churn.
+- Extended [`dev_rules/migration_tuning.md`](dev_rules/migration_tuning.md) with
+  audit commands, non-detailed constants, and mixed-mode enablement guidance.
+
+### Fixes
+
+- Abandoned settlements no longer leave alive `simulation_people_nondetailed`
+  rows at the abandoned `current_settlement_key` (root cause of large browser
+  population counts on abandoned sites).
+
+### Validation
+
+- `python utils/util_audit_abandoned_settlements.py --world default` on the
+  pre-fix year-1029 save: `abandoned_settlements=4`, all four with
+  `nondetailed_alive>0` (`temp/abandoned_settlement_audit.tsv`).
+- `python utils/util_audit_movement_rates.py --world default` on the pre-fix
+  save: `nondetailed_migrant_share_vs_alive_end=0.949024`,
+  `detailed_move_reason:job_seeker_migration=92` (`temp/movement_rate_audit.tsv`).
+- `python -m unittest
+  unit_test.test_lazy_settlements.TestLazySettlements.test_abandonment_evacuates_nondetailed_residents`
+- Matched laptop 10-year profiles (seed `639789854`, 100 couples):
+  - mixed-mode default: `178.431s`, `nondetailed.sql_migration=50.24s` profile
+    total, `summary.social=21.37s` (`population_sim_timing.tsv` /
+    `population_sim_profile.tsv` rows `2026-06-26T14:16:55`).
+  - detailed-only (`--use-passive-cohorts --passive-population-scale 0`):
+    `149.310s`, no `nondetailed.*` phases (`2026-06-26T14:26:40` profile rows).
+
+## Settlement Abandonment Mixed Viability (2026-06-26)
+
+### Enhancements
+
+- `library/settlements.py`: `evaluate_settlement_abandonment` gates abandonment on
+  directory mixed viability (`detailed_alive + nondetailed_alive`), sustained
+  economic distress, demographic collapse, or explicit absorption founding reasons;
+  viable low-resolution sites promote ~1% of directory residents
+  (`settlement_low_resolution_sample`) instead of abandoning when detailed census
+  is empty.
+- `library/simulation_context.py`: `evolve_settlements_one_year` uses the new
+  evaluator, records `settlement_abandoned` / `settlement_low_resolution_sample`
+  events with `abandon_reason`, and keeps evacuation after the plausibility gate.
+- `utils/util_audit_abandoned_settlements.py`: audit TSV now distinguishes
+  `abandoned_empty`, `abandoned_economic`, and `promoted_low_resolution_sample`.
+- Docs: [`dev_rules/migration_tuning.md`](dev_rules/migration_tuning.md),
+  [`dev_rules/known_gotchas.md`](dev_rules/known_gotchas.md).
+
+### Validation
+
+- `python -m unittest unit_test.test_lazy_settlements -v` (13 tests).

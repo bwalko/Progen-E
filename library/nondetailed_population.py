@@ -48,6 +48,15 @@ _ADULT_JOB_FAMILIES: tuple[str, ...] = (
     "other",
 )
 
+# Non-detailed SQL migration pressure / outflow (see dev_rules/migration_tuning.md).
+NONDETAILED_MIGRATION_REGIONAL_PRESSURE_BASE = 0.88
+NONDETAILED_MIGRATION_FOOD_PRESSURE_BASE = 0.68
+NONDETAILED_MIGRATION_FOOD_PRESSURE_SCALE = 1.05
+NONDETAILED_MIGRATION_PROSPERITY_DEFICIT_SCALE = 0.75
+NONDETAILED_MIGRATION_STABILITY_DEFICIT_SCALE = 0.90
+NONDETAILED_MIGRATION_MAX_OUTFLOW_SHARE = 0.04
+NONDETAILED_MIGRATION_OUTFLOW_PRESSURE_SCALE = 0.028
+
 _PERSON_ID_TABLES: tuple[str, ...] = (
     "simulation_people",
     "simulation_people_light",
@@ -738,6 +747,94 @@ def apply_nondetailed_resource_mortality(
     )
 
 
+def pick_active_evacuation_destination(
+    ctx: object,
+    source_st: object,
+    *,
+    year: int,
+    rng: random.Random,
+    mixed_counts_by_settlement: dict[str, int] | None = None,
+) -> object | None:
+    """Pick an active settlement to receive residents evacuated from an abandoned site."""
+    source_sid = str(getattr(source_st, "settlement_id", "") or "").strip()
+    origin_rid = str(getattr(source_st, "region_id", "") or "").strip()
+    allowed_regions = {origin_rid} if origin_rid else set()
+    try:
+        for route in list_routes_from(
+            origin_rid,
+            world=getattr(ctx, "world", "default"),
+            db_path=getattr(ctx, "db_path"),
+            simulation_year=int(year),
+        ):
+            dst = str(getattr(route, "to_region_id", "") or "").strip()
+            if dst:
+                allowed_regions.add(dst)
+    except Exception:
+        pass
+    candidates = [
+        st
+        for st in getattr(ctx, "settlements_by_id", {}).values()
+        if str(getattr(st, "settlement_id", "") or "").strip() != source_sid
+        and str(getattr(st, "region_id", "") or "").strip() in allowed_regions
+        and str(getattr(st, "status", "") or "").strip().lower() == "active"
+    ]
+    if not candidates:
+        return None
+    mixed_counts_fn = getattr(ctx, "mixed_population_counts_by_settlement", None)
+    if mixed_counts_by_settlement is None and callable(mixed_counts_fn):
+        try:
+            mixed_counts_by_settlement = {
+                str(sid): int(count) for sid, count in mixed_counts_fn().items()
+            }
+        except Exception:
+            mixed_counts_by_settlement = {}
+    mixed_counts_by_settlement = mixed_counts_by_settlement or {}
+    scored: list[tuple[float, object]] = []
+    for st in candidates:
+        sid = str(getattr(st, "settlement_id", "") or "").strip()
+        if not sid:
+            continue
+        score = settlement_attraction_score(st, ctx=ctx, year=year)
+        residents = int(mixed_counts_by_settlement.get(sid, 0))
+        score *= 1.0 / (1.0 + residents * 0.0025)
+        if score > 0.0:
+            scored.append((score, st))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (-item[0], str(getattr(item[1], "settlement_id", ""))))
+    top = scored[: min(5, len(scored))]
+    return rng.choices([st for _, st in top], weights=[score for score, _ in top], k=1)[0]
+
+
+def evacuate_nondetailed_from_settlement(
+    conn: sqlite3.Connection,
+    source_settlement_id: str,
+    destination_settlement_id: str,
+    *,
+    source_region_id: str | None = None,
+    destination_region_id: str | None = None,
+) -> int:
+    """Move all alive non-detailed residents from one settlement to another."""
+    source_sid = str(source_settlement_id or "").strip()
+    dest_sid = str(destination_settlement_id or "").strip()
+    if not source_sid or not dest_sid or source_sid == dest_sid:
+        return 0
+    source_key = _settlement_key(conn, source_sid, source_region_id)
+    dest_key = _settlement_key(conn, dest_sid, destination_region_id)
+    if source_key is None or dest_key is None or int(source_key) == int(dest_key):
+        return 0
+    conn.execute(
+        """
+        UPDATE simulation_people_nondetailed
+        SET current_settlement_key = ?
+        WHERE is_alive = 1
+          AND current_settlement_key = ?
+        """,
+        (int(dest_key), int(source_key)),
+    )
+    return int(conn.execute("SELECT changes()").fetchone()[0])
+
+
 def run_nondetailed_sql_migration(
     conn: sqlite3.Connection,
     ctx: object,
@@ -802,9 +899,25 @@ def run_nondetailed_sql_migration(
         + int(passive_by_region.get(rid, 0))
         for rid in set(region_counts) | set(detailed_by_region) | set(passive_by_region)
     }
+    mixed_counts_by_settlement: dict[str, int] | None = None
+    mixed_counts_fn = getattr(ctx, "mixed_population_counts_by_settlement", None)
+    if callable(mixed_counts_fn):
+        try:
+            mixed_counts_by_settlement = {
+                str(sid): int(count) for sid, count in mixed_counts_fn().items()
+            }
+        except Exception:
+            mixed_counts_by_settlement = {}
     moved_total = 0
     source_count = 0
     rng = random.Random(int(year) * 800_011 + int(getattr(ctx, "placename_rng_salt", 0)) + 93_337)
+    conn.execute(
+        """
+        CREATE TEMP TABLE IF NOT EXISTS temp_nondetailed_migrants (
+            person_id INTEGER PRIMARY KEY
+        )
+        """
+    )
     for source_sid, pop in sorted(counts.items()):
         st = getattr(ctx, "settlements_by_id", {}).get(source_sid)
         if st is None or str(getattr(st, "status", "") or "").strip().lower() != "active":
@@ -823,24 +936,42 @@ def run_nondetailed_sql_migration(
         stability = _metric_value(st, "stability", 0.5)
         source_pressure = max(
             0.0,
-            regional_pressure - 0.84,
-            (food_pressure - 0.62) * 1.15,
-            (0.70 - prosperity) * 0.95,
-            (0.42 - stability) * 1.10,
+            regional_pressure - NONDETAILED_MIGRATION_REGIONAL_PRESSURE_BASE,
+            (food_pressure - NONDETAILED_MIGRATION_FOOD_PRESSURE_BASE)
+            * NONDETAILED_MIGRATION_FOOD_PRESSURE_SCALE,
+            (0.70 - prosperity) * NONDETAILED_MIGRATION_PROSPERITY_DEFICIT_SCALE,
+            (0.42 - stability) * NONDETAILED_MIGRATION_STABILITY_DEFICIT_SCALE,
         )
         if source_pressure <= 0.0:
             continue
-        dest = _pick_nondetailed_destination(ctx, st, year=int(year), rng=rng)
+        dest = _pick_nondetailed_destination(
+            ctx,
+            st,
+            year=int(year),
+            rng=rng,
+            mixed_counts_by_settlement=mixed_counts_by_settlement,
+        )
         if dest is None or dest.settlement_id == source_sid:
             continue
         migrants = min(
             int(max_migrants_per_settlement),
-            max(1, int(math.ceil(int(pop) * min(0.095, source_pressure * 0.055)))),
+            max(
+                1,
+                int(
+                    math.ceil(
+                        int(pop)
+                        * min(
+                            NONDETAILED_MIGRATION_MAX_OUTFLOW_SHARE,
+                            source_pressure * NONDETAILED_MIGRATION_OUTFLOW_PRESSURE_SCALE,
+                        )
+                    )
+                ),
+            ),
         )
-        conn.execute("DROP TABLE IF EXISTS temp_nondetailed_migrants")
+        conn.execute("DELETE FROM temp_nondetailed_migrants")
         conn.execute(
             """
-            CREATE TEMP TABLE temp_nondetailed_migrants AS
+            INSERT INTO temp_nondetailed_migrants (person_id)
             SELECT person_id
             FROM simulation_people_nondetailed
             WHERE is_alive = 1
@@ -910,7 +1041,14 @@ def run_nondetailed_sql_migration(
     )
 
 
-def _pick_nondetailed_destination(ctx: object, source_st: object, *, year: int, rng: random.Random):
+def _pick_nondetailed_destination(
+    ctx: object,
+    source_st: object,
+    *,
+    year: int,
+    rng: random.Random,
+    mixed_counts_by_settlement: dict[str, int] | None = None,
+):
     origin_rid = str(getattr(source_st, "region_id", "") or "").strip()
     allowed_regions = {origin_rid}
     try:
@@ -931,16 +1069,16 @@ def _pick_nondetailed_destination(ctx: object, source_st: object, *, year: int, 
         if str(getattr(st, "region_id", "") or "").strip() in allowed_regions
         and str(getattr(st, "status", "") or "").strip().lower() == "active"
     ]
-    mixed_counts_by_settlement = None
-    mixed_counts_fn = getattr(ctx, "mixed_population_counts_by_settlement", None)
-    if callable(mixed_counts_fn):
-        try:
-            mixed_counts_by_settlement = {
-                str(sid): int(count)
-                for sid, count in mixed_counts_fn().items()
-            }
-        except Exception:
-            mixed_counts_by_settlement = None
+    if mixed_counts_by_settlement is None:
+        mixed_counts_fn = getattr(ctx, "mixed_population_counts_by_settlement", None)
+        if callable(mixed_counts_fn):
+            try:
+                mixed_counts_by_settlement = {
+                    str(sid): int(count)
+                    for sid, count in mixed_counts_fn().items()
+                }
+            except Exception:
+                mixed_counts_by_settlement = None
     mixed_count_fn = getattr(ctx, "mixed_population_count_in_settlement", None)
     scored: list[tuple[float, object]] = []
     for st in candidates:
