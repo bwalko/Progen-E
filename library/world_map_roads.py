@@ -129,6 +129,12 @@ _WATER_GRAPH_CACHE: dict[
     tuple[int, int, list[Point], dict[tuple[int, int], int], dict[int, list[tuple[int, float]]]],
 ] = {}
 _LAND_BOUNDS_CACHE: dict[int, tuple[int, list[tuple[float, float, float, float, MicroRegionCell]]]] = {}
+_LAND_SPATIAL_CACHE: dict[
+    int,
+    tuple[int, object | None, list[tuple[int, MicroRegionCell]]],
+] = {}
+_LAND_POINT_CELL_CACHE: dict[int, tuple[int, dict[tuple[float, float], MicroRegionCell | None]]] = {}
+_LAND_POINT_TOO_CLOSE_CACHE: dict[int, tuple[int, dict[tuple[float, float, float], bool]]] = {}
 _SEA_REGION_ROUTE_CACHE: dict[
     tuple[int, int, str, str],
     tuple[tuple[str, ...], list[Point], float] | None,
@@ -723,6 +729,59 @@ def _is_sea_edge(edge: object) -> bool:
     return route_type == "sea" or edge_class == "sea_route"
 
 
+def _land_cell_spatial_index(
+    geometry: WorldMapGeometry,
+) -> tuple[object | None, list[tuple[int, MicroRegionCell]]]:
+    key = id(geometry.micro_cells)
+    count = len(geometry.micro_cells)
+    cached = _LAND_SPATIAL_CACHE.get(key)
+    if cached is not None and cached[0] == count:
+        return cached[1], cached[2]
+    indexed_cells: list[tuple[int, MicroRegionCell]] = []
+    geoms = []
+    try:
+        from shapely import STRtree
+        from shapely.geometry import Polygon
+    except ImportError:
+        _LAND_SPATIAL_CACHE[key] = (count, None, [])
+        return None, []
+    for cell in geometry.micro_cells:
+        if len(cell.polygon) < 3:
+            continue
+        indexed_cells.append((len(indexed_cells), cell))
+        geoms.append(Polygon(cell.polygon))
+    if not geoms:
+        _LAND_SPATIAL_CACHE[key] = (count, None, [])
+        return None, []
+    tree = STRtree(geoms)
+    _LAND_SPATIAL_CACHE[key] = (count, tree, indexed_cells)
+    return tree, indexed_cells
+
+
+def _query_land_cell_candidates(
+    geometry: WorldMapGeometry,
+    point: Point,
+    *,
+    margin: float = 0.0,
+) -> list[MicroRegionCell]:
+    tree, indexed_cells = _land_cell_spatial_index(geometry)
+    if tree is None or not indexed_cells:
+        return []
+    try:
+        from shapely.geometry import Point as ShapelyPoint, box
+    except ImportError:
+        return []
+    x, y = point
+    if margin <= 0.0:
+        query = ShapelyPoint(x, y)
+    else:
+        query = box(x - margin, y - margin, x + margin, y + margin)
+    hit_indices = {int(i) for i in tree.query(query, predicate="intersects")}
+    if not hit_indices:
+        return []
+    return [cell for idx, cell in indexed_cells if idx in hit_indices]
+
+
 def _land_cell_bounds(
     geometry: WorldMapGeometry,
 ) -> list[tuple[float, float, float, float, MicroRegionCell]]:
@@ -745,12 +804,32 @@ def _land_cell_containing_point(
     geometry: WorldMapGeometry,
     point: Point,
 ) -> MicroRegionCell | None:
+    cache_key = id(geometry.micro_cells)
+    count = len(geometry.micro_cells)
+    rounded = (round(point[0], 5), round(point[1], 5))
+    cached = _LAND_POINT_CELL_CACHE.get(cache_key)
+    if cached is not None and cached[0] == count:
+        if rounded in cached[1]:
+            return cached[1][rounded]
+    else:
+        cached = (count, {})
+        _LAND_POINT_CELL_CACHE[cache_key] = cached
+    candidates = _query_land_cell_candidates(geometry, point)
+    if candidates:
+        for cell in candidates:
+            if _point_in_polygon(point, cell.polygon):
+                cached[1][rounded] = cell
+                return cell
+        cached[1][rounded] = None
+        return None
     x, y = point
     for x0, y0, x1, y1, cell in _land_cell_bounds(geometry):
         if x < x0 or x > x1 or y < y0 or y > y1:
             continue
         if _point_in_polygon(point, cell.polygon):
+            cached[1][rounded] = cell
             return cell
+    cached[1][rounded] = None
     return None
 
 
@@ -760,17 +839,42 @@ def _point_too_close_to_land(
     *,
     clearance: float,
 ) -> bool:
+    cache_key = id(geometry.micro_cells)
+    count = len(geometry.micro_cells)
+    rounded = (round(point[0], 5), round(point[1], 5), round(clearance, 5))
+    cached = _LAND_POINT_TOO_CLOSE_CACHE.get(cache_key)
+    if cached is not None and cached[0] == count:
+        if rounded in cached[1]:
+            return cached[1][rounded]
+    else:
+        cached = (count, {})
+        _LAND_POINT_TOO_CLOSE_CACHE[cache_key] = cached
+
+    def _store(result: bool) -> bool:
+        cached[1][rounded] = result
+        return result
+
+    candidates = _query_land_cell_candidates(geometry, point, margin=clearance)
+    if candidates:
+        for cell in candidates:
+            if _point_in_polygon(point, cell.polygon):
+                return _store(True)
+            pts = cell.polygon
+            if clearance > 0.0 and len(pts) >= 2:
+                if min(_point_segment_distance(point, a, b) for a, b in zip(pts, pts[1:] + pts[:1])) <= clearance:
+                    return _store(True)
+        return _store(False)
     x, y = point
     for x0, y0, x1, y1, cell in _land_cell_bounds(geometry):
         if x < x0 - clearance or x > x1 + clearance or y < y0 - clearance or y > y1 + clearance:
             continue
         if _point_in_polygon(point, cell.polygon):
-            return True
+            return _store(True)
         pts = cell.polygon
         if clearance > 0.0 and len(pts) >= 2:
             if min(_point_segment_distance(point, a, b) for a, b in zip(pts, pts[1:] + pts[:1])) <= clearance:
-                return True
-    return False
+                return _store(True)
+    return _store(False)
 
 
 def _coast_distance(
@@ -1434,18 +1538,32 @@ def _cell_for_point(
     region_id: str | None = None,
 ) -> MicroRegionCell | None:
     rid = str(region_id or "").strip()
-    candidates = [c for c in geometry.micro_cells if c.region_id == rid] if rid else []
-    candidates = candidates or list(geometry.micro_cells)
-    for cell in candidates:
-        if _point_in_polygon(point, cell.polygon):
-            return cell
-    if not candidates:
+    if rid:
+        spatial = _query_land_cell_candidates(geometry, point)
+        candidates = [c for c in spatial if c.region_id == rid] if spatial else [
+            c for c in geometry.micro_cells if c.region_id == rid
+        ]
+        for cell in candidates:
+            if _point_in_polygon(point, cell.polygon):
+                return cell
+        if not candidates:
+            return None
+        return min(
+            candidates,
+            key=lambda c: (
+                (c.center_x - point[0]) ** 2 + (c.center_y - point[1]) ** 2,
+                c.micro_id,
+            ),
+        )
+    cell = _land_cell_containing_point(geometry, point)
+    if cell is not None:
+        return cell
+    if not geometry.micro_cells:
         return None
     return min(
-        candidates,
+        geometry.micro_cells,
         key=lambda c: (
             (c.center_x - point[0]) ** 2 + (c.center_y - point[1]) ** 2,
-            0 if rid and c.region_id == rid else 1,
             c.micro_id,
         ),
     )
@@ -1688,7 +1806,7 @@ def _point_in_any_micro_cell(
     geometry: WorldMapGeometry,
     point: Point,
 ) -> bool:
-    return any(_point_in_polygon(point, cell.polygon) for cell in geometry.micro_cells)
+    return _land_cell_containing_point(geometry, point) is not None
 
 
 def _segment_has_non_land_samples(

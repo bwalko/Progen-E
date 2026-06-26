@@ -1291,6 +1291,7 @@ def render_world_map_html(
         world_id,
         bool(include_inactive_settlements),
         bool(noisy_edges),
+        bool(include_roads),
         str(cfg),
         _sqlite_file_fingerprint(cfg),
         str(save),
@@ -1326,6 +1327,7 @@ def _render_world_map_html_cached(
     world_id: str,
     include_inactive_settlements: bool,
     noisy_edges: bool,
+    include_roads: bool,
     cfg_path: str,
     cfg_fingerprint: str,
     save_path: str,
@@ -1345,7 +1347,7 @@ def _render_world_map_html_cached(
             geometry=geometry,
             save_db_path=save,
             include_inactive_settlements=include_inactive_settlements,
-            include_roads=True,
+            include_roads=bool(include_roads),
         )
         svg = render_world_map_svg(
             geometry,

@@ -1645,9 +1645,14 @@ def _region_seed_score(
     *,
     river_cell_ids: set[str],
     hint: _RegionMapHint | None = None,
+    region_score_text: str | None = None,
 ) -> float:
     hint = hint or _RegionMapHint()
-    text = f"{_region_text(region)} {hint.placement} {' '.join(sorted(hint.features))}"
+    text = (
+        region_score_text
+        if region_score_text is not None
+        else f"{_region_text(region)} {hint.placement} {' '.join(sorted(hint.features))}"
+    )
     score = 0.0
     if "north" in text:
         score += cell.center_y * 2.4
@@ -1727,15 +1732,25 @@ def _assign_regions_to_micro_cells(
     by_id = {c.micro_id: c for c in micro_cells}
     seed_for_region: dict[str, str] = {}
     region_hints = region_hints or {}
+    region_text_by_id = {r.region_id: _region_text(r) for r in regions}
+    region_score_text_by_id = {
+        r.region_id: (
+            f"{region_text_by_id[r.region_id]} "
+            f"{region_hints.get(r.region_id, _RegionMapHint()).placement} "
+            f"{' '.join(sorted(region_hints.get(r.region_id, _RegionMapHint()).features))}"
+        )
+        for r in regions
+    }
     constrained_regions = sorted(
         regions,
         key=lambda r: (
-            0 if any(t in f"{_region_text(r)} {region_hints.get(r.region_id, _RegionMapHint()).placement} {' '.join(region_hints.get(r.region_id, _RegionMapHint()).features)}" for t in ("port", "coast", "shore", "river", "range", "north", "south", "east", "west")) else 1,
+            0 if any(t in region_score_text_by_id[r.region_id] for t in ("port", "coast", "shore", "river", "range", "north", "south", "east", "west")) else 1,
             r.region_id,
         ),
     )
     for region in constrained_regions:
         pool = [by_id[mid] for mid in available] or list(micro_cells)
+        score_text = region_score_text_by_id[region.region_id]
         seed = min(
             pool,
             key=lambda c: (
@@ -1744,6 +1759,7 @@ def _assign_regions_to_micro_cells(
                     c,
                     river_cell_ids=river_cell_ids,
                     hint=region_hints.get(region.region_id),
+                    region_score_text=score_text,
                 ),
                 c.micro_id,
             ),
@@ -1778,6 +1794,7 @@ def _assign_regions_to_micro_cells(
             }
             if not frontier:
                 continue
+            score_text = region_score_text_by_id[rid]
             candidate = min(
                 (by_id[mid] for mid in frontier),
                 key=lambda cell: (
@@ -1788,6 +1805,7 @@ def _assign_regions_to_micro_cells(
                         cell,
                         river_cell_ids=river_cell_ids,
                         hint=region_hints.get(region.region_id),
+                        region_score_text=score_text,
                     )
                     * 0.002,
                     cell.micro_id,
