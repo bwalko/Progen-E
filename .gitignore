@@ -197,3 +197,4 @@ unit_test/population_growth_simulation_people.json
 unit_test/population_growth_simulation_places_geo.json
 /temp
 unused-save.sqlite
+temp/gradio_data_browser.pid
