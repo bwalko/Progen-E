@@ -142,15 +142,17 @@ and **detailed_floor shared `save_conn` batching** (`runner.nondetailed_director
 `nondetailed.sql_migration` remains ~`0.1s/year`; mixed mode is ~**`1.5×`**
 detailed-only (~`144s`) on the latest laptop slice.
 
-**Review before calibration:** batch-conn detailed_floor changes fixed-seed yearly
-totals from year 1004 onward — see
-[`temp/mixed_mode_yearly_divergence.md`](../temp/mixed_mode_yearly_divergence.md).
-Cache audit (`HISTORY_SIM_VALIDATE_MIXED_COUNTS=1`) reported no mismatches on a
-5-year smoke run.
+**Floor equivalence (2026-06-26):** isolated deterministic fixtures (temp
+`config.sqlite`/`save.sqlite`, seed `639789854`, 10y / 100 couples) show legacy
+and batch-conn paths match year-by-year and on all 71 promotion decisions.
+Reports: [`temp/detailed_floor_first_divergence.md`](../temp/detailed_floor_first_divergence.md),
+[`temp/detailed_floor_trace_diff.md`](../temp/detailed_floor_trace_diff.md);
+test: `unit_test/test_detailed_floor_legacy_equivalence.py`. **Accept** optimized
+floor path for planning semantics.
 
-**Next (Nazuna or explicit long window):** 100-year mixed vs detailed-only
-benchmark with `--profile-last-years 10`; fixed-seed `yearly_summary.csv` diff
-vs pre-batch-conn commit before calibration-grade claims.
+**Next (separate from floor):** fix world-folder CLI `--reset-world` determinism
+before calibration-grade `yearly_summary.csv` A/B on `worlds/*`; then Nazuna
+100-year benchmark with `--profile-last-years 10`.
 
 ### Hybrid Population Architecture
 

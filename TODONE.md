@@ -4806,3 +4806,60 @@ completion.
 - `python -m unittest unit_test.test_nondetailed_population
   unit_test.test_simulation_migration unit_test.test_settlement_affordances
   unit_test.test_lazy_settlements` (52 tests, OK, ~720s).
+
+## Detailed-Floor Batch-Conn Divergence Trace (2026-06-26)
+
+### Fixes
+
+- `library/detailed_floor_promotion_trace.py`: per-decision TSV tracing
+  (`DETAILED_FLOOR_PROMOTION_TRACE`); legacy/batch-unfixed replay env flags.
+- `library/population_growth_runner.py`: default floor pass keeps shared
+  `save_conn`, mutable `detailed_by_sid`, `invalidate_mixed_cache=True`, and
+  post-pass mixed-cache invalidation; reproduces pre-batch behavior via
+  `DETAILED_FLOOR_LEGACY_CODE=1` / `DETAILED_FLOOR_BATCH_UNFIXED=1`.
+- Report: [`temp/detailed_floor_promotion_diff.md`](../temp/detailed_floor_promotion_diff.md);
+  traces `temp/detailed_floor_promotion_trace_before.tsv` /
+  `temp/detailed_floor_promotion_trace_after.tsv`.
+
+### Validation
+
+- Classification: **stale `len(by_settlement)` during batch floor loop** (108/108
+  batch-unfixed promotion rows had `detailed_alive_before < direct_detailed_alive`).
+- Historical laptop profile: year-1009 `detailed_alive` `438` → `530` (+92) after
+  batch conn (`population_sim_scale.tsv`, seed `639789854`).
+- `python -m unittest
+  unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_detailed_floor_promotes_from_passive_cohorts
+  unit_test.test_population_growth_determinism.TestPopulationGrowthDeterminism.test_large_mixed_settlement_raises_detailed_floor`
+  (OK).
+- Full 10-year mixed profile match vs legacy still needs one quiet sequential rerun
+  on Nazuna (overlapping local runs showed `detailed_alive` variance).
+
+## Detailed-Floor Fixed-Seed Equivalence Review (2026-06-26)
+
+### Fixes
+
+- `unit_test/test_detailed_floor_legacy_equivalence.py`: isolated 10-year fixture
+  asserts matching `yearly_summary` columns and promotion decision keys for legacy
+  vs batch-conn default.
+
+### Validation
+
+- Isolated temp DBs (seed `639789854`, 10y / 100 couples): no yearly divergence;
+  year-1009 `detailed_alive_count` 362/362; 71/71 identical promotion decisions
+  (`person_ids_selected`, reasons, counts, floors).
+- Trace metadata (`direct_detailed_alive`, etc.) differs on batch path due to
+  deferred commit visibility; decisions do not.
+- World-folder CLI reruns on `default_*_floor_639789854` were nondeterministic
+  (same legacy path: 362–483 end `detailed_alive` across repeats); not used as
+  calibration gate.
+- `python -m unittest unit_test.test_population_growth_determinism` (20 tests, OK,
+  ~624s).
+- `python -m unittest unit_test.test_nondetailed_population
+  unit_test.test_simulation_migration unit_test.test_settlement_affordances
+  unit_test.test_lazy_settlements unit_test.test_detailed_floor_legacy_equivalence`
+  (53 tests, OK, ~895s).
+- Reports: `temp/detailed_floor_first_divergence.md`,
+  `temp/detailed_floor_trace_legacy.tsv`, `temp/detailed_floor_trace_fixed.tsv`,
+  `temp/detailed_floor_trace_diff.md`.
+- **Recommendation:** accept batch-conn + in-memory maps for floor planning;
+  quarantine world-folder CLI A/B until reset determinism is fixed.

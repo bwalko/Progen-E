@@ -55,6 +55,10 @@ from library.relationship_attraction import (
 )
 from library.simulation_careers import resource_pressure_for_person
 from library import simulation_timing
+from library.detailed_floor_promotion_trace import (
+    DetailedFloorPromotionTrace,
+    batch_conn_enabled,
+)
 from library.mixed_population_audit import run_mixed_population_audit_if_enabled
 from library.simulation_context import SimulationContext, SimulationPersonRecord
 from library.simulation_export import people_export_payload, settlements_geo_export_payload
@@ -1550,36 +1554,165 @@ def _generate_detail_floor_person(
     return ctx.add_person(person=person, is_founder=False)
 
 
-def ensure_detailed_floor_for_active_settlements(
+def _settlement_display_name(st: SettlementState) -> str:
+    name = (st.display_name or "").strip()
+    if name:
+        return name
+    return (st.settlement_id or "").strip()
+
+
+def _passive_cohort_only_counts_by_settlement(ctx: SimulationContext) -> dict[str, int]:
+    """Alive aggregate-cohort residents by settlement (excludes city-directory rows)."""
+    out: dict[str, int] = {}
+    latest_year = ctx.latest_passive_cohort_year()
+    for cohort in ctx.passive_cohorts:
+        if latest_year is None or int(cohort.sim_year) != int(latest_year):
+            continue
+        sid = (cohort.settlement_id or "").strip()
+        if sid:
+            out[sid] = out.get(sid, 0) + max(0, int(cohort.population_count))
+    for rec in ctx.passive_people.values():
+        p = rec.person
+        y = int(ctx.current_year if ctx.current_year is not None else ctx.simulation_start_year)
+        if p.deathyear is not None and int(p.deathyear) <= y:
+            continue
+        sid = (p.current_settlement_id or p.birthplace_settlement_id or "").strip()
+        if sid:
+            out[sid] = out.get(sid, 0) + 1
+    return out
+
+
+def _direct_floor_count_maps(
+    ctx: SimulationContext,
+    conn: sqlite3.Connection,
+) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+    """Recompute detailed, nondetailed, and mixed alive counts for floor decisions."""
+    detailed = {
+        str(sid): int(count)
+        for sid, count in ctx.alive_census_cache().count_by_settlement.items()
+    }
+    nondetailed = {
+        str(sid): int(count) for sid, count in nondetailed_counts_by_settlement(conn).items()
+    }
+    passive_only = _passive_cohort_only_counts_by_settlement(ctx)
+    sids = set(detailed) | set(nondetailed) | set(passive_only)
+    mixed = {
+        sid: int(detailed.get(sid, 0))
+        + int(nondetailed.get(sid, 0))
+        + int(passive_only.get(sid, 0))
+        for sid in sids
+    }
+    return detailed, nondetailed, mixed
+
+
+def _floor_target_for_mixed(mixed_alive: int, *, minimum: int) -> int:
+    settlement_minimum = max(0, int(minimum))
+    for threshold, floor in LARGE_SETTLEMENT_DETAIL_FLOORS:
+        if int(mixed_alive) >= int(threshold):
+            settlement_minimum = max(settlement_minimum, int(floor))
+            break
+    return settlement_minimum
+
+
+def _last_promotion_source_kind(ctx: SimulationContext) -> str:
+    if ctx.passive_promotion_log:
+        synthesized = ctx.passive_promotion_log[-1].synthesized or {}
+        source = synthesized.get("source") or {}
+        if isinstance(source, dict):
+            kind = str(source.get("source_kind") or "").strip()
+            if kind:
+                return kind
+    for _event_year, event_type, _payload in reversed(ctx._pending_simulation_events):
+        if event_type == "nondetailed_person_promoted":
+            return "nondetailed_directory"
+        if event_type == "passive_person_promoted":
+            return "passive_cohort"
+        if event_type == "birth":
+            return "generated"
+    return "unknown"
+
+
+def _floor_trace_row(
+    trace: DetailedFloorPromotionTrace | None,
+    *,
+    count_conn: sqlite3.Connection | None,
+    ctx: SimulationContext,
+    year: int,
+    sid: str,
+    st: SettlementState,
+    detailed_alive: int,
+    nondetailed_alive: int,
+    mixed_alive: int,
+    settlement_minimum: int,
+    promotion_needed: bool,
+    promotion_count: int,
+    person_ids_selected: str,
+    promotion_reason: str,
+    cached_mixed_snapshot: dict[str, int],
+    already_promoted: bool,
+    cache_invalidation_after: int,
+    in_memory_count_update: int,
+    batch_conn: bool,
+    promotion_ordinal: int | str = "",
+) -> None:
+    if trace is None:
+        return
+    direct_detailed = direct_nondetailed = 0
+    if count_conn is not None:
+        direct_detailed, direct_nondetailed, _direct_mixed = _direct_floor_count_maps(
+            ctx, count_conn
+        )
+        direct_detailed = int(direct_detailed.get(sid, 0))
+        direct_nondetailed = int(direct_nondetailed.get(sid, 0))
+    trace.write_row(
+        year=int(year),
+        settlement_id=sid,
+        settlement_name=_settlement_display_name(st),
+        detailed_alive_before=detailed_alive,
+        nondetailed_alive_before=nondetailed_alive,
+        mixed_alive_before=mixed_alive,
+        target_detailed_floor=settlement_minimum,
+        promotion_needed=int(promotion_needed),
+        promotion_count=promotion_count,
+        person_ids_selected=person_ids_selected,
+        promotion_reason=promotion_reason,
+        cached_counts_used=int(mixed_alive) == int(cached_mixed_snapshot.get(sid, mixed_alive)),
+        direct_detailed_alive=direct_detailed,
+        direct_nondetailed_alive=direct_nondetailed,
+        already_promoted_this_year=int(already_promoted),
+        cache_invalidation_after=cache_invalidation_after,
+        in_memory_count_update=in_memory_count_update,
+        batch_conn=int(batch_conn),
+        promotion_ordinal=promotion_ordinal,
+    )
+
+
+def _ensure_detailed_floor_legacy(
     ctx: SimulationContext,
     year: int,
     *,
-    minimum: int = MIN_DETAILED_RESIDENTS_PER_ACTIVE_SETTLEMENT,
+    minimum: int,
+    prof: bool,
+    tpc: Callable[[], float],
+    trace: DetailedFloorPromotionTrace | None,
 ) -> int:
-    """Keep active cohort settlements from losing all detailed representation."""
-    minimum = max(0, int(minimum))
-    if minimum <= 0:
-        return 0
-    prof = simulation_timing.active_for_year(year)
-    tpc = time.perf_counter
+    """Pre-batch-conn floor pass: cached mixed snapshot and per-promotion SQLite commits."""
     promoted_or_created = 0
-    if prof:
-        t0 = tpc()
+    t0 = tpc() if prof else 0.0
     by_settlement = ctx.current_people_by_settlement()
     try:
         mixed_by_settlement = ctx.mixed_population_counts_by_settlement()
     except Exception:
         mixed_by_settlement = {}
-    if prof:
-        simulation_timing.accumulate("nondetailed_floor.scan", tpc() - t0)
-        t0 = tpc()
-    save_conn: sqlite3.Connection | None = None
+    count_conn: sqlite3.Connection | None = None
     try:
-        save_conn = sqlite3.connect(ctx.save_db_path)
-        save_conn.row_factory = sqlite3.Row
         from library.world_save import ensure_checkpoint_schema
 
-        ensure_checkpoint_schema(save_conn)
+        count_conn = sqlite3.connect(ctx.save_db_path)
+        count_conn.row_factory = sqlite3.Row
+        ensure_checkpoint_schema(count_conn)
+        nondetailed_snapshot = nondetailed_counts_by_settlement(count_conn)
+        promoted_this_year: set[str] = set()
         for sid, st in sorted(ctx.settlements_by_id.items()):
             if (st.status or "").strip().lower() != "active":
                 continue
@@ -1592,10 +1725,166 @@ def ensure_detailed_floor_for_active_settlements(
                 if mixed_count >= int(threshold):
                     settlement_minimum = max(settlement_minimum, int(floor))
                     break
-            needed = settlement_minimum - len(by_settlement.get(sid, ()))
+            detailed_alive = len(by_settlement.get(sid, ()))
+            nondetailed_alive = int(nondetailed_snapshot.get(sid, 0))
+            needed = settlement_minimum - detailed_alive
             if needed <= 0:
+                _floor_trace_row(
+                    trace,
+                    count_conn=count_conn,
+                    ctx=ctx,
+                    year=year,
+                    sid=sid,
+                    st=st,
+                    detailed_alive=detailed_alive,
+                    nondetailed_alive=nondetailed_alive,
+                    mixed_alive=mixed_count,
+                    settlement_minimum=settlement_minimum,
+                    promotion_needed=False,
+                    promotion_count=0,
+                    person_ids_selected="",
+                    promotion_reason="none",
+                    cached_mixed_snapshot=mixed_by_settlement,
+                    already_promoted=sid in promoted_this_year,
+                    cache_invalidation_after=0,
+                    in_memory_count_update=0,
+                    batch_conn=False,
+                )
                 continue
+            already_promoted = sid in promoted_this_year
             for i in range(needed):
+                gender = "Male" if (i % 2 == 0) else "Female"
+                promoted = promote_passive_candidate_for_office(
+                    ctx,
+                    year=int(year),
+                    settlement_id=sid,
+                    min_age=18,
+                    reason="settlement_detail_floor",
+                    source={"settlement_id": sid, "minimum": settlement_minimum},
+                )
+                if promoted is None:
+                    promoted = _generate_detail_floor_person(
+                        ctx,
+                        year=int(year),
+                        settlement_id=sid,
+                        gender=gender,
+                        ordinal=i,
+                    )
+                    ctx._pending_simulation_events[-1][2].update(
+                        {"reason": "settlement_detail_floor", "settlement_id": sid}
+                    )
+                    promotion_reason = "generated_detail_floor_person"
+                else:
+                    promotion_reason = _last_promotion_source_kind(ctx)
+                person_id = int(getattr(promoted, "person_id", 0) or 0)
+                _floor_trace_row(
+                    trace,
+                    count_conn=count_conn,
+                    ctx=ctx,
+                    year=year,
+                    sid=sid,
+                    st=st,
+                    detailed_alive=detailed_alive,
+                    nondetailed_alive=nondetailed_alive,
+                    mixed_alive=mixed_count,
+                    settlement_minimum=settlement_minimum,
+                    promotion_needed=True,
+                    promotion_count=needed,
+                    person_ids_selected=str(person_id) if person_id else "",
+                    promotion_reason=promotion_reason,
+                    cached_mixed_snapshot=mixed_by_settlement,
+                    already_promoted=already_promoted,
+                    cache_invalidation_after=0,
+                    in_memory_count_update=0,
+                    batch_conn=False,
+                    promotion_ordinal=i,
+                )
+                promoted_or_created += 1
+                promoted_this_year.add(sid)
+                already_promoted = True
+            by_settlement = ctx.current_people_by_settlement()
+    finally:
+        if count_conn is not None:
+            count_conn.close()
+    if prof:
+        simulation_timing.accumulate("nondetailed_floor.promotions", tpc() - t0)
+    return promoted_or_created
+
+
+def _ensure_detailed_floor_batch_unfixed(
+    ctx: SimulationContext,
+    year: int,
+    *,
+    minimum: int,
+    prof: bool,
+    tpc: Callable[[], float],
+    trace: DetailedFloorPromotionTrace | None,
+) -> int:
+    """Batch-conn optimization before in-memory maps: stale opening mixed snapshot."""
+    promoted_or_created = 0
+    t0 = tpc() if prof else 0.0
+    by_settlement = ctx.current_people_by_settlement()
+    try:
+        mixed_by_settlement = ctx.mixed_population_counts_by_settlement()
+    except Exception:
+        mixed_by_settlement = {}
+    if prof:
+        simulation_timing.accumulate("nondetailed_floor.scan", tpc() - t0)
+        t0 = tpc()
+    save_conn: sqlite3.Connection | None = None
+    count_conn: sqlite3.Connection | None = None
+    try:
+        from library.world_save import ensure_checkpoint_schema
+
+        save_conn = sqlite3.connect(ctx.save_db_path)
+        save_conn.row_factory = sqlite3.Row
+        ensure_checkpoint_schema(save_conn)
+        count_conn = save_conn
+        nondetailed_snapshot = nondetailed_counts_by_settlement(count_conn)
+        promoted_this_year: set[str] = set()
+        for sid, st in sorted(ctx.settlements_by_id.items()):
+            if (st.status or "").strip().lower() != "active":
+                continue
+            settlement_minimum = minimum
+            try:
+                mixed_count = int(mixed_by_settlement.get(sid, 0))
+            except Exception:
+                mixed_count = max(0, int(getattr(st, "resident_count", 0) or 0))
+            for threshold, floor in LARGE_SETTLEMENT_DETAIL_FLOORS:
+                if mixed_count >= int(threshold):
+                    settlement_minimum = max(settlement_minimum, int(floor))
+                    break
+            detailed_alive = len(by_settlement.get(sid, ()))
+            nondetailed_alive = int(nondetailed_snapshot.get(sid, 0))
+            needed = settlement_minimum - detailed_alive
+            if needed <= 0:
+                _floor_trace_row(
+                    trace,
+                    count_conn=count_conn,
+                    ctx=ctx,
+                    year=year,
+                    sid=sid,
+                    st=st,
+                    detailed_alive=detailed_alive,
+                    nondetailed_alive=nondetailed_alive,
+                    mixed_alive=mixed_count,
+                    settlement_minimum=settlement_minimum,
+                    promotion_needed=False,
+                    promotion_count=0,
+                    person_ids_selected="",
+                    promotion_reason="none",
+                    cached_mixed_snapshot=mixed_by_settlement,
+                    already_promoted=sid in promoted_this_year,
+                    cache_invalidation_after=0,
+                    in_memory_count_update=0,
+                    batch_conn=True,
+                )
+                continue
+            already_promoted = sid in promoted_this_year
+            for i in range(needed):
+                direct_before = _direct_floor_count_maps(ctx, count_conn)
+                direct_detailed_before = int(direct_before[0].get(sid, 0))
+                direct_nondetailed_before = int(direct_before[1].get(sid, 0))
                 gender = "Male" if (i % 2 == 0) else "Female"
                 promoted = promote_passive_candidate_for_office(
                     ctx,
@@ -1617,17 +1906,278 @@ def ensure_detailed_floor_for_active_settlements(
                     ctx._pending_simulation_events[-1][2].update(
                         {"reason": "settlement_detail_floor", "settlement_id": sid}
                     )
+                    promotion_reason = "generated_detail_floor_person"
+                else:
+                    promotion_reason = _last_promotion_source_kind(ctx)
+                person_id = int(getattr(promoted, "person_id", 0) or 0)
+                if trace is not None:
+                    trace.write_row(
+                        year=int(year),
+                        settlement_id=sid,
+                        settlement_name=_settlement_display_name(st),
+                        detailed_alive_before=detailed_alive,
+                        nondetailed_alive_before=nondetailed_alive,
+                        mixed_alive_before=mixed_count,
+                        target_detailed_floor=settlement_minimum,
+                        promotion_needed=1,
+                        promotion_count=needed,
+                        person_ids_selected=str(person_id) if person_id else "",
+                        promotion_reason=promotion_reason,
+                        cached_counts_used=int(mixed_count)
+                        == int(mixed_by_settlement.get(sid, mixed_count)),
+                        direct_detailed_alive=direct_detailed_before,
+                        direct_nondetailed_alive=direct_nondetailed_before,
+                        already_promoted_this_year=int(already_promoted),
+                        cache_invalidation_after=0,
+                        in_memory_count_update=0,
+                        batch_conn=1,
+                        promotion_ordinal=i,
+                    )
                 promoted_or_created += 1
+                promoted_this_year.add(sid)
+                already_promoted = True
             by_settlement = ctx.current_people_by_settlement()
         save_conn.commit()
     finally:
         if save_conn is not None:
             save_conn.close()
+    cache_invalidated_after = 0
     if promoted_or_created:
         ctx.invalidate_mixed_population_cache()
+        cache_invalidated_after = 1
+        if trace is not None:
+            trace.write_row(
+                year=int(year),
+                settlement_id="",
+                settlement_name="",
+                detailed_alive_before="",
+                nondetailed_alive_before="",
+                mixed_alive_before="",
+                target_detailed_floor="",
+                promotion_needed="",
+                promotion_count=promoted_or_created,
+                person_ids_selected="",
+                promotion_reason="pass_complete",
+                cached_counts_used="",
+                direct_detailed_alive="",
+                direct_nondetailed_alive="",
+                cache_invalidation_after=cache_invalidated_after,
+                in_memory_count_update=0,
+                batch_conn=1,
+                promotion_ordinal="",
+                already_promoted_this_year="",
+            )
     if prof:
         simulation_timing.accumulate("nondetailed_floor.promotions", tpc() - t0)
     return promoted_or_created
+
+
+def _ensure_detailed_floor_with_memory_maps(
+    ctx: SimulationContext,
+    year: int,
+    *,
+    minimum: int,
+    prof: bool,
+    tpc: Callable[[], float],
+    trace: DetailedFloorPromotionTrace | None,
+) -> int:
+    """Batch-conn floor pass with in-memory detailed counts updated after each promotion."""
+    promoted_or_created = 0
+    use_batch_conn = batch_conn_enabled()
+    t0 = 0.0
+    if prof:
+        t0 = tpc()
+    count_conn: sqlite3.Connection | None = None
+    save_conn: sqlite3.Connection | None = None
+    cache_invalidated_after = False
+    try:
+        from library.world_save import ensure_checkpoint_schema
+
+        by_settlement = ctx.current_people_by_settlement()
+        try:
+            cached_mixed_snapshot = ctx.mixed_population_counts_by_settlement()
+        except Exception:
+            cached_mixed_snapshot = {}
+        count_conn = sqlite3.connect(ctx.save_db_path)
+        count_conn.row_factory = sqlite3.Row
+        ensure_checkpoint_schema(count_conn)
+        nondetailed_snapshot = nondetailed_counts_by_settlement(count_conn)
+        detailed_by_sid = {
+            str(sid): len(records) for sid, records in by_settlement.items()
+        }
+        if use_batch_conn:
+            save_conn = count_conn
+        promoted_this_year: set[str] = set()
+        if prof:
+            simulation_timing.accumulate("nondetailed_floor.scan", tpc() - t0)
+            t0 = tpc()
+        for sid, st in sorted(ctx.settlements_by_id.items()):
+            if (st.status or "").strip().lower() != "active":
+                continue
+            by_settlement = ctx.current_people_by_settlement()
+            detailed_alive = len(by_settlement.get(sid, ()))
+            detailed_by_sid[sid] = detailed_alive
+            nondetailed_alive = int(nondetailed_snapshot.get(sid, 0))
+            try:
+                mixed_alive = int(cached_mixed_snapshot.get(sid, 0))
+            except Exception:
+                mixed_alive = max(0, int(getattr(st, "resident_count", 0) or 0))
+            if mixed_alive <= 0:
+                mixed_alive = detailed_alive + nondetailed_alive
+            settlement_minimum = _floor_target_for_mixed(mixed_alive, minimum=minimum)
+            needed = settlement_minimum - detailed_alive
+            promotion_needed = needed > 0
+            if not promotion_needed:
+                _floor_trace_row(
+                    trace,
+                    count_conn=count_conn,
+                    ctx=ctx,
+                    year=year,
+                    sid=sid,
+                    st=st,
+                    detailed_alive=detailed_alive,
+                    nondetailed_alive=nondetailed_alive,
+                    mixed_alive=mixed_alive,
+                    settlement_minimum=settlement_minimum,
+                    promotion_needed=False,
+                    promotion_count=0,
+                    person_ids_selected="",
+                    promotion_reason="none",
+                    cached_mixed_snapshot=cached_mixed_snapshot,
+                    already_promoted=sid in promoted_this_year,
+                    cache_invalidation_after=0,
+                    in_memory_count_update=0,
+                    batch_conn=use_batch_conn,
+                )
+                continue
+            already_promoted = sid in promoted_this_year
+            for i in range(needed):
+                direct_before = _direct_floor_count_maps(ctx, count_conn)
+                direct_detailed_before = int(direct_before[0].get(sid, 0))
+                direct_nondetailed_before = int(direct_before[1].get(sid, 0))
+                gender = "Male" if (i % 2 == 0) else "Female"
+                promoted = promote_passive_candidate_for_office(
+                    ctx,
+                    year=int(year),
+                    settlement_id=sid,
+                    min_age=18,
+                    reason="settlement_detail_floor",
+                    source={"settlement_id": sid, "minimum": settlement_minimum},
+                    save_conn=save_conn,
+                    invalidate_mixed_cache=True,
+                )
+                if promoted is None:
+                    promoted = _generate_detail_floor_person(
+                        ctx,
+                        year=int(year),
+                        settlement_id=sid,
+                        gender=gender,
+                        ordinal=i,
+                    )
+                    ctx._pending_simulation_events[-1][2].update(
+                        {"reason": "settlement_detail_floor", "settlement_id": sid}
+                    )
+                    promotion_reason = "generated_detail_floor_person"
+                else:
+                    promotion_reason = _last_promotion_source_kind(ctx)
+                person_id = int(getattr(promoted, "person_id", 0) or 0)
+                detailed_by_sid[sid] = int(detailed_by_sid.get(sid, 0)) + 1
+                promoted_or_created += 1
+                promoted_this_year.add(sid)
+                if trace is not None:
+                    trace.write_row(
+                        year=int(year),
+                        settlement_id=sid,
+                        settlement_name=_settlement_display_name(st),
+                        detailed_alive_before=detailed_alive,
+                        nondetailed_alive_before=nondetailed_alive,
+                        mixed_alive_before=mixed_alive,
+                        target_detailed_floor=settlement_minimum,
+                        promotion_needed=1,
+                        promotion_count=needed,
+                        person_ids_selected=str(person_id) if person_id else "",
+                        promotion_reason=promotion_reason,
+                        cached_counts_used=int(mixed_alive)
+                        == int(cached_mixed_snapshot.get(sid, mixed_alive)),
+                        direct_detailed_alive=direct_detailed_before,
+                        direct_nondetailed_alive=direct_nondetailed_before,
+                        already_promoted_this_year=int(already_promoted),
+                        cache_invalidation_after=0,
+                        in_memory_count_update=1,
+                        batch_conn=int(use_batch_conn),
+                        promotion_ordinal=i,
+                    )
+                detailed_alive = int(detailed_by_sid.get(sid, 0))
+                already_promoted = True
+        if save_conn is not None:
+            save_conn.commit()
+    finally:
+        if count_conn is not None:
+            count_conn.close()
+    if promoted_or_created:
+        ctx.invalidate_mixed_population_cache()
+        cache_invalidated_after = True
+        if trace is not None:
+            trace.write_row(
+                year=int(year),
+                settlement_id="",
+                settlement_name="",
+                detailed_alive_before="",
+                nondetailed_alive_before="",
+                mixed_alive_before="",
+                target_detailed_floor="",
+                promotion_needed="",
+                promotion_count=promoted_or_created,
+                person_ids_selected="",
+                promotion_reason="pass_complete",
+                cached_counts_used="",
+                direct_detailed_alive="",
+                direct_nondetailed_alive="",
+                cache_invalidation_after=int(cache_invalidated_after),
+                in_memory_count_update="",
+                batch_conn=int(use_batch_conn),
+                promotion_ordinal="",
+                already_promoted_this_year="",
+            )
+    if prof:
+        simulation_timing.accumulate("nondetailed_floor.promotions", tpc() - t0)
+    return promoted_or_created
+
+
+def ensure_detailed_floor_for_active_settlements(
+    ctx: SimulationContext,
+    year: int,
+    *,
+    minimum: int = MIN_DETAILED_RESIDENTS_PER_ACTIVE_SETTLEMENT,
+) -> int:
+    """Keep active cohort settlements from losing all detailed representation."""
+    minimum = max(0, int(minimum))
+    if minimum <= 0:
+        return 0
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
+    trace = DetailedFloorPromotionTrace.open_if_enabled()
+    legacy = os.environ.get("DETAILED_FLOOR_LEGACY_CODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    batch_unfixed = os.environ.get("DETAILED_FLOOR_BATCH_UNFIXED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if legacy:
+        return _ensure_detailed_floor_legacy(
+            ctx, year, minimum=minimum, prof=prof, tpc=tpc, trace=trace
+        )
+    if batch_unfixed:
+        return _ensure_detailed_floor_batch_unfixed(
+            ctx, year, minimum=minimum, prof=prof, tpc=tpc, trace=trace
+        )
+    return _ensure_detailed_floor_with_memory_maps(
+        ctx, year, minimum=minimum, prof=prof, tpc=tpc, trace=trace
+    )
 
 
 def _migration_arrivals_by_settlement_from_events(
