@@ -713,6 +713,19 @@ class TestEventHistoryReport(unittest.TestCase):
                     """,
                     [(1001,), (1002,), (1003,), (1004,)],
                 )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_serial_predation_candidates (
+                        person_id, risk_lane, status, risk_score,
+                        harm_drive, inhibition, control, exposure_noise,
+                        organized_serial_risk, disorganized_serial_risk,
+                        last_checked_year
+                    )
+                    VALUES (1, 'organized', 'active', 0.72,
+                            0.82, 0.04, 0.76, 0.18,
+                            0.72, 0.03, 1000)
+                    """
+                )
                 append_simulation_event_rows(
                     conn,
                     "default",
@@ -761,6 +774,9 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertGreater(h.average_serial_predator_propensity or 0.0, 0.20)
             self.assertEqual(h.event_year_span, 2)
             self.assertEqual(h.murder_events, 2)
+            self.assertEqual(h.ordinary_murder_events, 1)
+            self.assertEqual(h.predatory_murder_events, 1)
+            self.assertEqual(h.serial_predatory_murder_events, 0)
             self.assertEqual(h.serial_predator_candidate_events, 1)
             self.assertEqual(h.distinct_murder_killers, 2)
             self.assertEqual(h.repeat_murder_killers_2plus, 0)
@@ -825,7 +841,9 @@ class TestEventHistoryReport(unittest.TestCase):
                             {
                                 "killer_person_id": killer_id,
                                 "victim_person_id": victim_id,
-                                "incident_kind": "murder",
+                                "incident_kind": (
+                                    "predatory_murder" if killer_id == 1 else "murder"
+                                ),
                             },
                         )
                     )
@@ -844,6 +862,8 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertEqual(h.repeat_murder_killers_2plus, 1)
             self.assertEqual(h.serial_murder_killers_3plus, 1)
             self.assertEqual(h.serial_murder_events_by_3plus_killers, 3)
+            self.assertEqual(h.predatory_murder_events, 3)
+            self.assertEqual(h.serial_predatory_murder_events, 0)
             self.assertAlmostEqual(h.serial_murder_event_share_3plus or 0.0, 0.03)
             self.assertEqual(h.serial_murder_target_share_max, 0.01)
             self.assertEqual(h.serial_murder_calibration_status, "above_real_life_guardrail")
@@ -889,6 +909,73 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertEqual(h.serial_murder_emergence_min_murder_sample, 500)
             self.assertEqual(h.serial_murder_emergence_status, "no_serial_murder_emerged")
 
+    def test_hybrid_population_calibration_excludes_feud_and_non_murder_violence_from_serial(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            save = root / "save.sqlite"
+            with closing(sqlite3.connect(save)) as conn:
+                conn.row_factory = sqlite3.Row
+                ensure_checkpoint_schema(conn)
+                for person_id in range(1, 130):
+                    _insert_person(conn, person_id, f"P{person_id}", "Vale")
+                events = [
+                    (
+                        1000 + i,
+                        "murder",
+                        {
+                            "killer_person_id": 1 if i < 3 else i + 2,
+                            "victim_person_id": 120 - (i % 20),
+                            "incident_kind": "feud_murder" if i < 3 else "murder",
+                        },
+                    )
+                    for i in range(100)
+                ]
+                events.extend(
+                    [
+                        (
+                            1101,
+                            "property_crime",
+                            {"perpetrator_person_id": 1, "target_person_id": 4},
+                        ),
+                        (
+                            1102,
+                            "outlaw_raid",
+                            {"person_id": 1, "casualties": 3},
+                        ),
+                        (
+                            1103,
+                            "battle_fought",
+                            {"commander_person_id": 1, "casualties": 30},
+                        ),
+                        (
+                            1104,
+                            "legal_adjudication",
+                            {"accused_person_id": 1, "outcome": "execution"},
+                        ),
+                    ]
+                )
+                append_simulation_event_rows(
+                    conn,
+                    "default",
+                    events,
+                    created_at="2026-01-01T00:00:00+00:00",
+                )
+                conn.commit()
+
+                report = build_event_history_report(conn, save_path=save, sample_limit=0)
+
+            h = report.hybrid_population_calibration
+            self.assertEqual(h.murder_events, 100)
+            self.assertEqual(h.repeat_murder_killers_2plus, 1)
+            self.assertEqual(h.serial_murder_killers_3plus, 0)
+            self.assertEqual(h.serial_murder_events_by_3plus_killers, 0)
+            self.assertEqual(h.ordinary_murder_events, 97)
+            self.assertEqual(h.feud_revenge_murder_events, 3)
+            self.assertEqual(h.outlaw_raid_killing_events, 1)
+            self.assertEqual(h.war_political_legal_killing_events, 2)
+            self.assertEqual(h.predatory_murder_events, 0)
+            self.assertEqual(h.serial_predatory_murder_events, 0)
+
     def test_hybrid_population_calibration_flags_serial_emergence_within_guardrail(
         self,
     ) -> None:
@@ -903,15 +990,21 @@ class TestEventHistoryReport(unittest.TestCase):
                 events = []
                 for i in range(500):
                     killer_id = 1 if i < 3 else i + 2
+                    payload = {
+                        "killer_person_id": killer_id,
+                        "victim_person_id": 649 - (i % 100),
+                        "incident_kind": (
+                            "predatory_murder" if killer_id == 1 else "murder"
+                        ),
+                    }
+                    if killer_id == 1:
+                        payload["hidden_linked_kill_count"] = i + 1
+                        payload["serial_murder_classification"] = i >= 2
                     events.append(
                         (
                             1000 + i,
                             "murder",
-                            {
-                                "killer_person_id": killer_id,
-                                "victim_person_id": 649 - (i % 100),
-                                "incident_kind": "murder",
-                            },
+                            payload,
                         )
                     )
                 append_simulation_event_rows(
@@ -928,6 +1021,8 @@ class TestEventHistoryReport(unittest.TestCase):
             self.assertEqual(h.murder_events, 500)
             self.assertEqual(h.serial_murder_killers_3plus, 1)
             self.assertEqual(h.serial_murder_events_by_3plus_killers, 3)
+            self.assertEqual(h.predatory_murder_events, 2)
+            self.assertEqual(h.serial_predatory_murder_events, 1)
             self.assertAlmostEqual(h.serial_murder_event_share_3plus or 0.0, 0.006)
             self.assertEqual(h.serial_murder_calibration_status, "within_real_life_guardrail")
             self.assertEqual(h.serial_murder_emergence_status, "serial_murder_emerged")

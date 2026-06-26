@@ -4403,3 +4403,224 @@ completion.
   unit_test.test_world_map_roads.TestWorldMapRoads.test_terrain_route_uses_polygon_boundary_corner_waypoints`
 - `python -c "from utils.gradio_data_browser import build_app; app =
   build_app('default'); print(type(app).__name__)"`
+
+## 2026-06-25 - Gradio World Map Feature Controls And Road Shape
+
+### Fixes
+
+- Split the Gradio World Map `Places` behavior from natural `Features`: places
+  now hide only settlement and outlaw-refuge layers, while features have their
+  own checkbox and stay rendered independently.
+- Changed `Places`, `Features`, and `Labels` toggles to use the same lightweight
+  DOM/CSS visibility path as routes and polities, avoiding a fresh Python SVG
+  render for first-time label/place toggles.
+- Rendered natural feature layers regardless of settlement overlay presence, so
+  forests, streams, bays, and similar generated landmarks are not suppressed by
+  enabling place overlays.
+- Suppressed nearby generic same-kind feature labels when a local named feature
+  has no direct `source_region_feature_id`, preventing named streams/bays/etc.
+  from appearing alongside a generic `Stream` or `Bay` label at the same spot.
+- Strengthened long land-safe road naturalization with a broader three-waypoint
+  bow before falling back to smaller bends, reducing visibly straight road
+  chords while keeping land/channel safety checks.
+
+### Validation
+
+- `python -m py_compile utils\gradio_data_browser.py library\world_map_svg.py
+  library\world_map_roads.py unit_test\test_gradio_data_browser.py
+  unit_test\test_world_map_roads.py`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_roads_and_checkbox_hides_them
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_named_feature_replaces_nearby_generic_feature_label`
+- `python -m unittest unit_test.test_world_map_roads`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_generated_svg
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_html_renders_outlaw_refuges_and_selection_detail
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_click_handler_accepts_towns_and_features
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_overlays_read_named_features_from_local_geography
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_world_map_overlays_read_keyed_place_schema_through_readable_views`
+- `python -c "import time; from utils.gradio_data_browser import build_app;
+  t=time.perf_counter(); app=build_app('default'); print('build_app',
+  round(time.perf_counter()-t,3), 'dependencies', len(app.fns))"`
+
+## 2026-06-25 - Serious Crime Knowledge And Serial Predation V1
+
+### Enhancements
+
+- Split detailed murder events into omniscient truth plus public/legal
+  knowledge fields, including discovery, evidence, witnesses, kin pressure,
+  authority capacity, public suspicion, pattern recognition, and offender
+  identity confidence.
+- Added cached `simulation_serial_predation_candidates` save state with gated
+  organized/disorganized risk components, candidate status, next-check year,
+  linked-kill counts, public suspicion, and identity confidence.
+- Replaced the old additive repeat/serial propensity behavior with hard-gated
+  `serial_predation_risk(...)`; ordinary murder volume remains controlled by
+  `incident_rates.csv`, not serial risk.
+- Restricted strict `serial_murder_*` report semantics to repeated separate
+  `predatory_murder` incidents while preserving broad repeat-murder diagnostics.
+- Updated event records, event prose, Gradio murder cards, and outlaw-case
+  display so normal public/history views do not name the true offender unless
+  public identity confidence is high; admin truth still shows the true killer.
+
+### Validation
+
+- `python -m py_compile library/event_scoring.py library/simulation_context.py
+  library/world_save.py library/simulation_incidents.py
+  library/simulation_outlaws.py library/event_prose.py
+  library/event_history_report.py utils/gradio_data_browser.py
+  unit_test/test_event_scoring.py unit_test/test_simulation_incidents.py
+  unit_test/test_event_memory_lifecycle.py unit_test/test_event_history_report.py
+  unit_test/test_mixed_mode_calibration.py unit_test/test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_event_scoring
+  unit_test.test_event_memory_lifecycle unit_test.test_event_history_report
+  unit_test.test_mixed_mode_calibration`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_murder_tick_records_event_kills_victim_and_persists_rumor
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_murder_context_records_clear_motive_and_justice_drivers
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_recorded_murder_payload_and_outlaw_case_use_crime_context
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_predatory_murder_classification_requires_repeated_separate_predation
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_murder_tick_allows_population_scaled_multiple_events`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_history_browser_separates_public_unknown_rumored_known_and_admin_truth
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_murder_event_names_killer_and_victim
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_compact_property_crime_uses_readable_place_columns`
+- Bundled-Python smoke:
+  `python utils/run_population_simulation.py --world-id temp_serial_v1_smoke
+  --reset-world --years 5 --starting-couples 10 --seed 20260625
+  --use-nondetailed-directory --skip-report-files --skip-timing-log`;
+  elapsed `29.55s` reported by the script and `29.937s` wall-clock, ending with
+  52 detailed alive and 2,543 non-detailed alive.
+
+## 2026-06-25 - Serious Crime Taxonomy And Serial Predation V2
+
+### Enhancements
+
+- Added shared serious-crime taxonomy helpers for `ordinary_murder`,
+  `feud_revenge_murder`, `robbery_property_murder`, `outlaw_raid_killing`,
+  `war_political_legal_killing`, `spree_panic_killing`,
+  `predatory_murder`, and `serial_predatory_murder`.
+- Murder payloads now store `murder_taxonomy`,
+  `serious_crime_category`, `serious_crime_category_label`, and
+  `serial_classification_eligible`; the serial-predatory category is emitted
+  only once a predatory linked-kill pattern reaches the existing internal
+  serial threshold.
+- Added hybrid report and mixed-mode TSV columns for the new category counts,
+  while keeping broad repeat-murder diagnostics separate from strict
+  predatory-serial `serial_murder_*` semantics.
+- Updated admin event prose to show the factual category, and updated normal
+  Gradio murder detail cards to avoid exposing a hidden
+  `serial_predatory_murder` label unless the public pattern is recognized.
+- Left murder volume, target selection, serial candidate gates, and annual
+  person scanning unchanged; V2 is classification/reporting only.
+
+### Validation
+
+- `python -m py_compile library/serious_crime_taxonomy.py
+  library/simulation_incidents.py library/event_history_report.py
+  library/event_prose.py utils/gradio_data_browser.py
+  utils/run_mixed_mode_calibration.py unit_test/test_simulation_incidents.py
+  unit_test/test_event_history_report.py unit_test/test_mixed_mode_calibration.py
+  unit_test/test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_event_history_report
+  unit_test.test_mixed_mode_calibration`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_recorded_murder_payload_and_outlaw_case_use_crime_context
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_predatory_murder_classification_requires_repeated_separate_predation`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_compact_property_crime_uses_readable_place_columns
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_murder_event_names_killer_and_victim`
+- `python -m unittest unit_test.test_event_memory_lifecycle
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_recorded_murder_payload_and_outlaw_case_use_crime_context
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_predatory_murder_classification_requires_repeated_separate_predation
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_murder_event_names_killer_and_victim`
+- Short timing smoke:
+  `python utils/run_population_simulation.py --world-id temp_serial_v2_smoke
+  --reset-world --years 3 --starting-couples 10 --seed 20260625
+  --use-nondetailed-directory --skip-report-files --skip-timing-log`;
+  elapsed `23.13s`, ending with 34 detailed alive and 2,511 non-detailed alive.
+
+## 2026-06-25 - Serial Predation Event-Driven Opportunity V3
+
+### Enhancements
+
+- Replaced murder-sampling-time serial candidate refresh of the whole sampled
+  adult pool with event-driven candidate checks:
+  - existing candidate rows due by `next_check_year`;
+  - newly adult detailed people;
+  - promotion/job/location/release-or-escape/trait-recalculation event payloads;
+  - successful serious-crime actors.
+- Candidate rows now keep bounded trigger metadata in `details_json`, including
+  last trigger, trigger year, trigger count, and recent trigger history.
+- Added abstract `serial_predation_opportunity_score` for already-active
+  candidates, based on broad oversight gap, social access, mobility/isolation,
+  stress, and prior hidden pattern; this only modulates repeat selection and
+  predatory classification after ordinary murder gates pass.
+- Hardened active serial-predation incidents to use strict
+  `predatory_murder` rather than a catalog synonym, preserving the strict V1/V2
+  serial classification semantics.
+- Left homicide event volume, annual caps, world throttle, hard risk gates, and
+  target-selection model unchanged.
+
+### Validation
+
+- `python -m py_compile library/simulation_incidents.py
+  unit_test/test_simulation_incidents.py library/event_history_report.py
+  utils/run_mixed_mode_calibration.py`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_serial_candidate_refresh_uses_event_triggers_not_broad_adult_scan
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_successful_murder_triggers_candidate_evaluation
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_murder_sampling_uses_existing_candidate_rows_without_broad_refresh`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_recorded_murder_payload_and_outlaw_case_use_crime_context
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_predatory_murder_classification_requires_repeated_separate_predation
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_murder_sampling_uses_existing_candidate_rows_without_broad_refresh`
+- `python -m unittest unit_test.test_event_history_report
+  unit_test.test_mixed_mode_calibration`
+- Short timing smoke:
+  `python utils/run_population_simulation.py --world-id temp_serial_v3_smoke
+  --reset-world --years 3 --starting-couples 10 --seed 20260625
+  --use-nondetailed-directory --skip-report-files --skip-timing-log`;
+  elapsed `18.33s`, ending with 34 detailed alive and 2,511 non-detailed alive.
+
+## 2026-06-25 - Serious Crime Justice And Pattern Lifecycle V4
+
+### Enhancements
+
+- Added a bounded murder `justice_response` consequence that turns existing
+  witness, kin, authority, evidence, suspicion, and pattern scores into
+  abstract response levels, pursuit pressure, accusation pressure, kin
+  vengeance pressure, offender panic pressure, public case status, pattern
+  status, and coarse public/legal actions.
+- Persisted abstract accusation, infamy, and public pattern consequences through
+  existing legal-fallout, reputation-mark, and faction-memory read models only
+  when public/legal knowledge plausibly supports them.
+- Updated active serial-predation candidate rows with hidden heat, latest
+  justice response level, pursuit pressure, panic pressure, case status, and
+  pattern status; public pattern recognition can add `violet_marginalia`.
+- Exposed the new justice and pattern pressures in event-history summaries and
+  normal Gradio murder detail cards without revealing hidden offender truth.
+- Left homicide event volume, target selection, serial candidate gates, broad
+  annual scanning, schema version, detailed investigations, and tactical witness
+  behavior unchanged.
+
+### Validation
+
+- `python -m py_compile library/simulation_incidents.py
+  library/event_history_report.py utils/gradio_data_browser.py
+  unit_test/test_simulation_incidents.py`
+- `python -m unittest
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_recorded_murder_payload_and_outlaw_case_use_crime_context
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_murder_justice_response_persists_legal_fallout_and_infamy
+  unit_test.test_simulation_incidents.TestSimulationIncidents.test_predatory_murder_classification_requires_repeated_separate_predation`
+- `python -m unittest unit_test.test_event_history_report
+  unit_test.test_mixed_mode_calibration`
+- `python -m unittest
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_compact_property_crime_uses_readable_place_columns
+  unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_murder_event_names_killer_and_victim`
+- `python -m unittest unit_test.test_event_memory_lifecycle`
+- Short timing smoke:
+  `python utils/run_population_simulation.py --world-id temp_serial_v4_smoke
+  --reset-world --years 3 --starting-couples 10 --seed 20260625
+  --use-nondetailed-directory --skip-report-files --skip-timing-log`;
+  elapsed `19.13s`, ending with 34 detailed alive and 2,511 non-detailed alive.

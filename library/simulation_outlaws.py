@@ -1333,16 +1333,26 @@ def outlaw_case_from_murder(
     justice_pressure = clamp01(crime_context.get("justice_pressure_score", 0.0) or 0.0)
     witness_power = clamp01(crime_context.get("witness_status_power_01", 0.0) or 0.0)
     kin_power = clamp01(crime_context.get("victim_kin_power_01", 0.0) or 0.0)
+    evidence_strength = clamp01(crime_context.get("evidence_strength", 0.0) or 0.0)
+    public_suspicion = clamp01(crime_context.get("public_suspicion_score", 0.0) or 0.0)
+    identity_confidence = clamp01(
+        crime_context.get("offender_identity_confidence", 0.0) or 0.0
+    )
+    offender_identified = bool(crime_context.get("offender_identified")) or identity_confidence >= 0.60
     seen_identified = bool(crime_context.get("seen_identified", bool(witness_ids)))
-    base_knownness = 0.35 + len(witness_ids) * 0.12 + importance * 0.35
+    base_knownness = identity_confidence
     context_knownness = (
-        0.24
-        + (0.22 if seen_identified else 0.0)
+        0.08
+        + (0.18 if offender_identified else 0.0)
         + min(0.20, len(witness_ids) * 0.07)
         + witness_power * 0.14
         + kin_power * 0.10
-        + justice_pressure * 0.18
+        + justice_pressure * 0.12
+        + evidence_strength * 0.18
     )
+    knownness = max(base_knownness, context_knownness)
+    if not offender_identified:
+        knownness = min(knownness, 0.55)
     case = open_outlaw_case(
         ctx,
         year=int(year),
@@ -1350,7 +1360,7 @@ def outlaw_case_from_murder(
         offense_type="murder",
         offense_kind=kind,
         severity_01=0.74 + importance * 0.18 + kind_bonus + justice_pressure * 0.10,
-        knownness_01=max(base_knownness, context_knownness),
+        knownness_01=knownness,
         source_event_key=(
             f"murder:{getattr(incident.killer, 'person_id')}:"
             f"{getattr(incident.victim, 'person_id')}:{int(year)}"
@@ -1361,6 +1371,10 @@ def outlaw_case_from_murder(
             "witness_count": len(witness_ids),
             "crime_context": crime_context,
             "justice_pressure_score": round(float(justice_pressure), 5),
+            "evidence_strength": round(float(evidence_strength), 5),
+            "public_suspicion_score": round(float(public_suspicion), 5),
+            "offender_identified": bool(offender_identified),
+            "offender_identity_confidence": round(float(identity_confidence), 5),
             "retaliation_risk_score": round(
                 float(crime_context.get("retaliation_risk_score", 0.0) or 0.0), 5
             ),

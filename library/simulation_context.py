@@ -239,6 +239,7 @@ class SimulationContext:
     outlaw_cases: dict[str, SimulationOutlawCase] = field(default_factory=dict)
     outlaw_refuges: dict[str, SimulationOutlawRefuge] = field(default_factory=dict)
     outlaw_custodies: dict[str, SimulationOutlawCustody] = field(default_factory=dict)
+    serial_predation_candidates: dict[int, dict[str, Any]] = field(default_factory=dict)
     current_people_ids: set[int] = field(default_factory=set)
     couples: list[tuple[int, int]] = field(default_factory=list)
     paramours: list[tuple[int, int]] = field(default_factory=list)

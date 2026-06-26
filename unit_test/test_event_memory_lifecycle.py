@@ -218,8 +218,9 @@ class TestEventMemoryLifecycle(unittest.TestCase):
                     )
                 }
 
-            self.assertEqual(summary.records_lost, 3)
+            self.assertEqual(summary.records_lost, 4)
             self.assertEqual(str(rows["default"]["visibility_state"]), "lost")
+            self.assertEqual(str(rows["public_suspicious_death"]["visibility_state"]), "lost")
             self.assertEqual(str(rows["unknown_notice"]["visibility_state"]), "lost")
             self.assertEqual(str(rows["false_accusation"]["visibility_state"]), "lost")
             self.assertEqual(int(rows["unknown_notice"]["lost_year"]), 1100)
@@ -283,6 +284,7 @@ class TestEventMemoryLifecycle(unittest.TestCase):
                                source_institution_id, confidence, distortion_json
                         FROM simulation_event_records_readable
                         WHERE event_id IN (?, ?)
+                          AND record_key = 'default'
                         """,
                         (murder_id, knowledge_id),
                     )

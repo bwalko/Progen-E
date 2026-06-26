@@ -45,6 +45,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from library.simulation_outlaws import outlaw_refuge_display_name
+from library.serious_crime_taxonomy import (
+    murder_payload_taxonomy_category,
+    serious_crime_category_label,
+)
 
 CONFIG_DIR = PROJECT_ROOT / "config"
 WORLDS_DIR = PROJECT_ROOT / "worlds"
@@ -689,6 +693,23 @@ body.dark .place-sheet,
     display: none;
     pointer-events: none;
 }
+.world-map-card[data-places-visible="0"] svg [data-map-overlay-layer="settlements"],
+.world-map-card[data-places-visible="0"] svg [data-map-overlay-layer="outlaw-refuges"] {
+    display: none;
+    pointer-events: none;
+}
+.world-map-card[data-features-visible="0"] svg [data-map-overlay-layer="features"] {
+    display: none;
+    pointer-events: none;
+}
+.world-map-card[data-labels-visible="0"] svg .feature-label,
+.world-map-card[data-labels-visible="0"] svg .region-label,
+.world-map-card[data-labels-visible="0"] svg .settlement-label,
+.world-map-card[data-labels-visible="0"] svg .outlaw-refuge-label,
+.world-map-card[data-labels-visible="0"] svg .polity-label {
+    display: none;
+    pointer-events: none;
+}
 .map-controls {
     display: flex;
     gap: 8px;
@@ -1255,6 +1276,7 @@ def render_world_map_html(
     include_inactive_settlements: bool = False,
     include_roads: bool = True,
     include_polities: bool = True,
+    include_features: bool = True,
 ) -> str:
     world_id = (world or "").strip() or "default"
     cfg = _db_path(world_id, "Config DB")
@@ -1267,22 +1289,34 @@ def render_world_map_html(
     save = _db_path(world_id, "Save DB")
     rendered = _render_world_map_html_cached(
         world_id,
-        bool(include_overlays),
         bool(include_inactive_settlements),
         bool(noisy_edges),
-        bool(labels),
         str(cfg),
         _sqlite_file_fingerprint(cfg),
         str(save),
         _sqlite_file_fingerprint(save),
     )
+    include_routes = bool(include_roads)
+    include_polity_layer = bool(include_polities)
     return rendered.replace(
         'data-routes-visible="1"',
-        f'data-routes-visible="{1 if include_roads else 0}"',
+        f'data-routes-visible="{1 if include_routes else 0}"',
         1,
     ).replace(
         'data-polities-visible="1"',
-        f'data-polities-visible="{1 if include_polities else 0}"',
+        f'data-polities-visible="{1 if include_polity_layer else 0}"',
+        1,
+    ).replace(
+        'data-places-visible="1"',
+        f'data-places-visible="{1 if include_overlays else 0}"',
+        1,
+    ).replace(
+        'data-features-visible="1"',
+        f'data-features-visible="{1 if include_features else 0}"',
+        1,
+    ).replace(
+        'data-labels-visible="1"',
+        f'data-labels-visible="{1 if labels else 0}"',
         1,
     )
 
@@ -1290,10 +1324,8 @@ def render_world_map_html(
 @lru_cache(maxsize=32)
 def _render_world_map_html_cached(
     world_id: str,
-    include_overlays: bool,
     include_inactive_settlements: bool,
     noisy_edges: bool,
-    labels: bool,
     cfg_path: str,
     cfg_fingerprint: str,
     save_path: str,
@@ -1309,22 +1341,18 @@ def _render_world_map_html_cached(
             str(save),
             _save_fingerprint,
         )
-        overlays = (
-            load_world_map_overlays(
-                geometry=geometry,
-                save_db_path=save,
-                include_inactive_settlements=include_inactive_settlements,
-                include_roads=True,
-            )
-            if include_overlays
-            else None
+        overlays = load_world_map_overlays(
+            geometry=geometry,
+            save_db_path=save,
+            include_inactive_settlements=include_inactive_settlements,
+            include_roads=True,
         )
         svg = render_world_map_svg(
             geometry,
             width=1200,
             height=800,
             noisy_edges=bool(noisy_edges),
-            labels=bool(labels),
+            labels=True,
             overlays=overlays,
         )
     except Exception as exc:
@@ -1333,14 +1361,10 @@ def _render_world_map_html_cached(
             f'<p class="place-muted">Could not render world map: {html.escape(str(exc))}</p>'
             "</div>"
         )
-    if include_overlays and include_inactive_settlements:
-        overlay_text = "active and inactive settlements plus polities"
+    if include_inactive_settlements:
+        overlay_text = "active and inactive settlement overlays, routes, polities, natural features and outlaw refuges"
     else:
-        overlay_text = "active settlements and polities" if include_overlays else "base geography only"
-    if include_overlays:
-        overlay_text = overlay_text.replace("settlements", "settlements, roads and sea lanes")
-    if include_overlays:
-        overlay_text = overlay_text.replace("polities", "polities and outlaw refuges")
+        overlay_text = "active settlement overlays, routes, polities, natural features and outlaw refuges"
     zoom_sync = world_map_zoom_sync_script("s")
     controls = (
         '<div class="map-controls">'
@@ -1355,9 +1379,10 @@ def _render_world_map_html_cached(
     )
     return (
         '<div class="place-sheet world-map-card" data-routes-visible="1" data-polities-visible="1" '
+        'data-places-visible="1" data-features-visible="1" data-labels-visible="1" '
         f'onclick="{_world_map_click_onclick()}">'
         f"<h2>{html.escape(world_id)} World Map</h2>"
-        f'<p class="place-muted">Generated polygon geography; showing {html.escape(overlay_text)}. '
+        f'<p class="place-muted">Generated polygon geography; {html.escape(overlay_text)} available. '
         "Click a region, settlement, outlaw refuge, or named feature to open its detail sheet. Use the mouse wheel or drag to zoom and pan.</p>"
         f"{controls}"
         f"{svg}"
@@ -1380,6 +1405,36 @@ def _world_map_toggle_polities_js() -> str:
         "(visible)=>{"
         "const enabled=visible?'1':'0';"
         "document.querySelectorAll('.world-map-card').forEach(card=>{card.dataset.politiesVisible=enabled;});"
+        "return [];"
+        "}"
+    )
+
+
+def _world_map_toggle_places_js() -> str:
+    return (
+        "(visible)=>{"
+        "const enabled=visible?'1':'0';"
+        "document.querySelectorAll('.world-map-card').forEach(card=>{card.dataset.placesVisible=enabled;});"
+        "return [];"
+        "}"
+    )
+
+
+def _world_map_toggle_features_js() -> str:
+    return (
+        "(visible)=>{"
+        "const enabled=visible?'1':'0';"
+        "document.querySelectorAll('.world-map-card').forEach(card=>{card.dataset.featuresVisible=enabled;});"
+        "return [];"
+        "}"
+    )
+
+
+def _world_map_toggle_labels_js() -> str:
+    return (
+        "(visible)=>{"
+        "const enabled=visible?'1':'0';"
+        "document.querySelectorAll('.world-map-card').forEach(card=>{card.dataset.labelsVisible=enabled;});"
         "return [];"
         "}"
     )
@@ -5006,6 +5061,33 @@ def _decode_outlaw_case_key(value: object) -> dict[str, object]:
     return decoded if isinstance(decoded, dict) else {}
 
 
+def _outlaw_case_details(row: sqlite3.Row) -> dict[str, object]:
+    raw = _row_value(row, "details_json")
+    if raw in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _outlaw_murder_identity_public(row: sqlite3.Row) -> bool:
+    details = _outlaw_case_details(row)
+    context = details.get("crime_context")
+    if not isinstance(context, dict):
+        context = {}
+    if bool(details.get("offender_identified") or context.get("offender_identified")):
+        return True
+    confidence = _event_float_value(
+        details.get("offender_identity_confidence")
+        or context.get("offender_identity_confidence")
+    )
+    if confidence >= 0.60:
+        return True
+    return _event_float_value(_row_value(row, "knownness_01")) >= 0.70
+
+
 def load_outlaw_cases_browser(
     world: str,
     status_filter: str,
@@ -6014,6 +6096,13 @@ def _event_float(payload: dict[str, object], key: str) -> float | None:
         return None
 
 
+def _event_float_value(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _person_list_text(
     con: sqlite3.Connection,
     world: str,
@@ -6260,6 +6349,32 @@ def _event_murder_sentence(
     motive = _event_crime_motive_text(payload)
     context = [part for part in (incident_kind, motive) if part]
     tail = f"; {'; '.join(context)}" if context else ""
+    confidence = _event_float_value(
+        payload.get("offender_identity_confidence")
+        or _event_crime_context_value(payload, "offender_identity_confidence")
+    )
+    identified = bool(
+        payload.get("offender_identified")
+        or _event_crime_context_value(payload, "offender_identified")
+        or confidence >= 0.60
+    )
+    discovered = bool(
+        payload.get("discovered")
+        or _event_crime_context_value(payload, "discovered")
+        or payload.get("body_or_evidence_found")
+        or _event_crime_context_value(payload, "body_or_evidence_found")
+    )
+    pattern_tail = (
+        " Authorities suspected a link to earlier deaths."
+        if bool(payload.get("pattern_recognized") or payload.get("public_pattern_recognized"))
+        else ""
+    )
+    if not identified:
+        if not discovered:
+            return f"{victim} disappeared near {_event_place_text(con, world, payload)}{tail}.{pattern_tail}"
+        if _same_person_id(victim_id, focus_person_id):
+            return f"{victim} was the victim of an unresolved killing{tail}.{pattern_tail}"
+        return f"An unresolved killing involving {victim} was recorded{tail}.{pattern_tail}"
     if _same_person_id(victim_id, focus_person_id):
         return f"{victim} was killed by {killer}{tail}."
     if _same_person_id(killer_id, focus_person_id):
@@ -6284,19 +6399,64 @@ def _event_murder_sentence_html(
         or _event_crime_context_value(payload, "motive_category"),
         "",
     )
+    category_label = _event_public_murder_category_label(payload)
+    confidence = _event_float_value(
+        payload.get("offender_identity_confidence")
+        or _event_crime_context_value(payload, "offender_identity_confidence")
+    )
+    identified = bool(
+        payload.get("offender_identified")
+        or _event_crime_context_value(payload, "offender_identified")
+        or confidence >= 0.60
+    )
+    discovered = bool(
+        payload.get("discovered")
+        or _event_crime_context_value(payload, "discovered")
+        or payload.get("body_or_evidence_found")
+        or _event_crime_context_value(payload, "body_or_evidence_found")
+    )
+    pattern_tail = (
+        " Authorities suspected a link to earlier deaths."
+        if bool(payload.get("pattern_recognized") or payload.get("public_pattern_recognized"))
+        else ""
+    )
     details = _event_details_html(
         ("kind", incident_kind),
+        ("category", category_label),
         ("motive", motive),
         ("motive category", motive_category),
+        ("justice response", _event_label_text(payload.get("justice_response_level"), "")),
         ("justice pressure", _fmt_number(payload.get("justice_pressure_score"), 3)),
+        ("pursuit pressure", _fmt_number(payload.get("pursuit_pressure_score"), 3)),
+        ("accusation pressure", _fmt_number(payload.get("accusation_pressure_score"), 3)),
+        ("case status", _event_label_text(payload.get("public_case_status"), "")),
+        ("evidence", _fmt_number(payload.get("evidence_strength"), 3)),
+        ("identity confidence", _fmt_number(confidence, 3)),
         ("retaliation risk", _fmt_number(payload.get("retaliation_risk_score"), 3)),
         ("place", _event_place_text(con, world, payload)),
     )
+    if not identified:
+        if not discovered:
+            return f"{victim} disappeared near {html.escape(_event_place_text(con, world, payload))}." + details
+        if _same_person_id(victim_id, focus_person_id):
+            return f"{victim} was the victim of an unresolved killing.{html.escape(pattern_tail)}" + details
+        return f"An unresolved killing involving {victim} was recorded.{html.escape(pattern_tail)}" + details
     if _same_person_id(victim_id, focus_person_id):
         return f"{victim} was killed by {killer}." + details
     if _same_person_id(killer_id, focus_person_id):
         return f"{killer} killed {victim}." + details
     return f"{killer} killed {victim}." + details
+
+
+def _event_public_murder_category_label(payload: dict[str, object]) -> str:
+    category = murder_payload_taxonomy_category(payload)
+    if category == "serial_predatory_murder" and not bool(
+        payload.get("public_pattern_recognized")
+        or payload.get("pattern_recognized")
+        or _event_crime_context_value(payload, "pattern_recognized")
+    ):
+        category = "predatory_murder"
+    return serious_crime_category_label(category)
 
 
 def _event_label_text(value: object, default: str = "unknown") -> str:
@@ -8833,7 +8993,10 @@ def _person_outlaw_case_items_html(
         ).replace("_", " ")
         offense_type = str(_row_value(row, "offense_type") or "").strip().lower()
         if offense_type == "murder" and affected not in (None, ""):
-            visible_line = f"{accused} murdered {affected_html}"
+            if _outlaw_murder_identity_public(row):
+                visible_line = f"{accused} murdered {affected_html}"
+            else:
+                visible_line = f"{accused} was accused after {affected_html}'s killing"
         elif affected not in (None, ""):
             visible_line = f"{accused} committed {html.escape(offense)} against {affected_html}"
         else:
@@ -9005,6 +9168,14 @@ def _person_outlaw_case_lines(
         offense = str(
             _row_value(row, "offense_kind") or _row_value(row, "offense_type") or "outlaw case"
         ).replace("_", " ")
+        offense_type = str(_row_value(row, "offense_type") or "").strip().lower()
+        if offense_type == "murder" and affected_id not in (None, ""):
+            if _outlaw_murder_identity_public(row):
+                accusation = f"accused {accused}; affected {affected}"
+            else:
+                accusation = f"accused after {affected}'s killing; affected {affected}"
+        else:
+            accusation = f"accused {accused}; affected {affected}"
         resolution = _row_value(row, "resolution") or "unresolved"
         refuge = _outlaw_case_refuge_label(con, world, row) or "none"
         custody_bits = _detail_bits(
@@ -9028,7 +9199,7 @@ def _person_outlaw_case_lines(
         lines.append(
             f"- {_year_span_text(_row_value(row, 'start_year'), _row_value(row, 'resolved_year'))}: "
             f"{offense}; role {_person_outlaw_case_role(row, focus_person_id)}; "
-            f"accused {accused}; affected {affected}; "
+            f"{accusation}; "
             f"status {str(_row_value(row, 'status') or 'active')}; resolution {resolution}; "
             f"severity {_fmt_number(_row_value(row, 'severity_01'))}; "
             f"knownness {_fmt_number(_row_value(row, 'knownness_01'))}; "
@@ -14419,7 +14590,8 @@ def render_world_map_selection_detail(world: str, selection_json: str) -> str:
 
 def render_world_map_with_detail_reset(
     world: str,
-    include_overlays: bool = True,
+    include_places: bool = True,
+    include_features: bool = True,
     include_inactive_settlements: bool = False,
     noisy_edges: bool = True,
     labels: bool = True,
@@ -14429,12 +14601,13 @@ def render_world_map_with_detail_reset(
     return (
         render_world_map_html(
             world,
-            include_overlays=include_overlays,
+            include_overlays=include_places,
             noisy_edges=noisy_edges,
             labels=labels,
             include_inactive_settlements=include_inactive_settlements,
             include_roads=include_roads,
             include_polities=include_polities,
+            include_features=include_features,
         ),
         '<div class="place-sheet muted">Click a region, settlement, outlaw refuge, or named feature on the map to inspect it.</div>',
     )
@@ -15311,6 +15484,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             with gr.Row(elem_classes=["world-browser"]):
                 map_world = gr.Dropdown(worlds, value=initial_world, label="World")
                 map_include_overlays = gr.Checkbox(value=True, label="Places")
+                map_include_features = gr.Checkbox(value=True, label="Features")
                 map_include_inactive_settlements = gr.Checkbox(value=False, label="Inactive Settlements")
                 map_include_polities = gr.Checkbox(value=True, label="Polities")
                 map_include_roads = gr.Checkbox(value=True, label="Routes")
@@ -15731,6 +15905,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
         map_inputs = [
             map_world,
             map_include_overlays,
+            map_include_features,
             map_include_inactive_settlements,
             map_noisy_edges,
             map_labels,
@@ -15741,12 +15916,28 @@ def build_app(default_world: str = "default") -> gr.Blocks:
         map_refresh.click(render_world_map_with_detail_reset, map_inputs, map_outputs)
         for map_input in [
             map_world,
-            map_include_overlays,
             map_include_inactive_settlements,
             map_noisy_edges,
-            map_labels,
         ]:
             map_input.change(render_world_map_with_detail_reset, map_inputs, map_outputs)
+        map_include_overlays.change(
+            fn=None,
+            inputs=map_include_overlays,
+            outputs=None,
+            js=_world_map_toggle_places_js(),
+        )
+        map_include_features.change(
+            fn=None,
+            inputs=map_include_features,
+            outputs=None,
+            js=_world_map_toggle_features_js(),
+        )
+        map_labels.change(
+            fn=None,
+            inputs=map_labels,
+            outputs=None,
+            js=_world_map_toggle_labels_js(),
+        )
         map_include_roads.change(
             fn=None,
             inputs=map_include_roads,

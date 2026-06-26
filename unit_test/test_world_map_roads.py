@@ -1115,9 +1115,9 @@ class TestWorldMapRoads(unittest.TestCase):
 
         road = _edge(roads, "a", "b")
         self.assertIsNotNone(road)
-        self.assertGreaterEqual(len(road.points), 4)
-        self.assertLess(_max_segment_fraction(road.points), 0.42)
-        self.assertGreater(max(abs(y - 0.50) for _x, y in road.points), 0.04)
+        self.assertGreaterEqual(len(road.points), 5)
+        self.assertLess(_max_segment_fraction(road.points), 0.34)
+        self.assertGreater(max(abs(y - 0.50) for _x, y in road.points), 0.06)
 
     def test_road_point_cleanup_prunes_tiny_hairpin_before_svg_smoothing(self) -> None:
         points = [(0.1, 0.1), (0.125, 0.102), (0.1008, 0.1006), (0.18, 0.12)]

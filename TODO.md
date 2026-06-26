@@ -236,11 +236,15 @@ the detailed-person sample should increasingly represent people with unusual
 importance, variance, or narrative salience.
 
 Completed context needed for future calibration work: detailed-selection
-variance, serial-predator scoring, report/TSV calibration metrics, resume-safe
-mixed-mode calibration batches, non-detailed city-directory calibration,
-full-population homicide accounting, detailed-cap report fields, and
-focused repeat-selection regression coverage are implemented. See `TODONE.md`
-for the full completion record.
+variance, cached serial-predation risk scoring, public/legal serious-crime
+knowledge separation, explicit serious-crime taxonomy buckets,
+event-driven serial-candidate trigger checks,
+bounded justice/pattern response lifecycle,
+strict predatory serial-murder report semantics,
+report/TSV calibration metrics, resume-safe mixed-mode calibration batches,
+non-detailed city-directory calibration, full-population homicide accounting,
+detailed-cap report fields, and focused repeat-selection regression coverage
+are implemented. See `TODONE.md` for the full completion record.
 
 Design intent:
 

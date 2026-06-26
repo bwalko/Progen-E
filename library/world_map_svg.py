@@ -912,25 +912,6 @@ def _feature_symbol_svg(
     )
 
 
-def _feature_is_near_settlement(
-    feature: RegionFeature,
-    settlements: list[SettlementMapOverlay],
-    *,
-    max_distance: float = 0.065,
-) -> bool:
-    if not settlements:
-        return True
-    max_d2 = float(max_distance) * float(max_distance)
-    for settlement in settlements:
-        if settlement.region_id != feature.region_id:
-            continue
-        dx = settlement.x - feature.x
-        dy = settlement.y - feature.y
-        if dx * dx + dy * dy <= max_d2:
-            return True
-    return False
-
-
 def _label_box(x: float, y: float, text: str, font_size: float, *, anchor: str = "start") -> _LabelBox:
     width = max(10.0, len(text) * font_size * 0.54)
     height = font_size * 1.25
@@ -1728,6 +1709,35 @@ def _prefer_named_feature_overlay(
         return candidate.naming_priority > existing.naming_priority
     if candidate.naming_settlement_id and not existing.naming_settlement_id:
         return True
+    return False
+
+
+def _feature_class_for_kind(kind: str) -> str:
+    return _FEATURE_CLASS_BY_KIND.get(str(kind or "").strip().lower(), "landform")
+
+
+def _named_overlay_shadows_region_feature(
+    feature: RegionFeature,
+    named_overlays: list[FeatureMapOverlay],
+) -> bool:
+    """Return true when a local named feature should replace a generic marker."""
+    feature_kind = str(feature.kind or "").strip().lower()
+    feature_class = str(feature.feature_class or "").strip().lower()
+    for named in named_overlays:
+        if named.source_region_feature_id and named.source_region_feature_id == feature.feature_id:
+            return True
+        if named.feature_id == feature.feature_id:
+            return True
+        if named.region_id != feature.region_id:
+            continue
+        named_kind = str(named.kind or "").strip().lower()
+        named_class = _feature_class_for_kind(named_kind)
+        if named_kind != feature_kind and named_class != feature_class:
+            continue
+        distance = math.hypot(float(named.x) - float(feature.x), float(named.y) - float(feature.y))
+        threshold = 0.075 if named_kind == feature_kind else 0.045
+        if distance <= threshold:
+            return True
     return False
 
 
@@ -2982,39 +2992,15 @@ def render_world_map_svg(
         feature_labels += 1
         return True
 
-    if overlay_settlements and not named_feature_overlays:
-        renderable_features = [
-            f for f in geometry.features if _feature_is_near_settlement(f, overlay_settlements)
-        ]
-    elif overlay_settlements:
-        named_ids = {f.feature_id for f in named_feature_overlays}
-        named_source_ids = {
-            f.source_region_feature_id
-            for f in named_feature_overlays
-            if f.source_region_feature_id
-        }
-        renderable_features = [
-            f
-            for f in geometry.features
-            if f.feature_id not in named_source_ids
-            and (
-                f.feature_id in named_ids
-                or _feature_is_near_settlement(f, overlay_settlements, max_distance=0.025)
-            )
-        ]
-    else:
-        named_source_ids = {
-            f.source_region_feature_id
-            for f in named_feature_overlays
-            if f.source_region_feature_id
-        }
-        renderable_features = [
-            f for f in geometry.features if f.feature_id not in named_source_ids
-        ]
+    renderable_features = [
+        f
+        for f in geometry.features
+        if not _named_overlay_shadows_region_feature(f, named_feature_overlays)
+    ]
     sorted_features = sorted(renderable_features, key=lambda f: (-f.importance, f.region_id, f.feature_id))
     drawn_named_ids: set[str] = set()
     for named in named_feature_overlays:
-        feature_class = _FEATURE_CLASS_BY_KIND.get(named.kind.strip().lower(), "landform")
+        feature_class = _feature_class_for_kind(named.kind)
         color = _FEATURE_COLORS.get(feature_class, _FEATURE_COLORS["landform"])
         radius = 3.0
         allowed_polygon = _feature_marker_allowed_polygon(

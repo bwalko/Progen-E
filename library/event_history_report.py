@@ -10,7 +10,8 @@ from pathlib import Path
 
 from library.event_prose import EventRecordProse, load_public_chronicle_prose
 from library.detailed_population_variance import HIGH_VARIANCE_DETAIL_COMPOSITE
-from library.event_scoring import serial_predator_propensity
+from library.event_scoring import serial_predation_risk
+from library.serious_crime_taxonomy import event_serious_crime_category
 
 
 REMARKABLE_ARCHETYPE_EVENT_TYPES: frozenset[str] = frozenset(
@@ -119,6 +120,14 @@ class HybridPopulationCalibrationSummary:
     max_serial_predator_propensity: float | None
     event_year_span: int
     murder_events: int
+    ordinary_murder_events: int
+    feud_revenge_murder_events: int
+    robbery_property_murder_events: int
+    outlaw_raid_killing_events: int
+    war_political_legal_killing_events: int
+    spree_panic_killing_events: int
+    predatory_murder_events: int
+    serial_predatory_murder_events: int
     serial_predator_candidate_events: int
     distinct_murder_killers: int
     repeat_murder_killers_2plus: int
@@ -359,6 +368,20 @@ def format_event_history_summary(report: EventHistoryReport) -> str:
     lines.append(f"- max_serial_predator_propensity: {max_serial_propensity}")
     lines.append(f"- event_year_span: {h.event_year_span}")
     lines.append(f"- murder_events: {h.murder_events}")
+    lines.append(f"- ordinary_murder_events: {h.ordinary_murder_events}")
+    lines.append(f"- feud_revenge_murder_events: {h.feud_revenge_murder_events}")
+    lines.append(
+        f"- robbery_property_murder_events: {h.robbery_property_murder_events}"
+    )
+    lines.append(f"- outlaw_raid_killing_events: {h.outlaw_raid_killing_events}")
+    lines.append(
+        f"- war_political_legal_killing_events: {h.war_political_legal_killing_events}"
+    )
+    lines.append(f"- spree_panic_killing_events: {h.spree_panic_killing_events}")
+    lines.append(f"- predatory_murder_events: {h.predatory_murder_events}")
+    lines.append(
+        f"- serial_predatory_murder_events: {h.serial_predatory_murder_events}"
+    )
     lines.append(f"- serial_predator_candidate_events: {h.serial_predator_candidate_events}")
     lines.append(f"- distinct_murder_killers: {h.distinct_murder_killers}")
     lines.append(f"- repeat_murder_killers_2plus: {h.repeat_murder_killers_2plus}")
@@ -513,6 +536,12 @@ def _metric_summaries(conn: sqlite3.Connection) -> list[MetricSummary]:
         for metric in (
             "historical_importance",
             "resource_pressure",
+            "justice_pressure_score",
+            "pursuit_pressure_score",
+            "accusation_pressure_score",
+            "kin_vengeance_pressure",
+            "offender_panic_pressure",
+            "pattern_recognition_score",
             "loss_value",
             "relief_value",
             "novelty_value",
@@ -986,6 +1015,19 @@ def _hybrid_population_calibration(
     high_variance = 0
     variance_scores: list[float] = []
     serial_profile_scores: list[float] = []
+    candidate_table_scores: list[float] | None = None
+    if _relation_exists(conn, "simulation_serial_predation_candidates"):
+        candidate_table_scores = [
+            float(row["risk_score"] or 0.0)
+            for row in conn.execute(
+                """
+                SELECT risk_score
+                FROM simulation_serial_predation_candidates
+                WHERE status IN ('active', 'dormant_throttled', 'dormant')
+                  AND risk_lane <> ''
+                """
+            ).fetchall()
+        ]
     if _relation_exists(conn, "simulation_people"):
         for row in conn.execute("SELECT person_json FROM simulation_people"):
             payload = _payload(row["person_json"])
@@ -1002,31 +1044,59 @@ def _hybrid_population_calibration(
             score = _person_payload_variance_score(payload, trait_slots=trait_slots)
             if score is not None:
                 variance_scores.append(score)
-            genome = _person_payload_genome(payload, trait_slots=trait_slots)
-            if genome:
-                serial_profile_scores.append(serial_predator_propensity(genome))
+            if candidate_table_scores is None:
+                genome = _person_payload_genome(payload, trait_slots=trait_slots)
+                if genome:
+                    serial_profile_scores.append(serial_predation_risk(genome).risk_score)
+    if candidate_table_scores is not None:
+        serial_profile_scores = candidate_table_scores
     murder_events = _event_count(conn, "murder") if _relation_exists(conn, "simulation_events_readable") else 0
+    serious_crime_category_counts: dict[str, int] = {
+        "ordinary_murder": 0,
+        "feud_revenge_murder": 0,
+        "robbery_property_murder": 0,
+        "outlaw_raid_killing": 0,
+        "war_political_legal_killing": 0,
+        "spree_panic_killing": 0,
+        "predatory_murder": 0,
+        "serial_predatory_murder": 0,
+    }
     serial_candidates = 0
     murders_by_killer: dict[int, int] = {}
+    predatory_murders_by_killer: dict[int, int] = {}
     if _relation_exists(conn, "simulation_events_readable"):
         for row in conn.execute(
             """
-            SELECT payload_json
+            SELECT event_type, payload_json
             FROM simulation_events_readable
-            WHERE event_type = 'murder'
             """
         ):
+            event_type = str(row["event_type"] or "").strip()
             payload = _payload(row["payload_json"])
-            if bool(payload.get("serial_predator_candidate")):
+            category = event_serious_crime_category(event_type, payload)
+            if category in serious_crime_category_counts:
+                serious_crime_category_counts[category] += 1
+            if event_type != "murder":
+                continue
+            if bool(
+                payload.get("serial_predation_candidate")
+                or payload.get("serial_predator_candidate")
+            ):
                 serial_candidates += 1
             killer_id = _int_or_none(payload.get("killer_person_id"))
             if killer_id is not None:
                 murders_by_killer[killer_id] = murders_by_killer.get(killer_id, 0) + 1
+                if str(payload.get("incident_kind") or "").strip() == "predatory_murder":
+                    predatory_murders_by_killer[killer_id] = (
+                        predatory_murders_by_killer.get(killer_id, 0) + 1
+                    )
     span = _event_year_span(conn)
     person_years = detailed_alive * span
     repeat_2plus = sum(1 for count in murders_by_killer.values() if count >= 2)
-    serial_3plus = sum(1 for count in murders_by_killer.values() if count >= 3)
-    serial_events_3plus = sum(count for count in murders_by_killer.values() if count >= 3)
+    serial_3plus = sum(1 for count in predatory_murders_by_killer.values() if count >= 3)
+    serial_events_3plus = sum(
+        count for count in predatory_murders_by_killer.values() if count >= 3
+    )
     murder_rate = (
         float(murder_events) / float(person_years) * 10_000.0
         if person_years > 0
@@ -1069,21 +1139,33 @@ def _hybrid_population_calibration(
         serial_predator_profile_people=sum(
             1
             for score in serial_profile_scores
-            if score >= SERIAL_PREDATOR_PROFILE_THRESHOLD
+            if (
+                score >= SERIAL_PREDATOR_PROFILE_THRESHOLD
+                if candidate_table_scores is None
+                else score > 0.0
+            )
         ),
         serial_predator_profile_share=(
             sum(
                 1
                 for score in serial_profile_scores
-                if score >= SERIAL_PREDATOR_PROFILE_THRESHOLD
+                if (
+                    score >= SERIAL_PREDATOR_PROFILE_THRESHOLD
+                    if candidate_table_scores is None
+                    else score > 0.0
+                )
             )
-            / len(serial_profile_scores)
-            if serial_profile_scores
+            / (len(serial_profile_scores) if candidate_table_scores is None else max(1, detailed_alive))
+            if serial_profile_scores or candidate_table_scores is not None
             else None
         ),
         average_serial_predator_propensity=(
-            sum(serial_profile_scores) / len(serial_profile_scores)
-            if serial_profile_scores
+            (
+                sum(serial_profile_scores) / len(serial_profile_scores)
+                if candidate_table_scores is None
+                else sum(serial_profile_scores) / max(1, detailed_alive)
+            )
+            if serial_profile_scores or candidate_table_scores is not None
             else None
         ),
         max_serial_predator_propensity=(
@@ -1091,6 +1173,26 @@ def _hybrid_population_calibration(
         ),
         event_year_span=span,
         murder_events=murder_events,
+        ordinary_murder_events=serious_crime_category_counts["ordinary_murder"],
+        feud_revenge_murder_events=serious_crime_category_counts[
+            "feud_revenge_murder"
+        ],
+        robbery_property_murder_events=serious_crime_category_counts[
+            "robbery_property_murder"
+        ],
+        outlaw_raid_killing_events=serious_crime_category_counts[
+            "outlaw_raid_killing"
+        ],
+        war_political_legal_killing_events=serious_crime_category_counts[
+            "war_political_legal_killing"
+        ],
+        spree_panic_killing_events=serious_crime_category_counts[
+            "spree_panic_killing"
+        ],
+        predatory_murder_events=serious_crime_category_counts["predatory_murder"],
+        serial_predatory_murder_events=serious_crime_category_counts[
+            "serial_predatory_murder"
+        ],
         serial_predator_candidate_events=serial_candidates,
         distinct_murder_killers=len(murders_by_killer),
         repeat_murder_killers_2plus=repeat_2plus,
@@ -1420,6 +1522,14 @@ def _write_hybrid_population_calibration(
         "max_serial_predator_propensity": row.max_serial_predator_propensity,
         "event_year_span": row.event_year_span,
         "murder_events": row.murder_events,
+        "ordinary_murder_events": row.ordinary_murder_events,
+        "feud_revenge_murder_events": row.feud_revenge_murder_events,
+        "robbery_property_murder_events": row.robbery_property_murder_events,
+        "outlaw_raid_killing_events": row.outlaw_raid_killing_events,
+        "war_political_legal_killing_events": row.war_political_legal_killing_events,
+        "spree_panic_killing_events": row.spree_panic_killing_events,
+        "predatory_murder_events": row.predatory_murder_events,
+        "serial_predatory_murder_events": row.serial_predatory_murder_events,
         "serial_predator_candidate_events": row.serial_predator_candidate_events,
         "distinct_murder_killers": row.distinct_murder_killers,
         "repeat_murder_killers_2plus": row.repeat_murder_killers_2plus,

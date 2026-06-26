@@ -325,6 +325,19 @@ class TestMixedModeCalibration(unittest.TestCase):
                     """,
                     [(1001,), (1002,), (1003,)],
                 )
+                conn.execute(
+                    """
+                    INSERT INTO simulation_serial_predation_candidates (
+                        person_id, risk_lane, status, risk_score,
+                        harm_drive, inhibition, control, exposure_noise,
+                        organized_serial_risk, disorganized_serial_risk,
+                        last_checked_year
+                    )
+                    VALUES (1, 'organized', 'active', 0.74,
+                            0.84, 0.03, 0.78, 0.16,
+                            0.74, 0.04, 1000)
+                    """
+                )
                 append_simulation_event_rows(
                     conn,
                     "default",
@@ -335,7 +348,9 @@ class TestMixedModeCalibration(unittest.TestCase):
                             {
                                 "killer_person_id": 1,
                                 "victim_person_id": 2,
+                                "incident_kind": "predatory_murder",
                                 "serial_predator_candidate": True,
+                                "serial_predation_candidate": True,
                                 "serial_predator_propensity": 0.74,
                             },
                         )
@@ -384,6 +399,8 @@ class TestMixedModeCalibration(unittest.TestCase):
         self.assertEqual(fields["serial_predator_profile_share"], "0.500000")
         self.assertGreater(float(fields["max_serial_predator_propensity"]), 0.62)
         self.assertEqual(fields["murder_events"], 1)
+        self.assertEqual(fields["predatory_murder_events"], 1)
+        self.assertEqual(fields["serial_predatory_murder_events"], 0)
         self.assertEqual(fields["serial_predator_candidate_events"], 1)
         self.assertEqual(fields["distinct_murder_killers"], 1)
         self.assertEqual(fields["repeat_murder_killers_2plus"], 0)
@@ -1177,6 +1194,14 @@ class TestMixedModeCalibration(unittest.TestCase):
                 "mixed_person_years": 1004,
                 "murder_rate_population_basis": "mixed_population",
                 "murder_events": 0,
+                "ordinary_murder_events": 0,
+                "feud_revenge_murder_events": 0,
+                "robbery_property_murder_events": 0,
+                "outlaw_raid_killing_events": 0,
+                "war_political_legal_killing_events": 0,
+                "spree_panic_killing_events": 0,
+                "predatory_murder_events": 0,
+                "serial_predatory_murder_events": 0,
                 "serial_predator_candidate_events": 0,
                 "distinct_murder_killers": 0,
                 "repeat_murder_killers_2plus": 0,
@@ -1204,6 +1229,8 @@ class TestMixedModeCalibration(unittest.TestCase):
         self.assertIn("nondetailed_alive", text)
         self.assertIn("serial_predator_profile_people", text)
         self.assertIn("serial_candidate_share_of_murders", text)
+        self.assertIn("predatory_murder_events", text)
+        self.assertIn("serial_predatory_murder_events", text)
         self.assertIn("serial_murder_calibration_status", text)
         self.assertIn("insufficient_murder_sample", text)
         self.assertIn("\t2\t4\t1\t0.640000\t", text)

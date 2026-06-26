@@ -28,8 +28,8 @@ from library.world_save import (
     rediscover_event_record,
     upsert_public_event_record,
 )
-from library.world_map_geometry import MicroRegionCell, RegionCell, WorldMapGeometry
-from library.world_map_svg import load_world_map_overlays
+from library.world_map_geometry import MicroRegionCell, RegionCell, RegionFeature, WorldMapGeometry
+from library.world_map_svg import load_world_map_overlays, render_world_map_svg
 from utils.gradio_data_browser import (
     _event_sentence,
     _event_sentence_html,
@@ -1226,9 +1226,11 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         admin_rows = self._history_table_rows(admin_table)
         self.assertEqual(unknown_rows[0]["Public Stage"], "unknown")
         self.assertIn("went missing", unknown_rows[0]["Prose"])
+        self.assertNotIn("Fred Vale", unknown_rows[0]["Prose"])
         self.assertIn("Public Unknown", unknown_status)
         self.assertEqual(rumor_rows[0]["Public Stage"], "rumored")
         self.assertIn("taken by a monster", rumor_rows[0]["Prose"])
+        self.assertNotIn("Fred Vale", rumor_rows[0]["Prose"])
         self.assertIn("Public Rumors", rumor_status)
         self.assertEqual(known_rows[0]["Public Stage"], "known")
         self.assertIn("Fred Vale", known_rows[0]["Prose"])
@@ -2331,6 +2333,30 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                         "killer_person_id": 1,
                         "victim_person_id": 2,
                         "incident_kind": "feud_murder",
+                        "offender_identified": False,
+                        "offender_identity_confidence": 0.20,
+                        "discovered": True,
+                        "body_or_evidence_found": True,
+                    }
+                ),
+            ),
+        )
+        con.execute(
+            """
+            insert into simulation_events (id, world, sim_year, event_type, payload_json)
+            values (?, 'test', 44, 'murder', ?)
+            """,
+            (
+                101,
+                json.dumps(
+                    {
+                        "killer_person_id": 1,
+                        "victim_person_id": 2,
+                        "incident_kind": "feud_murder",
+                        "offender_identified": True,
+                        "offender_identity_confidence": 0.82,
+                        "discovered": True,
+                        "body_or_evidence_found": True,
                     }
                 ),
             ),
@@ -2354,14 +2380,20 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         )
         event = con.execute("select * from simulation_events where id = 99").fetchone()
         murder_event = con.execute("select * from simulation_events where id = 100").fetchone()
+        known_murder_event = con.execute("select * from simulation_events where id = 101").fetchone()
 
         text = _event_sentence(con, "test", event, 1)
         shown_html = _event_sentence_html(con, "test", event, 1)
         murder_html = _event_sentence_html(con, "test", murder_event, 1)
+        known_murder_html = _event_sentence_html(con, "test", known_murder_event, 1)
 
         self.assertIn("Fordham", text)
         self.assertIn("Fordham", shown_html)
         self.assertIn("Fordham", murder_html)
+        self.assertIn("unresolved killing", murder_html)
+        self.assertNotIn("Ada", murder_html)
+        self.assertIn("Ada", known_murder_html)
+        self.assertIn("killed", known_murder_html)
         self.assertNotIn("an unrecorded place", text)
         self.assertNotIn("an unrecorded place", shown_html)
         self.assertNotIn("an unrecorded place", murder_html)
@@ -3473,6 +3505,10 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 "victim_person_id": 2,
                 "incident_kind": "feud_murder",
                 "motive": "revenge",
+                "offender_identified": True,
+                "offender_identity_confidence": 0.82,
+                "discovered": True,
+                "body_or_evidence_found": True,
             },
         )
 
@@ -3487,6 +3523,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertNotIn("murder: Ada", killer_text)
         self.assertIn('<strong title="Ada Forge (b. 0)">Ada</strong> killed', killer_html)
         self.assertIn('<strong title="Bea Forge (b. 8)">Bea</strong> was killed by', victim_html)
+        self.assertIn("feud or revenge murder", killer_html)
         self.assertIn(">Bea</a>", killer_html)
         self.assertIn('title="Bea Forge (b. 8)"', killer_html)
         self.assertIn(">Ada</a>", victim_html)
@@ -5332,7 +5369,18 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     )
                 ],
                 micro_cells=[],
-                features=[],
+                features=[
+                    RegionFeature(
+                        feature_id="r1:wf0",
+                        region_id="r1",
+                        kind="forest",
+                        x=0.50,
+                        y=0.42,
+                        feature_class="vegetation",
+                        label="Forest",
+                        importance=1.0,
+                    )
+                ],
                 edges=[],
                 rivers=[],
             )
@@ -5346,6 +5394,9 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                 shown = render_world_map_html("test", include_overlays=True, include_roads=True)
                 hidden = render_world_map_html("test", include_overlays=True, include_roads=False)
                 polities_hidden = render_world_map_html("test", include_overlays=True, include_polities=False)
+                places_hidden = render_world_map_html("test", include_overlays=False, include_features=True)
+                features_hidden = render_world_map_html("test", include_overlays=True, include_features=False)
+                labels_hidden = render_world_map_html("test", include_overlays=True, labels=False)
             finally:
                 gdb._db_path = original_db_path
                 gdb._cached_world_map_geometry = original_geometry_cache
@@ -5360,14 +5411,27 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn('data-routes-visible="0"', hidden)
         self.assertIn('data-polities-visible="1"', shown)
         self.assertIn('data-polities-visible="0"', polities_hidden)
+        self.assertIn('data-places-visible="1"', shown)
+        self.assertIn('data-places-visible="0"', places_hidden)
+        self.assertIn('data-features-visible="1"', places_hidden)
+        self.assertIn('data-features-visible="0"', features_hidden)
+        self.assertIn('data-labels-visible="1"', shown)
+        self.assertIn('data-labels-visible="0"', labels_hidden)
         self.assertIn('class="road road-line"', hidden)
         self.assertIn("data-road-usage", hidden)
         self.assertIn('data-map-overlay-layer="routes"', hidden)
         self.assertIn('data-map-overlay-layer="settlements"', hidden)
+        self.assertIn('data-map-overlay-layer="features"', places_hidden)
         self.assertIn('[data-routes-visible="0"] svg [data-map-overlay-layer="routes"]', gdb.APP_CSS)
         self.assertIn('[data-polities-visible="0"] svg [data-map-overlay-layer="polities"]', gdb.APP_CSS)
+        self.assertIn('[data-places-visible="0"] svg [data-map-overlay-layer="settlements"]', gdb.APP_CSS)
+        self.assertIn('[data-features-visible="0"] svg [data-map-overlay-layer="features"]', gdb.APP_CSS)
+        self.assertIn('[data-labels-visible="0"] svg .feature-label', gdb.APP_CSS)
         self.assertIn("dataset.routesVisible=enabled", gdb._world_map_toggle_routes_js())
         self.assertIn("dataset.politiesVisible=enabled", gdb._world_map_toggle_polities_js())
+        self.assertIn("dataset.placesVisible=enabled", gdb._world_map_toggle_places_js())
+        self.assertIn("dataset.featuresVisible=enabled", gdb._world_map_toggle_features_js())
+        self.assertIn("dataset.labelsVisible=enabled", gdb._world_map_toggle_labels_js())
 
     def test_world_map_html_renders_outlaw_refuges_and_selection_detail(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -5587,6 +5651,59 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(overlays.features[0].name_ethnic, "Middle English")
         self.assertEqual(overlays.features[0].naming_settlement_id, "r1:s1")
         self.assertEqual(overlays.features[0].naming_settlement_name, "Fordham")
+
+    def test_world_map_named_feature_replaces_nearby_generic_feature_label(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con = _memory_place_save()
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+            geometry = WorldMapGeometry(
+                world="test",
+                version="unit",
+                width=1.0,
+                height=1.0,
+                cells=[
+                    RegionCell(
+                        region_id="r1",
+                        continent_id="test",
+                        center_x=0.5,
+                        center_y=0.5,
+                        polygon=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                        elevation=0.0,
+                        moisture=0.0,
+                        ruggedness=0.0,
+                        terrain_family="riverland",
+                        is_coastal=False,
+                        feature_ids=["r1:wf0"],
+                    )
+                ],
+                micro_cells=[],
+                features=[
+                    RegionFeature(
+                        feature_id="r1:wf0",
+                        region_id="r1",
+                        kind="river",
+                        x=0.20,
+                        y=0.30,
+                        feature_class="water",
+                        label="River",
+                        importance=1.0,
+                    )
+                ],
+                edges=[],
+                rivers=[],
+            )
+
+            overlays = load_world_map_overlays(geometry=geometry, save_db_path=path)
+            svg = render_world_map_svg(geometry, overlays=overlays)
+
+        self.assertIn("Bluewater", svg)
+        self.assertIn('data-feature-named="1"', svg)
+        self.assertNotIn('data-feature-name="River"', svg)
+        self.assertNotIn(">River</text>", svg)
 
     def test_world_map_overlays_read_keyed_place_schema_through_readable_views(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import random
 import time
@@ -24,7 +25,8 @@ from library.event_scoring import (
     property_crime_propensity,
     public_virtue_propensity,
     scandal_exposure_propensity,
-    serial_predator_propensity,
+    SerialPredationRisk,
+    serial_predation_risk,
     threshold_excess_value_weights,
     threshold_excess_weights,
     trait_value as _trait,
@@ -32,6 +34,11 @@ from library.event_scoring import (
 )
 from library.geography import get_region, list_routes_from
 from library.incident_rates import IncidentRateParams, incident_rate_for_year
+from library.serious_crime_taxonomy import (
+    murder_taxonomy_category,
+    serious_crime_category_label,
+    serial_classification_eligible_category,
+)
 from library.simulation_outlaws import (
     OUTLAW_STATUS_FUGITIVE,
     OUTLAW_STATUS_WANTED,
@@ -65,6 +72,33 @@ MURDER_SAMPLE_STREAM = 610_021
 MURDER_SERIAL_PROPENSITY_WEIGHT = 3.25
 MURDER_PRIOR_KILLER_WEIGHT = 0.42
 MURDER_REPEAT_KILLER_SELECTION_MULTIPLIER_CAP = 2.25
+SERIAL_CANDIDATE_TRIGGER_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "genome_composite_profile_refreshed",
+        "job_assigned",
+        "job_lost",
+        "job_seeker_migration",
+        "settlement_moved",
+        "passive_person_promoted",
+        "person_traits_recalculated",
+        "trait_profile_updated",
+        "outlaw_escape",
+        "outlaw_returned",
+        "outlaw_forgotten",
+        "outlaw_bought_off",
+    }
+)
+SERIAL_CANDIDATE_FORCE_RECHECK_TRIGGERS: frozenset[str] = frozenset(
+    {
+        "adulthood",
+        "promotion_to_detailed",
+        "major_trait_recalculation",
+        "job_or_location_change",
+        "release_or_escape",
+        "successful_serious_crime",
+    }
+)
+SERIAL_CANDIDATE_REEVALUATION_LIMIT = 64
 THEFT_BASE_SETTLEMENT_CHANCE = 0.0075
 THEFT_SETTLEMENT_CHANCE_CAP = 0.04
 THEFT_PROPENSITY_THRESHOLD = 0.24
@@ -123,6 +157,18 @@ class SeriousCrimeContext:
     offender_fear_panic_01: float
     offender_relationship_to_victim: str
     seen_identified: bool
+    discovered: bool
+    body_or_evidence_found: bool
+    offender_seen: bool
+    offender_identified: bool
+    witness_status_score: float
+    witness_pressure_score: float
+    victim_kin_pressure: float
+    authority_capacity: float
+    evidence_strength: float
+    public_suspicion_score: float
+    offender_identity_confidence: float
+    pattern_recognized: bool
     justice_pressure_score: float
     retaliation_risk_score: float
 
@@ -147,6 +193,20 @@ class SeriousCrimeContext:
             "offender_fear_panic_01": round(float(self.offender_fear_panic_01), 5),
             "offender_relationship_to_victim": self.offender_relationship_to_victim,
             "seen_identified": bool(self.seen_identified),
+            "discovered": bool(self.discovered),
+            "body_or_evidence_found": bool(self.body_or_evidence_found),
+            "offender_seen": bool(self.offender_seen),
+            "offender_identified": bool(self.offender_identified),
+            "witness_status_score": round(float(self.witness_status_score), 5),
+            "witness_pressure_score": round(float(self.witness_pressure_score), 5),
+            "victim_kin_pressure": round(float(self.victim_kin_pressure), 5),
+            "authority_capacity": round(float(self.authority_capacity), 5),
+            "evidence_strength": round(float(self.evidence_strength), 5),
+            "public_suspicion_score": round(float(self.public_suspicion_score), 5),
+            "offender_identity_confidence": round(
+                float(self.offender_identity_confidence), 5
+            ),
+            "pattern_recognized": bool(self.pattern_recognized),
             "justice_pressure_score": round(float(self.justice_pressure_score), 5),
             "retaliation_risk_score": round(float(self.retaliation_risk_score), 5),
         }
@@ -166,7 +226,11 @@ class MurderIncident:
     historical_importance: float
     genome_signals: dict[str, float]
     serial_predator_propensity: float = 0.0
+    serial_predation_lane: str = "none"
+    serial_predation_candidate_status: str = "none"
+    serial_predation_opportunity_score: float = 0.0
     previous_murder_count: int = 0
+    previous_predatory_murder_count: int = 0
     crime_context: SeriousCrimeContext | None = None
 
 
@@ -523,6 +587,430 @@ def _offender_fear_panic(killer: "SimulationPersonRecord", pressure: float) -> f
     )
 
 
+def _offender_concealment_capacity(killer: "SimulationPersonRecord") -> float:
+    return _clamp(
+        _composite_score(killer, "lie_or_cheat_willingness") * 0.30
+        + _composite_score(killer, "disguise_motive") * 0.25
+        + _composite_score(killer, "practical_intellect") * 0.20
+        + _composite_score(killer, "convince_people") * 0.15
+        + _composite_score(killer, "isolation_preference") * 0.10
+    )
+
+
+def _settlement_authority_capacity(
+    ctx: "SimulationContext",
+    facts: IncidentScoringFacts,
+    settlement_id: str,
+) -> float:
+    st = getattr(ctx, "settlements_by_id", {}).get(str(settlement_id or "").strip())
+    stability = float(getattr(st, "stability", 0.5) or 0.5) if st is not None else 0.5
+    prosperity = (
+        float(getattr(st, "prosperity_pool", 1.0) or 1.0) if st is not None else 1.0
+    )
+    market_pull = float(getattr(st, "market_pull", 0.0) or 0.0) if st is not None else 0.0
+    court = 0.18 if str(settlement_id or "").strip() in facts.court_settlement_ids else 0.0
+    return _clamp(
+        0.18
+        + _clamp(stability) * 0.22
+        + min(1.0, max(0.0, prosperity) / 2.0) * 0.12
+        + _clamp(market_pull) * 0.08
+        + court
+    )
+
+
+def _stable_community_attachment(rec: "SimulationPersonRecord") -> float:
+    person = rec.person
+    anchored = 0.0
+    if str(person.current_settlement_id or "").strip():
+        anchored += 0.18
+    if str(person.job or "").strip():
+        anchored += 0.16
+    if person.partner_person_id is not None:
+        anchored += 0.16
+    if person.household_prosperity is not None:
+        anchored += _clamp(float(person.household_prosperity or 0.0) / 4.0) * 0.12
+    return _clamp(anchored + _composite_score(rec, "make_friends") * 0.16)
+
+
+def _candidate_in_custody(rec: "SimulationPersonRecord") -> bool:
+    status = str(getattr(rec.person, "outlaw_custody_status", "") or "").strip().lower()
+    housing = str(getattr(rec.person, "housing_status", "") or "").strip().lower()
+    outlaw_status = str(getattr(rec.person, "outlaw_status", "") or "").strip().lower()
+    return status == "active" or housing == "custody" or outlaw_status == "imprisoned"
+
+
+def _candidate_intense_pursuit(
+    ctx: "SimulationContext", rec: "SimulationPersonRecord"
+) -> bool:
+    pid = int(rec.person_id)
+    for case in (getattr(ctx, "outlaw_cases", {}) or {}).values():
+        try:
+            accused = int(getattr(case, "accused_person_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if accused != pid:
+            continue
+        if str(getattr(case, "status", "") or "").strip().lower() not in {
+            "active",
+            "wanted",
+            "fugitive",
+        }:
+            continue
+        if float(getattr(case, "pursuit_pressure_01", 0.0) or 0.0) >= 0.65:
+            return True
+    return False
+
+
+def _active_serial_candidate_cap(ctx: "SimulationContext") -> int:
+    current_ids = getattr(ctx, "current_people_ids", set()) or set()
+    if current_ids:
+        detailed_alive = len(current_ids)
+    else:
+        detailed_alive = sum(1 for rec in getattr(ctx, "people", ()) if rec.person.deathyear is None)
+    return max(0, int(detailed_alive) // 15_000)
+
+
+def _serial_candidate_next_check_year(person_id: int, year: int) -> int:
+    return int(year) + 9 + (abs(int(person_id)) % 7)
+
+
+def _serial_candidate_row_from_risk(
+    ctx: "SimulationContext",
+    rec: "SimulationPersonRecord",
+    risk: SerialPredationRisk,
+    *,
+    year: int,
+    trigger: str,
+    status: str,
+) -> dict[str, object]:
+    existing = (getattr(ctx, "serial_predation_candidates", {}) or {}).get(int(rec.person_id), {})
+    hidden = int(existing.get("hidden_linked_kill_count", 0) or 0) if isinstance(existing, dict) else 0
+    suspected = int(existing.get("suspected_linked_kill_count", 0) or 0) if isinstance(existing, dict) else 0
+    public_suspicion = (
+        float(existing.get("public_suspicion_score", 0.0) or 0.0)
+        if isinstance(existing, dict)
+        else 0.0
+    )
+    identity_confidence = (
+        float(existing.get("offender_identity_confidence", 0.0) or 0.0)
+        if isinstance(existing, dict)
+        else 0.0
+    )
+    details = (
+        dict(existing.get("details") or {})
+        if isinstance(existing, dict) and isinstance(existing.get("details"), dict)
+        else {}
+    )
+    trigger_key = str(trigger or "").strip() or "candidate_check"
+    trigger_count = 0
+    try:
+        trigger_count = int(details.get("trigger_count", 0) or 0)
+    except (TypeError, ValueError):
+        trigger_count = 0
+    trigger_history_raw = details.get("trigger_history")
+    trigger_history = (
+        list(trigger_history_raw)
+        if isinstance(trigger_history_raw, list)
+        else []
+    )
+    trigger_history.append({"year": int(year), "trigger": trigger_key})
+    details.update(
+        {
+            "last_trigger": trigger_key,
+            "last_trigger_year": int(year),
+            "trigger_count": trigger_count + 1,
+            "trigger_history": trigger_history[-6:],
+        }
+    )
+    return {
+        "person_id": int(rec.person_id),
+        "risk_lane": risk.risk_lane,
+        "status": status,
+        "risk_score": round(float(risk.risk_score), 5),
+        "harm_drive": round(float(risk.harm_drive), 5),
+        "inhibition": round(float(risk.inhibition), 5),
+        "control": round(float(risk.control), 5),
+        "exposure_noise": round(float(risk.exposure_noise), 5),
+        "organized_serial_risk": round(float(risk.organized_serial_risk), 5),
+        "disorganized_serial_risk": round(float(risk.disorganized_serial_risk), 5),
+        "next_check_year": _serial_candidate_next_check_year(int(rec.person_id), int(year)),
+        "last_checked_year": int(year),
+        "last_serious_crime_year": (
+            existing.get("last_serious_crime_year")
+            if isinstance(existing, dict)
+            else None
+        ),
+        "hidden_linked_kill_count": max(0, hidden),
+        "suspected_linked_kill_count": max(0, suspected),
+        "public_suspicion_score": round(_clamp(public_suspicion), 5),
+        "pattern_recognized": bool(existing.get("pattern_recognized", False))
+        if isinstance(existing, dict)
+        else False,
+        "offender_identity_confidence": round(_clamp(identity_confidence), 5),
+        "rejection_reasons": list(risk.rejection_reasons),
+        "details": details,
+    }
+
+
+def _event_payload_person_ids(payload: object, keys: tuple[str, ...]) -> set[int]:
+    if not isinstance(payload, dict):
+        return set()
+    out: set[int] = set()
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, (list, tuple, set)):
+            values = value
+        else:
+            values = (value,)
+        for item in values:
+            try:
+                pid = int(item)
+            except (TypeError, ValueError):
+                continue
+            if pid > 0:
+                out.add(pid)
+    return out
+
+
+def _serial_trigger_kind_from_event_type(event_type: str) -> str | None:
+    event_key = str(event_type or "").strip()
+    if event_key not in SERIAL_CANDIDATE_TRIGGER_EVENT_TYPES:
+        return None
+    if event_key in {
+        "genome_composite_profile_refreshed",
+        "person_traits_recalculated",
+        "trait_profile_updated",
+    }:
+        return "major_trait_recalculation"
+    if event_key in {"job_assigned", "job_lost", "job_seeker_migration", "settlement_moved"}:
+        return "job_or_location_change"
+    if event_key == "passive_person_promoted":
+        return "promotion_to_detailed"
+    if event_key in {"outlaw_escape", "outlaw_returned", "outlaw_forgotten", "outlaw_bought_off"}:
+        return "release_or_escape"
+    return None
+
+
+def _pending_serial_candidate_trigger_ids(
+    ctx: "SimulationContext", year: int
+) -> dict[str, set[int]]:
+    triggered: dict[str, set[int]] = {}
+    for sim_year, event_type, payload in getattr(ctx, "_pending_simulation_events", ()):
+        if sim_year is not None and int(sim_year) != int(year):
+            continue
+        trigger = _serial_trigger_kind_from_event_type(str(event_type or ""))
+        if trigger is None:
+            continue
+        ids = _event_payload_person_ids(
+            payload,
+            (
+                "person_id",
+                "worker_person_id",
+                "accused_person_id",
+                "perpetrator_person_id",
+                "actor_person_id",
+                "moved_person_id",
+                "moved_person_ids",
+                "person_ids",
+            ),
+        )
+        if ids:
+            triggered.setdefault(trigger, set()).update(ids)
+    for entry in getattr(ctx, "passive_promotion_log", ()) or ():
+        try:
+            sim_year = int(getattr(entry, "sim_year"))
+            person_id = int(getattr(entry, "person_id"))
+        except (TypeError, ValueError):
+            continue
+        if sim_year == int(year) and person_id > 0:
+            triggered.setdefault("promotion_to_detailed", set()).add(person_id)
+    return triggered
+
+
+def _records_for_person_ids(
+    ctx: "SimulationContext", person_ids: set[int]
+) -> tuple["SimulationPersonRecord", ...]:
+    records: list["SimulationPersonRecord"] = []
+    for pid in sorted(int(value) for value in person_ids if int(value) > 0):
+        rec = getattr(ctx, "id_to_record", {}).get(pid)
+        if rec is not None:
+            records.append(rec)
+    return tuple(records)
+
+
+def _due_serial_candidate_records(
+    ctx: "SimulationContext", year: int
+) -> tuple["SimulationPersonRecord", ...]:
+    due_ids: set[int] = set()
+    for raw_pid, row in (getattr(ctx, "serial_predation_candidates", {}) or {}).items():
+        if not isinstance(row, dict):
+            continue
+        try:
+            pid = int(row.get("person_id", raw_pid))
+        except (TypeError, ValueError):
+            continue
+        try:
+            next_check = int(row.get("next_check_year"))
+        except (TypeError, ValueError):
+            continue
+        if next_check <= int(year):
+            due_ids.add(pid)
+    return _records_for_person_ids(ctx, due_ids)
+
+
+def _newly_adult_records(
+    records: list["SimulationPersonRecord"] | tuple["SimulationPersonRecord", ...],
+    year: int,
+) -> tuple["SimulationPersonRecord", ...]:
+    out: list["SimulationPersonRecord"] = []
+    for rec in records:
+        try:
+            age = int(year) - int(rec.person.birthyear)
+        except (TypeError, ValueError):
+            continue
+        if age == INCIDENT_ADULT_MIN_AGE and rec.person.deathyear is None:
+            out.append(rec)
+    return tuple(out)
+
+
+def _refresh_serial_predation_event_triggers(
+    ctx: "SimulationContext",
+    *,
+    year: int,
+    current_records: list["SimulationPersonRecord"] | tuple["SimulationPersonRecord", ...],
+) -> dict[int, dict[str, object]]:
+    checked: dict[int, dict[str, object]] = {}
+    groups: list[tuple[str, tuple["SimulationPersonRecord", ...]]] = [
+        ("scheduled_candidate_check", _due_serial_candidate_records(ctx, int(year))),
+        ("adulthood", _newly_adult_records(current_records, int(year))),
+    ]
+    for trigger, person_ids in sorted(
+        _pending_serial_candidate_trigger_ids(ctx, int(year)).items()
+    ):
+        groups.append((trigger, _records_for_person_ids(ctx, person_ids)))
+    seen_for_trigger: set[tuple[str, int]] = set()
+    for trigger, records in groups:
+        filtered: list["SimulationPersonRecord"] = []
+        for rec in records:
+            key = (trigger, int(rec.person_id))
+            if key in seen_for_trigger:
+                continue
+            seen_for_trigger.add(key)
+            if _adult_alive(rec, int(year)):
+                filtered.append(rec)
+        if not filtered:
+            continue
+        refreshed = _refresh_serial_predation_candidates(
+            ctx,
+            tuple(filtered[:SERIAL_CANDIDATE_REEVALUATION_LIMIT]),
+            year=int(year),
+            trigger=trigger,
+        )
+        checked.update(refreshed)
+    return checked
+
+
+def _serial_candidate_rows_for_records(
+    ctx: "SimulationContext",
+    records: list["SimulationPersonRecord"] | tuple["SimulationPersonRecord", ...],
+    *,
+    year: int,
+) -> dict[int, dict[str, object]]:
+    candidates = getattr(ctx, "serial_predation_candidates", {}) or {}
+    rows: dict[int, dict[str, object]] = {}
+    due: list["SimulationPersonRecord"] = []
+    for rec in records:
+        pid = int(rec.person_id)
+        row = candidates.get(pid)
+        if not isinstance(row, dict):
+            continue
+        rows[pid] = row
+        try:
+            next_check = int(row.get("next_check_year"))
+        except (TypeError, ValueError):
+            next_check = int(year) + 1
+        if next_check <= int(year):
+            due.append(rec)
+    if due:
+        rows.update(
+            _refresh_serial_predation_candidates(
+                ctx,
+                tuple(due[:SERIAL_CANDIDATE_REEVALUATION_LIMIT]),
+                year=int(year),
+                trigger="scheduled_candidate_check",
+            )
+        )
+    return rows
+
+
+def _refresh_serial_predation_candidates(
+    ctx: "SimulationContext",
+    records: list["SimulationPersonRecord"] | tuple["SimulationPersonRecord", ...],
+    *,
+    year: int,
+    trigger: str,
+) -> dict[int, dict[str, object]]:
+    candidates = getattr(ctx, "serial_predation_candidates", None)
+    if candidates is None:
+        candidates = {}
+        ctx.serial_predation_candidates = candidates
+    cap = _active_serial_candidate_cap(ctx)
+    active_count = sum(
+        1
+        for row in candidates.values()
+        if isinstance(row, dict) and str(row.get("status") or "") == "active"
+    )
+    checked: dict[int, dict[str, object]] = {}
+    for rec in records:
+        if not _adult_alive(rec, int(year)):
+            continue
+        pid = int(rec.person_id)
+        existing = candidates.get(pid)
+        next_check = None
+        if isinstance(existing, dict):
+            try:
+                next_check = int(existing.get("next_check_year"))
+            except (TypeError, ValueError):
+                next_check = None
+        due = existing is None or next_check is None or int(next_check) <= int(year)
+        if (
+            not due
+            and str(trigger or "") not in SERIAL_CANDIDATE_FORCE_RECHECK_TRIGGERS
+        ):
+            if isinstance(existing, dict):
+                checked[pid] = existing
+            continue
+        risk = serial_predation_risk(
+            rec,
+            stable_community_attachment=_stable_community_attachment(rec),
+            in_custody=_candidate_in_custody(rec),
+            intense_pursuit=_candidate_intense_pursuit(ctx, rec),
+        )
+        if risk.eligible:
+            prior_status = str(existing.get("status") or "") if isinstance(existing, dict) else ""
+            if cap <= 0:
+                status = "dormant_throttled"
+            elif prior_status == "active" and active_count <= cap:
+                status = "active"
+            elif active_count < cap:
+                status = "active"
+                active_count += 1
+            else:
+                status = "dormant_throttled"
+            row = _serial_candidate_row_from_risk(
+                ctx, rec, risk, year=int(year), trigger=trigger, status=status
+            )
+            candidates[pid] = row
+            checked[pid] = row
+        elif isinstance(existing, dict):
+            row = _serial_candidate_row_from_risk(
+                ctx, rec, risk, year=int(year), trigger=trigger, status="dormant_rejected"
+            )
+            candidates[pid] = row
+            checked[pid] = row
+    return checked
+
+
 def _relationship_to_victim(
     ctx: "SimulationContext",
     killer: "SimulationPersonRecord",
@@ -660,15 +1148,55 @@ def _build_serious_crime_context(
         incident_kind=incident_kind,
         pressure=pressure,
     )
-    seen = len(tuple(witness_person_ids or ())) > 0
+    witness_count = len(tuple(witness_person_ids or ()))
+    offender_seen = witness_count > 0
+    witness_pressure = _clamp(min(0.28, witness_count * 0.08) + witness_power * 0.22)
+    kin_pressure = _clamp(
+        min(0.22, len(kin_records) * 0.06) + kin_power * 0.30 + victim_power * 0.12
+    )
+    authority_capacity = _settlement_authority_capacity(ctx, facts, settlement_id)
+    concealment = _offender_concealment_capacity(killer)
+    body_or_evidence_found = bool(
+        offender_seen
+        or incident_kind
+        in {
+            "domestic_murder",
+            "kin_killing",
+            "feud_killing",
+            "feud_murder",
+            "rash_brawl_killing",
+        }
+        or (kin_pressure + authority_capacity) >= 0.82
+    )
+    evidence_strength = _clamp(
+        (0.20 if body_or_evidence_found else 0.04)
+        + witness_pressure * 0.35
+        + authority_capacity * 0.18
+        + kin_pressure * 0.12
+        + (0.10 if offender_seen else 0.0)
+        - concealment * 0.20
+    )
+    offender_identity_confidence = _clamp(
+        (0.18 if offender_seen else 0.0)
+        + witness_pressure * 0.34
+        + evidence_strength * 0.36
+        + authority_capacity * 0.12
+        - concealment * 0.18
+    )
+    offender_identified = offender_identity_confidence >= 0.60
+    public_suspicion = _clamp(
+        evidence_strength * 0.40
+        + witness_pressure * 0.24
+        + kin_pressure * 0.22
+        + authority_capacity * 0.14
+    )
+    discovered = bool(body_or_evidence_found or public_suspicion >= 0.42)
     justice_pressure = _clamp(
-        0.18
-        + (0.22 if seen else 0.0)
-        + min(0.24, len(tuple(witness_person_ids or ())) * 0.08)
-        + witness_power * 0.18
-        + min(0.18, len(kin_records) * 0.06)
-        + kin_power * 0.18
-        + victim_power * 0.08
+        witness_pressure
+        + kin_pressure
+        + authority_capacity * 0.35
+        + victim_power * 0.15
+        + evidence_strength * 0.25
     )
     relationship_heat = {
         "partner": 0.18,
@@ -682,7 +1210,7 @@ def _build_serious_crime_context(
         + min(0.24, len(kin_records) * 0.08)
         + kin_power * 0.30
         + relationship_heat
-        + (0.10 if seen else 0.0)
+        + (0.10 if offender_seen else 0.0)
         + (0.10 if detail in {"neighborhood_feud", "household_grievance"} else 0.0)
     )
     return SeriousCrimeContext(
@@ -693,7 +1221,7 @@ def _build_serious_crime_context(
         offender_person_id=int(killer.person_id),
         settlement_id=str(settlement_id or "").strip(),
         region_id=str(region_id or "").strip(),
-        witness_count=len(tuple(witness_person_ids or ())),
+        witness_count=witness_count,
         witness_person_ids=tuple(int(pid) for pid in tuple(witness_person_ids or ())),
         witness_social_status=(
             _status_label(witness_power, plural=True)
@@ -708,7 +1236,19 @@ def _build_serious_crime_context(
         offender_ruthlessness_01=ruthlessness,
         offender_fear_panic_01=fear_panic,
         offender_relationship_to_victim=relationship,
-        seen_identified=seen,
+        seen_identified=offender_seen,
+        discovered=discovered,
+        body_or_evidence_found=body_or_evidence_found,
+        offender_seen=offender_seen,
+        offender_identified=offender_identified,
+        witness_status_score=witness_power,
+        witness_pressure_score=witness_pressure,
+        victim_kin_pressure=kin_pressure,
+        authority_capacity=authority_capacity,
+        evidence_strength=evidence_strength,
+        public_suspicion_score=public_suspicion,
+        offender_identity_confidence=offender_identity_confidence,
+        pattern_recognized=False,
         justice_pressure_score=justice_pressure,
         retaliation_risk_score=retaliation_risk,
     )
@@ -759,25 +1299,8 @@ def _incident_kind(
             default="rash_brawl_killing",
             rng=rng,
         )
-    if serial_score >= 0.62:
-        return _catalog_incident_kind(
-            ctx,
-            "murder",
-            tags=("predatory", "planned"),
-            default="predatory_murder",
-            rng=rng,
-        )
-    if (
-        _negative_extreme(killer, "empathy") >= 0.55
-        and _positive_extreme(killer, "assertiveness") >= 0.35
-    ):
-        return _catalog_incident_kind(
-            ctx,
-            "murder",
-            tags=("predatory", "planned"),
-            default="predatory_murder",
-            rng=rng,
-        )
+    if serial_score > 0.0:
+        return "predatory_murder"
     return _catalog_incident_kind(
         ctx,
         "murder",
@@ -812,8 +1335,16 @@ def _genome_signal_payload(
     }
 
 
+def _murder_payload_is_predatory(payload: object) -> bool:
+    return isinstance(payload, dict) and str(payload.get("incident_kind") or "").strip() == "predatory_murder"
+
+
 def _previous_murder_counts_by_killer(
-    ctx: "SimulationContext", person_ids: set[int], *, before_year: int
+    ctx: "SimulationContext",
+    person_ids: set[int],
+    *,
+    before_year: int,
+    predatory_only: bool = False,
 ) -> dict[int, int]:
     """Count known prior killer-role murder events from pending and saved events."""
 
@@ -832,6 +1363,8 @@ def _previous_murder_counts_by_killer(
         try:
             pid = int(payload.get("killer_person_id"))
         except (AttributeError, TypeError, ValueError):
+            continue
+        if predatory_only and not _murder_payload_is_predatory(payload):
             continue
         if pid in counts:
             counts[pid] += 1
@@ -855,22 +1388,47 @@ def _previous_murder_counts_by_killer(
                 chunk = id_list[start : start + 500]
                 placeholders = ",".join("?" for _ in chunk)
                 params: list[object] = [*chunk, int(before_year)]
-                rows = conn.execute(
-                    f"""
-                    SELECT ep.person_id, COUNT(*) AS c
-                    FROM simulation_event_people ep
-                    JOIN simulation_events e ON e.id = ep.event_id
-                    WHERE ep.role = 'killer'
-                      AND e.event_type = 'murder'
-                      AND ep.person_id IN ({placeholders})
-                      AND (e.sim_year IS NULL OR e.sim_year < ?)
-                    GROUP BY ep.person_id
-                    """,
-                    params,
-                ).fetchall()
-                for row in rows:
-                    pid = int(row["person_id"])
-                    counts[pid] = counts.get(pid, 0) + int(row["c"])
+                if predatory_only:
+                    rows = conn.execute(
+                        f"""
+                        SELECT ep.person_id, e.payload_json
+                        FROM simulation_event_people ep
+                        JOIN simulation_events e ON e.id = ep.event_id
+                        WHERE ep.role = 'killer'
+                          AND e.event_type = 'murder'
+                          AND ep.person_id IN ({placeholders})
+                          AND (e.sim_year IS NULL OR e.sim_year < ?)
+                        """,
+                        params,
+                    ).fetchall()
+                    for row in rows:
+                        payload = {}
+                        try:
+                            parsed = json.loads(str(row["payload_json"] or "{}"))
+                            if isinstance(parsed, dict):
+                                payload = parsed
+                        except json.JSONDecodeError:
+                            payload = {}
+                        if _murder_payload_is_predatory(payload):
+                            pid = int(row["person_id"])
+                            counts[pid] = counts.get(pid, 0) + 1
+                else:
+                    rows = conn.execute(
+                        f"""
+                        SELECT ep.person_id, COUNT(*) AS c
+                        FROM simulation_event_people ep
+                        JOIN simulation_events e ON e.id = ep.event_id
+                        WHERE ep.role = 'killer'
+                          AND e.event_type = 'murder'
+                          AND ep.person_id IN ({placeholders})
+                          AND (e.sim_year IS NULL OR e.sim_year < ?)
+                        GROUP BY ep.person_id
+                        """,
+                        params,
+                    ).fetchall()
+                    for row in rows:
+                        pid = int(row["person_id"])
+                        counts[pid] = counts.get(pid, 0) + int(row["c"])
     except sqlite3.Error:
         return counts
     return counts
@@ -880,13 +1438,96 @@ def _repeat_murder_selection_multiplier(
     *, serial_propensity: float, previous_murders: int
 ) -> float:
     serial_pressure = max(0.0, float(serial_propensity) - 0.50)
-    prior_pressure = min(1.0, max(0, int(previous_murders)) / 3.0)
+    prior_pressure = (
+        min(1.0, max(0, int(previous_murders)) / 3.0)
+        if float(serial_propensity) > 0.0
+        else 0.0
+    )
     multiplier = (
         1.0
         + serial_pressure * float(MURDER_SERIAL_PROPENSITY_WEIGHT)
         + prior_pressure * float(MURDER_PRIOR_KILLER_WEIGHT)
     )
     return max(1.0, min(float(MURDER_REPEAT_KILLER_SELECTION_MULTIPLIER_CAP), multiplier))
+
+
+def _serial_predation_opportunity_score(
+    ctx: "SimulationContext",
+    facts: IncidentScoringFacts,
+    rec: "SimulationPersonRecord",
+    *,
+    settlement_id: str,
+    pressure: float,
+    previous_predatory_murders: int,
+    candidate_row: dict[str, object],
+) -> float:
+    """Abstract opportunity/oversight score for an already-gated candidate."""
+
+    authority = _settlement_authority_capacity(ctx, facts, settlement_id)
+    oversight_gap = max(0.0, 1.0 - authority)
+    person = rec.person
+    job_text = (
+        f"{person.job or ''} {person.job_market_type or ''} "
+        f"{getattr(person, 'job_family', '') or ''}"
+    ).lower()
+    access = 0.0
+    if any(
+        token in job_text
+        for token in (
+            "trade",
+            "merchant",
+            "porter",
+            "guard",
+            "soldier",
+            "service",
+            "servant",
+            "criminal",
+            "vice",
+            "outlaw",
+            "traveler",
+        )
+    ):
+        access += 0.22
+    if str(person.current_settlement_id or "").strip() and str(
+        person.current_settlement_id or ""
+    ) != str(person.birthplace_settlement_id or ""):
+        access += 0.10
+    if person.partner_person_id is None:
+        access += 0.07
+    stress = _clamp((float(pressure) - 0.75) / 0.75)
+    if str(person.housing_status or "").strip().lower() in {"street", "vagrant", "unstable"}:
+        stress += 0.16
+    if person.unemployment_started_year is not None:
+        stress += 0.12
+    if person.job_lost_year is not None:
+        stress += 0.08
+    prior_hidden = 0.0
+    if int(candidate_row.get("hidden_linked_kill_count", 0) or 0) > 0:
+        public_suspicion = float(candidate_row.get("public_suspicion_score", 0.0) or 0.0)
+        prior_hidden = 0.22 if public_suspicion < 0.45 else 0.08
+    if int(previous_predatory_murders) > 0:
+        prior_hidden = max(prior_hidden, min(0.24, int(previous_predatory_murders) * 0.08))
+    isolation = _composite_score(rec, "isolation_preference")
+    opportunity = (
+        oversight_gap * 0.34
+        + _clamp(access) * 0.22
+        + _clamp(stress) * 0.18
+        + _clamp(prior_hidden) * 0.16
+        + _clamp(isolation) * 0.10
+    )
+    return _clamp(opportunity)
+
+
+def _serial_predation_effective_score(
+    row: dict[str, object], opportunity_score: float
+) -> float:
+    if str(row.get("status") or "") != "active":
+        return 0.0
+    opportunity = _clamp(float(opportunity_score or 0.0))
+    if opportunity < 0.28:
+        return 0.0
+    risk_score = _clamp(float(row.get("risk_score", 0.0) or 0.0))
+    return _clamp(risk_score * (0.35 + opportunity * 0.65))
 
 
 def _historical_importance(
@@ -1546,20 +2187,43 @@ def _maybe_murder_in_settlement(
         {int(rec.person_id) for rec in adults},
         before_year=int(year),
     )
-    serial_propensities = {
-        int(rec.person_id): serial_predator_propensity(
+    previous_predatory_murders = _previous_murder_counts_by_killer(
+        ctx,
+        {int(rec.person_id) for rec in adults},
+        before_year=int(year),
+        predatory_only=True,
+    )
+    serial_candidate_rows = _serial_candidate_rows_for_records(
+        ctx,
+        adults,
+        year=int(year),
+    )
+    serial_opportunities: dict[int, float] = {}
+    serial_propensities: dict[int, float] = {}
+    for pid, row in serial_candidate_rows.items():
+        if not isinstance(row, dict) or str(row.get("status") or "") != "active":
+            continue
+        rec = ctx.id_to_record.get(int(pid))
+        if rec is None:
+            continue
+        opportunity = _serial_predation_opportunity_score(
+            ctx,
+            facts,
             rec,
-            context=contexts.get(int(rec.person_id)),
-            previous_murders=previous_murders.get(int(rec.person_id), 0),
+            settlement_id=settlement_id,
+            pressure=pressure,
+            previous_predatory_murders=previous_predatory_murders.get(int(pid), 0),
+            candidate_row=row,
         )
-        for rec in adults
-    }
+        serial_opportunities[int(pid)] = opportunity
+        serial_propensities[int(pid)] = _serial_predation_effective_score(
+            row, opportunity
+        )
     max_propensity = max(propensities.values(), default=0.0)
-    max_serial_propensity = max(serial_propensities.values(), default=0.0)
     chance = _murder_chance_from_propensity(
         adults_count=max(len(adults), int(population_count or len(adults))),
         scarcity=scarcity,
-        max_propensity=max(max_propensity, max_serial_propensity * 0.90),
+        max_propensity=max_propensity,
         rate=rate,
     )
     if chance_roll >= chance:
@@ -1575,7 +2239,7 @@ def _maybe_murder_in_settlement(
             base_weight
             * _repeat_murder_selection_multiplier(
                 serial_propensity=serial_propensities.get(int(rec.person_id), 0.0),
-                previous_murders=previous_murders.get(int(rec.person_id), 0),
+                previous_murders=previous_predatory_murders.get(int(rec.person_id), 0),
             )
             for rec, base_weight in zip(
                 candidate_killers,
@@ -1608,6 +2272,8 @@ def _maybe_murder_in_settlement(
     )
     region_id = _residence_region_id(ctx, killer)
     serial_score = serial_propensities.get(int(killer.person_id), 0.0)
+    serial_opportunity = serial_opportunities.get(int(killer.person_id), 0.0)
+    serial_row = serial_candidate_rows.get(int(killer.person_id), {})
     incident_kind = _incident_kind(
         ctx,
         killer,
@@ -1642,7 +2308,21 @@ def _maybe_murder_in_settlement(
         region_id=region_id,
         actor_propensity=propensities[killer.person_id],
         serial_predator_propensity=serial_score,
+        serial_predation_opportunity_score=serial_opportunity,
+        serial_predation_lane=(
+            str(serial_row.get("risk_lane") or "none")
+            if isinstance(serial_row, dict)
+            else "none"
+        ),
+        serial_predation_candidate_status=(
+            str(serial_row.get("status") or "none")
+            if isinstance(serial_row, dict)
+            else "none"
+        ),
         previous_murder_count=previous_murders.get(int(killer.person_id), 0),
+        previous_predatory_murder_count=previous_predatory_murders.get(
+            int(killer.person_id), 0
+        ),
         resource_pressure=pressure,
         historical_importance=historical_importance,
         genome_signals=_genome_signal_payload(killer),
@@ -2323,6 +3003,245 @@ def _apply_murder_consequences(
     if outlaw_case is not None:
         consequences["outlaw_case"] = outlaw_case
     return consequences
+
+
+def _pressure_level(score: float) -> str:
+    value = _clamp(float(score or 0.0))
+    if value >= 0.82:
+        return "intense"
+    if value >= 0.62:
+        return "high"
+    if value >= 0.36:
+        return "moderate"
+    if value > 0.0:
+        return "low"
+    return "none"
+
+
+def _murder_public_case_status(crime_context: dict[str, object] | None) -> str:
+    context = crime_context if isinstance(crime_context, dict) else {}
+    if not bool(context.get("discovered")):
+        return "undiscovered"
+    if bool(context.get("offender_identified")) or (
+        float(context.get("offender_identity_confidence", 0.0) or 0.0) >= 0.60
+    ):
+        return "accused_killer"
+    if float(context.get("public_suspicion_score", 0.0) or 0.0) >= 0.45:
+        return "suspected_murder"
+    if bool(context.get("body_or_evidence_found")):
+        return "suspicious_death"
+    return "unresolved_disappearance"
+
+
+def _build_murder_justice_response(
+    *,
+    crime_context: dict[str, object] | None,
+    pattern_recognition_score: float,
+    public_pattern_recognized: bool,
+    hidden_linked_kills: int,
+) -> dict[str, object]:
+    context = crime_context if isinstance(crime_context, dict) else {}
+    witness_pressure = _clamp(float(context.get("witness_pressure_score", 0.0) or 0.0))
+    witness_status = _clamp(float(context.get("witness_status_score", 0.0) or 0.0))
+    kin_pressure = _clamp(float(context.get("victim_kin_pressure", 0.0) or 0.0))
+    authority_capacity = _clamp(float(context.get("authority_capacity", 0.0) or 0.0))
+    evidence_strength = _clamp(float(context.get("evidence_strength", 0.0) or 0.0))
+    public_suspicion = _clamp(float(context.get("public_suspicion_score", 0.0) or 0.0))
+    identity_confidence = _clamp(
+        float(context.get("offender_identity_confidence", 0.0) or 0.0)
+    )
+    justice_pressure = _clamp(float(context.get("justice_pressure_score", 0.0) or 0.0))
+    retaliation_risk = _clamp(float(context.get("retaliation_risk_score", 0.0) or 0.0))
+    offender_panic_base = _clamp(
+        float(context.get("offender_fear_panic_01", 0.0) or 0.0)
+    )
+    pursuit_pressure = _clamp(
+        justice_pressure * 0.38
+        + evidence_strength * 0.22
+        + identity_confidence * 0.18
+        + authority_capacity * 0.12
+        + (0.10 if public_pattern_recognized else 0.0)
+    )
+    accusation_pressure = _clamp(
+        identity_confidence * 0.42
+        + evidence_strength * 0.28
+        + witness_pressure * 0.18
+        + authority_capacity * 0.08
+        + (0.04 if bool(context.get("offender_seen")) else 0.0)
+    )
+    kin_vengeance_pressure = _clamp(
+        retaliation_risk * 0.55
+        + kin_pressure * 0.26
+        + witness_status * 0.09
+        + (0.10 if bool(context.get("offender_seen")) else 0.0)
+    )
+    offender_panic_pressure = _clamp(
+        pursuit_pressure * 0.42
+        + public_suspicion * 0.20
+        + accusation_pressure * 0.18
+        + offender_panic_base * 0.20
+    )
+    actions: list[str] = []
+    if pursuit_pressure >= 0.36:
+        actions.append("investigation_pressure")
+    if accusation_pressure >= 0.52:
+        actions.append("accusation_pressure")
+    if kin_vengeance_pressure >= 0.50:
+        actions.append("kin_retaliation_pressure")
+    if offender_panic_pressure >= 0.45:
+        actions.append("offender_flight_or_panic_pressure")
+    if int(hidden_linked_kills) >= 2:
+        actions.append("pattern_watch")
+    if public_pattern_recognized:
+        actions.append("public_pattern_recognition")
+    case_status = _murder_public_case_status(context)
+    if public_pattern_recognized:
+        case_status = "recognized_pattern"
+    if int(hidden_linked_kills) >= 3:
+        pattern_status = (
+            "public_pattern_recognized"
+            if public_pattern_recognized
+            else "internal_pattern_only"
+        )
+    elif int(hidden_linked_kills) == 2:
+        pattern_status = "linked_pattern_possible"
+    else:
+        pattern_status = "none"
+    return {
+        "justice_pressure_score": round(justice_pressure, 5),
+        "response_level": _pressure_level(justice_pressure),
+        "witness_pressure_score": round(witness_pressure, 5),
+        "kin_pressure_score": round(kin_pressure, 5),
+        "authority_pressure_score": round(authority_capacity, 5),
+        "evidence_strength": round(evidence_strength, 5),
+        "pursuit_pressure_score": round(pursuit_pressure, 5),
+        "accusation_pressure_score": round(accusation_pressure, 5),
+        "kin_vengeance_pressure": round(kin_vengeance_pressure, 5),
+        "offender_panic_pressure": round(offender_panic_pressure, 5),
+        "public_case_status": case_status,
+        "pattern_status": pattern_status,
+        "pattern_recognition_score": round(_clamp(pattern_recognition_score), 5),
+        "abstract_actions": actions,
+    }
+
+
+def _murder_justice_legal_fallout(
+    year: int,
+    incident: MurderIncident,
+    justice_response: dict[str, object],
+    crime_context: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    context = crime_context if isinstance(crime_context, dict) else {}
+    identity_confidence = _clamp(
+        float(context.get("offender_identity_confidence", 0.0) or 0.0)
+    )
+    accusation_pressure = _clamp(
+        float(justice_response.get("accusation_pressure_score", 0.0) or 0.0)
+    )
+    offender_identified = bool(context.get("offender_identified")) or identity_confidence >= 0.60
+    if not offender_identified or accusation_pressure < 0.52:
+        return []
+    killer_id = int(incident.killer.person_id)
+    victim_id = int(incident.victim.person_id)
+    severity = _clamp(
+        0.30
+        + float(justice_response.get("justice_pressure_score", 0.0) or 0.0) * 0.36
+        + float(justice_response.get("pursuit_pressure_score", 0.0) or 0.0) * 0.20
+        + float(incident.historical_importance) * 0.14
+    )
+    return [
+        {
+            "fallout_key": f"murder_accusation:{killer_id}:{victim_id}:{int(year)}",
+            "fallout_type": "murder_accusation",
+            "status": "active",
+            "principal_person_id": killer_id,
+            "opposing_person_id": victim_id,
+            "related_person_id": None,
+            "severity": round(severity, 5),
+            "start_year": int(year),
+            "expected_duration_years": 14,
+            "settlement_id": incident.settlement_id,
+            "region_id": incident.region_id,
+            "source_role": "murder_justice_pressure",
+            "incident_kind": incident.incident_kind,
+            "justice_response": justice_response,
+        }
+    ]
+
+
+def _murder_reputation_marks(
+    year: int,
+    incident: MurderIncident,
+    justice_response: dict[str, object],
+    crime_context: dict[str, object] | None,
+    *,
+    public_pattern_recognized: bool,
+) -> list[dict[str, object]]:
+    context = crime_context if isinstance(crime_context, dict) else {}
+    identity_confidence = _clamp(
+        float(context.get("offender_identity_confidence", 0.0) or 0.0)
+    )
+    if identity_confidence < 0.60 and not public_pattern_recognized:
+        return []
+    strength = _clamp(
+        float(justice_response.get("pursuit_pressure_score", 0.0) or 0.0) * 0.52
+        + float(justice_response.get("pattern_recognition_score", 0.0) or 0.0) * 0.28
+        + float(incident.historical_importance) * 0.20
+    )
+    after = "violent-suspect"
+    if public_pattern_recognized:
+        after = "pattern-suspect"
+    elif identity_confidence >= 0.80:
+        after = "accused-killer"
+    return [
+        {
+            "mark_key": f"infamy:{int(incident.killer.person_id)}:{int(year)}",
+            "person_id": int(incident.killer.person_id),
+            "reputation_axis": "infamy",
+            "reputation_before": "unknown",
+            "reputation_after": after,
+            "direction": "negative",
+            "mark_strength": round(max(0.05, strength), 5),
+            "mark_year": int(year),
+            "settlement_id": incident.settlement_id,
+            "region_id": incident.region_id,
+            "source_role": "murder_public_infamy",
+            "public_pattern_recognized": bool(public_pattern_recognized),
+        }
+    ]
+
+
+def _append_murder_pattern_memory(
+    consequences: dict[str, object],
+    *,
+    incident: MurderIncident,
+    year: int,
+    justice_response: dict[str, object],
+    public_pattern_recognized: bool,
+) -> None:
+    if not public_pattern_recognized:
+        return
+    memory_rows = consequences.setdefault("faction_memory", [])
+    if not isinstance(memory_rows, list):
+        return
+    memory_rows.append(
+        _faction_memory_row(
+            memory_type="violent_pattern_fear",
+            principal=incident.victim,
+            opposing=incident.killer,
+            region_id=incident.region_id,
+            settlement_id=incident.settlement_id,
+            strength=0.42
+            + float(justice_response.get("pattern_recognition_score", 0.0) or 0.0)
+            * 0.42
+            + float(incident.historical_importance) * 0.16,
+            polarity="negative",
+            year=int(year),
+            duration_years=24,
+            source_role="public_pattern_recognition",
+            incident_kind=incident.incident_kind,
+        )
+    )
 
 
 def _relationship_update_at_year(
@@ -3857,10 +4776,101 @@ def _record_murder_incident(
         if incident.crime_context is not None
         else None
     )
+    is_predatory = str(incident.incident_kind or "") == "predatory_murder"
+    hidden_linked_kills = (
+        int(incident.previous_predatory_murder_count) + 1 if is_predatory else 0
+    )
+    pattern_recognition_score = 0.0
+    suspected_linked_kills = 0
+    serial_pattern_status = "none"
+    if is_predatory:
+        public_suspicion = (
+            float(crime_context.get("public_suspicion_score", 0.0) or 0.0)
+            if crime_context is not None
+            else 0.0
+        )
+        evidence_strength = (
+            float(crime_context.get("evidence_strength", 0.0) or 0.0)
+            if crime_context is not None
+            else 0.0
+        )
+        identity_confidence = (
+            float(crime_context.get("offender_identity_confidence", 0.0) or 0.0)
+            if crime_context is not None
+            else 0.0
+        )
+        pattern_recognition_score = _clamp(
+            public_suspicion * 0.45
+            + evidence_strength * 0.25
+            + min(1.0, hidden_linked_kills / 3.0) * 0.20
+            + identity_confidence * 0.10
+        )
+        if hidden_linked_kills >= 3:
+            serial_pattern_status = "internal_serial_murderer"
+        elif hidden_linked_kills == 2:
+            serial_pattern_status = "linked_pattern_possible"
+        if hidden_linked_kills >= 2 and public_suspicion >= 0.45:
+            suspected_linked_kills = hidden_linked_kills
+    public_pattern_recognized = bool(
+        is_predatory
+        and hidden_linked_kills >= 3
+        and pattern_recognition_score >= 0.65
+    )
+    if public_pattern_recognized:
+        suspected_linked_kills = hidden_linked_kills
+    if crime_context is not None:
+        crime_context["pattern_recognized"] = public_pattern_recognized
+    motive_detail = (
+        crime_context.get("motive_detail")
+        if crime_context is not None
+        else None
+    )
+    serious_crime_category = murder_taxonomy_category(
+        incident_kind=incident.incident_kind,
+        motive=incident.motive,
+        motive_detail=motive_detail,
+        hidden_linked_kill_count=hidden_linked_kills,
+        serial_murder_classification=bool(hidden_linked_kills >= 3 and is_predatory),
+    )
+    serious_crime_label = serious_crime_category_label(serious_crime_category)
+    justice_response = _build_murder_justice_response(
+        crime_context=crime_context,
+        pattern_recognition_score=pattern_recognition_score,
+        public_pattern_recognized=public_pattern_recognized,
+        hidden_linked_kills=hidden_linked_kills,
+    )
+    consequences["justice_response"] = justice_response
+    legal_fallout = _murder_justice_legal_fallout(
+        int(year), incident, justice_response, crime_context
+    )
+    if legal_fallout:
+        consequences.setdefault("legal_fallout", []).extend(legal_fallout)
+    reputation_marks = _murder_reputation_marks(
+        int(year),
+        incident,
+        justice_response,
+        crime_context,
+        public_pattern_recognized=public_pattern_recognized,
+    )
+    if reputation_marks:
+        consequences.setdefault("reputation_marks", []).extend(reputation_marks)
+    _append_murder_pattern_memory(
+        consequences,
+        incident=incident,
+        year=int(year),
+        justice_response=justice_response,
+        public_pattern_recognized=public_pattern_recognized,
+    )
     payload = {
         "year": int(year),
         "event_type": "murder",
         "incident_kind": incident.incident_kind,
+        "murder_taxonomy": serious_crime_category,
+        "serious_crime_category": serious_crime_category,
+        "serious_crime_category_label": serious_crime_label,
+        "serial_classification_eligible": serial_classification_eligible_category(
+            serious_crime_category
+        ),
         "motive": incident.motive,
         "killer_person_id": int(incident.killer.person_id),
         "victim_person_id": int(incident.victim.person_id),
@@ -3871,11 +4881,35 @@ def _record_murder_incident(
         "serial_predator_propensity": round(
             incident.serial_predator_propensity, 5
         ),
-        "previous_murder_count": int(incident.previous_murder_count),
-        "serial_predator_candidate": bool(
-            incident.serial_predator_propensity >= 0.62
-            or int(incident.previous_murder_count) >= 2
+        "serial_predation_opportunity_score": round(
+            incident.serial_predation_opportunity_score, 5
         ),
+        "serial_predation_lane": incident.serial_predation_lane,
+        "serial_predation_candidate_status": incident.serial_predation_candidate_status,
+        "previous_murder_count": int(incident.previous_murder_count),
+        "previous_predatory_murder_count": int(incident.previous_predatory_murder_count),
+        "serial_predation_candidate": bool(
+            float(incident.serial_predator_propensity) > 0.0
+            and incident.serial_predation_candidate_status == "active"
+        ),
+        "serial_predator_candidate": bool(
+            float(incident.serial_predator_propensity) > 0.0
+            and incident.serial_predation_candidate_status == "active"
+        ),
+        "hidden_linked_kill_count": int(hidden_linked_kills),
+        "suspected_linked_kill_count": int(suspected_linked_kills),
+        "serial_pattern_status": serial_pattern_status,
+        "internal_serial_murderer": bool(hidden_linked_kills >= 3 and is_predatory),
+        "public_pattern_recognized": public_pattern_recognized,
+        "pattern_recognized": public_pattern_recognized,
+        "pattern_recognition_score": round(float(pattern_recognition_score), 5),
+        "serial_murder_classification": bool(hidden_linked_kills >= 3 and is_predatory),
+        "justice_response_level": justice_response["response_level"],
+        "public_case_status": justice_response["public_case_status"],
+        "pursuit_pressure_score": justice_response["pursuit_pressure_score"],
+        "accusation_pressure_score": justice_response["accusation_pressure_score"],
+        "kin_vengeance_pressure": justice_response["kin_vengeance_pressure"],
+        "offender_panic_pressure": justice_response["offender_panic_pressure"],
         "resource_pressure": round(incident.resource_pressure, 5),
         "historical_importance": round(incident.historical_importance, 5),
         "consequences": consequences,
@@ -3891,8 +4925,79 @@ def _record_murder_incident(
                 "justice_pressure_score": crime_context["justice_pressure_score"],
                 "retaliation_risk_score": crime_context["retaliation_risk_score"],
                 "seen_identified": crime_context["seen_identified"],
+                "discovered": crime_context["discovered"],
+                "body_or_evidence_found": crime_context["body_or_evidence_found"],
+                "offender_seen": crime_context["offender_seen"],
+                "offender_identified": crime_context["offender_identified"],
+                "witness_status_score": crime_context["witness_status_score"],
+                "victim_kin_pressure": crime_context["victim_kin_pressure"],
+                "authority_capacity": crime_context["authority_capacity"],
+                "evidence_strength": crime_context["evidence_strength"],
+                "public_suspicion_score": crime_context["public_suspicion_score"],
+                "offender_identity_confidence": crime_context[
+                    "offender_identity_confidence"
+                ],
+                "pattern_recognized": crime_context["pattern_recognized"],
             }
         )
+    candidates = getattr(ctx, "serial_predation_candidates", {}) or {}
+    if int(incident.killer.person_id) not in candidates:
+        _refresh_serial_predation_candidates(
+            ctx,
+            (incident.killer,),
+            year=int(year),
+            trigger="successful_serious_crime",
+        )
+        candidates = getattr(ctx, "serial_predation_candidates", {}) or {}
+    row = candidates.get(int(incident.killer.person_id))
+    if isinstance(row, dict):
+        row = dict(row)
+        row["last_serious_crime_year"] = int(year)
+        row["hidden_linked_kill_count"] = max(
+            int(row.get("hidden_linked_kill_count", 0) or 0),
+            int(hidden_linked_kills),
+        )
+        row["suspected_linked_kill_count"] = max(
+            int(row.get("suspected_linked_kill_count", 0) or 0),
+            int(suspected_linked_kills),
+        )
+        row["public_suspicion_score"] = max(
+            float(row.get("public_suspicion_score", 0.0) or 0.0),
+            float(payload.get("public_suspicion_score", 0.0) or 0.0),
+        )
+        row["pattern_recognized"] = bool(row.get("pattern_recognized")) or public_pattern_recognized
+        row["offender_identity_confidence"] = max(
+            float(row.get("offender_identity_confidence", 0.0) or 0.0),
+            float(payload.get("offender_identity_confidence", 0.0) or 0.0),
+        )
+        details = dict(row.get("details") or {}) if isinstance(row.get("details"), dict) else {}
+        details["last_serious_crime_trigger"] = "murder"
+        details["last_serious_crime_year"] = int(year)
+        details["last_opportunity_score"] = round(
+            float(incident.serial_predation_opportunity_score or 0.0), 5
+        )
+        hidden_heat = _clamp(
+            float(details.get("hidden_heat_score", 0.0) or 0.0)
+            + float(justice_response.get("pursuit_pressure_score", 0.0) or 0.0)
+            * 0.24
+            + float(justice_response.get("pattern_recognition_score", 0.0) or 0.0)
+            * 0.18
+            + (0.14 if public_pattern_recognized else 0.0)
+        )
+        details["hidden_heat_score"] = round(hidden_heat, 5)
+        details["justice_response_level"] = justice_response["response_level"]
+        details["public_case_status"] = justice_response["public_case_status"]
+        details["pursuit_pressure_score"] = justice_response["pursuit_pressure_score"]
+        details["offender_panic_pressure"] = justice_response["offender_panic_pressure"]
+        details["pattern_status"] = justice_response["pattern_status"]
+        details["last_pattern_recognition_score"] = justice_response[
+            "pattern_recognition_score"
+        ]
+        if public_pattern_recognized:
+            details["violet_marginalia"] = "public_pattern_recognized"
+        row["details"] = details
+        candidates[int(incident.killer.person_id)] = row
+        ctx.serial_predation_candidates = candidates
     ctx._record_simulation_event(
         int(year),
         "murder",
@@ -3915,6 +5020,12 @@ def _record_background_murder_incident(
             "year": int(year),
             "event_type": "murder",
             "incident_kind": "background_murder",
+            "murder_taxonomy": "ordinary_murder",
+            "serious_crime_category": "ordinary_murder",
+            "serious_crime_category_label": serious_crime_category_label(
+                "ordinary_murder"
+            ),
+            "serial_classification_eligible": False,
             "background_population_event": True,
             "population_backend": "non_detailed",
             "killer_population": "non_detailed_or_unknown",
@@ -3954,6 +5065,12 @@ def _record_property_crime_incident(
     if incident.outlaw_status:
         payload["outlaw_status"] = incident.outlaw_status
     ctx._record_simulation_event(int(year), "property_crime", payload)
+    _refresh_serial_predation_candidates(
+        ctx,
+        (incident.perpetrator,),
+        year=int(year),
+        trigger="successful_serious_crime",
+    )
 
 
 def _record_affair_scandal_incident(
@@ -4135,8 +5252,20 @@ def simulation_incidents_annual_tick(ctx: "SimulationContext", year: int) -> Non
         KNOWLEDGE_MAX_EVENTS_PER_YEAR, knowledge_culture_rate
     )
     scoring_facts = _build_incident_scoring_facts(ctx, y)
+    current_records = [rec for _settlement_id, residents in settlements for rec in residents]
+    serial_trigger_checks = _refresh_serial_predation_event_triggers(
+        ctx,
+        year=y,
+        current_records=current_records,
+    )
     if prof:
         simulation_timing.accumulate("incidents.setup", tpc() - t0)
+        simulation_timing.record_gauge(
+            y,
+            "incidents",
+            "serial_candidate_trigger_checks",
+            len(serial_trigger_checks),
+        )
         t0 = tpc()
     for settlement_id, residents in settlements:
         murder_population = int(

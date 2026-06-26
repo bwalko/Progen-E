@@ -14,6 +14,11 @@ import json
 import sqlite3
 from typing import Any
 
+from library.serious_crime_taxonomy import (
+    murder_payload_taxonomy_category,
+    serious_crime_category_label,
+)
+
 
 PUBLIC_UNKNOWN_VISIBILITY_STATES: frozenset[str] = frozenset({"public_unknown"})
 PUBLIC_RUMOR_VISIBILITY_STATES: frozenset[str] = frozenset(
@@ -181,7 +186,8 @@ def render_event_admin_summary(
         prose = (
             f"{year}: {rr.person(payload.get('killer_person_id'))} killed "
             f"{rr.person(payload.get('victim_person_id'))} at {place}; "
-            f"{_kind(payload)}; motive: {_motive(payload)}; "
+            f"{_kind(payload)}{_murder_category_clause(payload)}; "
+            f"motive: {_motive(payload)}; "
             f"importance {_number(payload.get('historical_importance'))}"
             f"{_witness_clause(payload, rr)}."
         )
@@ -563,7 +569,9 @@ def _public_text(
     if summary:
         return _contextual_public_summary(summary, year, place)
     if event_type == "murder":
-        actor = _public_person(row, payload, rr, "public_actor_person_id", "killer_person_id")
+        actor = _public_person_without_truth_fallback(
+            row, rr, "public_actor_person_id", unknown="an unknown killer"
+        )
         victim = _public_person(row, payload, rr, "public_victim_person_id", "victim_person_id")
         kind = _kind(payload)
         motive = _motive_clause(payload)
@@ -737,7 +745,9 @@ def _rumor_text(
         return _contextual_public_summary(summary, year, place)
     if event_type == "murder":
         victim = _public_person(row, payload, rr, "public_victim_person_id", "victim_person_id")
-        actor = _public_person(row, payload, rr, "public_actor_person_id", "killer_person_id")
+        actor = _public_person_without_truth_fallback(
+            row, rr, "public_actor_person_id", unknown="an unknown suspect"
+        )
         rumored_cause = _label(
             distortion.get("rumored_cause")
             or distortion.get("public_cause")
@@ -763,12 +773,12 @@ def _rumor_text(
             payload,
             "public.murder.rumor",
             (
-                f"It was said in {place} that {actor} killed {victim}; the tale "
-                f"called it {_kind(payload)}{motive}{witnesses}.",
+                f"It was said in {place} that {victim}'s death was an unresolved "
+                f"killing; the tale called it {_kind(payload)}{motive}{witnesses}.",
                 f"Tavern and court rumor in {place} put {actor} near {victim}'s "
                 f"death in {year}, naming {_kind(payload)}{motive}.",
                 f"No formal roll settled the matter, but {place} repeated "
-                f"{actor}'s name beside {victim}'s death{witnesses}.",
+                f"uncertain suspicion beside {victim}'s death{witnesses}.",
             ),
         )
     if event_type == "property_crime":
@@ -1614,6 +1624,17 @@ def _public_person(
     return "an unknown person"
 
 
+def _public_person_without_truth_fallback(
+    row: Mapping[str, Any],
+    rr: EventProseResolver,
+    public_key: str,
+    *,
+    unknown: str = "an unknown person",
+) -> str:
+    pid = _coerce_int(row.get(public_key))
+    return rr.person(pid) if pid is not None else unknown
+
+
 def _distortion_summary(
     distortion: Mapping[str, Any], keys: tuple[str, ...]
 ) -> str:
@@ -1723,6 +1744,13 @@ def _clean_key(value: object) -> str:
 
 def _kind(payload: Mapping[str, Any]) -> str:
     return _label(payload.get("incident_kind") or payload.get("event_type") or "event")
+
+
+def _murder_category_clause(payload: Mapping[str, Any]) -> str:
+    category = murder_payload_taxonomy_category(payload)
+    if not category:
+        return ""
+    return f"; category: {serious_crime_category_label(category)}"
 
 
 def _motive(payload: Mapping[str, Any]) -> str:

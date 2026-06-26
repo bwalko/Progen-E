@@ -26,6 +26,7 @@ from library.event_scoring import (
     score_composite_scores,
     score_propensity,
     serial_killer_composite_pressure,
+    serial_predation_risk,
     serial_predator_propensity,
     threshold_excess_weights,
     violent_actor_propensity,
@@ -200,24 +201,132 @@ class TestEventScoring(unittest.TestCase):
         self.assertGreater(property_crime_propensity(property_actor), 0.75)
         self.assertLess(property_crime_propensity(stable), 0.05)
 
-    def test_serial_predator_propensity_requires_extreme_or_repeat_profile(self) -> None:
+    def test_serial_predation_risk_rejects_low_control_low_psychopathy_example(self) -> None:
+        example = _record(
+            20,
+            {},
+            genome_composite_scores={
+                "insanity": 0.65,
+                "evil_done_desire": 0.64,
+                "ruthless_ambition": 0.61,
+                "lie_or_cheat_willingness": 0.57,
+                "psychopathy": 0.34,
+                "disguise_motive": 0.22,
+                "practical_intellect": 0.08,
+                "convince_people": 0.17,
+                "force_get_way_desire": 0.50,
+                "revenge_desire": 0.25,
+                "enrich_self_desire": 0.25,
+            },
+        )
+
+        risk = serial_predation_risk(example)
+
+        self.assertFalse(risk.eligible)
+        self.assertEqual(risk.risk_lane, "none")
+        self.assertIn("harm_drive_below_gate", risk.rejection_reasons)
+        self.assertIn("lane_gate_not_met", risk.rejection_reasons)
+
+    def test_serial_predation_risk_hard_gates_reject_good_or_honest_work(self) -> None:
+        base_scores = {
+            "evil_done_desire": 0.95,
+            "psychopathy": 0.95,
+            "force_get_way_desire": 0.90,
+            "ruthless_ambition": 0.90,
+            "revenge_desire": 0.70,
+            "enrich_self_desire": 0.60,
+            "lie_or_cheat_willingness": 0.90,
+            "disguise_motive": 0.90,
+            "practical_intellect": 0.90,
+            "convince_people": 0.90,
+            "isolation_preference": 0.80,
+        }
+        good = _record(
+            21,
+            {},
+            genome_composite_scores={**base_scores, "good_done_desire": 0.35},
+        )
+        honest = _record(
+            22,
+            {},
+            genome_composite_scores={**base_scores, "honest_work_desire": 0.40},
+        )
+
+        good_risk = serial_predation_risk(good)
+        honest_risk = serial_predation_risk(honest)
+
+        self.assertFalse(good_risk.eligible)
+        self.assertIn("good_done_desire_gate", good_risk.rejection_reasons)
+        self.assertFalse(honest_risk.eligible)
+        self.assertIn("honest_work_desire_gate", honest_risk.rejection_reasons)
+
+    def test_serial_predation_risk_reports_organized_and_disorganized_lanes(self) -> None:
+        organized = _record(
+            23,
+            {},
+            genome_composite_scores={
+                "evil_done_desire": 0.92,
+                "psychopathy": 0.90,
+                "force_get_way_desire": 0.86,
+                "ruthless_ambition": 0.86,
+                "revenge_desire": 0.65,
+                "enrich_self_desire": 0.45,
+                "lie_or_cheat_willingness": 0.85,
+                "disguise_motive": 0.85,
+                "practical_intellect": 0.80,
+                "convince_people": 0.75,
+                "isolation_preference": 0.70,
+                "good_done_desire": 0.0,
+                "honest_work_desire": 0.0,
+                "make_friends": 0.0,
+                "insanity": 0.15,
+                "make_enemies": 0.05,
+            },
+        )
+        disorganized = _record(
+            24,
+            {},
+            genome_composite_scores={
+                "evil_done_desire": 0.95,
+                "psychopathy": 0.20,
+                "force_get_way_desire": 0.92,
+                "ruthless_ambition": 0.82,
+                "revenge_desire": 0.82,
+                "enrich_self_desire": 0.82,
+                "insanity": 0.90,
+                "good_done_desire": 0.0,
+                "honest_work_desire": 0.0,
+                "make_friends": 0.0,
+            },
+        )
+
+        organized_risk = serial_predation_risk(organized)
+        disorganized_risk = serial_predation_risk(disorganized)
+
+        self.assertTrue(organized_risk.eligible)
+        self.assertEqual(organized_risk.risk_lane, "organized")
+        self.assertGreater(organized_risk.risk_score, 0.0)
+        self.assertTrue(disorganized_risk.eligible)
+        self.assertEqual(disorganized_risk.risk_lane, "disorganized")
+        self.assertGreater(disorganized_risk.risk_score, 0.0)
+
+    def test_serial_predator_propensity_compatibility_ignores_prior_murders(self) -> None:
         ordinary = _record(1, {trait: 0.0 for trait in ("empathy", "justice", "honesty")})
         extreme = _record(
             2,
-            {
-                "empathy": -98,
-                "justice": -96,
-                "honesty": -90,
-                "temperance": -88,
-                "patience": 5,
-                "neurochemical": 94,
-                "assertiveness": 92,
-                "perception": 90,
-                "discipline": 88,
-                "persuasion": 86,
-                "mating drive": 80,
-                "courage": 85,
-                "ambition": 82,
+            {},
+            genome_composite_scores={
+                "evil_done_desire": 0.95,
+                "psychopathy": 0.95,
+                "force_get_way_desire": 0.90,
+                "ruthless_ambition": 0.90,
+                "revenge_desire": 0.70,
+                "enrich_self_desire": 0.60,
+                "lie_or_cheat_willingness": 0.90,
+                "disguise_motive": 0.90,
+                "practical_intellect": 0.90,
+                "convince_people": 0.90,
+                "isolation_preference": 0.80,
             },
         )
         context = EventScoringContext(
@@ -226,8 +335,8 @@ class TestEventScoring(unittest.TestCase):
         )
 
         self.assertLess(serial_predator_propensity(ordinary), 0.05)
-        self.assertGreater(serial_predator_propensity(extreme, context=context), 0.60)
-        self.assertGreater(
+        self.assertGreater(serial_predator_propensity(extreme, context=context), 0.0)
+        self.assertEqual(
             serial_predator_propensity(extreme, context=context, previous_murders=2),
             serial_predator_propensity(extreme, context=context),
         )
@@ -248,6 +357,9 @@ class TestEventScoring(unittest.TestCase):
                 "isolation_preference": 0.75,
                 "evil_done_desire": 0.8,
                 "lie_or_cheat_willingness": 0.75,
+                "ruthless_ambition": 0.85,
+                "practical_intellect": 0.75,
+                "convince_people": 0.75,
             },
         )
 

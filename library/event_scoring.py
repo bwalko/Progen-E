@@ -58,6 +58,22 @@ class EventScoringContext:
     witness_count: int = 0
 
 
+@dataclass(frozen=True)
+class SerialPredationRisk:
+    """Cached, gated risk components for hidden serial-predation candidates."""
+
+    harm_drive: float = 0.0
+    inhibition: float = 0.0
+    control: float = 0.0
+    exposure_noise: float = 0.0
+    organized_serial_risk: float = 0.0
+    disorganized_serial_risk: float = 0.0
+    risk_lane: str = "none"
+    risk_score: float = 0.0
+    eligible: bool = False
+    rejection_reasons: tuple[str, ...] = ()
+
+
 def clamp01(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, float(value)))
 
@@ -1049,59 +1065,145 @@ def violent_actor_propensity(
     )
 
 
+def serial_predation_risk(
+    subject: Any,
+    *,
+    stable_community_attachment: float = 0.0,
+    in_custody: bool = False,
+    intense_pursuit: bool = False,
+) -> SerialPredationRisk:
+    """Return gated hidden serial-predation candidate risk components.
+
+    This is deliberately not an event-rate score. It identifies the rare adults
+    who may enter a cached candidate table after ordinary murder sampling has
+    already passed its normal rate gates.
+    """
+
+    def c(name: str) -> float:
+        return clamp01(composite_score(subject, name))
+
+    evil_done_desire = c("evil_done_desire")
+    psychopathy = c("psychopathy")
+    force_get_way_desire = c("force_get_way_desire")
+    ruthless_ambition = c("ruthless_ambition")
+    revenge_desire = c("revenge_desire")
+    enrich_self_desire = c("enrich_self_desire")
+    good_done_desire = c("good_done_desire")
+    honest_work_desire = c("honest_work_desire")
+    make_friends = c("make_friends")
+    lie_or_cheat_willingness = c("lie_or_cheat_willingness")
+    disguise_motive = c("disguise_motive")
+    practical_intellect = c("practical_intellect")
+    convince_people = c("convince_people")
+    isolation_preference = c("isolation_preference")
+    insanity = c("insanity")
+    make_enemies = c("make_enemies")
+    community = clamp01(float(stable_community_attachment or 0.0))
+
+    harm_drive = clamp01(
+        0.30 * evil_done_desire
+        + 0.25 * psychopathy
+        + 0.15 * force_get_way_desire
+        + 0.15 * ruthless_ambition
+        + 0.10 * revenge_desire
+        + 0.05 * enrich_self_desire
+    )
+    inhibition = clamp01(
+        0.40 * good_done_desire
+        + 0.35 * honest_work_desire
+        + 0.15 * make_friends
+        + 0.10 * community
+    )
+    control = clamp01(
+        0.30 * lie_or_cheat_willingness
+        + 0.25 * disguise_motive
+        + 0.20 * practical_intellect
+        + 0.15 * convince_people
+        + 0.10 * isolation_preference
+    )
+    exposure_noise = clamp01(
+        0.35 * insanity
+        + 0.25 * make_enemies
+        + 0.20 * max(0.0, 0.50 - disguise_motive)
+        + 0.20 * max(0.0, 0.50 - practical_intellect)
+    )
+    organized = clamp01(
+        harm_drive
+        * psychopathy
+        * max(0.0, 1.0 - inhibition)
+        * control
+        * max(0.0, 1.0 - exposure_noise * 0.60)
+    )
+    disorganized = clamp01(
+        harm_drive
+        * insanity
+        * force_get_way_desire
+        * max(0.0, 1.0 - inhibition)
+        * 0.25
+    )
+
+    reasons: list[str] = []
+    if in_custody:
+        reasons.append("in_custody")
+    if intense_pursuit:
+        reasons.append("intense_active_pursuit")
+    if harm_drive < 0.70:
+        reasons.append("harm_drive_below_gate")
+    if inhibition > 0.25:
+        reasons.append("inhibition_above_gate")
+    if good_done_desire >= 0.35:
+        reasons.append("good_done_desire_gate")
+    if honest_work_desire >= 0.40:
+        reasons.append("honest_work_desire_gate")
+
+    organized_gate = psychopathy >= 0.60 and control >= 0.50
+    disorganized_gate = evil_done_desire >= 0.80 and insanity >= 0.75
+    if not organized_gate and not disorganized_gate:
+        reasons.append("lane_gate_not_met")
+    if organized_gate and control < 0.35:
+        reasons.append("control_below_hidden_pattern_gate")
+
+    lane = "none"
+    score = 0.0
+    if not reasons:
+        if organized_gate and organized >= disorganized:
+            lane = "organized"
+            score = organized
+        elif disorganized_gate:
+            lane = "disorganized"
+            score = disorganized
+        elif organized_gate:
+            lane = "organized"
+            score = organized
+
+    return SerialPredationRisk(
+        harm_drive=harm_drive,
+        inhibition=inhibition,
+        control=control,
+        exposure_noise=exposure_noise,
+        organized_serial_risk=organized,
+        disorganized_serial_risk=disorganized,
+        risk_lane=lane,
+        risk_score=clamp01(score),
+        eligible=(lane != "none"),
+        rejection_reasons=tuple(reasons),
+    )
+
+
 def serial_predator_propensity(
     subject: Any,
     *,
     context: EventScoringContext | None = None,
     previous_murders: int = 0,
 ) -> float:
-    """Very rare repeat-predator signal inside the already-calibrated murder rate.
+    """Compatibility wrapper for older diagnostics.
 
-    This is not a separate event-volume knob. It only identifies detailed people
-    whose extreme profile should make predatory or repeated killing more likely
-    when a murder event has already passed the era/population rate gates.
+    Prior killings and local pressure no longer raise this score; repeated
+    predatory classification is handled from separate incidents in event state.
     """
 
-    coldness = clamp01(
-        negative_extreme(subject, "empathy") * 0.48
-        + negative_extreme(subject, "justice") * 0.34
-        + negative_extreme(subject, "honesty") * 0.18
-    )
-    control = clamp01(
-        positive_extreme(subject, "perception") * 0.24
-        + positive_extreme(subject, "assertiveness") * 0.24
-        + ideal_strength(subject, "patience") * 0.18
-        + positive_extreme(subject, "discipline") * 0.14
-        + positive_extreme(subject, "persuasion") * 0.12
-        + positive_extreme(subject, "neurochemical") * 0.08
-    )
-    instability = clamp01(
-        positive_extreme(subject, "neurochemical") * 0.55
-        + negative_extreme(subject, "temperance") * 0.30
-        + positive_extreme(subject, "mating drive") * 0.15
-    )
-    prior = clamp01(float(previous_murders) / 3.0)
-    role = 0.0
-    if context is not None:
-        role += score_tag_weights(context.pressure_tags, {"scarcity": 0.02, "war": 0.02})
-        role += score_tag_weights(context.opportunity_tags, {"isolated": 0.04, "privacy": 0.03})
-    serial_profile = serial_killer_composite_pressure(subject)
-    moral_brake = (
-        composite_score(subject, "good_done_desire") * 0.10
-        + composite_score(subject, "honest_work_desire") * 0.06
-    )
-    return clamp01(
-        coldness * 0.42
-        + control * 0.24
-        + instability * 0.14
-        + serial_profile * 0.35
-        + violent_actor_propensity(subject, context=context) * 0.10
-        + prior * 0.10
-        + role
-        - ideal_strength(subject, "empathy") * 0.10
-        - ideal_strength(subject, "justice") * 0.08
-        - moral_brake
-    )
+    _ = context, previous_murders
+    return serial_predation_risk(subject).risk_score
 
 
 def property_crime_propensity(

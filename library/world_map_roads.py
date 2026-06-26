@@ -1772,18 +1772,20 @@ def _naturalized_road_segment_points(
     bias = (cell_midpoint[0] - midpoint[0]) * px + (cell_midpoint[1] - midpoint[1]) * py
     first_sign = _road_bend_sign(start, end, bias)
     amounts = (
-        min(0.060, max(0.014, distance * 0.24)),
-        min(0.045, max(0.010, distance * 0.18)),
-        min(0.030, max(0.008, distance * 0.12)),
+        min(0.085, max(0.018, distance * 0.22)),
+        min(0.065, max(0.014, distance * 0.17)),
+        min(0.045, max(0.010, distance * 0.12)),
     )
-    fraction_sets = ((0.34, 0.66), (0.50,))
+    fraction_sets = ((0.24, 0.50, 0.76), (0.34, 0.66), (0.50,))
     for fractions in fraction_sets:
         for amount in amounts:
             for sign in (first_sign, -first_sign):
                 candidates: list[Point] = []
                 for fraction in fractions:
-                    x = start[0] + (end[0] - start[0]) * fraction + px * sign * amount
-                    y = start[1] + (end[1] - start[1]) * fraction + py * sign * amount
+                    taper = 0.72 + 0.28 * math.sin(math.pi * fraction)
+                    bend = amount * taper
+                    x = start[0] + (end[0] - start[0]) * fraction + px * sign * bend
+                    y = start[1] + (end[1] - start[1]) * fraction + py * sign * bend
                     candidates.append((_clamp(x, 0.006, 0.994), _clamp(y, 0.006, 0.994)))
                 candidate_cells = [_land_cell_containing_point(geometry, point) for point in candidates]
                 if any(cell is None or cell.continent_id != start_cell.continent_id for cell in candidate_cells):

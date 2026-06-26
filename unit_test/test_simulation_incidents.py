@@ -30,9 +30,11 @@ from library.simulation_incidents import (
     _incident_context_map,
     _knowledge_culture_kind,
     _knowledge_domain,
+    _maybe_murder_in_settlement,
     _murder_annual_event_cap,
     _murder_settlement_trial_count,
     _record_murder_incident,
+    _refresh_serial_predation_event_triggers,
     knowledge_culture_propensity,
     MURDER_PROPENSITY_THRESHOLD,
     property_crime_propensity,
@@ -258,6 +260,53 @@ class TestSimulationIncidents(unittest.TestCase):
             father_id=father_id,
             mother_id=mother_id,
         )
+
+    def _make_serial_risk_profile(self, rec) -> None:
+        rec.person = replace(
+            rec.person,
+            genome_composite_scores={
+                "evil_done_desire": 0.94,
+                "psychopathy": 0.92,
+                "force_get_way_desire": 0.88,
+                "ruthless_ambition": 0.88,
+                "revenge_desire": 0.50,
+                "enrich_self_desire": 0.42,
+                "lie_or_cheat_willingness": 0.90,
+                "disguise_motive": 0.88,
+                "practical_intellect": 0.84,
+                "convince_people": 0.80,
+                "isolation_preference": 0.78,
+                "good_done_desire": 0.0,
+                "honest_work_desire": 0.0,
+                "make_friends": 0.0,
+                "insanity": 0.10,
+                "make_enemies": 0.05,
+            },
+        )
+
+    def _serial_candidate_row(self, rec, *, status: str = "active") -> dict[str, object]:
+        return {
+            "person_id": int(rec.person_id),
+            "risk_lane": "organized",
+            "status": status,
+            "risk_score": 0.88,
+            "harm_drive": 0.90,
+            "inhibition": 0.02,
+            "control": 0.84,
+            "exposure_noise": 0.10,
+            "organized_serial_risk": 0.88,
+            "disorganized_serial_risk": 0.0,
+            "next_check_year": 2000,
+            "last_checked_year": 1000,
+            "last_serious_crime_year": None,
+            "hidden_linked_kill_count": 0,
+            "suspected_linked_kill_count": 0,
+            "public_suspicion_score": 0.0,
+            "pattern_recognized": False,
+            "offender_identity_confidence": 0.0,
+            "rejection_reasons": [],
+            "details": {},
+        }
 
     def test_murder_population_rate_helpers_scale_above_review_sample_cap(self) -> None:
         residents = [object()] * 20_000
@@ -686,6 +735,7 @@ class TestSimulationIncidents(unittest.TestCase):
                     JOIN simulation_events_readable er ON er.id = e.id
                     JOIN simulation_event_records_readable r ON r.event_id = e.id
                     WHERE e.event_type = 'murder'
+                      AND r.record_key = 'default'
                     """
                 ).fetchone()
 
@@ -697,10 +747,17 @@ class TestSimulationIncidents(unittest.TestCase):
             payload = json.loads(str(row["payload_json"]))
             self.assertEqual(int(payload["killer_person_id"]), killer.person_id)
             self.assertEqual(int(payload["victim_person_id"]), victim.person_id)
+            self.assertIn("crime_context", payload)
+            self.assertIn("evidence_strength", payload)
+            self.assertIn("offender_identity_confidence", payload)
+            self.assertFalse(payload["serial_murder_classification"])
             self.assertEqual(str(row["record_type"]), "violent_crime_record")
             self.assertEqual(str(row["visibility_state"]), "rumored")
             self.assertAlmostEqual(float(row["confidence"]), 0.55)
-            self.assertEqual(int(row["public_actor_person_id"]), killer.person_id)
+            if bool(payload["offender_identified"]):
+                self.assertEqual(int(row["public_actor_person_id"]), killer.person_id)
+            else:
+                self.assertIsNone(row["public_actor_person_id"])
             self.assertEqual(int(row["public_victim_person_id"]), victim.person_id)
             self.assertEqual(
                 str(row["prose_variant_key"]),
@@ -831,6 +888,17 @@ class TestSimulationIncidents(unittest.TestCase):
             self.assertEqual(context.witness_person_ids, (witness.person_id,))
             self.assertTrue(context.seen_identified)
             self.assertGreater(context.witness_status_power_01, 0.6)
+            self.assertTrue(context.discovered)
+            self.assertTrue(context.body_or_evidence_found)
+            self.assertTrue(context.offender_seen)
+            self.assertIn(context.offender_identified, {True, False})
+            self.assertGreater(context.witness_pressure_score, 0.20)
+            self.assertGreater(context.victim_kin_pressure, 0.20)
+            self.assertGreater(context.authority_capacity, 0.20)
+            self.assertGreater(context.evidence_strength, 0.20)
+            self.assertGreater(context.public_suspicion_score, 0.25)
+            self.assertGreaterEqual(context.offender_identity_confidence, 0.0)
+            self.assertFalse(context.pattern_recognized)
             self.assertEqual(context.victim_kin_count, 1)
             self.assertGreater(context.victim_kin_power_01, 0.45)
             self.assertGreater(context.justice_pressure_score, 0.65)
@@ -904,6 +972,15 @@ class TestSimulationIncidents(unittest.TestCase):
                 "killed after a long-running neighborhood feud",
             )
             self.assertEqual(
+                murder_payload["serious_crime_category"],
+                "feud_revenge_murder",
+            )
+            self.assertEqual(
+                murder_payload["serious_crime_category_label"],
+                "feud or revenge murder",
+            )
+            self.assertFalse(murder_payload["serial_classification_eligible"])
+            self.assertEqual(
                 murder_payload["crime_context"]["motive_category"],
                 "settlement_grievance",
             )
@@ -912,7 +989,12 @@ class TestSimulationIncidents(unittest.TestCase):
                 outlaw_case.details["crime_context"]["motive_detail"],
                 "neighborhood_feud",
             )
-            self.assertGreater(outlaw_case.knownness_01, 0.55)
+            self.assertGreater(outlaw_case.knownness_01, 0.25)
+            self.assertIn("offender_identity_confidence", outlaw_case.details)
+            self.assertIn("public_suspicion_score", outlaw_case.details)
+            self.assertIn("justice_response", murder_payload["consequences"])
+            self.assertIn("pursuit_pressure_score", murder_payload)
+            self.assertIn("public_case_status", murder_payload)
             summary = render_event_admin_summary(
                 {
                     "id": 1,
@@ -922,7 +1004,425 @@ class TestSimulationIncidents(unittest.TestCase):
                 }
             ).prose
             self.assertIn("killed after a long-running neighborhood feud", summary)
+            self.assertIn("category: feud or revenge murder", summary)
             self.assertNotIn("settlement grievance", summary)
+
+    def test_murder_justice_response_persists_legal_fallout_and_infamy(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            ctx = self._context(root)
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            killer = self._add_adult(
+                ctx,
+                genome=VIOLENT_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            victim = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            witness = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            self._make_serial_risk_profile(killer)
+            ctx.serial_predation_candidates[killer.person_id] = self._serial_candidate_row(killer)
+            facts = _build_incident_scoring_facts(ctx, 1001)
+            crime_context = _build_serious_crime_context(
+                ctx,
+                facts,
+                year=1001,
+                killer=killer,
+                victim=victim,
+                incident_kind="murder",
+                motive_category="settlement_grievance",
+                witness_person_ids=(witness.person_id,),
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                local_records=(killer, victim, witness),
+                pressure=0.4,
+            )
+            crime_context = replace(
+                crime_context,
+                discovered=True,
+                body_or_evidence_found=True,
+                offender_seen=True,
+                offender_identified=True,
+                witness_pressure_score=0.80,
+                witness_status_score=0.72,
+                victim_kin_pressure=0.62,
+                authority_capacity=0.70,
+                evidence_strength=0.92,
+                public_suspicion_score=0.90,
+                offender_identity_confidence=0.91,
+                justice_pressure_score=0.88,
+                retaliation_risk_score=0.76,
+            )
+            incident = MurderIncident(
+                killer=killer,
+                victim=victim,
+                incident_kind="murder",
+                motive="settlement_grievance",
+                witness_person_ids=(witness.person_id,),
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                actor_propensity=0.9,
+                resource_pressure=0.4,
+                historical_importance=0.7,
+                genome_signals={},
+                crime_context=crime_context,
+            )
+
+            with patch("library.simulation_incidents._candidate_intense_pursuit", return_value=False):
+                _record_murder_incident(ctx, 1001, incident)
+
+            murder_payload = next(
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "murder"
+            )
+            response = murder_payload["consequences"]["justice_response"]
+            self.assertEqual(response["response_level"], "intense")
+            self.assertEqual(response["public_case_status"], "accused_killer")
+            self.assertIn("investigation_pressure", response["abstract_actions"])
+            self.assertIn("accusation_pressure", response["abstract_actions"])
+            self.assertIn("offender_flight_or_panic_pressure", response["abstract_actions"])
+            self.assertGreater(murder_payload["pursuit_pressure_score"], 0.60)
+            fallout = murder_payload["consequences"]["legal_fallout"]
+            self.assertEqual(fallout[0]["fallout_type"], "murder_accusation")
+            self.assertEqual(int(fallout[0]["principal_person_id"]), killer.person_id)
+            marks = murder_payload["consequences"]["reputation_marks"]
+            self.assertEqual(marks[0]["reputation_axis"], "infamy")
+            self.assertEqual(int(marks[0]["person_id"]), killer.person_id)
+            candidate_details = ctx.serial_predation_candidates[killer.person_id]["details"]
+            self.assertEqual(candidate_details["justice_response_level"], "intense")
+            self.assertGreater(candidate_details["hidden_heat_score"], 0.0)
+
+            checkpoint_simulation_to_save(ctx, full_snapshot=False)
+            with closing(sqlite3.connect(root / "save.sqlite")) as conn:
+                conn.row_factory = sqlite3.Row
+                fallout_row = conn.execute(
+                    """
+                    SELECT fallout_type, principal_person_id, opposing_person_id,
+                           severity, source_event_type
+                    FROM simulation_legal_fallout_readable
+                    WHERE source_event_type = 'murder'
+                    """
+                ).fetchone()
+                reputation_row = conn.execute(
+                    """
+                    SELECT reputation_axis, person_id, reputation_after, direction,
+                           source_event_type
+                    FROM simulation_reputation_marks_readable
+                    WHERE source_event_type = 'murder'
+                    """
+                ).fetchone()
+
+            self.assertIsNotNone(fallout_row)
+            self.assertEqual(str(fallout_row["fallout_type"]), "murder_accusation")
+            self.assertEqual(int(fallout_row["principal_person_id"]), killer.person_id)
+            self.assertEqual(int(fallout_row["opposing_person_id"]), victim.person_id)
+            self.assertGreater(float(fallout_row["severity"]), 0.0)
+            self.assertIsNotNone(reputation_row)
+            self.assertEqual(str(reputation_row["reputation_axis"]), "infamy")
+            self.assertEqual(int(reputation_row["person_id"]), killer.person_id)
+            self.assertEqual(str(reputation_row["direction"]), "negative")
+
+    def test_serial_candidate_refresh_uses_event_triggers_not_broad_adult_scan(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            due = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            triggered = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            unrelated = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            self._make_serial_risk_profile(due)
+            self._make_serial_risk_profile(triggered)
+            self._make_serial_risk_profile(unrelated)
+            ctx.serial_predation_candidates[due.person_id] = {
+                **self._serial_candidate_row(due, status="dormant"),
+                "next_check_year": 1001,
+            }
+            ctx._record_simulation_event(
+                1001,
+                "job_assigned",
+                {"person_id": int(triggered.person_id), "job": "merchant"},
+            )
+
+            checked = _refresh_serial_predation_event_triggers(
+                ctx,
+                year=1001,
+                current_records=[due, triggered, unrelated],
+            )
+
+            self.assertIn(due.person_id, checked)
+            self.assertIn(triggered.person_id, checked)
+            self.assertNotIn(unrelated.person_id, checked)
+            self.assertIn(due.person_id, ctx.serial_predation_candidates)
+            self.assertIn(triggered.person_id, ctx.serial_predation_candidates)
+            self.assertNotIn(unrelated.person_id, ctx.serial_predation_candidates)
+            self.assertEqual(
+                ctx.serial_predation_candidates[triggered.person_id]["details"][
+                    "last_trigger"
+                ],
+                "job_or_location_change",
+            )
+
+    def test_successful_murder_triggers_candidate_evaluation(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            killer = self._add_adult(
+                ctx,
+                genome=_genome(
+                    justice=-95,
+                    empathy=-95,
+                    courage=90,
+                    assertiveness=90,
+                    ambition=85,
+                ),
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            victim = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            self._make_serial_risk_profile(killer)
+            incident = MurderIncident(
+                killer=killer,
+                victim=victim,
+                incident_kind="murder",
+                motive="settlement_grievance",
+                witness_person_ids=(),
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                actor_propensity=0.9,
+                resource_pressure=0.4,
+                historical_importance=0.7,
+                genome_signals={},
+            )
+
+            with patch("library.simulation_incidents._candidate_intense_pursuit", return_value=False):
+                _record_murder_incident(ctx, 1001, incident)
+
+            row = ctx.serial_predation_candidates.get(killer.person_id)
+            self.assertIsInstance(row, dict)
+            self.assertEqual(row["last_checked_year"], 1001)
+            self.assertEqual(row["last_serious_crime_year"], 1001)
+            self.assertEqual(row["details"]["last_trigger"], "successful_serious_crime")
+            self.assertEqual(row["details"]["last_serious_crime_trigger"], "murder")
+            murder_payload = next(
+                payload
+                for _year, event_type, payload in ctx._pending_simulation_events
+                if event_type == "murder"
+            )
+            self.assertFalse(murder_payload["serial_murder_classification"])
+
+    def test_murder_sampling_uses_existing_candidate_rows_without_broad_refresh(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            settlement.food_pressure = 2.0
+            killer = self._add_adult(
+                ctx,
+                genome=_genome(
+                    justice=-95,
+                    empathy=-95,
+                    courage=90,
+                    assertiveness=90,
+                    ambition=85,
+                ),
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            killer.person = replace(
+                killer.person,
+                job="merchant",
+                job_market_type="trade",
+                current_settlement_id=settlement.settlement_id,
+            )
+            victim = self._add_adult(
+                ctx,
+                genome=PEACEFUL_GENOME,
+                gender="Female",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            ctx.serial_predation_candidates[killer.person_id] = self._serial_candidate_row(killer)
+
+            with patch(
+                "library.simulation_incidents._refresh_serial_predation_candidates"
+            ) as refresh, patch(
+                "library.simulation_incidents.MURDER_BASE_SETTLEMENT_CHANCE", 1.0
+            ), patch(
+                "library.simulation_incidents.MURDER_SETTLEMENT_CHANCE_CAP", 1.0
+            ), patch(
+                "library.simulation_incidents.MURDER_PROPENSITY_THRESHOLD", 0.2
+            ):
+                incident = _maybe_murder_in_settlement(
+                    ctx,
+                    1001,
+                    settlement.settlement_id,
+                    [killer, victim],
+                    rng=random.Random(7),
+                    already_dead=set(),
+                )
+
+            refresh.assert_not_called()
+            self.assertIsNotNone(incident)
+            assert incident is not None
+            self.assertEqual(incident.killer.person_id, killer.person_id)
+            self.assertGreater(incident.serial_predator_propensity, 0.0)
+            self.assertGreater(incident.serial_predation_opportunity_score, 0.0)
+            self.assertEqual(incident.incident_kind, "predatory_murder")
+
+    def test_predatory_murder_classification_requires_repeated_separate_predation(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            killer = self._add_adult(
+                ctx,
+                genome=VIOLENT_GENOME,
+                gender="Male",
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            facts = _build_incident_scoring_facts(ctx, 1001)
+
+            def record_kind(kind: str, previous_predatory: int) -> dict[str, object]:
+                victim = self._add_adult(
+                    ctx,
+                    genome=PEACEFUL_GENOME,
+                    gender="Female",
+                    settlement_id=settlement.settlement_id,
+                    region_id=settlement.region_id,
+                )
+                witness = self._add_adult(
+                    ctx,
+                    genome=PEACEFUL_GENOME,
+                    gender="Female",
+                    settlement_id=settlement.settlement_id,
+                    region_id=settlement.region_id,
+                )
+                context = _build_serious_crime_context(
+                    ctx,
+                    facts,
+                    year=1001 + previous_predatory,
+                    killer=killer,
+                    victim=victim,
+                    incident_kind=kind,
+                    motive_category="settlement_grievance",
+                    witness_person_ids=(witness.person_id,),
+                    settlement_id=settlement.settlement_id,
+                    region_id=settlement.region_id,
+                    local_records=(killer, victim, witness),
+                    pressure=0.4,
+                )
+                context = replace(
+                    context,
+                    discovered=True,
+                    body_or_evidence_found=True,
+                    offender_seen=True,
+                    offender_identified=True,
+                    evidence_strength=0.95,
+                    public_suspicion_score=0.95,
+                    offender_identity_confidence=0.95,
+                )
+                incident = MurderIncident(
+                    killer=killer,
+                    victim=victim,
+                    incident_kind=kind,
+                    motive="settlement_grievance",
+                    witness_person_ids=(witness.person_id,),
+                    settlement_id=settlement.settlement_id,
+                    region_id=settlement.region_id,
+                    actor_propensity=0.9,
+                    resource_pressure=0.4,
+                    historical_importance=0.7,
+                    genome_signals={},
+                    serial_predator_propensity=0.4 if kind == "predatory_murder" else 0.0,
+                    serial_predation_lane="organized" if kind == "predatory_murder" else "none",
+                    serial_predation_candidate_status="active"
+                    if kind == "predatory_murder"
+                    else "none",
+                    previous_predatory_murder_count=previous_predatory,
+                    crime_context=context,
+                )
+                _record_murder_incident(ctx, 1001 + previous_predatory, incident)
+                return next(
+                    payload
+                    for _year, event_type, payload in reversed(ctx._pending_simulation_events)
+                    if event_type == "murder"
+                )
+
+            first = record_kind("predatory_murder", 0)
+            second = record_kind("predatory_murder", 1)
+            third = record_kind("predatory_murder", 2)
+            feud = record_kind("feud_killing", 2)
+
+            self.assertEqual(first["serial_pattern_status"], "none")
+            self.assertEqual(first["serious_crime_category"], "predatory_murder")
+            self.assertFalse(first["serial_murder_classification"])
+            self.assertEqual(second["serial_pattern_status"], "linked_pattern_possible")
+            self.assertEqual(second["serious_crime_category"], "predatory_murder")
+            self.assertFalse(second["serial_murder_classification"])
+            self.assertEqual(third["serial_pattern_status"], "internal_serial_murderer")
+            self.assertEqual(
+                third["serious_crime_category"],
+                "serial_predatory_murder",
+            )
+            self.assertTrue(third["serial_murder_classification"])
+            self.assertTrue(third["serial_classification_eligible"])
+            self.assertTrue(third["public_pattern_recognized"])
+            self.assertEqual(
+                third["consequences"]["justice_response"]["pattern_status"],
+                "public_pattern_recognized",
+            )
+            self.assertIn(
+                "public_pattern_recognition",
+                third["consequences"]["justice_response"]["abstract_actions"],
+            )
+            self.assertTrue(
+                any(
+                    row["memory_type"] == "violent_pattern_fear"
+                    for row in third["consequences"]["faction_memory"]
+                )
+            )
+            self.assertEqual(feud["serial_pattern_status"], "none")
+            self.assertEqual(feud["serious_crime_category"], "feud_revenge_murder")
+            self.assertFalse(feud["serial_murder_classification"])
+            self.assertFalse(feud["serial_classification_eligible"])
 
     def test_forced_murder_tick_allows_population_scaled_multiple_events(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -969,7 +1469,7 @@ class TestSimulationIncidents(unittest.TestCase):
             murder_events = [
                 payload
                 for _year, event_type, payload in ctx._pending_simulation_events
-                if event_type == "murder"
+                if event_type == "murder" and "victim_person_id" in payload
             ]
             victim_ids = {int(event["victim_person_id"]) for event in murder_events}
             self.assertEqual(len(murder_events), 3)

@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 23
+SAVE_SCHEMA_VERSION = 24
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -88,6 +88,7 @@ _SAVE_REBUILD_TABLES = (
     "simulation_outlaw_cases",
     "simulation_outlaw_refuges",
     "simulation_outlaw_custodies",
+    "simulation_serial_predation_candidates",
     "simulation_couples",
     "simulation_paramours",
     "simulation_events",
@@ -402,6 +403,9 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
         18,
         19,
         20,
+        21,
+        22,
+        23,
         SAVE_SCHEMA_VERSION,
     ):
         raise RuntimeError(
@@ -992,6 +996,145 @@ def _ensure_outlaw_tables(conn: sqlite3.Connection) -> None:
     cols = set(_table_columns(conn, "simulation_outlaw_refuges"))
     if "display_name" not in cols:
         conn.execute("ALTER TABLE simulation_outlaw_refuges ADD COLUMN display_name TEXT")
+
+
+def _ensure_serial_predation_candidate_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS simulation_serial_predation_candidates (
+            person_id INTEGER PRIMARY KEY,
+            risk_lane TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'dormant',
+            risk_score REAL NOT NULL DEFAULT 0,
+            harm_drive REAL NOT NULL DEFAULT 0,
+            inhibition REAL NOT NULL DEFAULT 0,
+            control REAL NOT NULL DEFAULT 0,
+            exposure_noise REAL NOT NULL DEFAULT 0,
+            organized_serial_risk REAL NOT NULL DEFAULT 0,
+            disorganized_serial_risk REAL NOT NULL DEFAULT 0,
+            next_check_year INTEGER,
+            last_checked_year INTEGER,
+            last_serious_crime_year INTEGER,
+            hidden_linked_kill_count INTEGER NOT NULL DEFAULT 0,
+            suspected_linked_kill_count INTEGER NOT NULL DEFAULT 0,
+            public_suspicion_score REAL NOT NULL DEFAULT 0,
+            pattern_recognized INTEGER NOT NULL DEFAULT 0,
+            offender_identity_confidence REAL NOT NULL DEFAULT 0,
+            rejection_reasons_json TEXT NOT NULL DEFAULT '[]',
+            details_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_sim_serial_candidates_due
+        ON simulation_serial_predation_candidates (status, next_check_year);
+        CREATE INDEX IF NOT EXISTS idx_sim_serial_candidates_risk
+        ON simulation_serial_predation_candidates (risk_lane, risk_score DESC);
+        CREATE INDEX IF NOT EXISTS idx_sim_serial_candidates_pattern
+        ON simulation_serial_predation_candidates (
+            pattern_recognized, public_suspicion_score DESC
+        );
+        """
+    )
+
+
+def _serial_candidate_int(row: dict[str, object], key: str) -> int | None:
+    value = row.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _serial_candidate_float(row: dict[str, object], key: str) -> float:
+    try:
+        value = float(row.get(key, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return max(0.0, min(1.0, value))
+
+
+def _sync_serial_predation_candidates(
+    conn: sqlite3.Connection, ctx: "SimulationContext"
+) -> None:
+    _ensure_serial_predation_candidate_table(conn)
+    candidates = getattr(ctx, "serial_predation_candidates", {}) or {}
+    now = datetime.now(timezone.utc).isoformat()
+    for person_id, raw in candidates.items():
+        if not isinstance(raw, dict):
+            continue
+        row = {str(k): v for k, v in raw.items()}
+        pid = _serial_candidate_int(row, "person_id")
+        if pid is None:
+            try:
+                pid = int(person_id)
+            except (TypeError, ValueError):
+                continue
+        rejection_reasons = row.get("rejection_reasons")
+        if not isinstance(rejection_reasons, (list, tuple)):
+            rejection_reasons = []
+        details = row.get("details")
+        if not isinstance(details, dict):
+            details = {}
+        conn.execute(
+            """
+            INSERT INTO simulation_serial_predation_candidates (
+                person_id, risk_lane, status, risk_score, harm_drive, inhibition,
+                control, exposure_noise, organized_serial_risk,
+                disorganized_serial_risk, next_check_year, last_checked_year,
+                last_serious_crime_year, hidden_linked_kill_count,
+                suspected_linked_kill_count, public_suspicion_score,
+                pattern_recognized, offender_identity_confidence,
+                rejection_reasons_json, details_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(person_id)
+            DO UPDATE SET
+                risk_lane = excluded.risk_lane,
+                status = excluded.status,
+                risk_score = excluded.risk_score,
+                harm_drive = excluded.harm_drive,
+                inhibition = excluded.inhibition,
+                control = excluded.control,
+                exposure_noise = excluded.exposure_noise,
+                organized_serial_risk = excluded.organized_serial_risk,
+                disorganized_serial_risk = excluded.disorganized_serial_risk,
+                next_check_year = excluded.next_check_year,
+                last_checked_year = excluded.last_checked_year,
+                last_serious_crime_year = excluded.last_serious_crime_year,
+                hidden_linked_kill_count = excluded.hidden_linked_kill_count,
+                suspected_linked_kill_count = excluded.suspected_linked_kill_count,
+                public_suspicion_score = excluded.public_suspicion_score,
+                pattern_recognized = excluded.pattern_recognized,
+                offender_identity_confidence = excluded.offender_identity_confidence,
+                rejection_reasons_json = excluded.rejection_reasons_json,
+                details_json = excluded.details_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                pid,
+                str(row.get("risk_lane") or "").strip(),
+                str(row.get("status") or "dormant").strip() or "dormant",
+                _serial_candidate_float(row, "risk_score"),
+                _serial_candidate_float(row, "harm_drive"),
+                _serial_candidate_float(row, "inhibition"),
+                _serial_candidate_float(row, "control"),
+                _serial_candidate_float(row, "exposure_noise"),
+                _serial_candidate_float(row, "organized_serial_risk"),
+                _serial_candidate_float(row, "disorganized_serial_risk"),
+                _serial_candidate_int(row, "next_check_year"),
+                _serial_candidate_int(row, "last_checked_year"),
+                _serial_candidate_int(row, "last_serious_crime_year"),
+                max(0, int(row.get("hidden_linked_kill_count") or 0)),
+                max(0, int(row.get("suspected_linked_kill_count") or 0)),
+                _serial_candidate_float(row, "public_suspicion_score"),
+                1 if bool(row.get("pattern_recognized")) else 0,
+                _serial_candidate_float(row, "offender_identity_confidence"),
+                json.dumps([str(v) for v in rejection_reasons], sort_keys=True),
+                json.dumps(details, sort_keys=True),
+                now,
+            ),
+        )
 
 
 def _sync_outlaw_state(conn: sqlite3.Connection, ctx: "SimulationContext") -> None:
@@ -4223,10 +4366,17 @@ def _event_record_public_people(
     event_type: str,
     primary_person_id: int | None,
     secondary_person_id: int | None,
+    payload: dict | None = None,
 ) -> tuple[int | None, int | None]:
     et = str(event_type or "").strip()
     if et == "death":
         return None, primary_person_id
+    if et == "murder":
+        p = payload if isinstance(payload, dict) else {}
+        identified = bool(p.get("offender_identified")) or (
+            _safe_float(p.get("offender_identity_confidence")) >= 0.60
+        )
+        return (primary_person_id if identified else None), secondary_person_id
     if et in {"household_childcare_shortfall", "household_prosperity_crisis"}:
         return None, primary_person_id
     return primary_person_id, secondary_person_id
@@ -4248,12 +4398,44 @@ _DEFAULT_PUBLIC_STAGE_EVENT_TYPES: frozenset[str] = frozenset(
         "campaign_ended",
         "battle_fought",
         "dynastic_marriage_alliance",
+        "murder",
     }
 )
 
 
 def _clean_stage_payload(payload: dict | None) -> dict:
     return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _json_loads_dict(raw: object) -> dict[str, object]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if raw in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(number):
+        return float(default)
+    return number
+
+
+def _safe_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _stage_label(value: object) -> str:
@@ -4282,6 +4464,8 @@ def _default_public_stage_record_specs(
         record_type: str,
         confidence: float,
         distortion: dict[str, object],
+        public_actor_person_id: int | None = None,
+        public_victim_person_id: int | None = None,
     ) -> None:
         specs.append(
             {
@@ -4290,6 +4474,8 @@ def _default_public_stage_record_specs(
                 "record_type": record_type,
                 "confidence": confidence,
                 "distortion": distortion,
+                "public_actor_person_id": public_actor_person_id,
+                "public_victim_person_id": public_victim_person_id,
             }
         )
 
@@ -4301,6 +4487,65 @@ def _default_public_stage_record_specs(
             confidence=0.35,
             distortion={"uncertain_fields": ["cause"], "public_cause": "unknown"},
         )
+    elif et == "murder":
+        identified = bool(p.get("offender_identified")) or (
+            _safe_float(p.get("offender_identity_confidence")) >= 0.60
+        )
+        actor_id = _safe_int(p.get("killer_person_id")) if identified else None
+        victim_id = _safe_int(p.get("victim_person_id"))
+        suspicion = _safe_float(p.get("public_suspicion_score"))
+        evidence = _safe_float(p.get("evidence_strength"))
+        pattern = bool(p.get("pattern_recognized"))
+        confidence = max(0.25, min(0.75, suspicion or evidence or 0.35))
+        add(
+            record_key="public_suspicious_death",
+            public_stage="unknown",
+            record_type="violent_crime_uncertainty",
+            confidence=confidence,
+            public_actor_person_id=actor_id,
+            public_victim_person_id=victim_id,
+            distortion={
+                "uncertain_fields": ["offender", "motive"],
+                "public_cause": "suspicious death",
+            },
+        )
+        if suspicion >= 0.35 or evidence >= 0.35:
+            add(
+                record_key="public_murder_rumor",
+                public_stage="rumored",
+                record_type="violent_crime_rumor",
+                confidence=max(0.35, min(0.72, suspicion)),
+                public_actor_person_id=actor_id,
+                public_victim_person_id=victim_id,
+                distortion={
+                    "rumored_cause": "suspected murder",
+                    "uncertain_fields": ["offender"],
+                },
+            )
+        if pattern:
+            add(
+                record_key="public_pattern_rumor",
+                public_stage="rumored",
+                record_type="violent_pattern_rumor",
+                confidence=max(0.45, min(0.80, suspicion)),
+                public_actor_person_id=actor_id,
+                public_victim_person_id=victim_id,
+                distortion={
+                    "rumored_cause": "linked to earlier deaths",
+                    "pattern_recognized": True,
+                    "uncertain_fields": ["offender", "pattern"],
+                },
+            )
+        if identified:
+            add(
+                record_key="public_identified_killing",
+                public_stage="known",
+                record_type="public_chronicle",
+                confidence=max(0.60, min(1.0, _safe_float(p.get("offender_identity_confidence")))),
+                public_actor_person_id=actor_id,
+                public_victim_person_id=victim_id,
+                distortion={},
+            )
     elif et in {"settlement_move_planned", "settlement_move_dropped", "settlement_moved"}:
         add(
             record_key="public_move_unclear",
@@ -4443,6 +4688,16 @@ def _insert_default_public_stage_record_rows(
             record_type=str(spec["record_type"]),
             confidence=float(spec["confidence"]),
             distortion=dict(spec["distortion"]),
+            public_actor_person_id=(
+                int(spec["public_actor_person_id"])
+                if spec.get("public_actor_person_id") is not None
+                else None
+            ),
+            public_victim_person_id=(
+                int(spec["public_victim_person_id"])
+                if spec.get("public_victim_person_id") is not None
+                else None
+            ),
         )
 
 
@@ -4464,7 +4719,7 @@ def _insert_default_event_record_row(
         event_type, event_origin
     )
     public_actor, public_victim = _event_record_public_people(
-        event_type, primary_person_id, secondary_person_id
+        event_type, primary_person_id, secondary_person_id, payload
     )
     prose_variant_key = f"{record_type}.{visibility_state}.default"
     conn.execute(
@@ -4747,7 +5002,8 @@ def mark_event_record_misattributed(
 def _event_record_event_row(conn: sqlite3.Connection, event_id: int) -> sqlite3.Row:
     row = conn.execute(
         """
-        SELECT id, sim_year, event_type, primary_person_id, secondary_person_id,
+        SELECT id, sim_year, event_type, payload_json,
+               primary_person_id, secondary_person_id,
                settlement_key, region_key, event_origin, created_at
         FROM simulation_events
         WHERE id = ?
@@ -4792,6 +5048,7 @@ def upsert_event_record(
         str(event["event_type"] or ""),
         int(event["primary_person_id"]) if event["primary_person_id"] is not None else None,
         int(event["secondary_person_id"]) if event["secondary_person_id"] is not None else None,
+        _json_loads_dict(event["payload_json"] if "payload_json" in event.keys() else None),
     )
     if public_actor_person_id is not None:
         public_actor = int(public_actor_person_id)
@@ -5784,6 +6041,7 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
     _ensure_household_service_contracts_table(conn)
     _ensure_patronage_ties_table(conn)
     _ensure_outlaw_tables(conn)
+    _ensure_serial_predation_candidate_table(conn)
     from library.person_archive_scores import ensure_person_archive_score_schema
     from library.person_almanack import ensure_person_almanack_schema
 
@@ -6907,6 +7165,7 @@ def clear_world_checkpoint(save_db_path: Path | str, *, world: str) -> None:
         conn.execute("DELETE FROM simulation_outlaw_cases")
         conn.execute("DELETE FROM simulation_outlaw_refuges")
         conn.execute("DELETE FROM simulation_outlaw_custodies")
+        conn.execute("DELETE FROM simulation_serial_predation_candidates")
         conn.execute("DELETE FROM simulation_settlements")
         conn.execute("DELETE FROM simulation_regions")
         conn.execute("DELETE FROM simulation_couples")
@@ -7366,6 +7625,7 @@ def append_simulation_event_rows(
             event_type,
             primary,
             secondary,
+            payload,
         )
         default_record_rows.append(
             (
@@ -7658,6 +7918,7 @@ def flush_simulation_meta_checkpoint(ctx: "SimulationContext") -> None:
             conn, getattr(ctx, "passive_promotion_log", ())
         )
         _sync_outlaw_state(conn, ctx)
+        _sync_serial_predation_candidates(conn, ctx)
         conn.commit()
     _profile_accumulate("checkpoint.meta_only", t0)
 
@@ -8560,6 +8821,9 @@ def checkpoint_simulation_snapshot(ctx: "SimulationContext") -> None:
         _sync_outlaw_state(conn, ctx)
         t0 = _profile_accumulate("checkpoint.snapshot_outlaws", t0)
 
+        _sync_serial_predation_candidates(conn, ctx)
+        t0 = _profile_accumulate("checkpoint.snapshot_serial_predation_candidates", t0)
+
         passive_column_names = (
             "person_id",
             "name",
@@ -9405,6 +9669,77 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
                 if case.case_key:
                     outlaw_cases[case.case_key] = case
 
+        serial_predation_candidates: dict[int, dict[str, object]] = {}
+        if _table_exists(conn, "simulation_serial_predation_candidates"):
+            for r in conn.execute(
+                """
+                SELECT *
+                FROM simulation_serial_predation_candidates
+                WHERE person_id IN (
+                    SELECT person_id
+                    FROM simulation_people
+                    WHERE is_alive = 1 OR deathyear IS NULL OR deathyear >= ?
+                )
+                ORDER BY person_id
+                """,
+                (int(reference_year) - int(retention),),
+            ).fetchall():
+                pid = int(r["person_id"] or 0)
+                if pid not in id_to:
+                    continue
+                rejection_reasons: list[str] = []
+                raw_reasons = r["rejection_reasons_json"] if "rejection_reasons_json" in r.keys() else None
+                if raw_reasons:
+                    try:
+                        parsed_reasons = json.loads(str(raw_reasons))
+                        if isinstance(parsed_reasons, list):
+                            rejection_reasons = [str(v) for v in parsed_reasons]
+                    except json.JSONDecodeError:
+                        rejection_reasons = []
+                details: dict[str, object] = {}
+                raw_details = r["details_json"] if "details_json" in r.keys() else None
+                if raw_details:
+                    try:
+                        parsed_details = json.loads(str(raw_details))
+                        if isinstance(parsed_details, dict):
+                            details = parsed_details
+                    except json.JSONDecodeError:
+                        details = {}
+                serial_predation_candidates[pid] = {
+                    "person_id": pid,
+                    "risk_lane": str(r["risk_lane"] or ""),
+                    "status": str(r["status"] or "dormant"),
+                    "risk_score": float(r["risk_score"] or 0.0),
+                    "harm_drive": float(r["harm_drive"] or 0.0),
+                    "inhibition": float(r["inhibition"] or 0.0),
+                    "control": float(r["control"] or 0.0),
+                    "exposure_noise": float(r["exposure_noise"] or 0.0),
+                    "organized_serial_risk": float(r["organized_serial_risk"] or 0.0),
+                    "disorganized_serial_risk": float(r["disorganized_serial_risk"] or 0.0),
+                    "next_check_year": (
+                        int(r["next_check_year"])
+                        if r["next_check_year"] is not None
+                        else None
+                    ),
+                    "last_checked_year": (
+                        int(r["last_checked_year"])
+                        if r["last_checked_year"] is not None
+                        else None
+                    ),
+                    "last_serious_crime_year": (
+                        int(r["last_serious_crime_year"])
+                        if r["last_serious_crime_year"] is not None
+                        else None
+                    ),
+                    "hidden_linked_kill_count": int(r["hidden_linked_kill_count"] or 0),
+                    "suspected_linked_kill_count": int(r["suspected_linked_kill_count"] or 0),
+                    "public_suspicion_score": float(r["public_suspicion_score"] or 0.0),
+                    "pattern_recognized": bool(int(r["pattern_recognized"] or 0)),
+                    "offender_identity_confidence": float(r["offender_identity_confidence"] or 0.0),
+                    "rejection_reasons": rejection_reasons,
+                    "details": details,
+                }
+
         meta_row = conn.execute(
             "SELECT meta_value FROM simulation_meta WHERE meta_key = ?",
             ("next_person_id",),
@@ -9533,6 +9868,7 @@ def try_load_simulation_checkpoint(ctx: "SimulationContext") -> bool:
     ctx.outlaw_refuges = outlaw_refuges
     ctx.outlaw_cases = outlaw_cases
     ctx.outlaw_custodies = outlaw_custodies
+    ctx.serial_predation_candidates = serial_predation_candidates
     for a_id, b_id in couples:
         ra = id_to.get(a_id)
         rb = id_to.get(b_id)
