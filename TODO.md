@@ -132,6 +132,26 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
   `prod_timing_250_foreground` baseline, now that incident generation and
   career reassignment have had a bounded optimization pass.
 
+### Concrete Follow-up: Mixed-Mode Runtime Regression Against June 4 Baseline
+
+- The 2026-06-26 100-couple / 100-year mixed-mode run finished in
+  `2541.820s` (`42.36` minutes, `25.42s/year`) with `detailed_alive=2018`
+  and `nondetailed_alive=31114` (`33132` total alive).
+- A 2026-06-04 1000-couple / 100-year detailed baseline finished in
+  `242.422s` (`4.04` minutes, `2.42s/year`) with `10181` active people
+  (`242.422  100  default  234023274  10  1000  10181`).
+- Treat this as a real scale regression until disproven: the newer run is
+  about `10.49x` slower wall-clock overall, and still about `3.22x` slower per
+  final alive-person-year even if all non-detailed people are counted as active
+  population.
+- Latest visible late-run slices showed the biggest annual costs as
+  `non-detailed migration` at a flat `15s/year`, then `social relationships`
+  around `7.5s/year`, with checkpoint save reduced to acceptable single-digit
+  or low-teen seconds after Almanack deferral.
+- Completion boundary: profile and optimize the mixed-mode runtime so
+  non-detailed population is a net performance win at comparable population
+  scale, or document/retune when the non-detailed layer should be enabled.
+
 ### Hybrid Population Architecture
 
 The likely route to millions alive is not to run full annual individual logic for everyone. Use a hybrid model:
@@ -305,6 +325,37 @@ Completion boundary:
     `detailed_alive=339`, `nondetailed_alive=25454`, 17 towns, 12 cities,
     28 polities, 392 office seats, and zero alive partnered non-detailed rows
     missing `partner_person_id`.
+
+### Concrete Follow-up: Abandoned Settlements With Large Populations
+
+- Latest save has 68 abandoned settlements, and all of them reportedly still
+  have fairly large populations.
+- Investigate whether abandonment status is failing to evacuate/depopulate
+  non-detailed residents, whether population counts are being read from stale
+  settlement state, or whether abandoned status is being applied too broadly to
+  viable settlements.
+- Completion boundary: produce a save-backed audit table listing abandoned
+  settlements, detailed alive counts, non-detailed alive counts, settlement
+  capacity/status/founding reason, and the transition year/reason where
+  available; then fix the smallest confirmed logic error or add a concrete
+  calibration TODO if the behavior is intentional but implausibly tuned.
+
+### Concrete Follow-up: Over-Fluid Residence And Migration Churn
+
+- Latest browser inspection shows residence timelines where frequent moves look
+  like the norm rather than exceptional life events; people appear to change
+  settlements repeatedly across ordinary adult life.
+- Migration should remain possible, but the default pattern should not make
+  nearly every person move nearly every year. Treat this as a plausibility bug
+  and a likely contributor to simulation churn/runtime until measured.
+- Audit detailed and non-detailed movement rates separately: annual move share,
+  moves per lifetime, same-region vs long-distance moves, return moves, moves
+  caused by settlement abandonment, marriage, office/patronage, resource
+  pressure, and generic job/resource migration.
+- Completion boundary: add a save-backed movement-rate diagnostic, compare the
+  current run against a target range, and retune the broadest overactive
+  movement source without blocking necessary migration from distressed or
+  abandoned settlements.
 
 ### Completed Context: Passive-To-Detailed Promotion V1
 
