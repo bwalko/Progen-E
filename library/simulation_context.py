@@ -311,6 +311,15 @@ class SimulationContext:
     _passive_population_counts_by_region_cache: tuple[int, dict[str, int]] | None = field(
         default=None, repr=False
     )
+    _nondetailed_counts_by_settlement_cache: tuple[int, dict[str, int]] | None = field(
+        default=None, repr=False
+    )
+    _mixed_population_counts_by_settlement_cache: tuple[int, dict[str, int]] | None = field(
+        default=None, repr=False
+    )
+    _mixed_population_counts_by_region_cache: tuple[int, dict[str, int]] | None = field(
+        default=None, repr=False
+    )
     _world_map_geometry_cache: WorldMapGeometry | None = field(default=None, repr=False)
     _regional_base_cap_cache: dict[str, int] = field(default_factory=dict, repr=False)
     _species_life_stage_rows_cache: tuple[
@@ -577,7 +586,31 @@ class SimulationContext:
         """Drop cached passive/directory counts after background rows change."""
         self._passive_population_counts_by_settlement_cache = None
         self._passive_population_counts_by_region_cache = None
+        self._nondetailed_counts_by_settlement_cache = None
+        self._mixed_population_counts_by_settlement_cache = None
+        self._mixed_population_counts_by_region_cache = None
         self._annual_resource_facts_cache = None
+
+    def _mixed_population_cache_year(self) -> int:
+        return int(
+            self.current_year
+            if self.current_year is not None
+            else self.simulation_start_year
+        )
+
+    def seed_nondetailed_settlement_counts_cache(
+        self, counts_by_settlement: dict[str, int]
+    ) -> None:
+        """Reuse an already-loaded directory census for mixed-count lookups this year."""
+        y = self._mixed_population_cache_year()
+        self._nondetailed_counts_by_settlement_cache = (
+            y,
+            {str(sid): int(count) for sid, count in counts_by_settlement.items()},
+        )
+        self._passive_population_counts_by_settlement_cache = None
+        self._passive_population_counts_by_region_cache = None
+        self._mixed_population_counts_by_settlement_cache = None
+        self._mixed_population_counts_by_region_cache = None
 
     @staticmethod
     def _append_alive_census_record(
@@ -2437,16 +2470,27 @@ class SimulationContext:
         self._passive_population_counts_by_settlement_cache = (y, dict(out))
         return out
 
-    def nondetailed_population_counts_by_settlement(self) -> dict[str, int]:
+    def nondetailed_population_counts_by_settlement(
+        self, conn: sqlite3.Connection | None = None
+    ) -> dict[str, int]:
         """Alive SQLite city-directory people by settlement, without loading rows."""
+        y = self._mixed_population_cache_year()
+        cached = self._nondetailed_counts_by_settlement_cache
+        if cached is not None and int(cached[0]) == y:
+            return dict(cached[1])
         try:
             from library.world_save import ensure_checkpoint_schema
             from library.nondetailed_population import nondetailed_counts_by_settlement
 
-            with closing(sqlite3.connect(self.save_db_path)) as conn:
-                conn.row_factory = sqlite3.Row
-                ensure_checkpoint_schema(conn)
-                return nondetailed_counts_by_settlement(conn)
+            if conn is not None:
+                counts = nondetailed_counts_by_settlement(conn)
+            else:
+                with closing(sqlite3.connect(self.save_db_path)) as own_conn:
+                    own_conn.row_factory = sqlite3.Row
+                    ensure_checkpoint_schema(own_conn)
+                    counts = nondetailed_counts_by_settlement(own_conn)
+            self._nondetailed_counts_by_settlement_cache = (y, dict(counts))
+            return dict(counts)
         except sqlite3.Error:
             return {}
 
@@ -2477,21 +2521,31 @@ class SimulationContext:
         return out
 
     def mixed_population_counts_by_settlement(self) -> dict[str, int]:
+        y = self._mixed_population_cache_year()
+        cached = self._mixed_population_counts_by_settlement_cache
+        if cached is not None and int(cached[0]) == y:
+            return dict(cached[1])
         out = {
             str(sid): int(count)
             for sid, count in self.alive_census_cache().count_by_settlement.items()
         }
         for sid, count in self.passive_population_counts_by_settlement().items():
             out[sid] = int(out.get(sid, 0)) + int(count)
+        self._mixed_population_counts_by_settlement_cache = (y, dict(out))
         return out
 
     def mixed_population_counts_by_region(self) -> dict[str, int]:
+        y = self._mixed_population_cache_year()
+        cached = self._mixed_population_counts_by_region_cache
+        if cached is not None and int(cached[0]) == y:
+            return dict(cached[1])
         out = {
             str(rid): int(count)
             for rid, count in self.alive_census_cache().count_by_region.items()
         }
         for rid, count in self.passive_population_counts_by_region().items():
             out[rid] = int(out.get(rid, 0)) + int(count)
+        self._mixed_population_counts_by_region_cache = (y, dict(out))
         return out
 
     def mixed_population_count_in_settlement(self, settlement_id: str) -> int:

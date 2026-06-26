@@ -845,6 +845,12 @@ def run_nondetailed_sql_migration(
     """Move bounded sets of non-detailed adults toward existing attractive settlements."""
     started = time.perf_counter()
     counts = nondetailed_counts_by_settlement(conn)
+    seed_cache_fn = getattr(ctx, "seed_nondetailed_settlement_counts_cache", None)
+    if callable(seed_cache_fn):
+        try:
+            seed_cache_fn(counts)
+        except Exception:
+            pass
     if not counts:
         return NondetailedMigrationResult()
     region_counts = nondetailed_counts_by_region(conn)
@@ -911,6 +917,8 @@ def run_nondetailed_sql_migration(
     moved_total = 0
     source_count = 0
     rng = random.Random(int(year) * 800_011 + int(getattr(ctx, "placename_rng_salt", 0)) + 93_337)
+    allowed_regions_cache: dict[str, frozenset[str]] = {}
+    destination_pool_cache: dict[str, list[tuple[float, str, object]]] = {}
     conn.execute(
         """
         CREATE TEMP TABLE IF NOT EXISTS temp_nondetailed_migrants (
@@ -950,6 +958,8 @@ def run_nondetailed_sql_migration(
             year=int(year),
             rng=rng,
             mixed_counts_by_settlement=mixed_counts_by_settlement,
+            allowed_regions_cache=allowed_regions_cache,
+            destination_pool_cache=destination_pool_cache,
         )
         if dest is None or dest.settlement_id == source_sid:
             continue
@@ -1041,49 +1051,52 @@ def run_nondetailed_sql_migration(
     )
 
 
-def _pick_nondetailed_destination(
+def _migration_allowed_regions(
     ctx: object,
-    source_st: object,
+    origin_rid: str,
     *,
     year: int,
-    rng: random.Random,
-    mixed_counts_by_settlement: dict[str, int] | None = None,
-):
-    origin_rid = str(getattr(source_st, "region_id", "") or "").strip()
-    allowed_regions = {origin_rid}
+    cache: dict[str, frozenset[str]] | None = None,
+) -> frozenset[str]:
+    rid = str(origin_rid or "").strip()
+    if cache is not None and rid in cache:
+        return cache[rid]
+    allowed = {rid} if rid else set()
     try:
         for route in list_routes_from(
-            origin_rid,
+            rid,
             world=getattr(ctx, "world", "default"),
             db_path=getattr(ctx, "db_path"),
             simulation_year=int(year),
         ):
             dst = str(getattr(route, "to_region_id", "") or "").strip()
             if dst:
-                allowed_regions.add(dst)
+                allowed.add(dst)
     except Exception:
         pass
-    candidates = [
-        st
-        for st in getattr(ctx, "settlements_by_id", {}).values()
-        if str(getattr(st, "region_id", "") or "").strip() in allowed_regions
-        and str(getattr(st, "status", "") or "").strip().lower() == "active"
-    ]
-    if mixed_counts_by_settlement is None:
-        mixed_counts_fn = getattr(ctx, "mixed_population_counts_by_settlement", None)
-        if callable(mixed_counts_fn):
-            try:
-                mixed_counts_by_settlement = {
-                    str(sid): int(count)
-                    for sid, count in mixed_counts_fn().items()
-                }
-            except Exception:
-                mixed_counts_by_settlement = None
+    frozen = frozenset(allowed)
+    if cache is not None and rid:
+        cache[rid] = frozen
+    return frozen
+
+
+def _score_nondetailed_migration_destinations(
+    ctx: object,
+    *,
+    year: int,
+    allowed_regions: frozenset[str],
+    mixed_counts_by_settlement: dict[str, int] | None,
+) -> list[tuple[float, str, object]]:
+    """Score active destination settlements once per origin region for SQL migration."""
     mixed_count_fn = getattr(ctx, "mixed_population_count_in_settlement", None)
-    scored: list[tuple[float, object]] = []
-    for st in candidates:
+    scored: list[tuple[float, str, object]] = []
+    for st in getattr(ctx, "settlements_by_id", {}).values():
         sid = str(getattr(st, "settlement_id", "") or "").strip()
         if not sid:
+            continue
+        if str(getattr(st, "region_id", "") or "").strip() not in allowed_regions:
+            continue
+        if str(getattr(st, "status", "") or "").strip().lower() != "active":
             continue
         score = settlement_attraction_score(st, ctx=ctx, year=year)
         try:
@@ -1110,10 +1123,59 @@ def _pick_nondetailed_destination(
             score *= headroom * (0.82 + profile.migration_pull * 0.38)
         except Exception:
             pass
-        if sid == str(getattr(source_st, "settlement_id", "") or ""):
-            score *= 0.62
         if score > 0.0:
-            scored.append((score, st))
+            scored.append((score, sid, st))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return scored
+
+
+def _pick_nondetailed_destination(
+    ctx: object,
+    source_st: object,
+    *,
+    year: int,
+    rng: random.Random,
+    mixed_counts_by_settlement: dict[str, int] | None = None,
+    allowed_regions_cache: dict[str, frozenset[str]] | None = None,
+    destination_pool_cache: dict[str, list[tuple[float, str, object]]] | None = None,
+):
+    origin_rid = str(getattr(source_st, "region_id", "") or "").strip()
+    source_sid = str(getattr(source_st, "settlement_id", "") or "").strip()
+    allowed_regions = _migration_allowed_regions(
+        ctx,
+        origin_rid,
+        year=int(year),
+        cache=allowed_regions_cache,
+    )
+    if mixed_counts_by_settlement is None:
+        mixed_counts_fn = getattr(ctx, "mixed_population_counts_by_settlement", None)
+        if callable(mixed_counts_fn):
+            try:
+                mixed_counts_by_settlement = {
+                    str(sid): int(count)
+                    for sid, count in mixed_counts_fn().items()
+                }
+            except Exception:
+                mixed_counts_by_settlement = None
+    pool: list[tuple[float, str, object]]
+    if destination_pool_cache is not None and origin_rid in destination_pool_cache:
+        pool = destination_pool_cache[origin_rid]
+    else:
+        pool = _score_nondetailed_migration_destinations(
+            ctx,
+            year=int(year),
+            allowed_regions=allowed_regions,
+            mixed_counts_by_settlement=mixed_counts_by_settlement,
+        )
+        if destination_pool_cache is not None and origin_rid:
+            destination_pool_cache[origin_rid] = pool
+    if not pool:
+        return None
+    scored: list[tuple[float, object]] = []
+    for score, sid, st in pool:
+        adj = score * 0.62 if sid == source_sid else score
+        if adj > 0.0:
+            scored.append((adj, st))
     if not scored:
         return None
     scored.sort(key=lambda item: (-item[0], str(getattr(item[1], "settlement_id", ""))))

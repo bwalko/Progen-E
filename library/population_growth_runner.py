@@ -33,6 +33,7 @@ from library.nondetailed_population import (
     apply_nondetailed_resource_mortality,
     next_global_person_id,
     nondetailed_alive_count,
+    nondetailed_counts_by_settlement,
     run_nondetailed_sql_annual_tick_for_save,
     run_nondetailed_sql_migration,
     seed_nondetailed_from_active_settlements,
@@ -1560,12 +1561,16 @@ def ensure_detailed_floor_for_active_settlements(
         return 0
     promoted_or_created = 0
     by_settlement = ctx.current_people_by_settlement()
+    try:
+        mixed_by_settlement = ctx.mixed_population_counts_by_settlement()
+    except Exception:
+        mixed_by_settlement = {}
     for sid, st in sorted(ctx.settlements_by_id.items()):
         if (st.status or "").strip().lower() != "active":
             continue
         settlement_minimum = minimum
         try:
-            mixed_count = int(ctx.mixed_population_count_in_settlement(sid))
+            mixed_count = int(mixed_by_settlement.get(sid, 0))
         except Exception:
             mixed_count = max(0, int(getattr(st, "resident_count", 0) or 0))
         for threshold, floor in LARGE_SETTLEMENT_DETAIL_FLOORS:
@@ -2327,8 +2332,10 @@ def _run_population_growth_year_loop(
                         tpc() - t_nd,
                     )
                 ctx._nondetailed_sql_migration_year = int(year)
+                post_migration_counts = nondetailed_counts_by_settlement(conn)
                 conn.commit()
             ctx.invalidate_mixed_population_cache()
+            ctx.seed_nondetailed_settlement_counts_cache(post_migration_counts)
             if int(resource_mortality_result.deaths) > 0:
                 with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                     conn.row_factory = sqlite3.Row
@@ -2379,6 +2386,7 @@ def _run_population_growth_year_loop(
             if phase_callback is not None:
                 phase_callback(year, "detailed_floor")
             ensure_detailed_floor_for_active_settlements(ctx, year)
+        ctx.invalidate_mixed_population_cache()
         if prof:
             simulation_timing.accumulate(
                 "runner.nondetailed_directory"

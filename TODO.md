@@ -134,20 +134,25 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 
 ### Concrete Follow-up: Mixed-Mode Runtime Regression Against June 4 Baseline
 
-Context for completed work (2026-06-26): added per-year mixed-count caching and
-reusable temp-table migration in `library/nondetailed_population.py`, retuned
-directory migration coefficients, and documented profiling/enablement guidance in
-[`dev_rules/migration_tuning.md`](dev_rules/migration_tuning.md). A matched
-laptop 10-year / 100-couple / seed `639789854` probe recorded
-`178.431s` mixed-mode vs `149.310s` detailed-only (`--use-passive-cohorts
---passive-population-scale 0`), with profile hotspots
-`nondetailed.sql_migration=50.24s` (10-year total, ~`5.0s/year` vs the prior
-~`15s/year` slice) and `summary.social=21.37s`.
+Context (2026-06-26 timing audit, see [`temp/timing_hotspot_audit.md`](../temp/timing_hotspot_audit.md)):
+laptop 10-year / 100-couple / seed `639789854` mixed mode improved from
+`303.08s` wall / `409.66s` profile to `259.89s` wall / `295.25s` profile after
+mixed-count caching and nondetailed migration destination pooling.
+`nondetailed.sql_migration` dropped ~`5.1s/year` → ~`0.1s/year`; mixed mode
+remains ~`1.8×` detailed-only (~`144s`) on the laptop slice.
 
-Remaining validation (optional, Nazuna or explicit long window): rerun the
-original 100-couple / 100-year mixed-mode timing against the June 4 detailed
-baseline after these optimizations and decide whether further social-phase work
-is warranted if `summary.social` stays dominant at mature scale.
+**Next (Nazuna or explicit long window):** 100-year mixed vs detailed-only
+benchmark with `--profile-last-years 10`:
+
+```bash
+python utils/run_population_simulation.py --world-id default --reset-world --years 100 \
+  --starting-couples 100 --seed 639789854 --use-nondetailed-directory \
+  --profile-last-years 10 --progress
+```
+
+Decide whether `summary.social` / checkpoint phases warrant further work at mature
+scale; re-diff `yearly_summary.csv` under fixed seed after optimizations before
+calibration-grade claims.
 
 ### Hybrid Population Architecture
 

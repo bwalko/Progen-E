@@ -4756,3 +4756,27 @@ completion.
 ### Validation
 
 - `python -m unittest unit_test.test_lazy_settlements -v` (13 tests).
+
+## Mixed-Mode Timing Hotspot Audit (2026-06-26)
+
+### Enhancements
+
+- `library/simulation_context.py`: per-year caches for mixed and nondetailed
+  settlement counts; `seed_nondetailed_settlement_counts_cache()` for reusing an
+  open SQLite census; optional `conn` on `nondetailed_population_counts_by_settlement`.
+- `library/nondetailed_population.py`: region-level route and destination score
+  pools for SQL migration; avoids rescoring every active settlement per source.
+- `library/population_growth_runner.py`: prefetch mixed counts in
+  `ensure_detailed_floor_for_active_settlements`; post-migration census seed;
+  invalidate mixed cache after detailed floor before `record_year_summary`.
+- Report: [`temp/timing_hotspot_audit.md`](../temp/timing_hotspot_audit.md).
+
+### Validation
+
+- Laptop 10-year / 100-couple / seed `639789854` mixed mode: wall
+  `303.08s` → `259.89s`; profile `nondetailed.sql_migration`
+  `51.28s` → `1.01s` (10-year totals).
+- `python -m unittest unit_test.test_nondetailed_population
+  unit_test.test_simulation_migration` (31 tests, OK).
+- `python -m unittest unit_test.test_settlement_affordances
+  unit_test.test_lazy_settlements` (21 tests, OK).
