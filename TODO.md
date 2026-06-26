@@ -136,23 +136,21 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
 
 Context (2026-06-26 timing audit, see [`temp/timing_hotspot_audit.md`](../temp/timing_hotspot_audit.md)):
 laptop 10-year / 100-couple / seed `639789854` mixed mode improved from
-`303.08s` wall / `409.66s` profile to `259.89s` wall / `295.25s` profile after
-mixed-count caching and nondetailed migration destination pooling.
-`nondetailed.sql_migration` dropped ~`5.1s/year` → ~`0.1s/year`; mixed mode
-remains ~`1.8×` detailed-only (~`144s`) on the laptop slice.
+`303.08s` wall to **`214.29s`** wall after mixed-count caching, migration pooling,
+and **detailed_floor shared `save_conn` batching** (`runner.nondetailed_directory`
+~`9.3s/year` → ~`3.0s/year`; `nondetailed_floor.promotions` was ~`76%` of that phase).
+`nondetailed.sql_migration` remains ~`0.1s/year`; mixed mode is ~**`1.5×`**
+detailed-only (~`144s`) on the latest laptop slice.
+
+**Review before calibration:** batch-conn detailed_floor changes fixed-seed yearly
+totals from year 1004 onward — see
+[`temp/mixed_mode_yearly_divergence.md`](../temp/mixed_mode_yearly_divergence.md).
+Cache audit (`HISTORY_SIM_VALIDATE_MIXED_COUNTS=1`) reported no mismatches on a
+5-year smoke run.
 
 **Next (Nazuna or explicit long window):** 100-year mixed vs detailed-only
-benchmark with `--profile-last-years 10`:
-
-```bash
-python utils/run_population_simulation.py --world-id default --reset-world --years 100 \
-  --starting-couples 100 --seed 639789854 --use-nondetailed-directory \
-  --profile-last-years 10 --progress
-```
-
-Decide whether `summary.social` / checkpoint phases warrant further work at mature
-scale; re-diff `yearly_summary.csv` under fixed seed after optimizations before
-calibration-grade claims.
+benchmark with `--profile-last-years 10`; fixed-seed `yearly_summary.csv` diff
+vs pre-batch-conn commit before calibration-grade claims.
 
 ### Hybrid Population Architecture
 

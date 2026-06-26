@@ -4780,3 +4780,29 @@ completion.
   unit_test.test_simulation_migration` (31 tests, OK).
 - `python -m unittest unit_test.test_settlement_affordances
   unit_test.test_lazy_settlements` (21 tests, OK).
+
+## Mixed-Mode Timing Session 2 — Sub-Phases + Detailed Floor Batching (2026-06-26)
+
+### Enhancements
+
+- `library/population_growth_runner.py`: sub-phase timers for
+  `nondetailed.detailed_floor`, `nondetailed_floor.promotions`, cache
+  seed/invalidate, post-migration counts, settlement sync; shared `save_conn` +
+  single commit in `ensure_detailed_floor_for_active_settlements`.
+- `library/simulation_context.py`: `invalidate_mixed_cache` on nondetailed promotion.
+- `library/passive_population.py`: defer per-promotion cache invalidate when
+  batch `save_conn` is in use.
+- `library/mixed_population_audit.py`, `utils/util_audit_mixed_population_counts.py`:
+  cache vs direct census checks (`HISTORY_SIM_VALIDATE_MIXED_COUNTS`).
+- Reports: [`temp/timing_hotspot_audit.md`](../temp/timing_hotspot_audit.md) (session 2
+  section), [`temp/mixed_mode_yearly_divergence.md`](../temp/mixed_mode_yearly_divergence.md).
+
+### Validation
+
+- Laptop 10-year mixed: wall `271.73s` (instrumented) → `214.29s` (batch conn);
+  `runner.nondetailed_directory` `7.74s/year` → `2.97s/year`;
+  `nondetailed_floor.promotions` `5.87s/year` → `1.04s/year`.
+- `HISTORY_SIM_VALIDATE_MIXED_COUNTS=1` on 5-year smoke: no cache mismatch output.
+- `python -m unittest unit_test.test_nondetailed_population
+  unit_test.test_simulation_migration unit_test.test_settlement_affordances
+  unit_test.test_lazy_settlements` (52 tests, OK, ~720s).

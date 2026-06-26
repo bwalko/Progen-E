@@ -55,6 +55,7 @@ from library.relationship_attraction import (
 )
 from library.simulation_careers import resource_pressure_for_person
 from library import simulation_timing
+from library.mixed_population_audit import run_mixed_population_audit_if_enabled
 from library.simulation_context import SimulationContext, SimulationPersonRecord
 from library.simulation_export import people_export_payload, settlements_geo_export_payload
 from library.simulation_mortality import apply_annual_mortality
@@ -1559,50 +1560,73 @@ def ensure_detailed_floor_for_active_settlements(
     minimum = max(0, int(minimum))
     if minimum <= 0:
         return 0
+    prof = simulation_timing.active_for_year(year)
+    tpc = time.perf_counter
     promoted_or_created = 0
+    if prof:
+        t0 = tpc()
     by_settlement = ctx.current_people_by_settlement()
     try:
         mixed_by_settlement = ctx.mixed_population_counts_by_settlement()
     except Exception:
         mixed_by_settlement = {}
-    for sid, st in sorted(ctx.settlements_by_id.items()):
-        if (st.status or "").strip().lower() != "active":
-            continue
-        settlement_minimum = minimum
-        try:
-            mixed_count = int(mixed_by_settlement.get(sid, 0))
-        except Exception:
-            mixed_count = max(0, int(getattr(st, "resident_count", 0) or 0))
-        for threshold, floor in LARGE_SETTLEMENT_DETAIL_FLOORS:
-            if mixed_count >= int(threshold):
-                settlement_minimum = max(settlement_minimum, int(floor))
-                break
-        needed = settlement_minimum - len(by_settlement.get(sid, ()))
-        if needed <= 0:
-            continue
-        for i in range(needed):
-            gender = "Male" if (i % 2 == 0) else "Female"
-            promoted = promote_passive_candidate_for_office(
-                ctx,
-                year=int(year),
-                settlement_id=sid,
-                min_age=18,
-                reason="settlement_detail_floor",
-                source={"settlement_id": sid, "minimum": settlement_minimum},
-            )
-            if promoted is None:
-                promoted = _generate_detail_floor_person(
+    if prof:
+        simulation_timing.accumulate("nondetailed_floor.scan", tpc() - t0)
+        t0 = tpc()
+    save_conn: sqlite3.Connection | None = None
+    try:
+        save_conn = sqlite3.connect(ctx.save_db_path)
+        save_conn.row_factory = sqlite3.Row
+        from library.world_save import ensure_checkpoint_schema
+
+        ensure_checkpoint_schema(save_conn)
+        for sid, st in sorted(ctx.settlements_by_id.items()):
+            if (st.status or "").strip().lower() != "active":
+                continue
+            settlement_minimum = minimum
+            try:
+                mixed_count = int(mixed_by_settlement.get(sid, 0))
+            except Exception:
+                mixed_count = max(0, int(getattr(st, "resident_count", 0) or 0))
+            for threshold, floor in LARGE_SETTLEMENT_DETAIL_FLOORS:
+                if mixed_count >= int(threshold):
+                    settlement_minimum = max(settlement_minimum, int(floor))
+                    break
+            needed = settlement_minimum - len(by_settlement.get(sid, ()))
+            if needed <= 0:
+                continue
+            for i in range(needed):
+                gender = "Male" if (i % 2 == 0) else "Female"
+                promoted = promote_passive_candidate_for_office(
                     ctx,
                     year=int(year),
                     settlement_id=sid,
-                    gender=gender,
-                    ordinal=i,
+                    min_age=18,
+                    reason="settlement_detail_floor",
+                    source={"settlement_id": sid, "minimum": settlement_minimum},
+                    save_conn=save_conn,
                 )
-                ctx._pending_simulation_events[-1][2].update(
-                    {"reason": "settlement_detail_floor", "settlement_id": sid}
-                )
-            promoted_or_created += 1
-        by_settlement = ctx.current_people_by_settlement()
+                if promoted is None:
+                    promoted = _generate_detail_floor_person(
+                        ctx,
+                        year=int(year),
+                        settlement_id=sid,
+                        gender=gender,
+                        ordinal=i,
+                    )
+                    ctx._pending_simulation_events[-1][2].update(
+                        {"reason": "settlement_detail_floor", "settlement_id": sid}
+                    )
+                promoted_or_created += 1
+            by_settlement = ctx.current_people_by_settlement()
+        save_conn.commit()
+    finally:
+        if save_conn is not None:
+            save_conn.close()
+    if promoted_or_created:
+        ctx.invalidate_mixed_population_cache()
+    if prof:
+        simulation_timing.accumulate("nondetailed_floor.promotions", tpc() - t0)
     return promoted_or_created
 
 
@@ -2230,8 +2254,15 @@ def _run_population_growth_year_loop(
                     population_scale=passive_population_scale,
                 )
                 if founded_satellites:
+                    if prof:
+                        t_cache = tpc()
                     ctx.invalidate_mixed_population_cache()
                     ctx.sync_settlement_resident_counts()
+                    if prof:
+                        simulation_timing.accumulate(
+                            "nondetailed.settlement_sync",
+                            tpc() - t_cache,
+                        )
                 if prof:
                     simulation_timing.record_gauge(
                         year,
@@ -2269,8 +2300,14 @@ def _run_population_growth_year_loop(
                         tpc() - t_nd,
                     )
                 conn.commit()
+            if prof:
+                t_cache = tpc()
             ctx.invalidate_mixed_population_cache()
             if prof:
+                simulation_timing.accumulate(
+                    "nondetailed.cache_invalidate",
+                    tpc() - t_cache,
+                )
                 t_nd = tpc()
             if phase_callback is not None:
                 phase_callback(year, "nondetailed_sql_tick")
@@ -2281,7 +2318,14 @@ def _run_population_growth_year_loop(
             )
             if prof:
                 simulation_timing.accumulate("nondetailed.sql_tick", tpc() - t_nd)
+            if prof:
+                t_cache = tpc()
             ctx.invalidate_mixed_population_cache()
+            if prof:
+                simulation_timing.accumulate(
+                    "nondetailed.cache_invalidate",
+                    tpc() - t_cache,
+                )
             if overflow_births:
                 ctx.last_nondetailed_tick_result = replace(
                     ctx.last_nondetailed_tick_result,
@@ -2332,14 +2376,35 @@ def _run_population_growth_year_loop(
                         tpc() - t_nd,
                     )
                 ctx._nondetailed_sql_migration_year = int(year)
+                if prof:
+                    t_nd = tpc()
                 post_migration_counts = nondetailed_counts_by_settlement(conn)
+                if prof:
+                    simulation_timing.accumulate(
+                        "nondetailed.post_migration_counts",
+                        tpc() - t_nd,
+                    )
                 conn.commit()
+            if prof:
+                t_cache = tpc()
             ctx.invalidate_mixed_population_cache()
             ctx.seed_nondetailed_settlement_counts_cache(post_migration_counts)
+            if prof:
+                simulation_timing.accumulate(
+                    "nondetailed.cache_seed",
+                    tpc() - t_cache,
+                )
             if int(resource_mortality_result.deaths) > 0:
+                if prof:
+                    t_nd = tpc()
                 with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                     conn.row_factory = sqlite3.Row
                     alive_after_resource_mortality = nondetailed_alive_count(conn)
+                if prof:
+                    simulation_timing.accumulate(
+                        "nondetailed.post_mortality_alive_count",
+                        tpc() - t_nd,
+                    )
                 ctx.last_nondetailed_tick_result = replace(
                     ctx.last_nondetailed_tick_result,
                     deaths=int(ctx.last_nondetailed_tick_result.deaths)
@@ -2365,14 +2430,28 @@ def _run_population_growth_year_loop(
                     "migration_moved",
                     migration_result.moved,
                 )
+            if prof:
+                t_nd = tpc()
             with closing(sqlite3.connect(ctx.save_db_path)) as conn:
                 ctx.next_person_id = max(
                     int(ctx.next_person_id),
                     next_global_person_id(conn, minimum=int(ctx.next_person_id)),
                 )
+            if prof:
+                simulation_timing.accumulate(
+                    "nondetailed.person_id_sync",
+                    tpc() - t_nd,
+                )
             if phase_callback is not None:
                 phase_callback(year, "detailed_floor")
+            if prof:
+                t_nd = tpc()
             ensure_detailed_floor_for_active_settlements(ctx, year)
+            if prof:
+                simulation_timing.accumulate(
+                    "nondetailed.detailed_floor",
+                    tpc() - t_nd,
+                )
         else:
             if phase_callback is not None:
                 phase_callback(year, "passive_cohorts")
@@ -2386,7 +2465,16 @@ def _run_population_growth_year_loop(
             if phase_callback is not None:
                 phase_callback(year, "detailed_floor")
             ensure_detailed_floor_for_active_settlements(ctx, year)
+        if prof:
+            t_cache = tpc()
         ctx.invalidate_mixed_population_cache()
+        if prof:
+            simulation_timing.accumulate(
+                "nondetailed.cache_invalidate",
+                tpc() - t_cache,
+            )
+        if use_nondetailed_directory:
+            run_mixed_population_audit_if_enabled(ctx, year=int(year))
         if prof:
             simulation_timing.accumulate(
                 "runner.nondetailed_directory"

@@ -1062,6 +1062,7 @@ class SimulationContext:
         reason: str,
         source: dict[str, Any] | None = None,
         conn: sqlite3.Connection | None = None,
+        invalidate_mixed_cache: bool = True,
     ) -> SimulationPersonRecord | None:
         """Materialize one SQLite city-directory person into detailed simulation."""
         from library.nondetailed_population import (
@@ -1155,7 +1156,8 @@ class SimulationContext:
                 "DELETE FROM simulation_people_nondetailed WHERE person_id = ?",
                 (promote_id,),
             )
-            self.invalidate_mixed_population_cache()
+            if invalidate_mixed_cache:
+                self.invalidate_mixed_population_cache()
             if own_conn is not None:
                 db_conn.commit()
         finally:
@@ -1294,6 +1296,7 @@ class SimulationContext:
         limit: int = 1,
         source: dict[str, Any] | None = None,
         conn: sqlite3.Connection | None = None,
+        invalidate_mixed_cache: bool = True,
     ) -> list[SimulationPersonRecord]:
         """Materialize bounded non-detailed rows by id, place, job family, or traits."""
         from library.nondetailed_population import normalize_nondetailed_job_family
@@ -1447,6 +1450,7 @@ class SimulationContext:
                     reason=reason_text,
                     source=selector_source,
                     conn=db_conn,
+                    invalidate_mixed_cache=bool(invalidate_mixed_cache),
                 )
                 if rec is not None:
                     promoted.append(rec)

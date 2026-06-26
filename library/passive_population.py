@@ -188,11 +188,14 @@ def _try_promote_nondetailed_candidate(
     source: dict[str, Any] | None = None,
     save_conn: Any | None = None,
     selector: str,
+    invalidate_mixed_cache: bool | None = None,
 ) -> Any | None:
     """Prefer real city-directory rows before falling back to aggregate cohorts."""
     promote = getattr(ctx, "promote_nondetailed_people", None)
     if not callable(promote):
         return None
+    if invalidate_mixed_cache is None:
+        invalidate_mixed_cache = save_conn is None
     if save_conn is None:
         save_db_path = getattr(ctx, "save_db_path", None)
         if not save_db_path or not Path(save_db_path).exists():
@@ -225,6 +228,7 @@ def _try_promote_nondetailed_candidate(
                 "promotion_selector": selector,
             },
             conn=save_conn,
+            invalidate_mixed_cache=bool(invalidate_mixed_cache),
         )
     except (TypeError, ValueError):
         return None
@@ -243,6 +247,7 @@ def promote_passive_candidate_for_office(
     source: dict[str, Any] | None = None,
     candidate_index: PassiveOfficeCandidateIndex | None = None,
     save_conn: Any | None = None,
+    invalidate_mixed_cache: bool | None = None,
 ) -> Any | None:
     """Promote one adult from the latest aggregate cohort snapshot for an office."""
     sid = (settlement_id or "").strip()
@@ -261,6 +266,7 @@ def promote_passive_candidate_for_office(
         source=source,
         save_conn=save_conn,
         selector="office",
+        invalidate_mixed_cache=invalidate_mixed_cache,
     )
     if nondetailed is not None:
         return nondetailed
