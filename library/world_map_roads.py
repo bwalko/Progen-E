@@ -23,6 +23,7 @@ from library.world_map_geometry import (
     _clamp,
     project_local_point_to_region_footprint,
     project_world_point_to_region_footprint,
+    region_id_for_world_point,
 )
 
 
@@ -140,11 +141,11 @@ _SEA_REGION_ROUTE_CACHE: dict[
     tuple[tuple[str, ...], list[Point], float] | None,
 ] = {}
 _COAST_DISTANCE_CACHE: dict[int, tuple[int, dict[Point, float]]] = {}
-_REDUNDANT_MINOR_ROAD_MAX_USAGE_FRACTION = 0.10
-_REDUNDANT_MINOR_ROAD_MIN_USAGE = 8.0
-_REDUNDANT_MAIN_ROAD_MIN_USAGE = 12.0
-_REDUNDANT_MAIN_ROAD_USAGE_RATIO = 2.25
-_REDUNDANT_ROAD_NEAR_FRACTION = 0.74
+_REDUNDANT_MINOR_ROAD_MAX_USAGE_FRACTION = 0.12
+_REDUNDANT_MINOR_ROAD_MIN_USAGE = 5.0
+_REDUNDANT_MAIN_ROAD_MIN_USAGE = 10.0
+_REDUNDANT_MAIN_ROAD_USAGE_RATIO = 2.0
+_REDUNDANT_ROAD_NEAR_FRACTION = 0.68
 
 
 def _quote_identifier(name: str) -> str:
@@ -2169,6 +2170,337 @@ def _route_between_points(
     return route
 
 
+def _max_polyline_chord_offset(points: list[Point]) -> float:
+    if len(points) < 2:
+        return 0.0
+    start, end = points[0], points[-1]
+    return max(_point_segment_distance(point, start, end) for point in points)
+
+
+def _is_visually_straight_route(route: _RoadPath, direct: float) -> bool:
+    if direct < 0.08:
+        return False
+    maxoff = _max_polyline_chord_offset(route.points)
+    offset_ratio = maxoff / max(direct, 0.0001)
+    if direct >= 0.12 and offset_ratio <= 0.065:
+        return True
+    if route.length / max(direct, 0.0001) > 1.18:
+        return False
+    return maxoff <= max(0.014, direct * 0.075)
+
+
+def _region_cell_center(geometry: WorldMapGeometry, region_id: str) -> Point | None:
+    cell = geometry.cell_by_region_id().get(str(region_id or "").strip())
+    if cell is None:
+        return None
+    return (float(cell.center_x), float(cell.center_y))
+
+
+def _finalize_connector_path(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+    ford_points: list[Point],
+    *,
+    start: Point,
+    end: Point,
+) -> list[Point]:
+    points = _clean_road_points(_dedupe_path_points(points), ford_points)
+    points = _naturalize_long_road_segments(geometry, points, ford_points)
+    points = _clean_road_points(points, ford_points)
+    return points if len(points) >= 2 else [start, end]
+
+
+def _connector_through_land(
+    geometry: WorldMapGeometry,
+    start: Point,
+    end: Point,
+    *,
+    start_region_id: str | None,
+    end_region_id: str | None,
+    ford_points: list[Point],
+    bend_region_id: str | None = None,
+    min_interior_leg: float = 0.055,
+) -> list[Point]:
+    direct = max(0.0001, math.hypot(end[0] - start[0], end[1] - start[1]))
+    if direct < min_interior_leg:
+        routed = _route_between_points(
+            geometry,
+            start,
+            end,
+            start_region_id=start_region_id,
+            end_region_id=end_region_id,
+            ford_points=ford_points,
+        )
+        return list(routed.points) if routed is not None else [start, end]
+
+    routed = _route_between_points(
+        geometry,
+        start,
+        end,
+        start_region_id=start_region_id,
+        end_region_id=end_region_id,
+        ford_points=ford_points,
+    )
+    leg_cap = max(0.08, direct * 0.55)
+    if routed is not None and len(routed.points) > 2:
+        offset_ratio = _max_polyline_chord_offset(routed.points) / direct
+        max_leg = max(
+            math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(routed.points, routed.points[1:])
+        )
+        if max_leg <= leg_cap and (offset_ratio > 0.04 or max_leg <= 0.08):
+            return _finalize_connector_path(
+                geometry,
+                list(routed.points),
+                ford_points,
+                start=start,
+                end=end,
+            )
+
+    interior: list[Point] = [start]
+    start_region = str(start_region_id or "").strip()
+    end_region = str(end_region_id or "").strip()
+    bend_region = str(bend_region_id or "").strip()
+    if not bend_region:
+        bend_region = end_region if end_region and end_region != start_region else start_region
+    leg_cap = max(0.08, direct * 0.55)
+    min_offset = max(0.015, direct * 0.04)
+    candidate_paths: list[list[Point]] = []
+    if routed is not None and len(routed.points) >= 2:
+        candidate_paths.append(
+            _finalize_connector_path(
+                geometry,
+                list(routed.points),
+                ford_points,
+                start=start,
+                end=end,
+            )
+        )
+    seen_regions: set[str] = set()
+    for rid in (bend_region, end_region, start_region):
+        if not rid or rid in seen_regions:
+            continue
+        seen_regions.add(rid)
+        center = _region_cell_center(geometry, rid)
+        if center is None:
+            continue
+        if _point_segment_distance(center, start, end) <= min_offset:
+            continue
+        candidate_paths.append(
+            _finalize_connector_path(
+                geometry,
+                [start, center, end],
+                ford_points,
+                start=start,
+                end=end,
+            )
+        )
+    if candidate_paths:
+        def _max_leg(points: list[Point]) -> float:
+            return max(
+                math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(points, points[1:])
+            ) if len(points) > 1 else 0.0
+
+        return min(candidate_paths, key=_max_leg)
+    return [start, end]
+
+
+def _light_bow_straight_leg(
+    geometry: WorldMapGeometry,
+    start: Point,
+    end: Point,
+    ford_points: list[Point],
+    *,
+    start_region_id: str | None = None,
+    end_region_id: str | None = None,
+    max_detour_ratio: float = 1.28,
+    min_detour_ratio: float = 1.03,
+) -> list[Point] | None:
+    """Insert a small visible bow when full land routing would over-detour."""
+    direct = max(0.0001, math.hypot(end[0] - start[0], end[1] - start[1]))
+    if direct < 0.055:
+        return None
+    old_offset = _point_segment_distance(
+        ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0),
+        start,
+        end,
+    )
+    best: list[Point] | None = None
+    best_offset = old_offset
+    region_ids: list[str] = []
+    for rid in (start_region_id, end_region_id):
+        if rid and rid not in region_ids:
+            region_ids.append(rid)
+    for rid in region_ids:
+        center = _region_cell_center(geometry, rid)
+        if center is None:
+            continue
+        if _point_segment_distance(center, start, end) <= max(0.005, direct * 0.01):
+            continue
+        points = _finalize_connector_path(
+            geometry,
+            [start, center, end],
+            ford_points,
+            start=start,
+            end=end,
+        )
+        if len(points) < 3:
+            continue
+        length = _path_length(points)
+        if length < direct * min_detour_ratio or length > direct * max_detour_ratio:
+            continue
+        offset = _max_polyline_chord_offset(points)
+        if offset > best_offset:
+            best_offset = offset
+            best = points
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    norm = max(0.0001, math.hypot(dx, dy))
+    perp = (-dy / norm, dx / norm)
+    mid = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    for sign in (1.0, -1.0):
+        for scale in (0.14, 0.10, 0.07, 0.05):
+            bow = (
+                mid[0] + perp[0] * direct * scale * sign,
+                mid[1] + perp[1] * direct * scale * sign,
+            )
+            if _land_cell_containing_point(geometry, bow) is None:
+                continue
+            points = _finalize_connector_path(
+                geometry,
+                [start, bow, end],
+                ford_points,
+                start=start,
+                end=end,
+            )
+            if len(points) < 3:
+                continue
+            length = _path_length(points)
+            if length < direct * min_detour_ratio or length > direct * max_detour_ratio:
+                continue
+            offset = _max_polyline_chord_offset(points)
+            if offset > best_offset:
+                best_offset = offset
+                best = points
+    return best
+
+
+def _is_straight_leg(start: Point, end: Point, *, tolerance: float = 0.002) -> bool:
+    mid = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    return _point_segment_distance(mid, start, end) <= tolerance
+
+
+def _refine_straight_legs_in_polyline(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+    ford_points: list[Point],
+    *,
+    min_leg: float = 0.085,
+    max_detour_ratio: float = 1.28,
+    min_detour_ratio: float = 1.04,
+) -> list[Point]:
+    """Subdivide geometrically straight legs so long chords become visible bows."""
+    if len(points) < 2:
+        return points
+    out: list[Point] = [points[0]]
+    for start, end in zip(points, points[1:]):
+        leg_len = math.hypot(end[0] - start[0], end[1] - start[1])
+        if leg_len < min_leg or not _is_straight_leg(start, end):
+            out.append(end)
+            continue
+        start_region = region_id_for_world_point(geometry, start)
+        end_region = region_id_for_world_point(geometry, end)
+        naturalized = _naturalize_long_road_segments(geometry, [start, end], ford_points)
+        if len(naturalized) > 2:
+            nat_len = _path_length(naturalized)
+            if nat_len >= leg_len * min_detour_ratio and nat_len <= leg_len * max_detour_ratio:
+                out.extend(naturalized[1:])
+                continue
+        light = _light_bow_straight_leg(
+            geometry,
+            start,
+            end,
+            ford_points,
+            start_region_id=start_region,
+            end_region_id=end_region,
+            max_detour_ratio=max_detour_ratio,
+            min_detour_ratio=min_detour_ratio,
+        )
+        if light is not None:
+            out.extend(light[1:])
+            continue
+        bent = _connector_through_land(
+            geometry,
+            start,
+            end,
+            start_region_id=start_region,
+            end_region_id=end_region,
+            ford_points=ford_points,
+            min_interior_leg=min_leg,
+        )
+        bent_len = _path_length(bent) if len(bent) >= 2 else leg_len
+        old_offset = _point_segment_distance(
+            ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0),
+            start,
+            end,
+        )
+        new_offset = _max_polyline_chord_offset(bent)
+        if (
+            len(bent) > 2
+            and new_offset > old_offset
+            and bent_len >= leg_len * min_detour_ratio
+            and bent_len <= leg_len * max_detour_ratio
+        ):
+            out.extend(bent[1:])
+            continue
+        out.append(end)
+    return _clean_road_points(_dedupe_path_points(out), ford_points)
+
+
+def _refine_region_route_chords(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+    ford_points: list[Point],
+) -> list[Point]:
+    return _refine_straight_legs_in_polyline(
+        geometry,
+        points,
+        ford_points,
+        min_leg=0.08,
+        max_detour_ratio=1.30,
+        min_detour_ratio=1.03,
+    )
+
+
+def _refine_visually_straight_legs(
+    geometry: WorldMapGeometry,
+    points: list[Point],
+    ford_points: list[Point],
+    *,
+    start_region_id: str | None,
+    end_region_id: str | None,
+    min_leg: float = 0.055,
+) -> list[Point]:
+    if len(points) < 2:
+        return points
+    out: list[Point] = [points[0]]
+    for leg_start, leg_end in zip(points, points[1:]):
+        leg_len = math.hypot(leg_end[0] - leg_start[0], leg_end[1] - leg_start[1])
+        if leg_len >= min_leg:
+            segment = _connector_through_land(
+                geometry,
+                leg_start,
+                leg_end,
+                start_region_id=start_region_id,
+                end_region_id=end_region_id,
+                ford_points=ford_points,
+                min_interior_leg=min_leg,
+            )
+            out.extend(segment[1:])
+        else:
+            out.append(leg_end)
+    return _dedupe_path_points(out)
+
+
 def _expand_route_points_through_land(
     geometry: WorldMapGeometry,
     points: list[Point],
@@ -2241,6 +2573,235 @@ def _route_via_ford_point(
     return _RoadPath(points=points, cost=max(0.0001, first.cost + second.cost), length=route_length)
 
 
+def _region_routed_path_between_nodes(
+    geometry: WorldMapGeometry,
+    a: RoadMapNode,
+    b: RoadMapNode,
+    ford_points: list[Point],
+) -> _RoadPath | None:
+    if a.region_id == b.region_id:
+        return None
+    start_point = (a.x, a.y)
+    end_point = (b.x, b.y)
+    region_route = _configured_region_route_points(geometry, a.region_id, b.region_id)
+    if region_route is None:
+        return None
+    region_route = _edge_trace_existing_points(geometry, region_route)
+    expanded_region_route = _expand_route_points_through_land(geometry, region_route, ford_points)
+    if expanded_region_route is None:
+        return None
+    region_route = expanded_region_route
+    if len(region_route) >= 3:
+        region_route = _refine_region_route_chords(geometry, region_route, ford_points)
+    route_start_region = region_id_for_world_point(geometry, region_route[0]) or a.region_id
+    route_end_region = region_id_for_world_point(geometry, region_route[-1]) or b.region_id
+    first_leg = math.hypot(
+        region_route[0][0] - start_point[0],
+        region_route[0][1] - start_point[1],
+    )
+    last_leg = math.hypot(
+        end_point[0] - region_route[-1][0],
+        end_point[1] - region_route[-1][1],
+    )
+    if first_leg >= 0.08:
+        first_bend_region = b.region_id if a.region_id != b.region_id and last_leg < 0.08 else route_start_region
+        first_connector = _connector_through_land(
+            geometry,
+            start_point,
+            region_route[0],
+            start_region_id=a.region_id,
+            end_region_id=route_start_region,
+            bend_region_id=first_bend_region,
+            ford_points=ford_points,
+        )
+    else:
+        first_route = _route_between_points(
+            geometry,
+            start_point,
+            region_route[0],
+            start_region_id=a.region_id,
+            end_region_id=a.region_id,
+            ford_points=ford_points,
+        )
+        first_connector = list(first_route.points) if first_route is not None else [start_point, region_route[0]]
+    if last_leg >= 0.08:
+        last_bend_region = a.region_id if a.region_id != b.region_id and first_leg < 0.08 else route_end_region
+        last_connector = _connector_through_land(
+            geometry,
+            region_route[-1],
+            end_point,
+            start_region_id=route_end_region,
+            end_region_id=b.region_id,
+            bend_region_id=last_bend_region,
+            ford_points=ford_points,
+        )
+    else:
+        last_route = _route_between_points(
+            geometry,
+            region_route[-1],
+            end_point,
+            start_region_id=b.region_id,
+            end_region_id=b.region_id,
+            ford_points=ford_points,
+        )
+        last_connector = list(last_route.points) if last_route is not None else [region_route[-1], end_point]
+    points = [
+        *first_connector,
+        *region_route[1:-1],
+        *last_connector[1:],
+    ]
+    points = _clean_road_points(points, ford_points)
+    route_length = _path_length(points)
+    points = _naturalize_long_road_segments(geometry, points, ford_points)
+    points = _clean_road_points(points, ford_points)
+    start_cell = _land_cell_containing_point(geometry, start_point)
+    end_cell = _land_cell_containing_point(geometry, end_point)
+    if start_cell is not None and end_cell is not None:
+        points = _naturalized_direct_road_points(
+            geometry,
+            points,
+            start_cell=start_cell,
+            end_cell=end_cell,
+            ford_points=ford_points,
+        )
+    if len(points) < 2:
+        return None
+    return _RoadPath(points=points, cost=max(0.0001, route_length), length=route_length)
+
+
+def _is_long_chord_route(route: _RoadPath, a: RoadMapNode, b: RoadMapNode) -> bool:
+    direct = max(0.0001, math.hypot(a.x - b.x, a.y - b.y))
+    if direct < 0.07:
+        return False
+    if _is_visually_straight_route(route, direct):
+        return True
+    routed_ratio = route.length / direct
+    if len(route.points) <= 2:
+        return routed_ratio <= 1.08
+    return routed_ratio <= 1.05 and len(route.points) <= 3
+
+
+def _bend_visually_straight_route(
+    geometry: WorldMapGeometry,
+    a: RoadMapNode,
+    b: RoadMapNode,
+    route: _RoadPath,
+    ford_points: list[Point],
+) -> _RoadPath:
+    direct = max(0.0001, math.hypot(a.x - b.x, a.y - b.y))
+    if not _is_visually_straight_route(route, direct):
+        return route
+    old_offset = _max_polyline_chord_offset(route.points)
+    if a.region_id != b.region_id:
+        region_path = _region_routed_path_between_nodes(geometry, a, b, ford_points)
+        if region_path is not None and not _is_visually_straight_route(region_path, direct):
+            return region_path
+    bent_region = b.region_id if a.region_id != b.region_id else a.region_id
+    start_point = (a.x, a.y)
+    end_point = (b.x, b.y)
+    max_ratio = 1.25 if direct < 0.18 else (1.65 if direct < 0.28 else 2.2)
+    candidate_paths: list[list[Point]] = []
+
+    connector_points = _connector_through_land(
+        geometry,
+        start_point,
+        end_point,
+        start_region_id=a.region_id,
+        end_region_id=b.region_id,
+        bend_region_id=bent_region,
+        ford_points=ford_points,
+        min_interior_leg=0.045,
+    )
+    if len(connector_points) >= 3:
+        candidate_paths.append(connector_points)
+
+    seen_regions: set[str] = set()
+    for rid in (bent_region, b.region_id, a.region_id):
+        if not rid or rid in seen_regions:
+            continue
+        seen_regions.add(rid)
+        center = _region_cell_center(geometry, rid)
+        if center is None:
+            continue
+        if _point_segment_distance(center, start_point, end_point) <= max(0.006, direct * 0.012):
+            continue
+        candidate_paths.append(
+            _finalize_connector_path(
+                geometry,
+                [start_point, center, end_point],
+                ford_points,
+                start=start_point,
+                end=end_point,
+            )
+        )
+
+    start_cell = _land_cell_containing_point(geometry, start_point)
+    end_cell = _land_cell_containing_point(geometry, end_point)
+    if start_cell is not None and end_cell is not None:
+        bow = _naturalized_road_segment_points(
+            geometry,
+            start_point,
+            end_point,
+            start_cell=start_cell,
+            end_cell=end_cell,
+            ford_points=ford_points,
+        )
+        if len(bow) >= 3:
+            candidate_paths.append(
+                _finalize_connector_path(
+                    geometry,
+                    bow,
+                    ford_points,
+                    start=start_point,
+                    end=end_point,
+                )
+            )
+
+    best_path: list[Point] | None = None
+    best_offset = old_offset
+    for points in candidate_paths:
+        if len(points) < 3:
+            continue
+        length = _path_length(points)
+        if length / direct > max_ratio:
+            continue
+        offset = _max_polyline_chord_offset(points)
+        if offset > best_offset * 1.2:
+            best_offset = offset
+            best_path = points
+
+    if best_path is not None:
+        length = _path_length(best_path)
+        return _RoadPath(points=best_path, cost=max(0.0001, length), length=length)
+    return route
+
+
+def _upgrade_chord_route_if_needed(
+    geometry: WorldMapGeometry,
+    a: RoadMapNode,
+    b: RoadMapNode,
+    route: _RoadPath,
+    ford_points: list[Point],
+) -> _RoadPath:
+    if not _is_long_chord_route(route, a, b):
+        return route
+    direct = max(0.0001, math.hypot(a.x - b.x, a.y - b.y))
+    if a.region_id != b.region_id:
+        region_path = _region_routed_path_between_nodes(geometry, a, b, ford_points)
+        if region_path is not None and not _is_visually_straight_route(region_path, direct):
+            return region_path
+    bent = _bend_visually_straight_route(geometry, a, b, route, ford_points)
+    if bent is not route:
+        return bent
+    if geometry.micro_cells and len(route.points) == 2:
+        start, end = route.points
+        points = _naturalize_long_road_segments(geometry, [start, end], ford_points)
+        if len(points) > 2:
+            length = _path_length(points)
+            return _RoadPath(points=points, cost=max(0.0001, length), length=length)
+    return route
+
+
 def _route_between_nodes(
     geometry: WorldMapGeometry,
     a: RoadMapNode,
@@ -2250,6 +2811,9 @@ def _route_between_nodes(
     start_point = (a.x, a.y)
     end_point = (b.x, b.y)
     if a.region_id != b.region_id:
+        region_path = _region_routed_path_between_nodes(geometry, a, b, ford_points)
+        if region_path is not None:
+            return _upgrade_chord_route_if_needed(geometry, a, b, region_path, ford_points)
         land_neighbors = _region_land_neighbors(geometry)
         if b.region_id in land_neighbors.get(a.region_id, set()):
             direct_micro_route = _route_between_points(
@@ -2262,55 +2826,8 @@ def _route_between_nodes(
             )
             direct_distance = max(0.0001, math.hypot(start_point[0] - end_point[0], start_point[1] - end_point[1]))
             if direct_micro_route is not None and direct_micro_route.length / direct_distance <= 2.8:
-                return direct_micro_route
-        region_route = _configured_region_route_points(geometry, a.region_id, b.region_id)
-        if region_route is not None:
-            region_route = _edge_trace_existing_points(geometry, region_route)
-            expanded_region_route = _expand_route_points_through_land(geometry, region_route, ford_points)
-            if expanded_region_route is None:
-                region_route = []
-            else:
-                region_route = expanded_region_route
-        if region_route:
-            first_connector = _route_between_points(
-                geometry,
-                start_point,
-                region_route[0],
-                start_region_id=a.region_id,
-                end_region_id=a.region_id,
-                ford_points=ford_points,
-            )
-            last_connector = _route_between_points(
-                geometry,
-                region_route[-1],
-                end_point,
-                start_region_id=b.region_id,
-                end_region_id=b.region_id,
-                ford_points=ford_points,
-            )
-            if first_connector is not None and last_connector is not None:
-                points = [
-                    *first_connector.points,
-                    *region_route[1:-1],
-                    *last_connector.points[1:],
-                ]
-                points = _clean_road_points(points, ford_points)
-                route_length = _path_length(points)
-                points = _naturalize_long_road_segments(geometry, points, ford_points)
-                points = _clean_road_points(points, ford_points)
-                start_cell = _land_cell_containing_point(geometry, start_point)
-                end_cell = _land_cell_containing_point(geometry, end_point)
-                if start_cell is not None and end_cell is not None:
-                    points = _naturalized_direct_road_points(
-                        geometry,
-                        points,
-                        start_cell=start_cell,
-                        end_cell=end_cell,
-                        ford_points=ford_points,
-                    )
-                if len(points) >= 2:
-                    return _RoadPath(points=points, cost=max(0.0001, route_length), length=route_length)
-    return _route_between_points(
+                return _upgrade_chord_route_if_needed(geometry, a, b, direct_micro_route, ford_points)
+    route = _route_between_points(
         geometry,
         start_point,
         end_point,
@@ -2318,6 +2835,9 @@ def _route_between_nodes(
         end_region_id=b.region_id,
         ford_points=ford_points,
     )
+    if route is None:
+        return None
+    return _upgrade_chord_route_if_needed(geometry, a, b, route, ford_points)
 
 
 def _path_length(points: list[Point]) -> float:
@@ -2499,6 +3019,295 @@ def _filter_redundant_minor_roads(segments: list[_RoadSegment]) -> list[_RoadSeg
     return kept
 
 
+def _orient_segment_points(segment: _RoadSegment, toward_settlement_id: str) -> list[Point]:
+    if segment.to_settlement_id == toward_settlement_id:
+        return list(segment.points)
+    if segment.from_settlement_id == toward_settlement_id:
+        return list(reversed(segment.points))
+    return list(segment.points)
+
+
+def _orient_route_points(route: _RoadPath, start: RoadMapNode, end: RoadMapNode) -> list[Point]:
+    points = list(route.points)
+    if len(points) < 2:
+        return points
+    start_point = (start.x, start.y)
+    end_point = (end.x, end.y)
+    forward = (
+        math.hypot(points[0][0] - start_point[0], points[0][1] - start_point[1])
+        + math.hypot(points[-1][0] - end_point[0], points[-1][1] - end_point[1])
+    )
+    reverse = (
+        math.hypot(points[-1][0] - start_point[0], points[-1][1] - start_point[1])
+        + math.hypot(points[0][0] - end_point[0], points[0][1] - end_point[1])
+    )
+    if reverse < forward:
+        points = list(reversed(points))
+    return points
+
+
+def _trunk_tail_from_junction(trunk: list[Point], junction_point: Point, seg_start: int) -> list[Point]:
+    if seg_start < 0 or seg_start >= len(trunk) - 1:
+        return _dedupe_path_points([junction_point, trunk[-1]])
+    return _dedupe_path_points([junction_point, *trunk[seg_start + 1 :]])
+
+
+def _branch_prefix_to_junction(oriented_branch: list[Point], junction_point: Point) -> list[Point]:
+    if len(oriented_branch) < 2:
+        return _dedupe_path_points([oriented_branch[0], junction_point]) if oriented_branch else [junction_point]
+    best: tuple[float, int, Point] | None = None
+    for idx in range(len(oriented_branch) - 1):
+        a = oriented_branch[idx]
+        b = oriented_branch[idx + 1]
+        projected = _nearest_point_on_segment(junction_point, a, b)
+        distance = math.hypot(projected[0] - junction_point[0], projected[1] - junction_point[1])
+        candidate = (distance, idx, projected)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        return _dedupe_path_points([oriented_branch[0], junction_point])
+    _distance, split_idx, _projected = best
+    prefix = list(oriented_branch[: split_idx + 1])
+    if math.hypot(prefix[-1][0] - junction_point[0], prefix[-1][1] - junction_point[1]) > 1e-6:
+        prefix.append(junction_point)
+    return _dedupe_path_points(prefix)
+
+
+def _polyline_direction_near_endpoint(
+    points: list[Point],
+    *,
+    toward_last: bool,
+    span: float,
+) -> tuple[float, float] | None:
+    if len(points) < 2:
+        return None
+    if toward_last:
+        end = points[-1]
+        travel = 0.0
+        for idx in range(len(points) - 2, -1, -1):
+            start = points[idx]
+            step = math.hypot(end[0] - start[0], end[1] - start[1])
+            if step <= 1e-9:
+                continue
+            if travel + step >= span or idx == 0:
+                vx = end[0] - start[0]
+                vy = end[1] - start[1]
+                norm = math.hypot(vx, vy)
+                return (vx / norm, vy / norm) if norm > 1e-9 else None
+            travel += step
+            end = start
+        start = points[0]
+        vx = points[-1][0] - start[0]
+        vy = points[-1][1] - start[1]
+    else:
+        start = points[0]
+        travel = 0.0
+        for idx in range(1, len(points)):
+            end = points[idx]
+            step = math.hypot(end[0] - start[0], end[1] - start[1])
+            if step <= 1e-9:
+                continue
+            if travel + step >= span or idx == len(points) - 1:
+                vx = end[0] - start[0]
+                vy = end[1] - start[1]
+                norm = math.hypot(vx, vy)
+                return (vx / norm, vy / norm) if norm > 1e-9 else None
+            travel += step
+            start = end
+        end = points[-1]
+        vx = end[0] - points[0][0]
+        vy = end[1] - points[0][1]
+    norm = math.hypot(vx, vy)
+    return (vx / norm, vy / norm) if norm > 1e-9 else None
+
+
+def _direction_angle_deg(
+    a: tuple[float, float] | None,
+    b: tuple[float, float] | None,
+) -> float:
+    if a is None or b is None:
+        return 180.0
+    dot = max(-1.0, min(1.0, a[0] * b[0] + a[1] * b[1]))
+    return math.degrees(math.acos(dot))
+
+
+def _junction_approach_is_sane(
+    branch_prefix: list[Point],
+    trunk_tail: list[Point],
+    *,
+    min_angle_deg: float = 28.0,
+    max_angle_deg: float = 150.0,
+) -> bool:
+    if len(branch_prefix) < 2 or len(trunk_tail) < 2:
+        return True
+    span = max(0.012, min(0.05, _path_length(trunk_tail) * 0.35))
+    branch_dir = _polyline_direction_near_endpoint(branch_prefix, toward_last=True, span=span)
+    trunk_dir = _polyline_direction_near_endpoint(trunk_tail, toward_last=True, span=span)
+    angle = _direction_angle_deg(branch_dir, trunk_dir)
+    return min_angle_deg <= angle <= max_angle_deg
+
+
+def _best_trunk_junction(
+    trunk: list[Point],
+    branch: list[Point],
+    branch_start: Point,
+    *,
+    corridor: float,
+    min_tail_length: float,
+    direct_settlement_distance: float,
+    max_tail_fraction: float = 0.88,
+) -> tuple[int, Point, float, float] | None:
+    if len(trunk) < 2 or len(branch) < 2:
+        return None
+    trunk_length = _path_length(trunk)
+    if trunk_length <= 1e-9:
+        return None
+    best: tuple[tuple[float, float, float, float, float], int, Point, float, float] | None = None
+    for seg_start in range(len(trunk) - 1):
+        a = trunk[seg_start]
+        b = trunk[seg_start + 1]
+        seg_len = math.hypot(b[0] - a[0], b[1] - a[1])
+        if seg_len <= 1e-9:
+            continue
+        sample_count = max(1, min(12, int(math.ceil(seg_len / max(corridor * 0.75, 0.004)))))
+        for sample_idx in range(sample_count + 1):
+            t = sample_idx / sample_count
+            point = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+            tail = _trunk_tail_from_junction(trunk, point, seg_start)
+            tail_length = _path_length(tail)
+            if tail_length < min_tail_length:
+                continue
+            if tail_length > trunk_length * max_tail_fraction:
+                continue
+            branch_distance = _point_polyline_distance(point, branch)
+            prefix_length = math.hypot(point[0] - branch_start[0], point[1] - branch_start[1])
+            merged_length = prefix_length + tail_length
+            merged_ratio = merged_length / max(direct_settlement_distance, 0.0001)
+            if merged_ratio > 2.05:
+                continue
+            parallel_tail = _polyline_near_fraction(tail, branch, max_distance=corridor)
+            attach_ok = branch_distance <= corridor * 1.35 or parallel_tail >= 0.35
+            if not attach_ok and merged_ratio > 1.32:
+                continue
+            if branch_distance > corridor * 2.8 and merged_ratio > 1.18:
+                continue
+            score = (merged_ratio, branch_distance, -tail_length, seg_start, point[0])
+            if best is None or score < best[0]:
+                best = (score, seg_start, point, tail_length, merged_length)
+    if best is None:
+        return None
+    return best[1], best[2], best[3], best[4]
+
+
+def _best_existing_road_junction(
+    segments: dict[tuple[str, str], _RoadSegment],
+    nodes: dict[str, RoadMapNode],
+    key: tuple[str, str],
+    direct_route: _RoadPath,
+    direct_settlement_distance: float,
+    *,
+    geometry: WorldMapGeometry,
+    ford_points: list[Point],
+) -> tuple[tuple[str, str], tuple[str, str], list[Point], float] | None:
+    a_id, b_id = key
+    best: tuple[tuple[float, float, float, str, str], tuple[str, str], tuple[str, str], list[Point], float] | None = None
+    for seg_key, segment in segments.items():
+        if segment.usage <= 0.0 or len(segment.points) < 2:
+            continue
+        corridor = _road_corridor_distance(segment)
+        min_tail = max(0.012, direct_settlement_distance * 0.035)
+        for endpoint_id in key:
+            if endpoint_id not in seg_key:
+                continue
+            if segment.to_settlement_id != endpoint_id:
+                continue
+            trunk_other = seg_key[0] if seg_key[1] == endpoint_id else seg_key[1]
+            branch_start_id = key[0] if key[1] == endpoint_id else key[1]
+            if trunk_other == branch_start_id:
+                continue
+            trunk = _orient_segment_points(segment, endpoint_id)
+            branch_start = nodes[branch_start_id]
+            branch_end = nodes[endpoint_id]
+            oriented_branch = _orient_route_points(direct_route, branch_start, branch_end)
+            branch_start_point = (branch_start.x, branch_start.y)
+            junction = _best_trunk_junction(
+                trunk,
+                oriented_branch,
+                branch_start_point,
+                corridor=corridor,
+                min_tail_length=min_tail,
+                direct_settlement_distance=direct_settlement_distance,
+            )
+            if junction is None:
+                continue
+            seg_start, junction_point, tail_length, merged_length = junction
+            trunk_tail = _trunk_tail_from_junction(trunk, junction_point, seg_start)
+            prefix_route = _route_between_points(
+                geometry,
+                branch_start_point,
+                junction_point,
+                start_region_id=branch_start.region_id,
+                end_region_id=branch_start.region_id,
+                ford_points=ford_points,
+            )
+            if prefix_route is not None and prefix_route.length + tail_length <= merged_length * 1.12:
+                branch_prefix = prefix_route.points
+                merged_length = prefix_route.length + tail_length
+            else:
+                branch_prefix = _branch_prefix_to_junction(oriented_branch, junction_point)
+                merged_length = _path_length(branch_prefix) + tail_length
+            if not _junction_approach_is_sane(branch_prefix, trunk_tail):
+                continue
+            merged_points = _clean_road_points(_dedupe_path_points([*branch_prefix, *trunk_tail[1:]]))
+            if len(merged_points) < 2:
+                continue
+            merged_ratio = merged_length / max(direct_settlement_distance, 0.0001)
+            if merged_ratio > 2.05:
+                continue
+            direct_parallel = _polyline_near_fraction(
+                oriented_branch,
+                trunk,
+                max_distance=corridor,
+            )
+            if direct_parallel >= 0.72 and merged_ratio > 1.35:
+                continue
+            score = (merged_ratio, -segment.usage, -tail_length, seg_key[0], seg_key[1])
+            candidate = (score, seg_key, key, merged_points, merged_ratio)
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+    if best is None:
+        return None
+    _score, trunk_key, branch_key, merged_points, merged_ratio = best
+    return trunk_key, branch_key, merged_points, merged_ratio
+
+
+def _ensure_segment_with_points(
+    segments: dict[tuple[str, str], _RoadSegment],
+    nodes: dict[str, RoadMapNode],
+    a: str,
+    b: str,
+    points: list[Point],
+    *,
+    cost: float,
+    length: float,
+) -> tuple[str, str] | None:
+    key = _pair_key(a, b)
+    if key in segments:
+        return key
+    if len(points) < 2:
+        return None
+    segments[key] = _RoadSegment(
+        from_settlement_id=key[0],
+        to_settlement_id=key[1],
+        points=points,
+        cost=max(0.0001, cost),
+        length=length,
+        from_settlement_name=nodes[key[0]].display_name or key[0],
+        to_settlement_name=nodes[key[1]].display_name or key[1],
+    )
+    return key
+
+
 def _network_route(
     segments: dict[tuple[str, str], _RoadSegment],
     start: str,
@@ -2570,12 +3379,24 @@ def _ensure_segment(
         if route is None:
             return None
         routes[key] = route
+    else:
+        route = _upgrade_chord_route_if_needed(geometry, nodes[a], nodes[b], route, ford_points)
+        routes[key] = route
+    refined_points = _refine_straight_legs_in_polyline(
+        geometry,
+        list(route.points),
+        ford_points,
+        min_leg=0.065,
+        max_detour_ratio=1.22,
+        min_detour_ratio=1.03,
+    )
+    route_length = _path_length(refined_points)
     segments[key] = _RoadSegment(
         from_settlement_id=key[0],
         to_settlement_id=key[1],
-        points=route.points,
+        points=refined_points,
         cost=route.cost,
-        length=route.length,
+        length=route_length,
         from_settlement_name=nodes[key[0]].display_name or key[0],
         to_settlement_name=nodes[key[1]].display_name or key[1],
     )
@@ -2737,28 +3558,86 @@ def build_settlement_road_overlays(
         ),
     )[: max(1, int(max_roads))]
     segments: dict[tuple[str, str], _RoadSegment] = {}
-    for key, demand in ordered:
+
+    def _attach_demand(key: tuple[str, str], demand: _RoadDemand, *, implied_only: bool) -> None:
         direct_route = routes[key]
         direct_settlement_distance = max(
             0.0001,
             math.hypot(nodes[key[0]].x - nodes[key[1]].x, nodes[key[0]].y - nodes[key[1]].y),
         )
-        sea_route = None
-        if (
-            nodes[key[0]].region_id != nodes[key[1]].region_id
-            and direct_route.length / direct_settlement_distance >= 1.45
-        ):
-            sea_route = _sea_route_between_nodes(geometry, nodes[key[0]], nodes[key[1]], ford_points)
-        if _sea_route_should_replace_land_route(geometry, direct_route, sea_route, nodes, key[0], key[1]):
-            continue
+        if not implied_only:
+            sea_route = None
+            if (
+                nodes[key[0]].region_id != nodes[key[1]].region_id
+                and direct_route.length / direct_settlement_distance >= 1.45
+            ):
+                sea_route = _sea_route_between_nodes(geometry, nodes[key[0]], nodes[key[1]], ford_points)
+            if _sea_route_should_replace_land_route(geometry, direct_route, sea_route, nodes, key[0], key[1]):
+                return
         strong_actual = demand.actual_usage >= max(3.0, max_actual * 0.25)
         network = _network_route(segments, key[0], key[1])
+        network_limit = 1.85 if implied_only else 1.55
+        network_soft = 1.25 if not implied_only else 1.55
         if network is not None:
             _network_cost, network_length, network_segments = network
             network_ratio = network_length / direct_settlement_distance
-            if network_ratio <= 1.2 or (network_ratio <= 1.45 and not strong_actual):
+            if network_ratio <= network_soft or (network_ratio <= network_limit and not strong_actual):
                 _add_usage_to_segments(segments, network_segments, demand)
-                continue
+                return
+
+        if implied_only:
+            for via_id in nodes:
+                if via_id in key:
+                    continue
+                for via_key in (_pair_key(key[0], via_id), _pair_key(via_id, key[1])):
+                    if via_key not in routes:
+                        route = _route_between_nodes(geometry, nodes[via_key[0]], nodes[via_key[1]], ford_points)
+                        if route is not None:
+                            routes[via_key] = route
+            via = _best_via_node(nodes, routes, key, direct_route)
+            if via is not None:
+                via_id, via_ratio = via
+                if via_ratio <= 1.55:
+                    first_key = _pair_key(key[0], via_id)
+                    second_key = _pair_key(via_id, key[1])
+                    first = _ensure_segment(segments, routes, geometry, nodes, ford_points, key[0], via_id)
+                    second = _ensure_segment(segments, routes, geometry, nodes, ford_points, via_id, key[1])
+                    if first is not None and second is not None:
+                        _add_usage_to_segments(segments, (first, second), demand)
+                        return
+            direct_route_ratio = direct_route.length / direct_settlement_distance
+            if not segments and direct_route_ratio <= 2.2:
+                direct = _ensure_segment(segments, routes, geometry, nodes, ford_points, key[0], key[1])
+                if direct is not None:
+                    _add_usage_to_segments(segments, (direct,), demand)
+                    return
+            return
+
+        junction = _best_existing_road_junction(
+            segments,
+            nodes,
+            key,
+            direct_route,
+            direct_settlement_distance,
+            geometry=geometry,
+            ford_points=ford_points,
+        )
+        if junction is not None:
+            trunk_key, branch_key, merged_points, junction_ratio = junction
+            if junction_ratio <= 1.25 or (junction_ratio <= 1.65 and not strong_actual):
+                merged_length = _path_length(merged_points)
+                branch = _ensure_segment_with_points(
+                    segments,
+                    nodes,
+                    branch_key[0],
+                    branch_key[1],
+                    merged_points,
+                    cost=direct_route.cost,
+                    length=merged_length,
+                )
+                if branch is not None:
+                    _add_usage_to_segments(segments, (branch, trunk_key), demand)
+                    return
 
         for via_id in nodes:
             if via_id in key:
@@ -2790,16 +3669,23 @@ def build_settlement_road_overlays(
                     second = _ensure_segment(segments, routes, geometry, nodes, ford_points, via_id, key[1])
                     if first is not None and second is not None:
                         _add_usage_to_segments(segments, (first, second), demand)
-                        continue
+                        return
 
         direct_route_ratio = direct_route.length / direct_settlement_distance
         if demand.actual_usage <= 0.0 and direct_route_ratio > 2.2:
-            continue
+            return
         if not strong_actual and direct_route_ratio > 3.6:
-            continue
+            return
         direct = _ensure_segment(segments, routes, geometry, nodes, ford_points, key[0], key[1])
         if direct is not None:
             _add_usage_to_segments(segments, (direct,), demand)
+
+    for key, demand in ordered:
+        if demand.actual_usage > 0.0:
+            _attach_demand(key, demand, implied_only=False)
+    for key, demand in ordered:
+        if demand.actual_usage <= 0.0:
+            _attach_demand(key, demand, implied_only=True)
     return _finalize_edges(segments)
 
 
