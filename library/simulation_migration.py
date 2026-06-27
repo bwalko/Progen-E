@@ -17,10 +17,14 @@ if TYPE_CHECKING:
     from library.simulation_context import SimulationContext
 
 # Ratio of census / effective_cap above which out-migration is considered.
-MIGRATION_PRESSURE_THRESHOLD = 0.88
+MIGRATION_PRESSURE_THRESHOLD = 0.92
 # Trials scale with excess pressure; capped as a share of regional population per year.
-MIGRATION_MAX_OUTFLOW_SHARE = 0.08
-MIGRATION_TRIALS_PER_EXCESS_PRESSURE = 3.2
+MIGRATION_MAX_OUTFLOW_SHARE = 0.025
+MIGRATION_TRIALS_PER_EXCESS_PRESSURE = 1.15
+# Share of eligible adults who even enter the move trial pool (rises with excess pressure).
+MIGRATION_CONSIDERATION_BASE = 0.04
+MIGRATION_CONSIDERATION_EXCESS_SCALE = 0.38
+MIGRATION_CONSIDERATION_CAP = 0.20
 # Random walk on effective-cap multiplier (applied to config carrying_capacity).
 _CAP_DRIFT_LOW = 0.993
 _CAP_DRIFT_HIGH = 1.007
@@ -79,6 +83,45 @@ def _pick_destination_region(
     if not dest_ids:
         return None
     return rng.choices(dest_ids, weights=weights, k=1)[0]
+
+
+def _migration_consideration_probability(excess: float) -> float:
+    """Fraction of eligible adults who may be tried for out-migration this year."""
+    return min(
+        MIGRATION_CONSIDERATION_CAP,
+        MIGRATION_CONSIDERATION_BASE
+        + max(0.0, float(excess)) * MIGRATION_CONSIDERATION_EXCESS_SCALE,
+    )
+
+
+def _select_migration_candidates(
+    pool: list[int],
+    trials: int,
+    *,
+    excess: float,
+    year: int,
+    region_id: str,
+    salt: int,
+    rng: random.Random,
+) -> list[int]:
+    """Sample a small move-trial subset instead of scoring destinations for everyone."""
+    if trials <= 0 or not pool:
+        return []
+    consider_p = _migration_consideration_probability(excess)
+    if excess >= 0.12:
+        consider_p = max(consider_p, 0.55)
+    elif excess >= 0.05:
+        consider_p = max(consider_p, 0.22)
+    region_key = sum(ord(ch) for ch in (region_id or ""))
+    candidates: list[int] = []
+    for pid in pool:
+        roll_rng = random.Random(
+            int(year) * 1_000_003 + int(pid) * 9176 + int(salt) + region_key
+        )
+        if roll_rng.random() < consider_p:
+            candidates.append(int(pid))
+    rng.shuffle(candidates)
+    return candidates[:trials]
 
 
 def _pick_attractive_settlement(
@@ -217,8 +260,16 @@ def simulation_migration_annual_tick(ctx: "SimulationContext", year: int) -> Non
         pool = _eligible_migrant_pool(ctx, rid, year)
         if not pool:
             continue
-        rng.shuffle(pool)
-        for pid in pool[:trials]:
+        candidates = _select_migration_candidates(
+            pool,
+            trials,
+            excess=excess,
+            year=int(year),
+            region_id=rid,
+            salt=int(ctx.placename_rng_salt),
+            rng=rng,
+        )
+        for pid in candidates:
             dst_rid = _pick_destination_region(
                 ctx, rid, year, rng, resource_facts=resource_facts
             )

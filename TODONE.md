@@ -4911,3 +4911,11 @@ completion.
   long geometrically straight legs inside region routes and overlay segments (detour-capped).
   Morthalan→Peathrixl max leg 0.136 → ≤0.071; network-wide straight legs ≥0.08 → 0.
 - `python -m unittest unit_test.test_world_map_roads` (36 tests, OK).
+
+### Fixes (migration churn / consideration sampling, 2026-06-27)
+
+- Detailed resource-pressure migration: raised ``MIGRATION_PRESSURE_THRESHOLD`` to 0.92, cut max outflow to 2.5%/year, and added ``MIGRATION_CONSIDERATION_*`` so most eligible adults skip destination scoring each year.
+- Job-seeker migration: ``_job_seeker_migration_considered`` gate (min 2 unemployment years unless extreme pressure) before expensive destination picks; lower move probabilities.
+- Non-detailed directory migration: per-settlement consideration roll before scoring destinations; tighter pressure/outflow constants; distressed sites still pass via pressure tiers.
+- Removed post-hoc ``relocation_beats_staying`` score filter in favor of fewer candidates (cheaper and more realistic inertia). See ``dev_rules/migration_tuning.md``.
+- Evidence: default save audit had ``detailed_move_share≈0.86`` with 107/147 moves ``resource_pressure_migration``; targeted tests OK.

@@ -112,7 +112,12 @@ PRIMARY_CHILDCARE_OUT_OF_HOME_LOSS_FLOOR = 0.72
 PRIMARY_CHILDCARE_KIN_SIGNAL_WEIGHT = 0.44
 PRIMARY_CHILDCARE_KIN_PULL_WEIGHT = 0.35
 
-JOB_SEEKER_MIGRATION_MAX_PROB = 0.35
+JOB_SEEKER_MIGRATION_MAX_PROB = 0.28
+JOB_SEEKER_MIGRATION_MIN_UNEMPLOYMENT_YEARS = 2
+JOB_SEEKER_MIGRATION_CONSIDERATION_BASE = 0.025
+JOB_SEEKER_MIGRATION_CONSIDERATION_UNEMPLOYMENT_SCALE = 0.035
+JOB_SEEKER_MIGRATION_CONSIDERATION_PRESSURE_SCALE = 0.10
+JOB_SEEKER_MIGRATION_CONSIDERATION_CAP = 0.14
 
 ADULT_HOUSING_MIN_AGE = 18
 HOUSEHOLD_CARE_MIN_DUTY = 0.35
@@ -3951,15 +3956,48 @@ def _pick_job_seeker_destination(
     return st.settlement_id
 
 
+def _job_seeker_migration_considered(
+    rec: "SimulationPersonRecord",
+    *,
+    year: int,
+    pressure: float,
+    salt: int,
+) -> bool:
+    """Cheap gate: most unemployed adults never enter job-seeker relocation scoring."""
+    unemployment_years = _unemployment_years(rec.person, year)
+    if unemployment_years <= 0 and float(pressure) < 0.95:
+        return False
+    if unemployment_years < 1:
+        return False
+    if unemployment_years < JOB_SEEKER_MIGRATION_MIN_UNEMPLOYMENT_YEARS and float(pressure) < 0.98:
+        return False
+    consider_p = min(
+        JOB_SEEKER_MIGRATION_CONSIDERATION_CAP,
+        JOB_SEEKER_MIGRATION_CONSIDERATION_BASE
+        + min(max(0, int(unemployment_years)), 8)
+        * JOB_SEEKER_MIGRATION_CONSIDERATION_UNEMPLOYMENT_SCALE
+        + max(0.0, float(pressure) - 0.9) * JOB_SEEKER_MIGRATION_CONSIDERATION_PRESSURE_SCALE,
+    )
+    roll_rng = random.Random(
+        _event_seed(
+            year=year,
+            person_id=rec.person_id,
+            salt=int(salt),
+            stream=97_008,
+        )
+    )
+    return roll_rng.random() < consider_p
+
+
 def job_seeker_migration_probability(
     fitness_score: float, resource_pressure: float, unemployment_years: int
 ) -> float:
-    if unemployment_years <= 0 and resource_pressure < 0.9:
+    if unemployment_years <= 0 and resource_pressure < 0.95:
         return 0.0
     p = (
-        0.02
-        + min(max(0, int(unemployment_years)), 8) * 0.04
-        + max(0.0, float(resource_pressure) - 0.8) * 0.25
+        0.012
+        + min(max(0, int(unemployment_years)), 8) * 0.028
+        + max(0.0, float(resource_pressure) - 0.85) * 0.18
         - _clamp(float(fitness_score), 0.0, 1.0) * 0.03
     )
     return round(_clamp(p, 0.0, JOB_SEEKER_MIGRATION_MAX_PROB), 5)
@@ -4224,6 +4262,13 @@ def simulation_careers_annual_tick(ctx: "SimulationContext", year: int) -> None:
         if not rec.person.job and rec.person.employment_status == "unemployed"
     ]
     for rec, fitness, pressure, _traits in migration_candidates:
+        if not _job_seeker_migration_considered(
+            rec,
+            year=year,
+            pressure=pressure,
+            salt=int(ctx.placename_rng_salt),
+        ):
+            continue
         if maybe_migrate_job_seeker_household(
             ctx,
             rec,

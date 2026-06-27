@@ -11,6 +11,7 @@ Effective caps combine config `carrying_capacity` with a per-region multiplier (
 | `MIGRATION_PRESSURE_THRESHOLD` | Minimum `census / effective_cap` before a region tries out-migration. |
 | `MIGRATION_MAX_OUTFLOW_SHARE` | Upper bound on trial count as a fraction of regional population per year. |
 | `MIGRATION_TRIALS_PER_EXCESS_PRESSURE` | Scales trials with pressure above the threshold. |
+| `MIGRATION_CONSIDERATION_*` | Fraction of eligible adults who enter the move-trial pool (most skip destination scoring entirely). |
 | `_CAP_DRIFT_LOW` / `_CAP_DRIFT_HIGH` | Random-walk multipliers on the effective cap after the move phase. |
 | `_CAP_MULT_FLOOR` / `_CAP_MULT_CEIL` | Clamp for the effective-cap multiplier. |
 
@@ -22,6 +23,7 @@ Effective caps combine config `carrying_capacity` with a per-region multiplier (
 | `NONDETAILED_MIGRATION_FOOD_PRESSURE_BASE` | Food-pressure term baseline. |
 | `NONDETAILED_MIGRATION_MAX_OUTFLOW_SHARE` | Per-settlement annual outflow cap as a share of local directory population. |
 | `NONDETAILED_MIGRATION_OUTFLOW_PRESSURE_SCALE` | Scales outflow share with computed `source_pressure`. |
+| `NONDETAILED_MIGRATION_CONSIDERATION_*` | Per-settlement roll before scoring destinations (skips most sites each year). |
 
 ## Save-backed diagnostics
 
@@ -52,7 +54,7 @@ Change one constant at a time, re-run a fixed-seed scenario, and compare `yearly
 
 Current tuning note: high-pressure regions may now plan up to **8%** detailed outflow per year, but planned representatives are capped by the integer surplus above `MIGRATION_PRESSURE_THRESHOLD × effective_cap` so barely-over-threshold regions do not drain below the target simply because the max outflow share is higher.
 
-Non-detailed directory migration was retuned downward (2026-06-26) after movement audits showed aggregate migrant share near total alive population; abandonment now evacuates directory residents before a site is marked `abandoned`.
+Non-detailed directory migration was retuned downward (2026-06-26) after movement audits showed aggregate migrant share near total alive population; abandonment now evacuates directory residents before a site is marked `abandoned`. Relocation resistance (2026-06-27) now comes mainly from **consideration sampling** — most adults/settlements never enter destination scoring each year — plus lower outflow caps and a higher pressure threshold, rather than post-hoc score comparisons at pick time.
 
 Settlement abandonment (2026-06-26) uses **directory mixed viability** (`detailed_alive + nondetailed_alive`), not detailed-only census. A site abandons only when mixed population is empty, stays below `ABANDON_MIXED_POP_THRESHOLD` for multiple years, suffers sustained multi-year economic distress (`ABANDON_DISTRESS_*` metrics), or has an absorption founding reason (`absorbed`, `merged`, …). Viable low-resolution sites with directory residents but no detailed people promote ~1% (`settlement_low_resolution_sample`) instead of abandoning. Audit categories: `abandoned_empty`, `abandoned_economic`, `promoted_low_resolution_sample` in `temp/abandoned_settlement_audit.tsv`.
 

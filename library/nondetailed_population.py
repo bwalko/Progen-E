@@ -49,13 +49,16 @@ _ADULT_JOB_FAMILIES: tuple[str, ...] = (
 )
 
 # Non-detailed SQL migration pressure / outflow (see dev_rules/migration_tuning.md).
-NONDETAILED_MIGRATION_REGIONAL_PRESSURE_BASE = 0.88
-NONDETAILED_MIGRATION_FOOD_PRESSURE_BASE = 0.68
+NONDETAILED_MIGRATION_REGIONAL_PRESSURE_BASE = 0.92
+NONDETAILED_MIGRATION_FOOD_PRESSURE_BASE = 0.75
 NONDETAILED_MIGRATION_FOOD_PRESSURE_SCALE = 1.05
 NONDETAILED_MIGRATION_PROSPERITY_DEFICIT_SCALE = 0.75
 NONDETAILED_MIGRATION_STABILITY_DEFICIT_SCALE = 0.90
-NONDETAILED_MIGRATION_MAX_OUTFLOW_SHARE = 0.04
-NONDETAILED_MIGRATION_OUTFLOW_PRESSURE_SCALE = 0.028
+NONDETAILED_MIGRATION_MAX_OUTFLOW_SHARE = 0.02
+NONDETAILED_MIGRATION_OUTFLOW_PRESSURE_SCALE = 0.018
+NONDETAILED_MIGRATION_CONSIDERATION_BASE = 0.06
+NONDETAILED_MIGRATION_CONSIDERATION_PRESSURE_SCALE = 0.18
+NONDETAILED_MIGRATION_CONSIDERATION_CAP = 0.28
 
 _PERSON_ID_TABLES: tuple[str, ...] = (
     "simulation_people",
@@ -952,6 +955,22 @@ def run_nondetailed_sql_migration(
         )
         if source_pressure <= 0.0:
             continue
+        consider_p = min(
+            NONDETAILED_MIGRATION_CONSIDERATION_CAP,
+            NONDETAILED_MIGRATION_CONSIDERATION_BASE
+            + source_pressure * NONDETAILED_MIGRATION_CONSIDERATION_PRESSURE_SCALE,
+        )
+        if source_pressure >= 0.35:
+            consider_p = max(consider_p, 0.75)
+        elif source_pressure >= 0.15:
+            consider_p = max(consider_p, 0.35)
+        consider_rng = random.Random(
+            int(year) * 900_011
+            + int(getattr(ctx, "placename_rng_salt", 0))
+            + sum(ord(ch) for ch in source_sid)
+        )
+        if consider_rng.random() >= consider_p:
+            continue
         dest = _pick_nondetailed_destination(
             ctx,
             st,
@@ -1173,9 +1192,10 @@ def _pick_nondetailed_destination(
         return None
     scored: list[tuple[float, object]] = []
     for score, sid, st in pool:
-        adj = score * 0.62 if sid == source_sid else score
-        if adj > 0.0:
-            scored.append((adj, st))
+        if sid == source_sid:
+            continue
+        if score > 0.0:
+            scored.append((score, st))
     if not scored:
         return None
     scored.sort(key=lambda item: (-item[0], str(getattr(item[1], "settlement_id", ""))))
