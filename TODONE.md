@@ -4863,3 +4863,51 @@ completion.
   `temp/detailed_floor_trace_diff.md`.
 - **Recommendation:** accept batch-conn + in-memory maps for floor planning;
   quarantine world-folder CLI A/B until reset determinism is fixed.
+
+## Road Junction Reuse (2026-06-26)
+
+### Enhancements
+
+- `library/world_map_roads.py`: branch roads now attach to existing trunk geometry at
+  an intersection point instead of drawing a parallel approach to the same endpoint;
+  network-route reuse thresholds relaxed slightly (1.25 / 1.55 vs 1.2 / 1.45).
+- `unit_test/test_world_map_roads.py`: `test_branch_road_junctions_onto_existing_trunk`.
+
+### Validation
+
+- `python -m unittest unit_test.test_world_map_roads` (35 tests, OK).
+
+### Fixes (anti-spaghetti pass)
+
+- Junction reuse now only merges when the trunk **ends** at the shared endpoint (converging
+  T-junction), not when roads radiate from the same hub.
+- Fixed endpoint detection: `pair_key` sort order no longer confused with travel direction.
+- Two-pass build: actual-movement roads first; implied demand only reuses backbone (network,
+  via, or seeds when no roads exist yet) instead of materializing a full mesh.
+- Hub-spoke audit: avg 2.8 points/spoke -> 2.0; parallel pairs 1 -> 0.
+
+### Fixes (long chord / continent-spanning roads)
+
+- Cross-region routing now always prefers configured inter-region land routes before micro
+  shortcuts; long two-point chords are upgraded via `_upgrade_chord_route_if_needed`.
+- `unit_test/test_world_map_roads.py`: `test_cross_region_long_route_is_not_a_two_point_chord`.
+
+### Fixes (Georgehop–Doiredoir / asymmetric cross-region connectors)
+
+- `_region_routed_path_between_nodes`: long first/last connectors now bend through the
+  correct region when the configured backbone attaches near only one settlement (long leg
+  ≥ 0.08, short leg < 0.08); interior waypoints skip collinear chord collapse.
+- `_connector_through_land`: reject micro-routes whose longest leg still exceeds 55% of
+  direct distance; same-region long legs bend via region center when off-chord.
+- Runtime evidence (default world): Doiredoir→Georgehop max leg 0.131 → 0.068; direct
+  overlay chord removed in favor of via `aeria_port:s4`.
+- Follow-up (Cnocthalby / Pritouw–Immoferh): split micro-routing from bend-region selection;
+  connector candidates compared after `_finalize_connector_path` naturalization. Pritouw→Immoferh
+  max leg 0.160 → 0.080; no aeria overlay legs ≥ 0.081 except short mesh-boundary stubs.
+- Visual-straight pass: offset/direct ≤ 0.065 detection; cross-region routes now run
+  `_upgrade_chord_route_if_needed`; lighter region-center bow when connector detour too long.
+  Hughof→Georgehop off/direct 0.055 → 0.387; parallel minor roads reduced (67 → 60 overlays).
+- Leg-level refinement: `_refine_straight_legs_in_polyline` + `_light_bow_straight_leg` bend
+  long geometrically straight legs inside region routes and overlay segments (detour-capped).
+  Morthalan→Peathrixl max leg 0.136 → ≤0.071; network-wide straight legs ≥0.08 → 0.
+- `python -m unittest unit_test.test_world_map_roads` (36 tests, OK).

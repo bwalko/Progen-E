@@ -27,6 +27,7 @@ from library.world_map_roads import (
     RoadMapEdge,
     SeaRouteMapEdge,
     _clean_road_points,
+    _point_polyline_distance,
     build_settlement_road_overlays,
     build_settlement_sea_route_overlays,
 )
@@ -1373,6 +1374,48 @@ class TestWorldMapRoads(unittest.TestCase):
         self.assertIsNone(_edge(roads, "a", "c"))
         self.assertIsNotNone(_edge(roads, "a", "b"))
         self.assertIsNotNone(_edge(roads, "b", "c"))
+
+    def test_cross_region_long_route_is_not_a_two_point_chord(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {"a": (0.10, 0.50), "c": (0.90, 0.50)},
+                [(10, "a", "c", 4)],
+                region_by_settlement={"a": "r1", "c": "r3"},
+            )
+
+            roads = build_settlement_road_overlays(
+                geometry=_three_region_route_geometry(),
+                save_db_path=save,
+            )
+
+        road = _edge(roads, "a", "c")
+        self.assertIsNotNone(road)
+        self.assertGreaterEqual(len(road.points), 5)
+        self.assertGreater(_path_length(road.points), 0.9)
+
+    def test_branch_road_junctions_onto_existing_trunk(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            save = _make_save(
+                Path(tmp),
+                {
+                    "a": (0.10, 0.50),
+                    "b": (0.90, 0.50),
+                    "c": (0.75, 0.38),
+                },
+                [(10, "a", "b", 30), (10, "c", "b", 5)],
+            )
+
+            roads = build_settlement_road_overlays(geometry=_geometry(), save_db_path=save)
+
+        ab = _edge(roads, "a", "b")
+        cb = _edge(roads, "c", "b")
+        self.assertIsNotNone(ab)
+        self.assertIsNotNone(cb)
+        self.assertGreaterEqual(len(cb.points), 3)
+        self.assertLess(_point_polyline_distance(cb.points[len(cb.points) // 2], ab.points), 0.004)
+        self.assertAlmostEqual(cb.points[-1][0], 0.9, places=3)
+        self.assertAlmostEqual(cb.points[-1][1], 0.5, places=3)
 
     def test_implied_only_extreme_detour_is_omitted_without_reuse(self) -> None:
         ford = (0.5, 0.9)

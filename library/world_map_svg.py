@@ -189,7 +189,63 @@ _POLITY_COLORS = (
 
 DEFAULT_MAX_SETTLEMENT_OVERLAYS = 500
 
+_ROUTE_OVERLAY_CACHE: dict[
+    tuple[tuple[str, str, int, int], str, int],
+    tuple[tuple[RoadMapEdge, ...], tuple[SeaRouteMapEdge, ...]],
+] = {}
+_ROUTE_OVERLAY_CACHE_MAX = 32
+
 _LabelBox = tuple[float, float, float, float]
+
+
+def _save_db_fingerprint(path: Path) -> str:
+    pieces: list[str] = []
+    for candidate in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+        try:
+            stat = candidate.stat()
+        except OSError:
+            pieces.append("0:0")
+        else:
+            pieces.append(f"{stat.st_mtime_ns}:{stat.st_size}")
+    return "|".join(pieces)
+
+
+def _geometry_overlay_key(geometry: WorldMapGeometry) -> tuple[str, str, int, int]:
+    return (
+        str(geometry.world or ""),
+        str(geometry.version or ""),
+        len(geometry.micro_cells),
+        len(geometry.cells),
+    )
+
+
+def _settlement_route_overlays_for_geometry(
+    geometry: WorldMapGeometry,
+    save_path: Path,
+    *,
+    max_settlements: int,
+    save_fingerprint: str | None = None,
+) -> tuple[list[RoadMapEdge], list[SeaRouteMapEdge]]:
+    fingerprint = save_fingerprint if save_fingerprint is not None else _save_db_fingerprint(save_path)
+    cache_key = (_geometry_overlay_key(geometry), fingerprint, max(0, int(max_settlements)))
+    cached = _ROUTE_OVERLAY_CACHE.get(cache_key)
+    if cached is not None:
+        return list(cached[0]), list(cached[1])
+    settlement_limit = max(0, int(max_settlements))
+    roads = build_settlement_road_overlays(
+        geometry=geometry,
+        save_db_path=save_path,
+        max_nodes=settlement_limit,
+    )
+    sea_routes = build_settlement_sea_route_overlays(
+        geometry=geometry,
+        save_db_path=save_path,
+        max_nodes=settlement_limit,
+    )
+    if len(_ROUTE_OVERLAY_CACHE) >= _ROUTE_OVERLAY_CACHE_MAX:
+        _ROUTE_OVERLAY_CACHE.pop(next(iter(_ROUTE_OVERLAY_CACHE)))
+    _ROUTE_OVERLAY_CACHE[cache_key] = (tuple(roads), tuple(sea_routes))
+    return roads, sea_routes
 
 
 def _stable_seed(*parts: object) -> int:
@@ -1114,6 +1170,7 @@ def _place_coastline_marker(
     pad: int,
     allowed_polygon: list[tuple[float, float]] | None = None,
     max_offset: float = 34.0,
+    boundary_edges: dict[str, list[tuple[Point, Point]]] | None = None,
 ) -> tuple[float, float]:
     if (kind or "").strip().lower() not in {"harbor", "bay", "coast"}:
         return _place_marker(
@@ -1138,6 +1195,7 @@ def _place_coastline_marker(
             height=height,
             pad=pad,
             allowed_polygon=allowed_polygon,
+            boundary_edges=boundary_edges,
         )
 
     sx, sy = snapped(x, y)
@@ -1257,10 +1315,12 @@ def _coastline_marker_screen_point(
     height: int,
     pad: int,
     allowed_polygon: list[tuple[float, float]] | None,
+    boundary_edges: dict[str, list[tuple[Point, Point]]] | None = None,
 ) -> tuple[float, float]:
     if (kind or "").strip().lower() not in {"harbor", "bay", "coast"}:
         return _scale(world_point, width, height, pad)
-    boundary_edges = _micro_boundary_edges(geometry.micro_cells)
+    if boundary_edges is None:
+        boundary_edges = _micro_boundary_edges(geometry.micro_cells)
     best: tuple[float, tuple[float, float]] | None = None
     for cell in geometry.micro_cells:
         if cell.region_id != region_id or not cell.is_coastal:
@@ -1775,24 +1835,14 @@ def load_world_map_overlays(
     features_by_id: dict[str, FeatureMapOverlay] = {}
     polities: dict[str, PolityMapOverlay] = {}
     outlaw_refuges: list[OutlawRefugeMapOverlay] = []
-    roads: list[RoadMapEdge] = (
-        build_settlement_road_overlays(
-            geometry=geometry,
-            save_db_path=path,
-            max_nodes=settlement_limit,
+    roads: list[RoadMapEdge] = []
+    sea_routes: list[SeaRouteMapEdge] = []
+    if include_roads:
+        roads, sea_routes = _settlement_route_overlays_for_geometry(
+            geometry,
+            path,
+            max_settlements=settlement_limit,
         )
-        if include_roads
-        else []
-    )
-    sea_routes: list[SeaRouteMapEdge] = (
-        build_settlement_sea_route_overlays(
-            geometry=geometry,
-            save_db_path=path,
-            max_nodes=settlement_limit,
-        )
-        if include_roads
-        else []
-    )
     with closing(sqlite3.connect(path)) as conn:
         conn.row_factory = sqlite3.Row
         relations = {
@@ -2997,6 +3047,7 @@ def render_world_map_svg(
         for f in geometry.features
         if not _named_overlay_shadows_region_feature(f, named_feature_overlays)
     ]
+    coastline_boundary_edges = _micro_boundary_edges(geometry.micro_cells) if geometry.micro_cells else {}
     sorted_features = sorted(renderable_features, key=lambda f: (-f.importance, f.region_id, f.feature_id))
     drawn_named_ids: set[str] = set()
     for named in named_feature_overlays:
@@ -3023,6 +3074,7 @@ def render_world_map_svg(
             height=height,
             pad=pad,
             allowed_polygon=allowed_polygon,
+            boundary_edges=coastline_boundary_edges,
         )
         trial_occupied_markers = list(occupied_markers)
         x, y = _place_coastline_marker(
@@ -3040,6 +3092,7 @@ def render_world_map_svg(
             pad=pad,
             max_offset=42.0,
             allowed_polygon=allowed_polygon,
+            boundary_edges=coastline_boundary_edges,
         )
         if not _claim_active_thing_polygon(
             occupied_thing_polygons,
@@ -3112,6 +3165,7 @@ def render_world_map_svg(
             height=height,
             pad=pad,
             allowed_polygon=allowed_polygon,
+            boundary_edges=coastline_boundary_edges,
         )
         trial_occupied_markers = list(occupied_markers)
         x, y = _place_coastline_marker(
@@ -3129,6 +3183,7 @@ def render_world_map_svg(
             pad=pad,
             max_offset=36.0,
             allowed_polygon=allowed_polygon,
+            boundary_edges=coastline_boundary_edges,
         )
         if not _claim_active_thing_polygon(
             occupied_thing_polygons,
