@@ -4958,3 +4958,9 @@ completion.
 - `python -m py_compile utils/gradio_data_browser.py unit_test/test_gradio_data_browser.py`
 - `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_titles_browser_loads_office_history_and_person_selection unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history`
 
+## 2026-06-27 - Remove Discover Tab
+
+### Fixes
+
+- Removed the unused **Discover** tab from `utils/gradio_data_browser.py` along with its loader helpers, CSS, and unit test.
+

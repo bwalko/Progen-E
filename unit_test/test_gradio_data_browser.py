@@ -4666,47 +4666,6 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Recent History", town_html)
         self.assertIn("Public Virtue", town_html)
 
-    def test_discovery_browser_loads_eventful_places_and_recent_history(self) -> None:
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-            path = Path(tmp) / "save.sqlite"
-            con = _memory_place_save()
-            con.execute(
-                """
-                insert into simulation_events (world, sim_year, event_type, payload_json)
-                values (
-                    'test', 42, 'public_virtue',
-                    '{"person_id": 1, "target_person_id": 2, "settlement_id": "r1:s1", "region_id": "r1", "virtue_kind": "well_repair"}'
-                )
-                """
-            )
-            _add_memory_events_readable_view(con)
-            con.commit()
-            with closing(sqlite3.connect(path)) as out:
-                con.backup(out)
-            con.close()
-
-            original_db_path = gdb._db_path
-            original_dataframe = getattr(gdb.gr, "Dataframe", None)
-            gdb._db_path = lambda world, db_kind: path
-            gdb.gr.Dataframe = lambda **kwargs: kwargs
-            try:
-                place_table, place_status = gdb.load_discovery_browser(
-                    "test", "Eventful Settlements", "", 50
-                )
-                history_table, history_status = gdb.load_discovery_browser(
-                    "test", "Recent History", "public_virtue", 50
-                )
-            finally:
-                gdb._db_path = original_db_path
-                if original_dataframe is not None:
-                    gdb.gr.Dataframe = original_dataframe
-
-        self.assertEqual(place_table["headers"], gdb.DISCOVERY_HEADERS)
-        self.assertIn("eventful settlements", place_status)
-        self.assertEqual(place_table["value"][0][1], "Fordham")
-        self.assertIn("recent history", history_status)
-        self.assertEqual("Public Virtue", history_table["value"][0][1])
-
     def test_generated_region_map_preserves_region_aspect_ratio(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)

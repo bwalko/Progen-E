@@ -293,13 +293,6 @@ REDISCOVERY_DETAIL_HEADERS = [
     "Admin Summary",
 ]
 PERSON_LINK_TARGET_DEFAULT = "person"
-DISCOVERY_CATEGORY_CHOICES = [
-    "Interesting People",
-    "Eventful Settlements",
-    "Eventful Regions",
-    "Recent History",
-]
-DISCOVERY_HEADERS = ["Kind", "Name", "ID", "Score", "Context"]
 
 from library.world_map_geometry import (  # noqa: E402
     WorldMapGeometry,
@@ -1247,10 +1240,6 @@ body.dark .person-sheet,
 }
 .person-link:hover {
     color: var(--person-sheet-link-hover) !important;
-}
-.discovery-status {
-    color: var(--place-muted) !important;
-    margin: 8px 0 0;
 }
 .sr-only {
     position: absolute;
@@ -11679,216 +11668,6 @@ def load_almanack_duel(world: str, person_a: object, person_b: object) -> tuple[
     return _almanack_duel_html(result), _almanack_duel_text(result)
 
 
-def _empty_discovery_frame() -> gr.Dataframe:
-    return gr.Dataframe(value=[], headers=DISCOVERY_HEADERS)
-
-
-def _discovery_row_matches(row: dict[str, object], search: str) -> bool:
-    needle = str(search or "").strip().lower()
-    if not needle:
-        return True
-    needle_variants = {needle, needle.replace("_", " ")}
-    haystacks = []
-    for value in row.values():
-        text = str(value or "").lower()
-        haystacks.append(text)
-        haystacks.append(text.replace("_", " "))
-    return any(variant in haystack for variant in needle_variants for haystack in haystacks)
-
-
-def _discovery_person_rows(
-    con: sqlite3.Connection,
-    world: str,
-    *,
-    search: str,
-    limit: int,
-) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    fetch_limit = min(250, max(limit * 4, limit))
-    if _has_table(con, "simulation_person_archive_scores"):
-        columns = set(_table_columns(con, "simulation_person_archive_scores"))
-        score_sql = "narrative_heat_total" if "narrative_heat_total" in columns else "0"
-        ari_sql = "archive_recognition_index" if "archive_recognition_index" in columns else "0"
-        hidden_sql = "hidden_heat" if "hidden_heat" in columns else "0"
-        narrative_bucket_sql = "narrative_bucket" if "narrative_bucket" in columns else "''"
-        recognition_bucket_sql = "recognition_bucket" if "recognition_bucket" in columns else "''"
-        for score_row in con.execute(
-            f"""
-            SELECT person_id,
-                   {score_sql} AS narrative_heat_total,
-                   {ari_sql} AS archive_recognition_index,
-                   {hidden_sql} AS hidden_heat,
-                   {narrative_bucket_sql} AS narrative_bucket,
-                   {recognition_bucket_sql} AS recognition_bucket
-            FROM simulation_person_archive_scores
-            ORDER BY narrative_heat_total DESC, archive_recognition_index DESC, person_id
-            LIMIT ?
-            """,
-            (fetch_limit,),
-        ).fetchall():
-            person_row, person = _lookup_person(con, world, score_row["person_id"])
-            name = _person_name(person) if person_row else f"Person {score_row['person_id']}"
-            context = (
-                f"Narrative {score_row['narrative_heat_total']:.1f}; "
-                f"ARI {score_row['archive_recognition_index']:.1f}; "
-                f"hidden {score_row['hidden_heat']:.1f}"
-            )
-            buckets = ", ".join(
-                str(score_row[key] or "").replace("_", " ")
-                for key in ("narrative_bucket", "recognition_bucket")
-                if str(score_row[key] or "").strip()
-            )
-            if buckets:
-                context += f" ({buckets})"
-            rows.append(
-                {
-                    "Kind": "Person",
-                    "Name": name,
-                    "ID": score_row["person_id"],
-                    "Score": _fmt_number(score_row["narrative_heat_total"]),
-                    "Context": context,
-                }
-            )
-    elif _has_table(con, "simulation_event_people"):
-        for event_row in con.execute(
-            """
-            SELECT ep.person_id, count(*) AS c, max(e.sim_year) AS latest_year
-            FROM simulation_event_people ep
-            JOIN simulation_events e ON e.id = ep.event_id
-            GROUP BY ep.person_id
-            ORDER BY c DESC, latest_year DESC, ep.person_id
-            LIMIT ?
-            """,
-            (fetch_limit,),
-        ).fetchall():
-            person_row, person = _lookup_person(con, world, event_row["person_id"])
-            name = _person_name(person) if person_row else f"Person {event_row['person_id']}"
-            rows.append(
-                {
-                    "Kind": "Person",
-                    "Name": name,
-                    "ID": event_row["person_id"],
-                    "Score": event_row["c"],
-                    "Context": f"{event_row['c']} linked events; latest {_format_year(event_row['latest_year'])}",
-                }
-            )
-    return [row for row in rows if _discovery_row_matches(row, search)][:limit]
-
-
-def _discovery_eventful_place_rows(
-    con: sqlite3.Connection,
-    world: str,
-    *,
-    place_kind: str,
-    search: str,
-    limit: int,
-) -> list[dict[str, object]]:
-    if not _has_relation(con, "simulation_events_readable"):
-        return []
-    column = "settlement_id" if place_kind == "settlement" else "region_id"
-    rows = con.execute(
-        f"""
-        SELECT {column} AS place_id, count(*) AS c, max(sim_year) AS latest_year
-        FROM simulation_events_readable
-        WHERE {column} IS NOT NULL AND {column} != ''
-        GROUP BY {column}
-        ORDER BY c DESC, latest_year DESC, {column}
-        LIMIT ?
-        """,
-        (min(250, max(limit * 4, limit)),),
-    ).fetchall()
-    values: list[dict[str, object]] = []
-    for row in rows:
-        place_id = str(row["place_id"] or "")
-        if place_kind == "settlement":
-            name = _history_settlement_label(con, world, place_id)
-            kind = "Settlement"
-        else:
-            name = _history_region_label(con, world, place_id)
-            kind = "Region"
-        values.append(
-            {
-                "Kind": kind,
-                "Name": name,
-                "ID": place_id,
-                "Score": row["c"],
-                "Context": f"{row['c']} linked events; latest {_format_year(row['latest_year'])}",
-            }
-        )
-    return [row for row in values if _discovery_row_matches(row, search)][:limit]
-
-
-def _discovery_recent_history_rows(
-    con: sqlite3.Connection,
-    *,
-    search: str,
-    limit: int,
-) -> list[dict[str, object]]:
-    if not _has_relation(con, "simulation_events_readable"):
-        return []
-    summaries = load_admin_event_summaries(
-        con,
-        search=search,
-        limit=min(250, max(limit * 4, limit)),
-        offset=0,
-    )
-    summaries.sort(key=lambda summary: (summary.sim_year, summary.event_id), reverse=True)
-    rows = [
-        {
-            "Kind": "Event",
-            "Name": _recent_history_event_label(summary.event_type),
-            "ID": summary.event_id,
-            "Score": _format_year(summary.sim_year),
-            "Context": summary.prose,
-        }
-        for summary in summaries
-        if summary.event_type not in _RECENT_HISTORY_ECONOMY_EVENT_TYPES
-    ]
-    return [row for row in rows if _discovery_row_matches(row, search)][:limit]
-
-
-def load_discovery_browser(
-    world: str,
-    category: str,
-    search: str,
-    limit: object,
-) -> tuple[gr.Dataframe, str]:
-    selected = category if category in DISCOVERY_CATEGORY_CHOICES else DISCOVERY_CATEGORY_CHOICES[0]
-    if not world:
-        return _empty_discovery_frame(), "Choose a world."
-    row_limit = _safe_int(limit, 50, 1, 250)
-    path = _db_path(world, "Save DB")
-    if not path.exists():
-        return _empty_discovery_frame(), f"{path} is missing. Run a simulation first."
-    with _connect_readonly(path) as con:
-        saved_world = _resolve_saved_world(con, world)
-        if selected == "Interesting People":
-            rows = _discovery_person_rows(con, saved_world, search=search or "", limit=row_limit)
-        elif selected == "Eventful Settlements":
-            rows = _discovery_eventful_place_rows(
-                con,
-                saved_world,
-                place_kind="settlement",
-                search=search or "",
-                limit=row_limit,
-            )
-        elif selected == "Eventful Regions":
-            rows = _discovery_eventful_place_rows(
-                con,
-                saved_world,
-                place_kind="region",
-                search=search or "",
-                limit=row_limit,
-            )
-        else:
-            rows = _discovery_recent_history_rows(con, search=search or "", limit=row_limit)
-    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
-    status = f"{path.name}: showing {len(rows)} {selected.lower()}{saved_world_note}."
-    if selected == "Interesting People" and not rows:
-        status += " Refresh archive scores or run a simulation with event people for richer person discovery."
-    return _dataframe(rows, DISCOVERY_HEADERS), status
-
-
 def _fmt_number(value: object, digits: int = 2) -> str:
     if value in (None, ""):
         return ""
@@ -15760,30 +15539,6 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         buttons=["copy"],
                     )
 
-        with gr.Tab("Discover"):
-            with gr.Row(elem_classes=["world-browser"]):
-                discovery_world = gr.Dropdown(worlds, value=initial_world, label="World")
-                discovery_category = gr.Radio(
-                    DISCOVERY_CATEGORY_CHOICES,
-                    value=DISCOVERY_CATEGORY_CHOICES[0],
-                    label="Find",
-                )
-                discovery_limit = gr.Number(value=50, label="Limit", precision=0)
-            discovery_search = gr.Textbox(
-                label="Search Discoveries",
-                placeholder="Name, id, event type, place, context...",
-            )
-            discovery_load = gr.Button("Load Discoveries", variant="primary")
-            discovery_status = gr.Textbox(label="Status", interactive=False)
-            discovery_table = gr.Dataframe(
-                value=[],
-                headers=DISCOVERY_HEADERS,
-                label="Discoveries",
-                interactive=False,
-                wrap=True,
-                elem_id="discovery-table",
-            )
-
         with gr.Tab("Settlements") as settlements_tab:
             with gr.Row(elem_classes=["world-browser"]):
                 with gr.Column(scale=5):
@@ -16341,14 +16096,6 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             [almanack_world, almanack_duel_a, almanack_duel_b],
             [almanack_duel_sheet, almanack_duel_text],
         )
-        discovery_inputs = [
-            discovery_world,
-            discovery_category,
-            discovery_search,
-            discovery_limit,
-        ]
-        discovery_load.click(load_discovery_browser, discovery_inputs, [discovery_table, discovery_status])
-        discovery_search.submit(load_discovery_browser, discovery_inputs, [discovery_table, discovery_status])
         settlement_browser_inputs = [
             settlement_world,
             settlement_search,

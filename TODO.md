@@ -45,8 +45,8 @@ gap, browser inspection need, or measured performance problem.
 ## Completed Context: Gradio Navigation And Discovery
 
 The Gradio navigation/discovery enhancement pass is complete; see `TODONE.md`
-for tab-local person lookup, genealogy, place-history, Discover-tab, and
-validation evidence. Future Gradio work should be added as a fresh concrete TODO
+for tab-local person lookup, genealogy, place-history, and validation evidence.
+Future Gradio work should be added as a fresh concrete TODO
 only when there is a specific navigation bug, missing detail surface, lookup
 workflow, visual genealogy requirement, or measured browser performance problem.
 
