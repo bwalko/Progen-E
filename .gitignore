@@ -200,3 +200,5 @@ unused-save.sqlite
 temp/gradio_data_browser.pid
 /temp
 unit_test/population_sim_timing.tsv
+temp/gradio_data_browser.pid
+/temp
