@@ -1275,6 +1275,7 @@ def open_outlaw_case(
             details={**existing.details, **case_details},
         )
         ctx.outlaw_cases[case_key] = case
+        normalize_outlaw_labor_state(ctx, accused, int(year))
         return case
 
     case = SimulationOutlawCase(
@@ -1313,6 +1314,7 @@ def open_outlaw_case(
             **_case_event_payload(case, event_type="outlaw_case_opened"),
         },
     )
+    normalize_outlaw_labor_state(ctx, accused, int(year))
     return case
 
 
@@ -1479,6 +1481,27 @@ def _choose_refuge(
     return refuge
 
 
+def _end_outlaw_paramour_ties(
+    ctx: "SimulationContext",
+    person_id: int,
+    *,
+    end_reason: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    for paramour_id in list(ctx.paramour_ids_for_person(int(person_id))):
+        try:
+            ctx.end_paramour_relationship(int(person_id), int(paramour_id))
+            payload: dict[str, Any] = {
+                "end_reason": end_reason,
+                "end_reasons": [end_reason],
+            }
+            if extra:
+                payload.update(extra)
+            ctx._pending_simulation_events[-1][2].update(payload)
+        except (LookupError, ValueError):
+            pass
+
+
 def _flight_partner_break_rng(
     ctx: "SimulationContext",
     *,
@@ -1539,18 +1562,12 @@ def flee_to_refuge(
         or rec.person.last_free_settlement_id
         or case.settlement_id
     )
-    for paramour_id in list(ctx.paramour_ids_for_person(int(rec.person_id))):
-        try:
-            ctx.end_paramour_relationship(int(rec.person_id), int(paramour_id))
-            ctx._pending_simulation_events[-1][2].update(
-                {
-                    "end_reason": "outlaw_flight",
-                    "end_reasons": ["outlaw_flight"],
-                    "flight_reason": flight_reason or "ordinary_flight",
-                }
-            )
-        except (LookupError, ValueError):
-            pass
+    _end_outlaw_paramour_ties(
+        ctx,
+        int(rec.person_id),
+        end_reason="outlaw_flight",
+        extra={"flight_reason": flight_reason or "ordinary_flight"},
+    )
     if rec.person.partner_person_id is not None:
         partner_id = int(rec.person.partner_person_id)
         partner = ctx.id_to_record.get(partner_id)
@@ -1708,6 +1725,11 @@ def resolve_outlaw_case(
     )
     if rec is not None and int(rec.person_id) in ctx.current_people_ids:
         if resolution in {"captured", "punished"}:
+            _end_outlaw_paramour_ties(
+                ctx,
+                int(rec.person_id),
+                end_reason="outlaw_custody",
+            )
             sid = _return_settlement(ctx, case, rec)
             custody = _open_outlaw_custody(
                 ctx,

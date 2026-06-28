@@ -280,6 +280,93 @@ class TestRelationshipsResidence(unittest.TestCase):
                 self.assertTrue(event_payloads)
                 self.assertIn("job", event_payloads[-1]["cleared_current_state_fields"])
 
+    def test_death_releases_living_workers_from_dead_employer(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="iso5",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                employer = generate_person_random(
+                    gender="Male",
+                    age=40,
+                    simulation_context=ctx,
+                    simulation_year=1000,
+                )
+                worker = generate_person_random(
+                    gender="Female",
+                    age=25,
+                    simulation_context=ctx,
+                    simulation_year=1000,
+                )
+                er = ctx.add_person(person=employer, is_founder=True)
+                wr = ctx.add_person(person=worker, is_founder=True)
+                wr.person = replace(
+                    wr.person,
+                    job="housekeeper",
+                    job_assigned_year=1000,
+                    employment_status="employed",
+                    job_market_type="domestic_service",
+                    housing_status="employer_household",
+                    employer_person_id=er.person_id,
+                    host_person_id=er.person_id,
+                )
+
+                ctx.mark_dead({er.person_id}, deathyear=1001)
+
+                self.assertIsNone(wr.person.job)
+                self.assertIsNone(wr.person.employer_person_id)
+                self.assertIsNone(wr.person.host_person_id)
+                self.assertEqual(wr.person.employment_status, "unemployed")
+                self.assertEqual(wr.person.last_job, "housekeeper")
+                self.assertEqual(wr.person.housing_status, "own_household")
+
+    def test_mark_dead_clears_stale_active_state_when_deathyear_already_set(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+            with SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="iso6",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            ) as ctx:
+                p = generate_person_random(
+                    gender="Male",
+                    age=30,
+                    simulation_context=ctx,
+                    simulation_year=1000,
+                )
+                rec = ctx.add_person(person=p, is_founder=True)
+                rec.person = replace(
+                    rec.person,
+                    deathyear=1000,
+                    job="judge",
+                    partner_person_id=999,
+                    employment_status="employed",
+                )
+                self.assertIn(rec.person_id, ctx.current_people_ids)
+
+                ctx.mark_dead({rec.person_id}, deathyear=1001)
+
+                self.assertNotIn(rec.person_id, ctx.current_people_ids)
+                self.assertEqual(rec.person.deathyear, 1000)
+                self.assertIsNone(rec.person.job)
+                self.assertIsNone(rec.person.partner_person_id)
+
 
 if __name__ == "__main__":
     unittest.main()

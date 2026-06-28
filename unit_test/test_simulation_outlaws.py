@@ -369,6 +369,8 @@ class TestSimulationOutlaws(unittest.TestCase):
                 target_person_id=accused.person_id,
             )
             self.assertIsNotNone(case)
+            self.assertIsNone(accused.person.job)
+            self.assertNotEqual(accused.person.employment_status, "employed")
             refuge = flee_to_refuge(ctx, case.case_key, year=1001)
             self.assertIsNotNone(refuge)
             self.assertIsNone(accused.person.job)
@@ -1276,6 +1278,89 @@ class TestSimulationOutlaws(unittest.TestCase):
                 flight_payload["details"],
                 "escaped custody before fleeing to outlaw refuge",
             )
+
+    def test_capture_ends_paramour_ties_immediately(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            accused = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Male",
+            )
+            paramour = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Female",
+            )
+            ctx.add_paramour_relationship(accused.person_id, paramour.person_id)
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=accused,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.70,
+                knownness_01=0.65,
+                source_event_key="test:capture:paramour",
+                target_person_id=paramour.person_id,
+            )
+            self.assertIsNotNone(case)
+            flee_to_refuge(ctx, case.case_key, year=1001)
+            accused.person = replace(
+                accused.person,
+                paramour_person_id=paramour.person_id,
+                paramour_person_ids=(paramour.person_id,),
+            )
+            paramour.person = replace(
+                paramour.person,
+                paramour_person_id=accused.person_id,
+                paramour_person_ids=(accused.person_id,),
+            )
+            ctx.paramours.append((accused.person_id, paramour.person_id))
+
+            resolve_outlaw_case(ctx, case.case_key, year=1002, resolution="captured")
+
+            self.assertIsNone(accused.person.paramour_person_id)
+            self.assertIsNone(paramour.person.paramour_person_id)
+            self.assertNotIn((accused.person_id, paramour.person_id), ctx.paramours)
+
+    def test_imprisoned_spouse_cannot_father_births(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            husband = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Male",
+            )
+            wife = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+                gender="Female",
+            )
+            ctx.add_couple(husband.person_id, wife.person_id)
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=husband,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.70,
+                knownness_01=0.65,
+                source_event_key="test:capture:birth-block",
+                target_person_id=wife.person_id,
+            )
+            self.assertIsNotNone(case)
+            resolve_outlaw_case(ctx, case.case_key, year=1001, resolution="captured")
+
+            from library.population_growth_runner import _birth_father_candidates
+
+            self.assertEqual(_birth_father_candidates(ctx, wife, 1002), [])
 
 
 if __name__ == "__main__":

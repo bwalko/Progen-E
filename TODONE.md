@@ -4991,3 +4991,20 @@ completion.
   (replaced with `outlaw`, `peddler`, `mercenary`, and `itinerant laborer`);
   `util_clean_genome_jobs.py` no longer maps turncoats to `deserter`.
 
+## 2026-06-27 — Death/custody/refuge relationship and job hardening
+
+- `mark_dead` now always clears active person state when removing someone from
+  the alive set, even if `deathyear` was already set, without duplicating death
+  events.
+- One O(alive) pass after each death batch releases living workers whose
+  `employer_person_id` or `host_person_id` points at a newly dead person.
+- `open_outlaw_case` immediately normalizes wanted labor state so settlement jobs
+  do not linger until the next careers tick.
+- Outlaw capture ends paramour ties immediately (shared helper with refuge
+  flight); spouse births skip fathers who are fugitive or imprisoned.
+- Tests:
+  `unit_test.test_relationships_residence` (employer-death release, stale-death
+  cleanup);
+  `unit_test.test_simulation_outlaws` (wanted job clear, capture paramour end,
+  imprisoned father birth block).
+

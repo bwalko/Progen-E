@@ -2093,6 +2093,53 @@ class SimulationContext:
             if np is not p:
                 rec.person = np
 
+    def _release_living_household_anchors_to_dead(
+        self, dead_ids: set[int], *, deathyear: int
+    ) -> None:
+        """Drop living workers' employer/host refs when that anchor just died."""
+        if not dead_ids:
+            return
+        y = int(deathyear)
+        for rec in self.iter_current_people():
+            p = rec.person
+            employer_dead = (
+                p.employer_person_id is not None
+                and int(p.employer_person_id) in dead_ids
+            )
+            host_dead = (
+                p.host_person_id is not None and int(p.host_person_id) in dead_ids
+            )
+            if not employer_dead and not host_dead:
+                continue
+            np = p
+            if employer_dead:
+                old_job = p.job
+                np = replace(
+                    np,
+                    job=None,
+                    job_assigned_year=None,
+                    job_era=None,
+                    job_tier=None,
+                    job_market_type="none" if old_job else np.job_market_type,
+                    household_role=None if old_job else np.household_role,
+                    employment_status="unemployed" if old_job else np.employment_status,
+                    job_lost_year=y if old_job else np.job_lost_year,
+                    unemployment_started_year=(
+                        y
+                        if old_job and np.unemployment_started_year is None
+                        else np.unemployment_started_year
+                    ),
+                    last_job=old_job or np.last_job,
+                    employer_person_id=None,
+                    host_person_id=None,
+                )
+                if (np.housing_status or "").strip().lower() == "employer_household":
+                    np = replace(np, housing_status="own_household")
+            elif host_dead:
+                np = replace(np, host_person_id=None)
+            if np is not p:
+                rec.person = np
+
     def _person_state_after_death(self, person: Person, deathyear: int) -> Person:
         """Keep identity/history fields, but clear active simulation state on death.
 
@@ -2212,8 +2259,17 @@ class SimulationContext:
             rec = self.id_to_record.get(pid)
             if rec is None:
                 continue
-            if rec.person.deathyear is None:
-                rec.person = self._person_state_after_death(rec.person, deathyear)
+            was_fresh_death = rec.person.deathyear is None
+            effective_deathyear = (
+                int(deathyear)
+                if was_fresh_death
+                else int(rec.person.deathyear)
+            )
+            if was_fresh_death or pid in self.current_people_ids:
+                rec.person = self._person_state_after_death(
+                    rec.person, effective_deathyear
+                )
+            if was_fresh_death:
                 if self.file_store is not None:
                     self.file_store.append_people_update(
                         {
@@ -2294,6 +2350,7 @@ class SimulationContext:
                 )
             self.current_people_ids.discard(pid)
         self.invalidate_alive_census_cache()
+        self._release_living_household_anchors_to_dead(dead_ids, deathyear=int(deathyear))
         self._clear_relationship_refs_to(dead_ids)
         self.couples = [
             (a_id, b_id)

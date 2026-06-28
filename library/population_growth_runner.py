@@ -63,6 +63,7 @@ from library.mixed_population_audit import run_mixed_population_audit_if_enabled
 from library.simulation_context import SimulationContext, SimulationPersonRecord
 from library.simulation_export import people_export_payload, settlements_geo_export_payload
 from library.simulation_mortality import apply_annual_mortality
+from library.simulation_outlaws import is_outlaw_absent
 from library.trait_impacts import trait_category_benefit, trait_category_pressure
 from library.world_save import ensure_checkpoint_schema
 
@@ -449,6 +450,8 @@ def _birth_father_candidates(
             return
         father = ctx.id_to_record.get(father_id)
         if father is None or not _eligible_for_birth(father, year):
+            return
+        if is_outlaw_absent(father.person):
             return
         if (father.person.gender or "").strip().lower() != "male":
             return
