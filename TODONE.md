@@ -4919,3 +4919,28 @@ completion.
 - Non-detailed directory migration: per-settlement consideration roll before scoring destinations; tighter pressure/outflow constants; distressed sites still pass via pressure tiers.
 - Removed post-hoc ``relocation_beats_staying`` score filter in favor of fewer candidates (cheaper and more realistic inertia). See ``dev_rules/migration_tuning.md``.
 - Evidence: default save audit had ``detailed_move_share≈0.86`` with 107/147 moves ``resource_pressure_migration``; targeted tests OK.
+
+## 2026-06-27 - Almanack Metric Fixes and Gradio UX
+
+### Enhancements
+
+- Disabled `single_strange_event_score` until `historical_importance` values reach the sparse-event threshold (was always empty at max ~0.61 vs required 0.75).
+- Added Almanack metrics: **Job Losses** (`job_lost` events), **Offices Held** (`simulation_office_holdings`), **Age at Death** (birth/death years on detailed people).
+- Gradio Almanack tab now suffixes metric dropdown labels with cached row counts after load/refresh, updates counts on world change, and expands status text for stale cache, empty cache, passive-population absence, and zero-row filters.
+
+### Validation
+
+- `python -m unittest unit_test.test_person_almanack unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_almanack_refresh_loads_rankings_and_row_details`
+- Default save refresh: 74 job-loss rows, 108 office-holder rows, 38 age-at-death rows.
+
+## 2026-06-27 - Outlaw Tab Human-Readable Grids
+
+### Fixes
+
+- Reworked Outlaw Cases and Outlaw Refuges Gradio tables to lead with accused/offense/refuge names instead of raw `case_key` ids.
+- Added region/settlement lookup fallbacks via `simulation_*_lookup` when readable views only expose numeric keys.
+- Humanized status/offense/outcome text, trimmed columns, enabled wrapping, and added outlaw-table CSS for readable multi-line cells.
+
+### Validation
+
+- `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_outlaw_browser_loads_cases_refuges_and_person_selection`

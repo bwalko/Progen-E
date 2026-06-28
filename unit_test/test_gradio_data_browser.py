@@ -1637,7 +1637,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             )
             gdb.gr.Dataframe = lambda **kwargs: kwargs
             try:
-                empty_table, empty_status, _, _, _ = gdb.load_almanack_browser(
+                empty_table, empty_status, _, _, _, _ = gdb.load_almanack_browser(
                     "default",
                     "All",
                     "Murders Committed",
@@ -1647,7 +1647,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     "",
                     50,
                 )
-                murder_table, murder_status, murder_keys, _, _ = gdb.refresh_almanack_browser(
+                murder_table, murder_status, murder_keys, _, _, _ = gdb.refresh_almanack_browser(
                     "default",
                     "All",
                     "Murders Committed",
@@ -1662,7 +1662,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     "default",
                     types.SimpleNamespace(index=0),
                 )
-                all_metric_table, _, _, _, _ = gdb.load_almanack_browser(
+                all_metric_table, _, _, _, _, _ = gdb.load_almanack_browser(
                     "default",
                     "All",
                     "All Metrics",
@@ -1672,7 +1672,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
                     "",
                     50,
                 )
-                passive_table, passive_status, passive_keys, _, _ = gdb.load_almanack_browser(
+                passive_table, passive_status, passive_keys, _, _, _ = gdb.load_almanack_browser(
                     "default",
                     "Family",
                     "Recorded Children",
@@ -4897,7 +4897,7 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertEqual(case_table["headers"], gdb.OUTLAW_CASE_BROWSER_HEADERS)
         self.assertIn("outlaw cases", case_status)
         self.assertEqual(len(case_keys), 1)
-        self.assertEqual(case_table["value"][0][3], "Ada Forge #1")
+        self.assertEqual(case_table["value"][0][0], "Ada Forge (1)")
         self.assertEqual(person_sheet, "person 1")
         self.assertEqual(share, "share 1")
         self.assertEqual(refuge_table["headers"], gdb.OUTLAW_REFUGE_BROWSER_HEADERS)

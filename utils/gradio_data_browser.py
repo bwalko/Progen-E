@@ -200,37 +200,33 @@ SETTLEMENT_BROWSER_HEADERS = [
     "Top Jobs",
 ]
 OUTLAW_CASE_BROWSER_HEADERS = [
-    "Case",
-    "Status",
-    "Offense",
     "Accused",
+    "Offense",
+    "Status",
+    "Region",
+    "Place",
     "Refuge",
     "Custody",
-    "Region",
-    "Settlement",
-    "Started",
+    "Since",
     "Last Seen",
-    "Forget Year",
-    "Resolved",
-    "Severity",
-    "Knownness",
     "Pursuit",
-    "Buyoff",
-    "Resolution",
+    "Known",
+    "Severity",
+    "Outcome",
 ]
 OUTLAW_REFUGE_BROWSER_HEADERS = [
     "Refuge",
     "Status",
     "Region",
-    "Near Settlement",
-    "Band Size",
+    "Near",
+    "Band",
     "Active Cases",
     "Founded",
     "Discovered",
     "Abandoned",
     "Concealment",
     "Support",
-    "Last Activity",
+    "Last Active",
 ]
 HISTORY_VIEW_CHOICES = [
     "Admin Truth",
@@ -320,7 +316,9 @@ from library.job_archetypes import normalize_job_catalog_key  # noqa: E402
 from library.person_almanack import (  # noqa: E402
     metric_definition_choices,
     metric_categories,
+    metric_choice_labels,
     metric_choices,
+    metric_row_counts,
     person_almanack_cache_status,
     query_person_almanack,
     query_person_almanack_duel,
@@ -375,6 +373,7 @@ ALMANACK_EVIDENCE_HEADERS = [
 ]
 ALMANACK_METRIC_CHOICES = ["All Metrics", *[label for label, _key in metric_definition_choices()]]
 ALMANACK_METRIC_LABEL_TO_KEY = {label: key for label, key in metric_choices()}
+_ALMANACK_METRIC_COUNT_SUFFIX_RE = re.compile(r" \([\d]+\)$")
 ALMANACK_CATEGORY_CHOICES = metric_categories()
 ALMANACK_SOURCE_CHOICES = ["Both", "Detailed", "Passive explicit"]
 ALMANACK_RANK_MODE_CHOICES = [
@@ -522,6 +521,41 @@ body.dark .sim-progress-card,
 #almanack-table th:nth-child(12),
 #almanack-table td:nth-child(12) {
     max-width: 260px !important;
+}
+#outlaw-case-table,
+#outlaw-refuge-table,
+#outlaw-case-table table,
+#outlaw-refuge-table table,
+#outlaw-case-table .table-wrap,
+#outlaw-refuge-table .table-wrap,
+#outlaw-case-table .dataframe,
+#outlaw-refuge-table .dataframe {
+    font-size: 12px !important;
+}
+#outlaw-case-table th,
+#outlaw-case-table td,
+#outlaw-refuge-table th,
+#outlaw-refuge-table td,
+#outlaw-case-table [role="columnheader"],
+#outlaw-case-table [role="gridcell"],
+#outlaw-refuge-table [role="columnheader"],
+#outlaw-refuge-table [role="gridcell"] {
+    font-size: 12px !important;
+    line-height: 1.25 !important;
+    white-space: normal !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    vertical-align: top !important;
+}
+#outlaw-case-table th:nth-child(1),
+#outlaw-case-table td:nth-child(1),
+#outlaw-refuge-table th:nth-child(1),
+#outlaw-refuge-table td:nth-child(1) {
+    min-width: 140px !important;
+}
+#outlaw-case-table th:nth-child(2),
+#outlaw-case-table td:nth-child(2) {
+    min-width: 160px !important;
 }
 .person-sheet {
     --person-sheet-bg-start: #fbf8ef;
@@ -1607,7 +1641,17 @@ def _format_year_span(start_year: object, end_year: object = None) -> str:
 
 
 def _dataframe_display_value(header: str, value: object) -> object:
-    if header in {"Year", "Born", "Died", "Founded"}:
+    if header in {
+        "Year",
+        "Born",
+        "Died",
+        "Founded",
+        "Since",
+        "Last Seen",
+        "Discovered",
+        "Abandoned",
+        "Last Active",
+    }:
         return _format_year_blank(value)
     return value
 
@@ -3919,6 +3963,48 @@ def load_composite_scores_browser(
     return _dataframe(public_rows, COMPOSITE_SCORE_HEADERS), status, keys
 
 
+def _almanack_metric_label_base(selection: object) -> str:
+    return _ALMANACK_METRIC_COUNT_SUFFIX_RE.sub("", str(selection or "").strip())
+
+
+def _almanack_metric_choices_from_conn(con: sqlite3.Connection) -> list[str]:
+    cache = person_almanack_cache_status(con)
+    if not cache.get("exists") or int(cache.get("row_count") or 0) == 0:
+        return list(ALMANACK_METRIC_CHOICES)
+    return metric_choice_labels(con, include_counts=True)
+
+
+def _almanack_metric_dropdown_update(current: object, choices: list[str]) -> gr.Dropdown:
+    current_base = _almanack_metric_label_base(current)
+    if not choices:
+        choices = list(ALMANACK_METRIC_CHOICES)
+    if current_base == "All Metrics":
+        value = "All Metrics"
+    else:
+        value = next(
+            (choice for choice in choices if _almanack_metric_label_base(choice) == current_base),
+            choices[1] if len(choices) > 1 else "All Metrics",
+        )
+    return gr.Dropdown(choices=choices, value=value)
+
+
+def refresh_almanack_metric_dropdown(world: str, current: object) -> gr.Dropdown:
+    if not world:
+        return _almanack_metric_dropdown_update(current, list(ALMANACK_METRIC_CHOICES))
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return _almanack_metric_dropdown_update(current, list(ALMANACK_METRIC_CHOICES))
+    with _connect_readonly(path) as con:
+        choices = _almanack_metric_choices_from_conn(con)
+    return _almanack_metric_dropdown_update(current, choices)
+
+
+def _almanack_passive_population_count(con: sqlite3.Connection) -> int:
+    if not _has_table(con, "simulation_people_light"):
+        return 0
+    return _count_one(con, "SELECT COUNT(*) FROM simulation_people_light")
+
+
 def _almanack_headers_for_metric(selection: object) -> list[str]:
     return ALMANACK_SELECTED_HEADERS if _almanack_metric_key(selection) else ALMANACK_HEADERS
 
@@ -3932,14 +4018,14 @@ def _almanack_empty_evidence_frame() -> gr.Dataframe:
 
 
 def _almanack_metric_key(selection: object) -> str | None:
-    text = str(selection or "").strip()
+    text = _almanack_metric_label_base(selection)
     if not text or text == "All Metrics":
         return None
     if text in ALMANACK_METRIC_LABEL_TO_KEY:
         return ALMANACK_METRIC_LABEL_TO_KEY[text]
     if text in set(ALMANACK_METRIC_LABEL_TO_KEY.values()):
         return text
-    return ALMANACK_METRIC_LABEL_TO_KEY.get(ALMANACK_METRIC_CHOICES[1])
+    return ALMANACK_METRIC_LABEL_TO_KEY.get(_almanack_metric_label_base(ALMANACK_METRIC_CHOICES[1]))
 
 
 def _almanack_year_span(row: dict[str, object]) -> str:
@@ -4027,7 +4113,15 @@ def _almanack_evidence_table(rows: list[dict[str, object]]) -> gr.Dataframe:
 
 
 def _almanack_status_text(
-    path: Path, cache: dict[str, object], row_count: int, rank_mode: str
+    path: Path,
+    cache: dict[str, object],
+    row_count: int,
+    rank_mode: str,
+    *,
+    source_filter: str = "Both",
+    passive_population_count: int | None = None,
+    selected_metric_key: str | None = None,
+    selected_metric_rows: int | None = None,
 ) -> str:
     bits = [f"{path.name}: showing {row_count} Almanack ranking rows"]
     bits.append(f"rank mode={rank_mode or 'Raw Value'}")
@@ -4041,7 +4135,21 @@ def _almanack_status_text(
     if updated_year not in (None, ""):
         bits.append(f"updated year={updated_year}")
     if cache.get("stale"):
-        bits.append("cache may be stale; click Refresh Almanack")
+        bits.append(
+            "cache is stale vs current events; click Refresh Almanack before trusting rankings"
+        )
+    elif cache_rows == 0:
+        bits.append("cache is empty; click Refresh Almanack to build rankings")
+    if str(source_filter or "Both").strip().lower().startswith("passive"):
+        passive_count = 0 if passive_population_count is None else int(passive_population_count)
+        if passive_count <= 0:
+            bits.append(
+                "Passive explicit filter is empty because this save has no simulation_people_light rows"
+            )
+    if row_count == 0 and cache_rows > 0:
+        bits.append("no rows match the current metric/category/filter settings")
+    if selected_metric_key and selected_metric_rows == 0:
+        bits.append(f"metric {selected_metric_key} has 0 cached rows after refresh")
     return " | ".join(bits) + ". Click a detailed row to open its person sheet."
 
 
@@ -4055,7 +4163,8 @@ def load_almanack_browser(
     min_value: object,
     limit: object,
     rank_mode: str = "Raw Value",
-) -> tuple[gr.Dataframe, str, list[str], str, str]:
+) -> tuple[gr.Dataframe, str, list[str], str, str, gr.Dropdown]:
+    metric_dropdown = _almanack_metric_dropdown_update(metric, list(ALMANACK_METRIC_CHOICES))
     if not world:
         return (
             _almanack_empty_frame(metric),
@@ -4063,6 +4172,7 @@ def load_almanack_browser(
             [],
             '<div class="person-sheet muted">Load The Almanack, then click a row.</div>',
             "Load The Almanack, then click a row.",
+            metric_dropdown,
         )
     row_limit = _safe_int(limit, 50, 1, 500)
     path = _db_path(world, "Save DB")
@@ -4073,10 +4183,21 @@ def load_almanack_browser(
             [],
             '<div class="person-sheet muted">No save DB found.</div>',
             "No save DB found.",
+            metric_dropdown,
         )
+    selected_metric_key = _almanack_metric_key(metric)
     with _connect_readonly(path) as con:
         saved_world = _resolve_saved_world(con, world)
         cache = person_almanack_cache_status(con)
+        metric_dropdown = _almanack_metric_dropdown_update(
+            metric,
+            _almanack_metric_choices_from_conn(con),
+        )
+        passive_population_count = _almanack_passive_population_count(con)
+        selected_metric_rows = None
+        if selected_metric_key:
+            counts = metric_row_counts(con)
+            selected_metric_rows = int(counts.get(selected_metric_key, 0))
         if not cache.get("exists") or int(cache.get("row_count") or 0) == 0:
             return (
                 _almanack_empty_frame(metric),
@@ -4084,10 +4205,11 @@ def load_almanack_browser(
                 [],
                 '<div class="person-sheet muted">Refresh The Almanack, then load rankings.</div>',
                 "Refresh The Almanack, then load rankings.",
+                metric_dropdown,
             )
         rows = query_person_almanack(
             con,
-            metric_key=_almanack_metric_key(metric),
+            metric_key=selected_metric_key,
             category=str(category or "All"),
             life_filter=str(life_filter or "All"),
             source_filter=str(source_filter or "Both"),
@@ -4100,13 +4222,26 @@ def load_almanack_browser(
     headers = _almanack_headers_for_metric(metric)
     keys = [_almanack_state_key(row) for row in rows]
     saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
-    status = _almanack_status_text(path, cache, len(values), str(rank_mode or "Raw Value")) + saved_world_note
+    status = (
+        _almanack_status_text(
+            path,
+            cache,
+            len(values),
+            str(rank_mode or "Raw Value"),
+            source_filter=str(source_filter or "Both"),
+            passive_population_count=passive_population_count,
+            selected_metric_key=selected_metric_key,
+            selected_metric_rows=selected_metric_rows,
+        )
+        + saved_world_note
+    )
     return (
         _dataframe(values, headers),
         status,
         keys,
         '<div class="person-sheet muted">Click a detailed row to open its person sheet. Passive rows show a compact record.</div>',
         "Click a detailed row to generate share text.",
+        metric_dropdown,
     )
 
 
@@ -4120,7 +4255,7 @@ def refresh_almanack_browser(
     min_value: object,
     limit: object,
     rank_mode: str = "Raw Value",
-) -> tuple[gr.Dataframe, str, list[str], str, str]:
+) -> tuple[gr.Dataframe, str, list[str], str, str, gr.Dropdown]:
     if not world:
         return (
             _almanack_empty_frame(metric),
@@ -4128,6 +4263,7 @@ def refresh_almanack_browser(
             [],
             '<div class="person-sheet muted">Choose a world.</div>',
             "Choose a world.",
+            _almanack_metric_dropdown_update(metric, list(ALMANACK_METRIC_CHOICES)),
         )
     path = _db_path(world, "Save DB")
     if not path.exists():
@@ -4137,12 +4273,13 @@ def refresh_almanack_browser(
             [],
             '<div class="person-sheet muted">No save DB found.</div>',
             "No save DB found.",
+            _almanack_metric_dropdown_update(metric, list(ALMANACK_METRIC_CHOICES)),
         )
     from library.world_save import ensure_checkpoint_schema_for_file
 
     ensure_checkpoint_schema_for_file(path)
     count = refresh_person_almanack_for_file(path)
-    table, status, keys, sheet, share = load_almanack_browser(
+    table, status, keys, sheet, share, metric_dropdown = load_almanack_browser(
         world,
         category,
         metric,
@@ -4153,7 +4290,7 @@ def refresh_almanack_browser(
         limit,
         rank_mode,
     )
-    return table, f"Refreshed {count} Almanack metric rows. {status}", keys, sheet, share
+    return table, f"Refreshed {count} Almanack metric rows. {status}", keys, sheet, share, metric_dropdown
 
 
 def _empty_settlements_frame() -> gr.Dataframe:
@@ -4488,21 +4625,21 @@ def _lookup_outlaw_refuge_display_name(
 
 def _outlaw_case_refuge_label(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
     explicit = str(
-        _row_value(row, "refuge_display_name")
-        or _row_value(row, "display_name")
+        _outlaw_row_value(row, "refuge_display_name")
+        or _outlaw_row_value(row, "display_name")
         or ""
     ).strip()
     if explicit:
         return explicit
-    refuge_id = _row_value(row, "refuge_id")
+    refuge_id = _outlaw_row_value(row, "refuge_id")
     if refuge_id in (None, ""):
         return ""
     return _lookup_outlaw_refuge_display_name(
         con,
         world,
         refuge_id,
-        region_id=_row_value(row, "region_id"),
-        near_settlement_id=_row_value(row, "settlement_id"),
+        region_id=_outlaw_lookup_region_id(con, row),
+        near_settlement_id=_outlaw_lookup_settlement_id(con, row),
     )
 
 
@@ -5001,47 +5138,124 @@ def _query_outlaw_cases(
     return rows, total
 
 
+def _outlaw_humanize(value: object) -> str:
+    text = " ".join(str(value or "").replace("_", " ").split())
+    if not text:
+        return ""
+    return " ".join(part.capitalize() if part.islower() else part for part in text.split())
+
+
+def _outlaw_lookup_region_id(con: sqlite3.Connection, row: sqlite3.Row) -> str:
+    region_id = str(_outlaw_row_value(row, "region_id") or "").strip()
+    if region_id:
+        return region_id
+    region_key = _coerce_int_or_none(_outlaw_row_value(row, "region_key"))
+    if region_key is None or not _has_table(con, "simulation_region_lookup"):
+        return ""
+    lookup = con.execute(
+        "SELECT region_id FROM simulation_region_lookup WHERE region_key = ?",
+        (region_key,),
+    ).fetchone()
+    return str(lookup["region_id"] or "").strip() if lookup else ""
+
+
+def _outlaw_lookup_settlement_id(con: sqlite3.Connection, row: sqlite3.Row) -> str:
+    for direct_key in (
+        "settlement_id",
+        "near_settlement_id",
+        "custody_site_settlement_id",
+        "site_settlement_id",
+    ):
+        settlement_id = str(_outlaw_row_value(row, direct_key) or "").strip()
+        if settlement_id:
+            return settlement_id
+    for key in ("settlement_key", "near_settlement_key", "site_settlement_key"):
+        settlement_key = _coerce_int_or_none(_outlaw_row_value(row, key))
+        if settlement_key is None:
+            continue
+        if _has_table(con, "simulation_settlement_lookup"):
+            lookup = con.execute(
+                "SELECT settlement_id FROM simulation_settlement_lookup WHERE settlement_key = ?",
+                (settlement_key,),
+            ).fetchone()
+            if lookup and str(lookup["settlement_id"] or "").strip():
+                return str(lookup["settlement_id"]).strip()
+    return ""
+
+
+def _outlaw_region_label(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
+    region_id = _outlaw_lookup_region_id(con, row)
+    return _safe_region_label(con, world, region_id) if region_id else ""
+
+
+def _outlaw_place_label(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
+    settlement_id = _outlaw_lookup_settlement_id(con, row)
+    return _safe_settlement_name(con, world, settlement_id) if settlement_id else ""
+
+
 def _outlaw_case_accused_label(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
     accused_id = _outlaw_row_value(row, "accused_person_id", "")
     name = str(_outlaw_row_value(row, "accused_name", "") or "").strip()
     if not name and accused_id not in (None, ""):
-        name = _person_link_text(con, world, accused_id).split(" (", 1)[0]
+        name = _person_link_text(con, world, accused_id).split(" (", 1)[0].strip()
+    if name and accused_id not in (None, ""):
+        return f"{name} ({int(accused_id)})"
+    if name:
+        return name
     if accused_id not in (None, ""):
-        return f"{name or 'Unknown'} #{accused_id}"
-    return name or "Unknown"
+        return f"Person {accused_id}"
+    return "Unknown"
+
+
+def _outlaw_case_offense_label(row: sqlite3.Row) -> str:
+    offense_kind = _outlaw_humanize(_outlaw_row_value(row, "offense_kind", ""))
+    offense_type = _outlaw_humanize(_outlaw_row_value(row, "offense_type", ""))
+    if offense_kind and offense_type and offense_kind.lower() != offense_type.lower():
+        return f"{offense_kind} ({offense_type})"
+    return offense_kind or offense_type or "Offense"
+
+
+def _outlaw_case_custody_label(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> str:
+    custody_status = _outlaw_humanize(_outlaw_row_value(row, "custody_status", ""))
+    custody_site = _outlaw_lookup_settlement_id(con, row) or str(
+        _outlaw_row_value(row, "custody_site_settlement_id", "") or ""
+    ).strip()
+    if not custody_status:
+        return ""
+    if custody_site:
+        return f"{custody_status} at {_safe_settlement_name(con, world, custody_site)}"
+    return custody_status
+
+
+def _outlaw_case_outcome_label(row: sqlite3.Row) -> str:
+    resolution = _outlaw_humanize(_outlaw_row_value(row, "resolution", ""))
+    resolved_year = _outlaw_row_value(row, "resolved_year", "")
+    forget_year = _outlaw_row_value(row, "expected_forget_year", "")
+    bits: list[str] = []
+    if resolution:
+        bits.append(resolution)
+    if resolved_year not in (None, ""):
+        bits.append(f"resolved {_format_year(resolved_year)}")
+    elif forget_year not in (None, ""):
+        bits.append(f"forgets {_format_year(forget_year)}")
+    return "; ".join(bits)
 
 
 def _outlaw_case_summary_row(con: sqlite3.Connection, world: str, row: sqlite3.Row) -> dict[str, object]:
-    offense_kind = str(_outlaw_row_value(row, "offense_kind", "") or "").replace("_", " ")
-    offense_type = str(_outlaw_row_value(row, "offense_type", "") or "").replace("_", " ")
-    offense = offense_kind or offense_type
-    if offense_kind and offense_type and offense_kind != offense_type:
-        offense = f"{offense_kind} ({offense_type})"
-    custody_status = str(_outlaw_row_value(row, "custody_status", "") or "").strip()
-    custody_site = str(_outlaw_row_value(row, "custody_site_settlement_id", "") or "").strip()
-    custody = ""
-    if custody_status:
-        custody = custody_status.replace("_", " ")
-        if custody_site:
-            custody += f" at {_safe_settlement_name(con, world, custody_site)}"
     return {
-        "Case": _outlaw_row_value(row, "case_key", ""),
-        "Status": _outlaw_row_value(row, "status", ""),
-        "Offense": offense,
         "Accused": _outlaw_case_accused_label(con, world, row),
+        "Offense": _outlaw_case_offense_label(row),
+        "Status": _outlaw_humanize(_outlaw_row_value(row, "status", "")),
+        "Region": _outlaw_region_label(con, world, row),
+        "Place": _outlaw_place_label(con, world, row),
         "Refuge": _outlaw_case_refuge_label(con, world, row),
-        "Custody": custody,
-        "Region": _safe_region_label(con, world, _outlaw_row_value(row, "region_id", "")),
-        "Settlement": _safe_settlement_name(con, world, _outlaw_row_value(row, "settlement_id", "")),
-        "Started": _outlaw_row_value(row, "start_year", ""),
+        "Custody": _outlaw_case_custody_label(con, world, row),
+        "Since": _outlaw_row_value(row, "start_year", ""),
         "Last Seen": _outlaw_row_value(row, "last_seen_year", ""),
-        "Forget Year": _outlaw_row_value(row, "expected_forget_year", ""),
-        "Resolved": _outlaw_row_value(row, "resolved_year", ""),
-        "Severity": _fmt_number(_outlaw_row_value(row, "severity_01", "")),
-        "Knownness": _fmt_number(_outlaw_row_value(row, "knownness_01", "")),
         "Pursuit": _fmt_number(_outlaw_row_value(row, "pursuit_pressure_01", "")),
-        "Buyoff": _fmt_number(_outlaw_row_value(row, "buyoff_power_01", "")),
-        "Resolution": _outlaw_row_value(row, "resolution", ""),
+        "Known": _fmt_number(_outlaw_row_value(row, "knownness_01", "")),
+        "Severity": _fmt_number(_outlaw_row_value(row, "severity_01", "")),
+        "Outcome": _outlaw_case_outcome_label(row),
     }
 
 
@@ -5319,17 +5533,17 @@ def load_outlaw_refuges_browser(
             values.append(
                 {
                     "Refuge": _outlaw_refuge_display_name(con, saved_world, row),
-                    "Status": _outlaw_row_value(row, "status", ""),
-                    "Region": _safe_region_label(con, saved_world, region_id) if region_id else "",
-                    "Near Settlement": _safe_settlement_name(con, saved_world, near_sid) if near_sid else "",
-                    "Band Size": _outlaw_row_value(row, "band_size", ""),
+                    "Status": _outlaw_humanize(_outlaw_row_value(row, "status", "")),
+                    "Region": _outlaw_region_label(con, saved_world, row),
+                    "Near": _outlaw_place_label(con, saved_world, row),
+                    "Band": _outlaw_row_value(row, "band_size", ""),
                     "Active Cases": active_cases,
                     "Founded": _outlaw_row_value(row, "founded_year", ""),
                     "Discovered": _outlaw_row_value(row, "discovered_year", ""),
                     "Abandoned": _outlaw_row_value(row, "abandoned_year", ""),
                     "Concealment": _fmt_number(_outlaw_row_value(row, "concealment_01", "")),
                     "Support": _fmt_number(_outlaw_row_value(row, "support_01", "")),
-                    "Last Activity": _outlaw_row_value(row, "last_activity_year", ""),
+                    "Last Active": _outlaw_row_value(row, "last_activity_year", ""),
                 }
             )
             keys.append(refuge_id)
@@ -15352,7 +15566,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                     outlaw_case_table = gr.Dataframe(
                         label="Outlaw Cases",
                         interactive=False,
-                        wrap=False,
+                        wrap=True,
                         elem_id="outlaw-case-table",
                     )
                     outlaw_case_keys_state = gr.State([])
@@ -15393,7 +15607,7 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                     outlaw_refuge_table = gr.Dataframe(
                         label="Outlaw Refuges",
                         interactive=False,
-                        wrap=False,
+                        wrap=True,
                         elem_id="outlaw-refuge-table",
                     )
                     outlaw_refuge_keys_state = gr.State([])
@@ -15769,10 +15983,16 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             almanack_keys_state,
             almanack_sheet,
             almanack_share_text,
+            almanack_metric,
         ]
         almanack_load.click(load_almanack_browser, almanack_inputs, almanack_outputs)
         almanack_refresh.click(refresh_almanack_browser, almanack_inputs, almanack_outputs)
         almanack_search.submit(load_almanack_browser, almanack_inputs, almanack_outputs)
+        almanack_world.change(
+            refresh_almanack_metric_dropdown,
+            [almanack_world, almanack_metric],
+            almanack_metric,
+        )
         almanack_table.select(
             select_almanack_from_table,
             [almanack_keys_state, almanack_world],

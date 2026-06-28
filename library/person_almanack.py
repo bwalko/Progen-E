@@ -216,6 +216,30 @@ _METRIC_DEFINITIONS: tuple[dict[str, object], ...] = (
         "description": "Distinct non-empty job assignments.",
     },
     {
+        "key": "job_losses",
+        "label": "Job Losses",
+        "category": "Work",
+        "value_type": "count",
+        "sources": "detailed",
+        "description": "Recorded job-loss events for the person.",
+    },
+    {
+        "key": "offices_held",
+        "label": "Offices Held",
+        "category": "Government",
+        "value_type": "count",
+        "sources": "detailed",
+        "description": "Distinct office holding spells recorded in government save tables.",
+    },
+    {
+        "key": "age_at_death",
+        "label": "Age at Death",
+        "category": "Life Span",
+        "value_type": "years",
+        "sources": "detailed",
+        "description": "Age in years at recorded death year for people with both birth and death years.",
+    },
+    {
         "key": "crossroads_index",
         "label": "Crossroads Index",
         "category": "Entanglement",
@@ -306,7 +330,8 @@ _METRIC_DEFINITIONS: tuple[dict[str, object], ...] = (
         "category": "Strange Records",
         "value_type": "score",
         "sources": "detailed",
-        "description": "High-importance event trace for otherwise sparsely recorded lives.",
+        "enabled": 0,
+        "description": "Disabled until historical_importance scores reach the sparse-event threshold.",
     },
     {
         "key": "disasters_survived",
@@ -575,6 +600,41 @@ def metric_categories(
     ]
 
 
+def metric_row_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Return cached row counts keyed by metric_key."""
+
+    if not _table_exists(conn, ALMANACK_TABLE):
+        return {}
+    rows = _fetch_dicts(
+        conn,
+        f"""
+        SELECT metric_key, COUNT(*) AS row_count
+        FROM {_quote_identifier(ALMANACK_TABLE)}
+        GROUP BY metric_key
+        """,
+    )
+    return {str(row["metric_key"]): int(row["row_count"] or 0) for row in rows}
+
+
+def metric_choice_labels(
+    conn: sqlite3.Connection | None = None,
+    *,
+    enabled_only: bool = True,
+    include_counts: bool = False,
+) -> list[str]:
+    """Return dropdown labels for Gradio, optionally suffixing cached row counts."""
+
+    labels = ["All Metrics"]
+    counts = metric_row_counts(conn) if conn is not None and include_counts else {}
+    for display_name, metric_key in metric_definition_choices(conn, enabled_only=enabled_only):
+        if include_counts:
+            count = int(counts.get(metric_key, 0))
+            labels.append(f"{display_name} ({count})")
+        else:
+            labels.append(display_name)
+    return labels
+
+
 def ensure_person_almanack_schema(conn: sqlite3.Connection) -> None:
     """Create cached Almanack tables, metric registry, and retrieval indexes."""
 
@@ -725,6 +785,8 @@ def refresh_person_almanack(
     _add_displacement_metrics(conn, accumulators)
     _add_relationship_anomaly_metrics(conn, accumulators)
     _add_family_reach_metrics(conn, accumulators)
+    _add_office_metrics(conn, accumulators)
+    _add_life_span_metrics(conn, accumulators)
     _add_strange_record_metrics(conn, accumulators)
     _add_crossroads_metrics(conn, accumulators)
     _add_archive_metrics(conn, accumulators)
@@ -974,6 +1036,11 @@ def query_person_almanack_duel(
             "legal/consequence involvement",
             ("legal_entanglements", "displacements", "children_lost_young"),
         ),
+        (
+            "work and office",
+            ("distinct_jobs", "job_losses", "offices_held"),
+        ),
+        ("life span", ("age_at_death",)),
         (
             "archive recognition",
             ("archive_narrative_heat", "archive_recognition_index"),
@@ -1308,6 +1375,25 @@ def _add_event_metrics(
                         "worker",
                         job,
                         payload_path="$.job",
+                        region_key=region_key,
+                        settlement_key=settlement_key,
+                        related_people=[person_id],
+                    ),
+                )
+        elif event_type == "job_lost":
+            person_id = _coerce_int(payload.get("person_id"))
+            if person_id is not None:
+                old_job = _clean_job(payload.get("old_job") or payload.get("job"))
+                detail = old_job or "job loss"
+                _acc(accumulators, "detailed", person_id, "job_losses").add_count(
+                    year=year,
+                    evidence=_event_evidence(
+                        event_id,
+                        year,
+                        event_type,
+                        "worker",
+                        detail,
+                        payload_path="$.old_job",
                         region_key=region_key,
                         settlement_key=settlement_key,
                         related_people=[person_id],
@@ -1908,6 +1994,91 @@ def _add_family_reach_metrics(
                     "related_people": sorted(close_family)[:12],
                 },
             )
+
+
+def _add_office_metrics(
+    conn: sqlite3.Connection,
+    accumulators: dict[tuple[str, int, str], _MetricAccumulator],
+) -> None:
+    if not _table_exists(conn, "simulation_office_holdings"):
+        return
+    columns = set(_table_columns(conn, "simulation_office_holdings"))
+    if "holder_person_id" not in columns:
+        return
+    select_cols = ["holding_id", "holder_person_id", "start_sim_year", "end_sim_year"]
+    if "seat_id" in columns:
+        select_cols.append("seat_id")
+    if "end_reason" in columns:
+        select_cols.append("end_reason")
+    rows = conn.execute(
+        f"""
+        SELECT {", ".join(_quote_identifier(col) for col in select_cols)}
+        FROM simulation_office_holdings
+        WHERE holder_person_id IS NOT NULL
+        """
+    ).fetchall()
+    for row in rows:
+        person_id = _coerce_int(row["holder_person_id"])
+        holding_id = _coerce_int(row["holding_id"])
+        if person_id is None or holding_id is None:
+            continue
+        start_year = _coerce_int(row["start_sim_year"])
+        end_year = _coerce_int(row["end_sim_year"])
+        seat_id = _coerce_int(row["seat_id"]) if "seat_id" in columns else None
+        end_reason = str(row["end_reason"] or "").strip() if "end_reason" in columns else ""
+        summary_bits = [f"holding {holding_id}"]
+        if seat_id is not None:
+            summary_bits.append(f"seat {seat_id}")
+        if end_reason:
+            summary_bits.append(end_reason)
+        _acc(accumulators, "detailed", person_id, "offices_held").add_distinct(
+            holding_id,
+            year=start_year,
+            evidence={
+                "source_table": "simulation_office_holdings",
+                "source_id": holding_id,
+                "source_year": start_year,
+                "role": "office_holder",
+                "summary": ", ".join(summary_bits),
+                "payload_path": "holder_person_id",
+                "contribution_value": 1.0,
+                "related_people": [person_id],
+                "caveat": {
+                    "start_sim_year": start_year,
+                    "end_sim_year": end_year,
+                    "seat_id": seat_id,
+                },
+            },
+        )
+
+
+def _add_life_span_metrics(
+    conn: sqlite3.Connection,
+    accumulators: dict[tuple[str, int, str], _MetricAccumulator],
+) -> None:
+    people = _people_context(conn)
+    for person_id, person in people.items():
+        birthyear = _coerce_int(person.get("birthyear"))
+        deathyear = _coerce_int(person.get("deathyear"))
+        if birthyear is None or deathyear is None or deathyear < birthyear:
+            continue
+        age = int(deathyear - birthyear)
+        _acc(accumulators, "detailed", person_id, "age_at_death").add_value(
+            value=float(age),
+            count=1,
+            year=deathyear,
+            evidence={
+                "source_table": "simulation_people",
+                "source_id": person_id,
+                "source_year": deathyear,
+                "role": "deceased",
+                "summary": f"died at age {age} in {deathyear}",
+                "payload_path": "birthyear/deathyear",
+                "contribution_value": float(age),
+                "related_people": [person_id],
+                "caveat": {"birthyear": birthyear, "deathyear": deathyear},
+            },
+        )
 
 
 def _add_strange_record_metrics(
@@ -2844,6 +3015,12 @@ def _evidence_rows_for_accumulator(acc: _MetricAccumulator) -> list[tuple[object
 def _evidence_summary(acc: _MetricAccumulator) -> str:
     if acc.metric_key in {"property_loss_caused", "property_loss_suffered"}:
         return f"{acc.metric_count} property crime event(s), total loss {acc.metric_value:.3f}"
+    if acc.metric_key == "age_at_death":
+        return f"died at age {acc.metric_value:.0f}"
+    if acc.metric_key == "offices_held":
+        return f"{acc.metric_count} recorded office holding spell(s)"
+    if acc.metric_key == "job_losses":
+        return f"{acc.metric_count} recorded job loss event(s)"
     if acc.metric_key == "crossroads_index" and acc.component_values:
         top = sorted(acc.component_values.items(), key=lambda item: item[1], reverse=True)[:3]
         return "Crossroads components: " + ", ".join(f"{key} {value:.1f}" for key, value in top)

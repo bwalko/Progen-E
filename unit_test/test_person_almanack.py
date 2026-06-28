@@ -76,7 +76,7 @@ class TestPersonAlmanack(unittest.TestCase):
                     (1008, "paramour_formed", {"person_a_id": 1, "person_b_id": 3}),
                     (1009, "job_assigned", {"person_id": 1, "job": "farmer"}),
                     (1010, "job_assigned", {"person_id": 1, "job": "scribe"}),
-                    (1011, "job_assigned", {"person_id": 1, "job": "farmer"}),
+                    (1011, "job_lost", {"person_id": 2, "old_job": "guard"}),
                     (
                         1012,
                         "settlement_moved",
@@ -95,6 +95,14 @@ class TestPersonAlmanack(unittest.TestCase):
                 VALUES (?, 1, 'war_displacement')
                 """,
                 (event_ids[-1],),
+            )
+            conn.execute(
+                """
+                INSERT INTO simulation_office_holdings (
+                    seat_id, holder_person_id, start_sim_year, end_sim_year, end_reason
+                )
+                VALUES (1, 1, 1010, NULL, NULL)
+                """
             )
             conn.execute(
                 """
@@ -159,6 +167,18 @@ class TestPersonAlmanack(unittest.TestCase):
                 metrics[("detailed", 1, "distinct_jobs")]["metric_count"],
                 2,
             )
+            self.assertEqual(
+                metrics[("detailed", 2, "job_losses")]["metric_count"],
+                1,
+            )
+            self.assertEqual(
+                metrics[("detailed", 1, "offices_held")]["metric_count"],
+                1,
+            )
+            self.assertEqual(
+                float(metrics[("detailed", 3, "age_at_death")]["metric_value"]),
+                33.0,
+            )
             self.assertIn(("detailed", 1, "crossroads_index"), metrics)
             self.assertIn(("detailed", 3, "property_crimes_suffered"), metrics)
             self.assertIn(("detailed", 3, "property_loss_suffered"), metrics)
@@ -174,7 +194,11 @@ class TestPersonAlmanack(unittest.TestCase):
 
             definition_labels = [label for label, _key in metric_definition_choices(conn)]
             self.assertIn("Crossroads Index", definition_labels)
+            self.assertIn("Job Losses", definition_labels)
+            self.assertIn("Offices Held", definition_labels)
+            self.assertIn("Age at Death", definition_labels)
             self.assertNotIn("Disasters Survived", definition_labels)
+            self.assertNotIn("Single Strange Event Score", definition_labels)
             all_definition_labels = [
                 label for label, _key in metric_definition_choices(conn, enabled_only=False)
             ]
