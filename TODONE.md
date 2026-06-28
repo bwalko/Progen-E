@@ -4964,3 +4964,30 @@ completion.
 
 - Removed the unused **Discover** tab from `utils/gradio_data_browser.py` along with its loader helpers, CSS, and unit test.
 
+## 2026-06-27 - Genome Jobs Realism And Common-Pool Variety
+
+### Enhancements
+
+- Added `utils/util_clean_genome_jobs.py` to normalize assignable job titles in
+  `config/genome_jobs.csv`: meta-labels (`*-equivalent`, persona/archetype
+  strings), behavior phrases, meme/internet titles, and bare generics are
+  replaced with neutral mass-employable occupations; premium columns keep
+  rarer labels via separate overrides.
+- Expanded era filler pools (prehistoric through modern) so short common job
+  lists gain additional realistic trades and labor roles without duplicating
+  tokens within a row.
+- Regenerated `config/job_economics.csv` from the cleaned catalog via
+  `utils/util_extract_job_economics_skeleton.py`.
+
+### Validation
+
+- `python utils/util_clean_genome_jobs.py`
+- `python utils/util_extract_job_economics_skeleton.py`
+- `python -m unittest unit_test.test_genome_jobs_catalog`
+- Follow-up: removed assignable job title `deserter` from `genome_jobs.csv`
+  (replaced with `outlaw`, `peddler`, `mercenary`, and `itinerant laborer`);
+  `util_clean_genome_jobs.py` no longer maps turncoats to `deserter`.
+- Follow-up: removed assignable job title `deserter` from `genome_jobs.csv`
+  (replaced with `outlaw`, `peddler`, `mercenary`, and `itinerant laborer`);
+  `util_clean_genome_jobs.py` no longer maps turncoats to `deserter`.
+
