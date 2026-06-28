@@ -9,6 +9,7 @@ import sqlite3
 from pathlib import Path
 
 from library.event_prose import EventRecordProse, load_public_chronicle_prose
+from library.world_save import event_payload_from_row
 from library.detailed_population_variance import HIGH_VARIANCE_DETAIL_COMPOSITE
 from library.event_scoring import serial_predation_risk
 from library.serious_crime_taxonomy import event_serious_crime_category
@@ -497,8 +498,9 @@ def _metric_summaries(conn: sqlite3.Connection) -> list[MetricSummary]:
     values: dict[tuple[str, str], list[float]] = {}
     for row in conn.execute(
         """
-        SELECT event_type, payload_json
-        FROM simulation_events_readable
+        SELECT id, event_type, payload_json, primary_person_id, secondary_person_id,
+               settlement_key, region_key, event_origin
+        FROM simulation_events
         WHERE event_type IN (
             'murder',
             'property_crime',
@@ -532,7 +534,7 @@ def _metric_summaries(conn: sqlite3.Connection) -> list[MetricSummary]:
         """
     ):
         event_type = str(row["event_type"])
-        payload = _payload(row["payload_json"])
+        payload = event_payload_from_row(row, conn, expand=True)
         for metric in (
             "historical_importance",
             "resource_pressure",
@@ -1067,12 +1069,13 @@ def _hybrid_population_calibration(
     if _relation_exists(conn, "simulation_events_readable"):
         for row in conn.execute(
             """
-            SELECT event_type, payload_json
-            FROM simulation_events_readable
+            SELECT id, event_type, payload_json, primary_person_id, secondary_person_id,
+                   settlement_key, region_key, event_origin
+            FROM simulation_events
             """
         ):
             event_type = str(row["event_type"] or "").strip()
-            payload = _payload(row["payload_json"])
+            payload = event_payload_from_row(row, conn, expand=True)
             category = event_serious_crime_category(event_type, payload)
             if category in serious_crime_category_counts:
                 serious_crime_category_counts[category] += 1

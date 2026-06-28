@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping
+from library.world_save import event_payload_from_row
 
 
 ALMANACK_TABLE = "simulation_person_almanack_metrics"
@@ -1202,7 +1202,7 @@ def _add_event_metrics(
         event_type = str(event["event_type"] or "").strip()
         region_key = _coerce_int(event["region_key"])
         settlement_key = _coerce_int(event["settlement_key"])
-        payload = _json_dict(event["payload_json"])
+        payload = event_payload_from_row(event, conn, expand=True)
         related = _payload_person_ids(payload)
         if event_type == "murder":
             killer_id = _coerce_int(payload.get("killer_person_id"))
@@ -1727,7 +1727,7 @@ def _add_relationship_anomaly_metrics(
     ):
         event_id = int(event["id"])
         year = _coerce_int(event["sim_year"]) or current_year
-        payload = _json_dict(event["payload_json"])
+        payload = event_payload_from_row(event, conn, expand=True)
         event_type = str(event["event_type"] or "")
         person_a = _coerce_int(payload.get("person_a_id"))
         person_b = _coerce_int(payload.get("person_b_id"))
@@ -2138,7 +2138,7 @@ def _add_strange_record_metrics(
                 years_by_person[person_id].append(year)
             event_count_by_person[person_id].add(event_id)
             roles_by_event_person[(person_id, event_id)].add(str(row["role"] or "related"))
-            payload = _json_dict(row["payload_json"])
+            payload = event_payload_from_row(row, conn, expand=True)
             importance = _coerce_float(payload.get("historical_importance")) or 0.0
             if importance > max_importance_by_person.get(person_id, (0.0, 0, None))[0]:
                 max_importance_by_person[person_id] = (importance, event_id, year)
@@ -2312,7 +2312,7 @@ def _add_crossroads_metrics(
                 regions[person_id].add(region_key)
             if settlement_key is not None:
                 settlements[person_id].add(settlement_key)
-            payload = _json_dict(row["payload_json"])
+            payload = event_payload_from_row(row, conn, expand=True)
             if str(row["event_type"] or "") == "job_assigned":
                 job = _clean_job(payload.get("job") or payload.get("job_family"))
                 if job:

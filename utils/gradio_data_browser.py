@@ -2236,61 +2236,77 @@ def _history_event_ids_from_person_ids(
         ).fetchall()
         event_ids.update(int(row["event_id"]) for row in rows if row["event_id"] is not None)
 
-    scalar_fields = (
-        "person_id",
-        "person_a_id",
-        "person_b_id",
-        "child_id",
-        "victim_person_id",
-        "killer_person_id",
-        "perpetrator_person_id",
-        "target_person_id",
-        "accused_person_id",
-        "paramour_person_id",
-        "benefactor_person_id",
-        "beneficiary_person_id",
-        "creator_person_id",
-        "patron_person_id",
-        "source_person_id",
-        "purseholder_person_id",
-        "moved_person_id",
-        "holder_person_id",
-        "previous_holder_id",
-        "prior_head_person_id",
-        "claimant_id",
-        "related_child_id",
-    )
-    array_fields = (
-        "household_member_ids",
-        "dependent_minor_ids",
-        "moved_person_ids",
-        "witness_person_ids",
-        "betrayed_partner_person_ids",
-        "related_child_ids",
-    )
-    scalar_clauses: list[str] = []
-    scalar_params: list[object] = []
-    for field in scalar_fields:
-        scalar_clauses.append(f"json_extract(payload_json, '$.{field}') IN ({placeholders})")
-        scalar_params.extend(person_params)
-    for field in array_fields:
-        scalar_clauses.append(
-            "EXISTS ("
-            f"SELECT 1 FROM json_each(payload_json, '$.{field}') "
-            f"WHERE json_each.value IN ({placeholders})"
-            ")"
+        event_cols = _table_columns(con, "simulation_events")
+        if "primary_person_id" in event_cols and "secondary_person_id" in event_cols:
+            rows = con.execute(
+                f"""
+                SELECT DISTINCT id
+                FROM simulation_events
+                WHERE {events_where}
+                  AND (
+                    primary_person_id IN ({placeholders})
+                    OR secondary_person_id IN ({placeholders})
+                  )
+                """,
+                (*events_params, *person_params, *person_params),
+            ).fetchall()
+            event_ids.update(int(row["id"]) for row in rows if row["id"] is not None)
+    else:
+        scalar_fields = (
+            "person_id",
+            "person_a_id",
+            "person_b_id",
+            "child_id",
+            "victim_person_id",
+            "killer_person_id",
+            "perpetrator_person_id",
+            "target_person_id",
+            "accused_person_id",
+            "paramour_person_id",
+            "benefactor_person_id",
+            "beneficiary_person_id",
+            "creator_person_id",
+            "patron_person_id",
+            "source_person_id",
+            "purseholder_person_id",
+            "moved_person_id",
+            "holder_person_id",
+            "previous_holder_id",
+            "prior_head_person_id",
+            "claimant_id",
+            "related_child_id",
         )
-        scalar_params.extend(person_params)
-    rows = con.execute(
-        f"""
-        SELECT DISTINCT id
-        FROM simulation_events
-        WHERE {events_where}
-          AND ({' OR '.join(scalar_clauses)})
-        """,
-        (*events_params, *scalar_params),
-    ).fetchall()
-    event_ids.update(int(row["id"]) for row in rows if row["id"] is not None)
+        array_fields = (
+            "household_member_ids",
+            "dependent_minor_ids",
+            "moved_person_ids",
+            "witness_person_ids",
+            "betrayed_partner_person_ids",
+            "related_child_ids",
+        )
+        scalar_clauses: list[str] = []
+        scalar_params: list[object] = []
+        for field in scalar_fields:
+            scalar_clauses.append(f"json_extract(payload_json, '$.{field}') IN ({placeholders})")
+            scalar_params.extend(person_params)
+        for field in array_fields:
+            scalar_clauses.append(
+                "EXISTS ("
+                f"SELECT 1 FROM json_each(payload_json, '$.{field}') "
+                f"WHERE json_each.value IN ({placeholders})"
+                ")"
+            )
+            scalar_params.extend(person_params)
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT id
+            FROM simulation_events
+            WHERE {events_where}
+              AND ({' OR '.join(scalar_clauses)})
+            """,
+            (*events_params, *scalar_params),
+        ).fetchall()
+        event_ids.update(int(row["id"]) for row in rows if row["id"] is not None)
 
     if _has_relation(con, "simulation_event_records_readable"):
         record_clauses = [

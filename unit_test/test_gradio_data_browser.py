@@ -34,6 +34,7 @@ from utils.gradio_data_browser import (
     _event_sentence,
     _event_sentence_html,
     _person_from_row,
+    _history_event_ids_from_person_ids,
     _person_event_rows,
     _render_polity_sheet,
     _render_region_sheet,
@@ -2627,6 +2628,35 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Pieter", employer_html)
         self.assertIn("Anita", employer_html)
         self.assertIn("household service as servant", employer_html)
+
+    def test_history_event_ids_use_event_people_without_payload_person_keys(self) -> None:
+        con = _memory_save()
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS simulation_event_people (
+                event_id INTEGER NOT NULL,
+                person_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                PRIMARY KEY (event_id, person_id, role)
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO simulation_events (id, world, sim_year, event_type, payload_json)
+            VALUES (?, 'test', 1000, 'murder', ?)
+            """,
+            (
+                50,
+                json.dumps({"incident_kind": "ordinary_murder", "historical_importance": 0.3}),
+            ),
+        )
+        con.executemany(
+            "INSERT INTO simulation_event_people (event_id, person_id, role) VALUES (?, ?, ?)",
+            [(50, 7, "killer"), (50, 8, "victim")],
+        )
+        event_ids = _history_event_ids_from_person_ids(con, "test", {7, 8})
+        self.assertEqual(event_ids, {50})
 
     def test_history_card_reasons_are_collapsed_into_details(self) -> None:
         con = _memory_save()

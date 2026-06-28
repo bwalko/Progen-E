@@ -17,6 +17,7 @@ from typing import Iterable
 from library import simulation_timing
 from library.world_save import (
     ensure_checkpoint_schema,
+    event_payload_from_row,
     mark_event_record_lost,
     rediscover_event_record,
 )
@@ -198,7 +199,7 @@ def event_memory_lifecycle_annual_tick(
 
         lost_count = 0
         for row in loss_rows:
-            chance = _loss_chance(row, sim_year) * max(0.0, float(loss_chance_multiplier))
+            chance = _loss_chance(row, sim_year, conn) * max(0.0, float(loss_chance_multiplier))
             if _stable_fraction("loss", sim_year, row["record_id"]) >= min(1.0, chance):
                 continue
             mark_event_record_lost(
@@ -211,7 +212,7 @@ def event_memory_lifecycle_annual_tick(
 
         rediscovered_count = 0
         for row in rediscovery_rows:
-            chance = _rediscovery_chance(row, sim_year) * max(
+            chance = _rediscovery_chance(row, sim_year, conn) * max(
                 0.0, float(rediscovery_chance_multiplier)
             )
             if (
@@ -314,6 +315,12 @@ def _fetch_candidates(
                 rl.region_id AS preserving_region_id,
                 e.sim_year,
                 e.event_type,
+                e.id AS event_id,
+                e.primary_person_id,
+                e.secondary_person_id,
+                e.settlement_key,
+                e.region_key,
+                e.event_origin,
                 e.payload_json
             FROM simulation_event_records r
             JOIN simulation_events e ON e.id = r.event_id
@@ -339,7 +346,7 @@ def _fetch_candidates(
     )
 
 
-def _loss_chance(row: sqlite3.Row, year: int) -> float:
+def _loss_chance(row: sqlite3.Row, year: int, conn: sqlite3.Connection) -> float:
     policy = LOSS_POLICIES.get(str(row["record_type"]), DEFAULT_LOSS_POLICY)
     event_age = _event_age(row, year)
     if event_age < policy.min_age:
@@ -356,14 +363,14 @@ def _loss_chance(row: sqlite3.Row, year: int) -> float:
     confidence = _float(row["confidence"], default=1.0)
     confidence_factor = _clamp(1.25 - (confidence * 0.5), 0.65, 1.25)
     age_factor = 1.0 + min(3.0, max(0, event_age - policy.min_age) / 120.0)
-    importance_factor = _clamp(1.1 - (_event_importance(row) * 0.6), 0.35, 1.1)
+    importance_factor = _clamp(1.1 - (_event_importance(row, conn) * 0.6), 0.35, 1.1)
     preservation_factor = 0.85 if _optional_text(row["preserving_region_id"]) else 1.0
     if _optional_text(row["source_institution_id"]):
         preservation_factor *= 0.75
     return policy.chance * visibility_factor * confidence_factor * age_factor * importance_factor * preservation_factor
 
 
-def _rediscovery_chance(row: sqlite3.Row, year: int) -> float:
+def _rediscovery_chance(row: sqlite3.Row, year: int, conn: sqlite3.Connection) -> float:
     policy = REDISCOVERY_POLICIES.get(
         str(row["record_type"]), DEFAULT_REDISCOVERY_POLICY
     )
@@ -372,7 +379,7 @@ def _rediscovery_chance(row: sqlite3.Row, year: int) -> float:
         return 0.0
     visibility_factor = 1.8 if str(row["visibility_state"]) == "sealed" else 1.0
     age_factor = 1.0 + min(2.5, max(0, hidden_age - policy.min_age) / 160.0)
-    importance_factor = 0.6 + (_event_importance(row) * 1.2)
+    importance_factor = 0.6 + (_event_importance(row, conn) * 1.2)
     preservation_factor = 1.0
     if _optional_text(row["preserving_region_id"]) or _optional_text(
         row["source_institution_id"]
@@ -396,8 +403,8 @@ def _hidden_age(row: sqlite3.Row, year: int) -> int:
     return max(0, int(year) - int(hidden_since))
 
 
-def _event_importance(row: sqlite3.Row) -> float:
-    payload = _payload(row)
+def _event_importance(row: sqlite3.Row, conn: sqlite3.Connection) -> float:
+    payload = _payload(row, conn)
     for key in (
         "historical_importance",
         "novelty_value",
@@ -445,15 +452,8 @@ def _rediscovery_confidence_and_distortion(
     return confidence, distortion or None
 
 
-def _payload(row: sqlite3.Row) -> dict:
-    raw = row["payload_json"]
-    if raw is None:
-        return {}
-    try:
-        parsed = json.loads(str(raw))
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+def _payload(row: sqlite3.Row, conn: sqlite3.Connection) -> dict:
+    return event_payload_from_row(row, conn, expand=True)
 
 
 def _stable_fraction(*parts: object) -> float:

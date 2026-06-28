@@ -10,6 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from library.world_save import event_payload_from_row
+
 from library.polity import (
     AllianceState,
     PolityState,
@@ -1466,7 +1468,8 @@ def summarize_city_state_patterns(conn: sqlite3.Connection) -> dict[str, int]:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
-        SELECT event_type, payload_json
+        SELECT id, event_type, payload_json, primary_person_id, secondary_person_id,
+               settlement_key, region_key, event_origin
         FROM simulation_events
         WHERE event_type LIKE 'city_state_%'
            OR event_type IN (
@@ -1489,10 +1492,7 @@ def summarize_city_state_patterns(conn: sqlite3.Connection) -> dict[str, int]:
             bucket = "other_city_state_event"
         counts[bucket] += 1
         counts["total_city_state_pattern_events"] += 1
-        try:
-            payload = json.loads(row["payload_json"] or "{}")
-        except (TypeError, json.JSONDecodeError):
-            payload = {}
+        payload = event_payload_from_row(row, conn, expand=True)
         if isinstance(payload, dict):
             state = str(
                 payload.get("autonomy_state")

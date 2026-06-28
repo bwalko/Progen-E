@@ -27,7 +27,7 @@ from library.world_save import (
     clear_world_checkpoint,
     ensure_checkpoint_schema,
     ensure_checkpoint_schema_for_file,
-    event_consequence_annual_tick_for_save,
+    event_payload_from_row,
     mark_event_record_lost,
     mark_event_record_misattributed,
     mark_event_record_public_unknown,
@@ -2246,6 +2246,7 @@ class TestSaveCheckpoint(unittest.TestCase):
             selfNotIn("region_id", payload)
             selfNotIn("settlement_id", payload)
             selfNotIn("event_origin", payload)
+            selfNotIn("person_id", payload)
             self.assertIsNotNone(person_place["birthplace_region_key"])
             self.assertIsNotNone(person_place["current_settlement_key"])
 
@@ -2289,6 +2290,71 @@ class TestSaveCheckpoint(unittest.TestCase):
             verbose_payload = json.loads(str(payload_json))
             self.assertEqual(verbose_payload["region_id"], rid2)
             self.assertEqual(verbose_payload["settlement_id"], sid2)
+
+    def test_event_person_ids_compact_and_rehydrate_round_trip(self) -> None:
+        random.seed(19)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            cfg = root / "config.sqlite"
+            sav = root / "save.sqlite"
+            load_all_csvs_into_sqlite(cfg)
+
+            ctx = SimulationContext.create(
+                db_path=cfg,
+                save_db_path=sav,
+                world_id="person_compact",
+                world="default",
+                start_year=1000,
+                refresh_config=False,
+                flush_run_store=False,
+            )
+            killer = ctx.add_person(
+                person=generate_person_random(
+                    simulation_context=ctx, simulation_year=1000
+                ),
+                is_founder=True,
+            )
+            victim = ctx.add_person(
+                person=generate_person_random(
+                    simulation_context=ctx, simulation_year=1000
+                ),
+                is_founder=True,
+            )
+            original = {
+                "killer_person_id": killer.person_id,
+                "victim_person_id": victim.person_id,
+                "incident_kind": "predatory_murder",
+                "historical_importance": 0.42,
+            }
+            ctx._record_simulation_event(1001, "murder", dict(original))
+            checkpoint_simulation_to_save(ctx, full_snapshot=False)
+
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT id, event_type, payload_json, primary_person_id,
+                           secondary_person_id, settlement_key, region_key, event_origin
+                    FROM simulation_events
+                    WHERE event_type = 'murder'
+                    """
+                ).fetchone()
+                compact = json.loads(str(row["payload_json"]))
+                self.assertNotIn("killer_person_id", compact)
+                self.assertNotIn("victim_person_id", compact)
+                self.assertEqual(compact["incident_kind"], "predatory_murder")
+                expanded = event_payload_from_row(row, conn, expand=True)
+                self.assertEqual(expanded["killer_person_id"], killer.person_id)
+                self.assertEqual(expanded["victim_person_id"], victim.person_id)
+                self.assertEqual(expanded["historical_importance"], 0.42)
+                link_count = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM simulation_event_people
+                    WHERE event_id = ?
+                    """,
+                    (int(row["id"]),),
+                ).fetchone()[0]
+            self.assertGreaterEqual(int(link_count), 2)
 
     def test_settlement_move_details_are_normalized_and_compacted(self) -> None:
         random.seed(17)
@@ -2494,7 +2560,8 @@ class TestSaveCheckpoint(unittest.TestCase):
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
                     """
-                    SELECT event_origin, payload_json
+                    SELECT id, event_type, payload_json, primary_person_id,
+                           secondary_person_id, settlement_key, region_key, event_origin
                     FROM simulation_events
                     WHERE event_type = 'promotion_backfill_birth'
                     """
@@ -2502,7 +2569,12 @@ class TestSaveCheckpoint(unittest.TestCase):
             self.assertEqual(row["event_origin"], "inferred")
             payload = json.loads(str(row["payload_json"]))
             self.assertNotIn("event_origin", payload)
-            self.assertEqual(payload["person_id"], 123)
+            self.assertNotIn("person_id", payload)
+            with closing(sqlite3.connect(sav)) as conn:
+                conn.row_factory = sqlite3.Row
+                expanded = event_payload_from_row(row, conn, expand=True)
+            self.assertEqual(expanded["person_id"], 123)
+            self.assertEqual(expanded["event_origin"], "inferred")
 
     def test_event_memory_schema_stores_template_keys_not_rendered_prose(self) -> None:
         prose_text_columns = {

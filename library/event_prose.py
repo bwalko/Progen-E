@@ -174,11 +174,11 @@ def render_event_admin_summary(
     """Render a compact factual summary for an admin/debug event row."""
 
     row = _mapping(event_row)
-    payload = _payload(row)
+    rr = resolver or EventProseResolver()
+    payload = _payload(row, conn=rr.conn)
     event_id = _coerce_int(row.get("event_id", row.get("id"))) or 0
     year = _coerce_int(row.get("sim_year", payload.get("year"))) or 0
     event_type = _clean_key(row.get("event_type") or payload.get("event_type"))
-    rr = resolver or EventProseResolver()
     place = _event_place(row, payload, rr)
     template_key = f"admin.{event_type or 'event'}.default"
 
@@ -297,7 +297,7 @@ def render_event_record_prose(
     row = _mapping(record_row)
     rr = resolver or EventProseResolver()
     admin = render_event_admin_summary(row, resolver=rr)
-    payload = _payload(row)
+    payload = _payload(row, conn=rr.conn)
     distortion = _json_object(row.get("distortion_json"))
     event_type = admin.event_type
     year = admin.sim_year
@@ -1574,7 +1574,15 @@ def _source_label(payload: Mapping[str, Any]) -> str:
     return "unknown"
 
 
-def _payload(row: Mapping[str, Any]) -> dict[str, Any]:
+def _payload(
+    row: Mapping[str, Any],
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    if conn is not None:
+        from library.world_save import event_payload_from_row
+
+        return event_payload_from_row(row, conn, expand=True)
     value = row.get("payload_json")
     return _json_object(value)
 

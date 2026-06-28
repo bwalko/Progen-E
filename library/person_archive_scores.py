@@ -12,7 +12,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Iterable
+from library.world_save import event_payload_from_row
 
 
 SCORE_FORMULA_VERSION = 3
@@ -1774,8 +1774,8 @@ def _score_person(
         "recognition_scope": recognition_scope,
         "infamy_gap": round(infamy_gap, 4),
         "prestige_gap": round(prestige_gap, 4),
-        "texture_flags_json": json.dumps(texture_flags, separators=(",", ":")),
-        "score_breakdown_json": json.dumps(score_breakdown, separators=(",", ":")),
+        "texture_flags_json": "[]",
+        "score_breakdown_json": "{}",
         "component_json": json.dumps(component_json, separators=(",", ":")),
         "updated_at": updated_at,
     }
@@ -2725,6 +2725,11 @@ def _load_events_by_person(
                 e.id AS event_id,
                 e.sim_year,
                 e.event_type,
+                e.primary_person_id,
+                e.secondary_person_id,
+                e.settlement_key,
+                e.region_key,
+                e.event_origin,
                 e.payload_json
             FROM simulation_event_people ep
             JOIN simulation_events e ON e.id = ep.event_id
@@ -2737,7 +2742,7 @@ def _load_events_by_person(
             event_id = int(row["event_id"])
             payload = payload_cache.get(event_id)
             if payload is None:
-                payload = _json_dict(row.get("payload_json"))
+                payload = event_payload_from_row(row, conn, expand=True)
                 payload_cache[event_id] = payload
             pid = int(row["person_id"])
             events[pid].append(

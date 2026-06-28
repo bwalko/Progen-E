@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 # Fallback if a minimal ``SimulationContext`` shell omits the field.
 _DEFAULT_WORKING_SET_DEAD_RETENTION = 20
 
-SAVE_SCHEMA_VERSION = 24
+SAVE_SCHEMA_VERSION = 25
 SAVE_SCHEMA_VERSION_META_KEY = "save_schema_version"
 EVENT_PEOPLE_BACKFILLED_META_KEY = "simulation_event_people_backfilled"
 EVENT_RECORDS_BACKFILLED_META_KEY = "simulation_event_records_backfilled"
@@ -406,6 +406,7 @@ def _ensure_supported_save_schema(conn: sqlite3.Connection) -> None:
         21,
         22,
         23,
+        24,
         SAVE_SCHEMA_VERSION,
     ):
         raise RuntimeError(
@@ -2097,7 +2098,7 @@ def _backfill_simulation_domain_states(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except (json.JSONDecodeError, TypeError):
             payload = {}
         if not isinstance(payload, dict):
@@ -2384,7 +2385,7 @@ def _backfill_simulation_obligations(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except (json.JSONDecodeError, TypeError):
             payload = {}
         if not isinstance(payload, dict):
@@ -2692,7 +2693,7 @@ def _backfill_simulation_reputation_marks(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except (json.JSONDecodeError, TypeError):
             payload = {}
         if not isinstance(payload, dict):
@@ -3007,7 +3008,7 @@ def _backfill_simulation_legal_fallout(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except (json.JSONDecodeError, TypeError):
             payload = {}
         if not isinstance(payload, dict):
@@ -3279,7 +3280,7 @@ def _backfill_simulation_faction_memory(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except (json.JSONDecodeError, TypeError):
             payload = {}
         if not isinstance(payload, dict):
@@ -3511,7 +3512,7 @@ def _backfill_simulation_institutions(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except (json.JSONDecodeError, TypeError):
             payload = {}
         if not isinstance(payload, dict):
@@ -3880,7 +3881,7 @@ def _backfill_simulation_innovations(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except (json.JSONDecodeError, TypeError):
             payload = {}
         if not isinstance(payload, dict):
@@ -5048,7 +5049,7 @@ def upsert_event_record(
         str(event["event_type"] or ""),
         int(event["primary_person_id"]) if event["primary_person_id"] is not None else None,
         int(event["secondary_person_id"]) if event["secondary_person_id"] is not None else None,
-        _json_loads_dict(event["payload_json"] if "payload_json" in event.keys() else None),
+        event_payload_from_row(event, conn, expand=True),
     )
     if public_actor_person_id is not None:
         public_actor = int(public_actor_person_id)
@@ -5341,7 +5342,7 @@ def _backfill_simulation_event_people(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except json.JSONDecodeError:
             payload = {}
         if not isinstance(payload, dict):
@@ -5401,7 +5402,7 @@ def _backfill_simulation_event_moves(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except json.JSONDecodeError:
             payload = {}
         if not isinstance(payload, dict):
@@ -5449,7 +5450,7 @@ def _backfill_simulation_event_records(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except json.JSONDecodeError:
             payload = {}
         if not isinstance(payload, dict):
@@ -5513,7 +5514,7 @@ def _backfill_simulation_event_public_stage_records(conn: sqlite3.Connection) ->
     ).fetchall()
     for row in rows:
         try:
-            payload = json.loads(row["payload_json"] or "{}")
+            payload = event_payload_from_row(row, conn, expand=True)
         except json.JSONDecodeError:
             payload = {}
         if not isinstance(payload, dict):
@@ -5804,7 +5805,7 @@ def _copy_events_from_attached_source(conn: sqlite3.Connection) -> int:
     ):
         payload: dict = {}
         try:
-            loaded = json.loads(row["payload_json"] or "{}")
+            loaded = event_payload_from_row(row, conn, expand=True)
             if isinstance(loaded, dict):
                 payload = loaded
         except (KeyError, json.JSONDecodeError, TypeError):
@@ -5883,6 +5884,7 @@ def _write_rebuilt_save_sqlite(
             _backfill_simulation_faction_memory(conn)
             _backfill_simulation_institutions(conn)
             _backfill_simulation_innovations(conn)
+            _recompact_simulation_event_payloads(conn)
             from library.person_almanack import refresh_person_almanack
 
             refresh_person_almanack(conn)
@@ -6062,6 +6064,9 @@ def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
 
     _gov_ckpt.ensure_government_schema(conn)
     _ensure_readable_place_views(conn)
+    version_before = save_schema_version(conn)
+    if version_before == 24:
+        _recompact_simulation_event_payloads(conn)
     _ensure_supported_save_schema(conn)
     conn.execute(
         """
@@ -7795,11 +7800,34 @@ def append_simulation_event_rows(
     return event_ids
 
 
+def _event_person_payload_drop_keys(
+    payload: dict,
+    *,
+    event_type: object = "",
+) -> set[str]:
+    """Payload keys duplicated by normalized event person/place columns."""
+    event_type_s = str(event_type or payload.get("event_type") or "").strip()
+    context_only_keys: set[str] = set()
+    if event_type_s == "job_assigned":
+        context_only_keys.update({"employer_person_id", "host_person_id"})
+    drop_keys: set[str] = set()
+    for key in payload:
+        if key in context_only_keys:
+            continue
+        if key in _EVENT_PERSON_SCALAR_ROLES or key in _EVENT_PERSON_LIST_ROLES:
+            drop_keys.add(str(key))
+            continue
+        if key.endswith("_person_id") or key.endswith("_person_ids"):
+            drop_keys.add(str(key))
+    return drop_keys
+
+
 def _compact_event_payload(event_type: str, payload: dict) -> dict:
-    """Drop place slugs duplicated by normalized event columns for normal runs."""
+    """Drop fields duplicated by normalized event columns for normal runs."""
     drop_keys: set[str] = set(_EVENT_SETTLEMENT_KEYS)
     drop_keys.update(_EVENT_REGION_KEYS)
     drop_keys.update(_EVENT_PAYLOAD_META_KEYS)
+    drop_keys.update(_event_person_payload_drop_keys(payload, event_type=event_type))
     if str(event_type or "").strip() == "job_seeker_migration":
         drop_keys.difference_update(
             {
@@ -7816,6 +7844,244 @@ def _compact_event_payload(event_type: str, payload: dict) -> dict:
         for k, v in payload.items()
         if str(k) not in drop_keys
     }
+
+
+_ROLE_SCALAR_PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {}
+_ROLE_LIST_PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {}
+for _payload_key, _payload_role in _EVENT_PERSON_SCALAR_ROLES.items():
+    _ROLE_SCALAR_PAYLOAD_KEYS.setdefault(_payload_role, []).append(_payload_key)
+for _payload_key, _payload_role in _EVENT_PERSON_LIST_ROLES.items():
+    _ROLE_LIST_PAYLOAD_KEYS.setdefault(_payload_role, []).append(_payload_key)
+for _role_key in _ROLE_SCALAR_PAYLOAD_KEYS:
+    _ROLE_SCALAR_PAYLOAD_KEYS[_role_key] = tuple(_ROLE_SCALAR_PAYLOAD_KEYS[_role_key])
+for _role_key in _ROLE_LIST_PAYLOAD_KEYS:
+    _ROLE_LIST_PAYLOAD_KEYS[_role_key] = tuple(_ROLE_LIST_PAYLOAD_KEYS[_role_key])
+
+
+def _lookup_settlement_id(conn: sqlite3.Connection, settlement_key: object) -> str | None:
+    if settlement_key is None:
+        return None
+    row = conn.execute(
+        """
+        SELECT settlement_id FROM simulation_settlement_lookup
+        WHERE settlement_key = ?
+        """,
+        (int(settlement_key),),
+    ).fetchone()
+    if row is None:
+        return None
+    text = str(row["settlement_id"] if isinstance(row, sqlite3.Row) else row[0]).strip()
+    return text or None
+
+
+def _lookup_region_id(conn: sqlite3.Connection, region_key: object) -> str | None:
+    if region_key is None:
+        return None
+    row = conn.execute(
+        """
+        SELECT region_id FROM simulation_region_lookup
+        WHERE region_key = ?
+        """,
+        (int(region_key),),
+    ).fetchone()
+    if row is None:
+        return None
+    text = str(row["region_id"] if isinstance(row, sqlite3.Row) else row[0]).strip()
+    return text or None
+
+
+def _apply_person_role_to_payload(
+    out: dict[str, object],
+    role: str,
+    person_ids: list[int],
+) -> None:
+    if not person_ids:
+        return
+    clean_role = str(role or "related").strip() or "related"
+    scalar_keys = _ROLE_SCALAR_PAYLOAD_KEYS.get(clean_role, ())
+    list_keys = _ROLE_LIST_PAYLOAD_KEYS.get(clean_role, ())
+    if len(person_ids) == 1 and scalar_keys:
+        out.setdefault(scalar_keys[0], person_ids[0])
+        return
+    if list_keys:
+        out.setdefault(list_keys[0], person_ids)
+        return
+    if len(person_ids) == 1:
+        out.setdefault(f"{clean_role}_person_id", person_ids[0])
+    else:
+        out.setdefault(f"{clean_role}_person_ids", person_ids)
+
+
+def _rehydrate_event_move_payload(
+    conn: sqlite3.Connection,
+    event_id: object,
+    out: dict[str, object],
+) -> None:
+    move = conn.execute(
+        """
+        SELECT moved_person_id, from_settlement_key, to_settlement_key,
+               from_region_key, to_region_key, cross_region, move_reason,
+               requested_year, planned_apply_year, source_event, group_id
+        FROM simulation_event_moves
+        WHERE event_id = ?
+        ORDER BY moved_person_id
+        LIMIT 1
+        """,
+        (int(event_id),),
+    ).fetchone()
+    if move is None:
+        return
+    moved_rows = conn.execute(
+        """
+        SELECT moved_person_id
+        FROM simulation_event_moves
+        WHERE event_id = ?
+        ORDER BY moved_person_id
+        """,
+        (int(event_id),),
+    ).fetchall()
+    moved_ids = [
+        int(row["moved_person_id"] if isinstance(row, sqlite3.Row) else row[0])
+        for row in moved_rows
+        if row[0] is not None
+    ]
+    if len(moved_ids) == 1:
+        out.setdefault("moved_person_id", moved_ids[0])
+    elif moved_ids:
+        out.setdefault("moved_person_ids", moved_ids)
+    from_settlement_id = _lookup_settlement_id(conn, move["from_settlement_key"])
+    to_settlement_id = _lookup_settlement_id(conn, move["to_settlement_key"])
+    from_region_id = _lookup_region_id(conn, move["from_region_key"])
+    to_region_id = _lookup_region_id(conn, move["to_region_key"])
+    if from_settlement_id:
+        out.setdefault("from_settlement_id", from_settlement_id)
+    if to_settlement_id:
+        out.setdefault("to_settlement_id", to_settlement_id)
+    if from_region_id:
+        out.setdefault("from_region_id", from_region_id)
+    if to_region_id:
+        out.setdefault("to_region_id", to_region_id)
+    if move["cross_region"] is not None:
+        out.setdefault("cross_region", bool(int(move["cross_region"])))
+    for key in (
+        "move_reason",
+        "requested_year",
+        "planned_apply_year",
+        "source_event",
+        "group_id",
+    ):
+        if move[key] is not None:
+            out.setdefault(key, move[key])
+
+
+def _event_row_value(row: sqlite3.Row | dict, key: str, default: object = None) -> object:
+    if isinstance(row, sqlite3.Row):
+        return row[key] if key in row.keys() else default
+    return row.get(key, default)
+
+
+def _rehydrate_event_payload(
+    row: sqlite3.Row | dict,
+    conn: sqlite3.Connection | None,
+    compact_payload: dict,
+) -> dict[str, object]:
+    """Merge normalized event columns and side tables back into a payload dict."""
+    out = dict(compact_payload)
+    event_type = str(
+        _event_row_value(row, "event_type", compact_payload.get("event_type", "")) or ""
+    ).strip()
+    event_id = _event_row_value(row, "id", _event_row_value(row, "event_id"))
+    if conn is not None and event_id is not None:
+        role_to_people: dict[str, list[int]] = defaultdict(list)
+        for link in conn.execute(
+            """
+            SELECT person_id, role
+            FROM simulation_event_people
+            WHERE event_id = ?
+            ORDER BY person_id
+            """,
+            (int(event_id),),
+        ):
+            pid = _coerce_event_person_id(
+                link["person_id"] if isinstance(link, sqlite3.Row) else link[0]
+            )
+            if pid is None:
+                continue
+            role = str(
+                link["role"] if isinstance(link, sqlite3.Row) else link[1]
+            ).strip() or "related"
+            if pid not in role_to_people[role]:
+                role_to_people[role].append(pid)
+        for role, person_ids in role_to_people.items():
+            _apply_person_role_to_payload(out, role, person_ids)
+
+        settlement_key = _event_row_value(row, "settlement_key")
+        region_key = _event_row_value(row, "region_key")
+        settlement_id_slug = _event_row_value(row, "settlement_id")
+        region_id_slug = _event_row_value(row, "region_id")
+        if event_type == "settlement_moved":
+            _rehydrate_event_move_payload(conn, event_id, out)
+        elif event_type != "job_seeker_migration":
+            settlement_id = (
+                str(settlement_id_slug).strip()
+                if settlement_id_slug not in (None, "")
+                else _lookup_settlement_id(conn, settlement_key)
+            )
+            region_id = (
+                str(region_id_slug).strip()
+                if region_id_slug not in (None, "")
+                else _lookup_region_id(conn, region_key)
+            )
+            if settlement_id:
+                out.setdefault("settlement_id", settlement_id)
+            if region_id:
+                out.setdefault("region_id", region_id)
+
+    event_origin = _event_row_value(row, "event_origin")
+    if event_origin is not None and str(event_origin).strip():
+        out.setdefault("event_origin", str(event_origin).strip())
+    return out
+
+
+def event_payload_from_row(
+    row: sqlite3.Row | dict,
+    conn: sqlite3.Connection | None = None,
+    *,
+    expand: bool = True,
+) -> dict[str, object]:
+    """Load an event payload from a DB row, optionally rehydrating compact storage."""
+    raw = None
+    if isinstance(row, sqlite3.Row):
+        raw = row["payload_json"] if "payload_json" in row.keys() else None
+    else:
+        raw = row.get("payload_json")
+    compact = _json_loads_dict(raw)
+    if not expand:
+        return compact
+    return _rehydrate_event_payload(row, conn, compact)
+
+
+def _recompact_simulation_event_payloads(conn: sqlite3.Connection) -> int:
+    """Rewrite ``payload_json`` using compact storage for all events."""
+    updated = 0
+    rows = conn.execute(
+        """
+        SELECT id, event_type, payload_json, primary_person_id, secondary_person_id,
+               settlement_key, region_key, event_origin
+        FROM simulation_events
+        """
+    ).fetchall()
+    for row in rows:
+        expanded = event_payload_from_row(row, conn, expand=True)
+        compact = _compact_event_payload(str(row["event_type"] or ""), expanded)
+        encoded = json.dumps(compact, separators=(",", ":"))
+        if encoded != str(row["payload_json"] or "{}"):
+            conn.execute(
+                "UPDATE simulation_events SET payload_json = ? WHERE id = ?",
+                (encoded, int(row["id"])),
+            )
+            updated += 1
+    return updated
 
 
 def flush_pending_simulation_events(ctx: "SimulationContext") -> None:
@@ -8104,7 +8370,7 @@ def _encode_trait_array(traits: dict[str, float], trait_slots: tuple[str, ...]) 
     encoded: list[float | None] = []
     for trait in trait_slots:
         raw = traits.get(trait)
-        encoded.append(None if raw is None else float(raw))
+        encoded.append(None if raw is None else round(float(raw), 4))
     return encoded
 
 
@@ -8741,6 +9007,7 @@ def checkpoint_simulation_snapshot(
     ctx: "SimulationContext",
     *,
     refresh_person_almanack: bool = True,
+    refresh_person_archive_scores: bool = True,
 ) -> None:
     """Upsert archival rows for people and settlements; rewrite derived snapshot slices.
 
@@ -9047,15 +9314,18 @@ def checkpoint_simulation_snapshot(
 
         from library.person_archive_scores import refresh_person_archive_scores
 
-        archive_score_rows = refresh_person_archive_scores(
-            conn,
-            person_ids=(int(rec.person_id) for rec in ctx.people),
-            simulation_year=year,
-        )
-        simulation_timing.record_gauge(
-            year, "checkpoint", "person_archive_score_rows", archive_score_rows
-        )
-        t0 = _profile_accumulate("checkpoint.snapshot_person_archive_scores", t0)
+        if refresh_person_archive_scores:
+            archive_score_rows = refresh_person_archive_scores(
+                conn,
+                person_ids=(int(rec.person_id) for rec in ctx.people),
+                simulation_year=year,
+            )
+            simulation_timing.record_gauge(
+                year, "checkpoint", "person_archive_score_rows", archive_score_rows
+            )
+            t0 = _profile_accumulate("checkpoint.snapshot_person_archive_scores", t0)
+        else:
+            t0 = _profile_accumulate("checkpoint.snapshot_person_archive_scores.skipped", t0)
 
         if refresh_person_almanack:
             from library.person_almanack import refresh_person_almanack
@@ -9139,6 +9409,7 @@ def checkpoint_simulation_to_save(
     *,
     full_snapshot: bool = True,
     refresh_person_almanack: bool = True,
+    refresh_person_archive_scores: bool = True,
 ) -> None:
     """Flush pending events; optionally write full snapshot tables to ``save.sqlite``.
 
@@ -9147,12 +9418,15 @@ def checkpoint_simulation_to_save(
     aux state, and settlement spinoff accrual so resume stays aligned with RAM between full snapshots.
     ``refresh_person_almanack`` controls the expensive derived Almanack ranking
     cache only; the Gradio browser can still rebuild it on demand.
+    ``refresh_person_archive_scores`` controls the derived archive score cache
+    the same way; rebuild on finalize or via maintenance tools.
     """
     flush_pending_simulation_events(ctx)
     if full_snapshot:
         checkpoint_simulation_snapshot(
             ctx,
             refresh_person_almanack=bool(refresh_person_almanack),
+            refresh_person_archive_scores=bool(refresh_person_archive_scores),
         )
     else:
         flush_simulation_meta_checkpoint(ctx)

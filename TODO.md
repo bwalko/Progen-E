@@ -99,10 +99,11 @@ Older finding from the pre-v3 large `worlds/default/save.sqlite`:
   fallout/adjudication/faction/institution ledgers, and added innovation
   discovery/adoption/era state tables. See `TODONE.md`.
 - Remaining bigger wins are likely:
-  - continue moving high-volume event detail out of JSON when another specific event family proves hot;
+  - continue moving high-volume event detail out of JSON when another specific event family proves hot (person IDs now stripped in schema v25; see `TODONE.md`);
   - keep moving background population from aggregate/passive compatibility paths
     toward the SQLite city-directory model in `simulation_people_nondetailed`;
-  - keep JSON only for sparse detail or extension fields.
+  - keep JSON only for sparse detail or extension fields;
+  - optional later: zlib BLOB columns if semantic trimming is not enough.
 - Keep human-readable inspection as a first-class need. Prefer readable views, browser helpers, or a future derived `world.sqlite` over making the canonical save easy to inspect only by storing long JSON keys everywhere.
 - Treat a generated `world.sqlite` / UI projection as a later project stage, not the primary fix. The canonical `save.sqlite` still needs to become compact because it controls write cost, resume cost, and disk growth during long runs.
 

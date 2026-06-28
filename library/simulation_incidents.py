@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from library import simulation_timing
+from library.world_save import event_payload_from_row
 from library.event_catalog import choose_event_catalog_kind
 from library.event_scoring import (
     EventScoringContext,
@@ -1391,7 +1391,9 @@ def _previous_murder_counts_by_killer(
                 if predatory_only:
                     rows = conn.execute(
                         f"""
-                        SELECT ep.person_id, e.payload_json
+                        SELECT ep.person_id, e.id AS event_id, e.event_type,
+                               e.payload_json, e.primary_person_id, e.secondary_person_id,
+                               e.settlement_key, e.region_key, e.event_origin
                         FROM simulation_event_people ep
                         JOIN simulation_events e ON e.id = ep.event_id
                         WHERE ep.role = 'killer'
@@ -1402,13 +1404,7 @@ def _previous_murder_counts_by_killer(
                         params,
                     ).fetchall()
                     for row in rows:
-                        payload = {}
-                        try:
-                            parsed = json.loads(str(row["payload_json"] or "{}"))
-                            if isinstance(parsed, dict):
-                                payload = parsed
-                        except json.JSONDecodeError:
-                            payload = {}
+                        payload = event_payload_from_row(row, conn, expand=True)
                         if _murder_payload_is_predatory(payload):
                             pid = int(row["person_id"])
                             counts[pid] = counts.get(pid, 0) + 1

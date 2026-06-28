@@ -5008,3 +5008,20 @@ completion.
   `unit_test.test_simulation_outlaws` (wanted job clear, capture paramour end,
   imprisoned father birth block).
 
+## 2026-06-27 — Save DB semantic compression (schema v25)
+
+- **Event payloads:** `_compact_event_payload` now strips person IDs duplicated in
+  `simulation_event_people` / indexed columns; `event_payload_from_row` rehydrates
+  on read for Python consumers.
+- **Schema v25:** in-place re-compact on open from v24; rebuild path re-compacts
+  after copy.
+- **Person JSON:** genome/mind-body trait arrays round to 4 decimal places in
+  `_encode_trait_array`.
+- **Derived caches:** `refresh_person_archive_scores` deferred on annual checkpoint
+  (like almanack); still runs on `finalize_run`. Archive score rows store
+  `texture_flags_json` / `score_breakdown_json` only inside `component_json`.
+- **Gradio:** person history lookup uses `simulation_event_people` instead of
+  `json_extract` on compact payloads when the side table exists.
+- Tests: `unit_test.test_save_checkpoint` round-trip;
+  `unit_test.test_gradio_data_browser` history event-id coverage.
+

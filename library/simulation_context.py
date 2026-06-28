@@ -3484,6 +3484,7 @@ class SimulationContext:
                 self,
                 full_snapshot=self._should_checkpoint_snapshot(year),
                 refresh_person_almanack=False,
+                refresh_person_archive_scores=False,
             )
             if prof:
                 t0 = tpc()
