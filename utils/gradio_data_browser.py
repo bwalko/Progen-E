@@ -228,6 +228,16 @@ OUTLAW_REFUGE_BROWSER_HEADERS = [
     "Support",
     "Last Active",
 ]
+TITLE_HISTORY_BROWSER_HEADERS = [
+    "Years",
+    "Title",
+    "Holder",
+    "Polity",
+    "Place",
+    "Status",
+    "End Reason",
+]
+TITLE_HISTORY_STATUS_CHOICES = ["All", "Current", "Ended"]
 HISTORY_VIEW_CHOICES = [
     "Admin Truth",
     "Public Chronicle",
@@ -12587,6 +12597,268 @@ def _office_history_rows(
     )
 
 
+def _empty_office_title_history_frame() -> gr.Dataframe:
+    return gr.Dataframe(value=[], headers=TITLE_HISTORY_BROWSER_HEADERS)
+
+
+def _office_title_history_row_dict(row: sqlite3.Row | dict[str, object]) -> dict[str, object]:
+    if isinstance(row, sqlite3.Row):
+        return {key: row[key] for key in row.keys()}
+    return dict(row)
+
+
+def _office_title_history_holder_label(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row | dict[str, object],
+) -> str:
+    holder_id = _mapping_value(row, "holder_person_id")
+    name = str(_mapping_value(row, "holder_name") or "").strip()
+    shown = _person_link_text(con, world, holder_id)
+    if shown != "Unknown":
+        return shown
+    if name and holder_id not in (None, ""):
+        return f"{name} ({int(holder_id)})"
+    if name:
+        return name
+    if holder_id not in (None, ""):
+        return f"Person {holder_id}"
+    return "Unknown"
+
+
+def _office_title_history_polity_label(row: sqlite3.Row | dict[str, object]) -> str:
+    polity_name = str(_mapping_value(row, "polity_name") or "").strip()
+    polity_id = _mapping_value(row, "polity_id")
+    if polity_name and polity_id not in (None, ""):
+        return f"{polity_name} (#{int(polity_id)})"
+    if polity_name:
+        return polity_name
+    if polity_id not in (None, ""):
+        return f"Polity #{int(polity_id)}"
+    return ""
+
+
+def _office_title_history_summary_row(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row | dict[str, object],
+) -> dict[str, object]:
+    end_year = _mapping_value(row, "end_sim_year")
+    status = "Current" if end_year in (None, "") else "Ended"
+    return {
+        "Years": _office_span_label(
+            _mapping_value(row, "start_sim_year"),
+            end_year,
+        ),
+        "Title": _office_title_label(_mapping_value(row, "title_id") or _mapping_value(row, "office_id")),
+        "Holder": _office_title_history_holder_label(con, world, row),
+        "Polity": _office_title_history_polity_label(row),
+        "Place": _office_scope_label(con, world, row),
+        "Status": status,
+        "End Reason": "" if status == "Current" else _office_end_reason_label(_mapping_value(row, "end_reason")),
+    }
+
+
+def _office_title_history_search_match(
+    con: sqlite3.Connection,
+    world: str,
+    row: sqlite3.Row | dict[str, object],
+    search: str,
+) -> bool:
+    needle = str(search or "").strip().lower()
+    if not needle:
+        return True
+    summary = _office_title_history_summary_row(con, world, row)
+    haystack = " ".join(
+        str(summary.get(header) or "")
+        for header in TITLE_HISTORY_BROWSER_HEADERS
+    )
+    holder_id = _mapping_value(row, "holder_person_id")
+    title_id = str(_mapping_value(row, "title_id") or _mapping_value(row, "office_id") or "")
+    extra = " ".join(
+        part
+        for part in (
+            str(holder_id or ""),
+            title_id,
+            str(_mapping_value(row, "holding_id") or ""),
+            str(_mapping_value(row, "polity_id") or ""),
+            str(_mapping_value(row, "scope_settlement_id") or ""),
+        )
+        if part
+    )
+    return needle in f"{haystack} {extra}".lower()
+
+
+def _office_title_history_status_match(row: sqlite3.Row | dict[str, object], status_filter: str) -> bool:
+    selected = str(status_filter or "All").strip()
+    if selected == "All":
+        return True
+    current = _mapping_value(row, "end_sim_year") in (None, "")
+    if selected == "Current":
+        return current
+    if selected == "Ended":
+        return not current
+    return True
+
+
+def _office_title_history_title_match(row: sqlite3.Row | dict[str, object], title_filter: str) -> bool:
+    selected = str(title_filter or "All").strip()
+    if not selected or selected.lower() == "all":
+        return True
+    title_id = str(_mapping_value(row, "title_id") or _mapping_value(row, "office_id") or "").strip()
+    label = _office_title_label(title_id)
+    selected_lower = selected.lower()
+    return selected_lower in {title_id.lower(), label.lower()} or selected_lower in label.lower()
+
+
+def _office_title_history_sort_key(row: sqlite3.Row | dict[str, object]) -> tuple[int, str, str, int]:
+    start = _safe_int(_mapping_value(row, "start_sim_year"), -1)
+    title = str(_mapping_value(row, "title_id") or _mapping_value(row, "office_id") or "")
+    holder = str(_mapping_value(row, "holder_name") or _mapping_value(row, "holder_person_id") or "")
+    holding_id = _safe_int(_mapping_value(row, "holding_id"), 0)
+    return (-start, title.lower(), holder.lower(), holding_id)
+
+
+def _query_office_title_history(
+    con: sqlite3.Connection,
+    world: str,
+    *,
+    search: str = "",
+    status_filter: str = "All",
+    title_filter: str = "All",
+    limit: int = 100,
+) -> tuple[list[dict[str, object]], int]:
+    rows = [_office_title_history_row_dict(row) for row in _office_history_rows(con)]
+    filtered = [
+        row
+        for row in rows
+        if _office_title_history_status_match(row, status_filter)
+        and _office_title_history_title_match(row, title_filter)
+        and _office_title_history_search_match(con, world, row, search)
+    ]
+    filtered.sort(key=_office_title_history_sort_key)
+    total = len(filtered)
+    return filtered[: int(limit)], total
+
+
+def _encode_office_title_history_key(row: sqlite3.Row | dict[str, object]) -> str:
+    holding_id = _mapping_value(row, "holding_id")
+    holder_id = _mapping_value(row, "holder_person_id")
+    return f"holding:{holding_id}:{holder_id}"
+
+
+def _decode_office_title_history_key(encoded: str) -> dict[str, object]:
+    text = str(encoded or "").strip()
+    parts = text.split(":")
+    if len(parts) >= 3 and parts[0] == "holding":
+        return {"holding_id": parts[1], "person_id": parts[2]}
+    return {}
+
+
+def _office_title_filter_choices(con: sqlite3.Connection) -> list[str]:
+    if not _has_table(con, "simulation_office_holdings") or not _has_table(con, "simulation_office_seats"):
+        return ["All"]
+    try:
+        rows = con.execute(
+            """
+            SELECT DISTINCT s.title_id
+            FROM simulation_office_holdings h
+            JOIN simulation_office_seats s ON s.seat_id = h.seat_id
+            WHERE s.title_id IS NOT NULL AND TRIM(s.title_id) != ''
+            ORDER BY s.title_id
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return ["All"]
+    labels = sorted(
+        {_office_title_label(row["title_id"]) for row in rows if str(row["title_id"] or "").strip()},
+        key=str.lower,
+    )
+    return ["All", *labels]
+
+
+def load_office_title_history_browser(
+    world: str,
+    status_filter: str,
+    title_filter: str,
+    search: str,
+    limit: object,
+) -> tuple[gr.Dataframe, str, list[str], gr.Dropdown]:
+    title_dropdown = gr.Dropdown(choices=["All"], value="All")
+    if not world:
+        return _empty_office_title_history_frame(), "Choose a world.", [], title_dropdown
+    row_limit = _safe_int(limit, 100, 1, 500)
+    path = _db_path(world, "Save DB")
+    if not path.exists():
+        return (
+            _empty_office_title_history_frame(),
+            f"{path} is missing. Run a simulation first.",
+            [],
+            title_dropdown,
+        )
+    with _connect_readonly(path) as con:
+        if not _has_table(con, "simulation_office_holdings"):
+            return (
+                _empty_office_title_history_frame(),
+                "No office history found. Run a simulation with government enabled.",
+                [],
+                title_dropdown,
+            )
+        saved_world = _resolve_saved_world(con, world)
+        title_choices = _office_title_filter_choices(con)
+        selected_title = str(title_filter or "All").strip()
+        if selected_title not in title_choices:
+            selected_title = "All"
+        title_dropdown = gr.Dropdown(choices=title_choices, value=selected_title)
+        rows, total = _query_office_title_history(
+            con,
+            saved_world,
+            search=search or "",
+            status_filter=status_filter,
+            title_filter=selected_title,
+            limit=row_limit,
+        )
+        values = [_office_title_history_summary_row(con, saved_world, row) for row in rows]
+        keys = [_encode_office_title_history_key(row) for row in rows]
+    filter_bits: list[str] = []
+    if str(status_filter or "All").strip() != "All":
+        filter_bits.append(str(status_filter))
+    if selected_title != "All":
+        filter_bits.append(f"title={selected_title}")
+    if search:
+        filter_bits.append(f"search={search!r}")
+    filter_text = f" | filters: {', '.join(filter_bits)}" if filter_bits else ""
+    saved_world_note = f" | saved world: {saved_world}" if saved_world != (world or "").strip() else ""
+    status = (
+        f"{path.name}: showing {len(values)} of {total} title holdings{filter_text}{saved_world_note}. "
+        "Click a row to open the holder's person sheet."
+    )
+    return _dataframe(values, TITLE_HISTORY_BROWSER_HEADERS), status, keys, title_dropdown
+
+
+def select_office_title_history_from_table(
+    keys: object,
+    world: str,
+    evt: gr.SelectData,
+) -> tuple[str, str]:
+    try:
+        row_index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        encoded = keys[int(row_index)]  # type: ignore[index]
+        person_id = _decode_office_title_history_key(encoded).get("person_id")
+        if person_id in (None, ""):
+            raise ValueError("missing person id")
+    except Exception:
+        return (
+            '<div class="person-sheet muted" role="status">Click a title history row to open the holder.</div>',
+            "Click a title history row to generate share text.",
+        )
+    return render_person_outputs(world, person_id, open_target="titles")
+
+
+def render_titles_linked_person_outputs(world: str, person_id: object) -> tuple[str, str]:
+    return render_person_outputs(world, person_id, open_target="titles")
+
+
 def _office_span_label(start_year: object, end_year: object) -> str:
     start = _format_year(start_year, unknown_text="?")
     if end_year in (None, ""):
@@ -12623,6 +12895,8 @@ def _office_title_label(title_id: object) -> str:
     title = str(title_id or "").strip()
     if not title:
         return "Office"
+    if title == "settlement_alderman":
+        return "Alderman"
     return _display_title(title)
 
 
@@ -12767,7 +13041,7 @@ def _office_seat_item(
     scope_label: str,
 ) -> str:
     title_id = str(_mapping_value(seat, "title_id") or "").strip()
-    title = "Alderman" if title_id == "settlement_alderman" else _office_title_label(title_id)
+    title = _office_title_label(title_id)
     place_part = f", {scope_label}" if scope_label else ""
     return f"{title}{place_part}: {holder_label}"
 
@@ -15696,6 +15970,60 @@ def build_app(default_world: str = "default") -> gr.Blocks:
                         label="Linked Person",
                     )
 
+        with gr.Tab("Titles") as titles_tab:
+            with gr.Row(elem_classes=["world-browser"]):
+                with gr.Column(scale=6):
+                    with gr.Row():
+                        titles_world = gr.Dropdown(worlds, value=initial_world, label="World")
+                        titles_status_filter = gr.Radio(
+                            TITLE_HISTORY_STATUS_CHOICES,
+                            value="All",
+                            label="Holdings",
+                        )
+                        titles_limit = gr.Number(value=100, label="Limit", precision=0)
+                    with gr.Row():
+                        titles_title_filter = gr.Dropdown(
+                            ["All"],
+                            value="All",
+                            label="Title",
+                        )
+                    titles_search = gr.Textbox(
+                        label="Search Title History",
+                        placeholder="Holder, polity, place, years, end reason...",
+                    )
+                    titles_load = gr.Button("Browse Titles", variant="primary")
+                    titles_status = gr.Textbox(label="Status", interactive=False)
+                    titles_table = gr.Dataframe(
+                        label="Title History",
+                        interactive=False,
+                        wrap=True,
+                        elem_id="titles-table",
+                    )
+                    titles_keys_state = gr.State([])
+                with gr.Column(scale=5):
+                    with gr.Row(elem_classes=["linked-person-open-controls"]):
+                        titles_person_open_id = gr.Textbox(
+                            value="",
+                            label="Open Linked Person ID",
+                            elem_id="titles-person-open-id",
+                        )
+                        titles_person_open_button = gr.Button(
+                            "Open Linked Person",
+                            elem_id="titles-person-open-button",
+                        )
+                    titles_person_sheet = gr.HTML(
+                        value='<div class="person-sheet muted">Browse title history, then click a row to open the holder.</div>',
+                        label="Holder Person Sheet",
+                    )
+                    titles_share_text = gr.Textbox(
+                        value="Click a title history row to generate share text.",
+                        label="Copyable Gmail Text",
+                        lines=14,
+                        max_lines=24,
+                        interactive=False,
+                        buttons=["copy"],
+                    )
+
         with gr.Tab("World Map") as world_map_tab:
             with gr.Row(elem_classes=["world-browser"]):
                 map_world = gr.Dropdown(worlds, value=initial_world, label="World")
@@ -16123,6 +16451,38 @@ def build_app(default_world: str = "default") -> gr.Blocks:
             render_polity_linked_person_sheet,
             [polity_world, polity_person_open_id],
             polity_person_sheet,
+        )
+        titles_browser_inputs = [
+            titles_world,
+            titles_status_filter,
+            titles_title_filter,
+            titles_search,
+            titles_limit,
+        ]
+        titles_browser_outputs = [
+            titles_table,
+            titles_status,
+            titles_keys_state,
+            titles_title_filter,
+        ]
+        titles_load.click(load_office_title_history_browser, titles_browser_inputs, titles_browser_outputs)
+        for titles_input in titles_browser_inputs:
+            titles_input.change(load_office_title_history_browser, titles_browser_inputs, titles_browser_outputs)
+        titles_search.submit(load_office_title_history_browser, titles_browser_inputs, titles_browser_outputs)
+        titles_table.select(
+            select_office_title_history_from_table,
+            [titles_keys_state, titles_world],
+            [titles_person_sheet, titles_share_text],
+        )
+        titles_person_open_button.click(
+            render_titles_linked_person_outputs,
+            [titles_world, titles_person_open_id],
+            [titles_person_sheet, titles_share_text],
+        )
+        titles_person_open_id.submit(
+            render_titles_linked_person_outputs,
+            [titles_world, titles_person_open_id],
+            [titles_person_sheet, titles_share_text],
         )
         map_inputs = [
             map_world,

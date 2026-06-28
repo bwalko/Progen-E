@@ -2249,9 +2249,9 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         self.assertIn("Alderman, Simonkren: Ada Forge (b. 0)", html)
         self.assertIn("Vacant seats: 1", html)
         self.assertIn("1005-present: Bea Forge (b. 8), current ruler", html)
-        self.assertIn("1009-present: Ada Forge (b. 0), Settlement Alderman of Simonkren", html)
+        self.assertIn("1009-present: Ada Forge (b. 0), Alderman of Simonkren", html)
         self.assertIn(
-            "1006-1008: Ada Forge (b. 0), Settlement Alderman of Simonkren, ended by term expiry",
+            "1006-1008: Ada Forge (b. 0), Alderman of Simonkren, ended by term expiry",
             html,
         )
         self.assertIn("1000: The polity received its name.", html)
@@ -2268,6 +2268,136 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         )
         plain_html = _render_polity_sheet(con, "test", "2")
         self.assertIn("No city-state structure yet.", plain_html)
+
+    def test_titles_browser_loads_office_history_and_person_selection(self) -> None:
+        con = _memory_save()
+        con.execute("ALTER TABLE simulation_people ADD COLUMN first_name TEXT")
+        con.execute("ALTER TABLE simulation_people ADD COLUMN last_name TEXT")
+        con.execute(
+            """
+            UPDATE simulation_people
+            SET first_name = json_extract(person_json, '$.first_name'),
+                last_name = json_extract(person_json, '$.last_name')
+            """
+        )
+        ensure_government_schema(con)
+        con.execute(
+            """
+            CREATE TABLE simulation_settlements (
+                settlement_id TEXT PRIMARY KEY,
+                display_name TEXT
+            )
+            """
+        )
+        con.execute("INSERT INTO simulation_settlements VALUES ('r1:s1', 'Simonkren')")
+        con.execute(
+            """
+            INSERT INTO simulation_polities (
+                polity_id, polity_type_id, name, founded_sim_year, capital_settlement_id
+            ) VALUES (1, 'city_state', 'Northrealm', 1000, 'r1:s1')
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO simulation_office_seats (
+                seat_id, polity_id, title_id, slot_index, status
+            ) VALUES (10, 1, 'count', 0, 'active')
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO simulation_office_seats (
+                seat_id, polity_id, title_id, slot_index, scope_settlement_id, status
+            ) VALUES (11, 1, 'settlement_alderman', 0, 'r1:s1', 'active')
+            """
+        )
+        append_office_holding(
+            con,
+            world="test",
+            seat_id=10,
+            holder_person_id=1,
+            start_sim_year=1000,
+            ensure_schema=False,
+        )
+        close_office_holding(
+            con,
+            world="test",
+            seat_id=10,
+            holder_person_id=1,
+            end_sim_year=1004,
+            end_reason="death",
+            ensure_schema=False,
+        )
+        append_office_holding(
+            con,
+            world="test",
+            seat_id=10,
+            holder_person_id=2,
+            start_sim_year=1005,
+            ensure_schema=False,
+        )
+        append_office_holding(
+            con,
+            world="test",
+            seat_id=11,
+            holder_person_id=1,
+            start_sim_year=1006,
+            ensure_schema=False,
+        )
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            path = Path(tmp) / "save.sqlite"
+            con.commit()
+            with closing(sqlite3.connect(path)) as out:
+                con.backup(out)
+            con.close()
+
+            original_db_path = gdb._db_path
+            original_dataframe = getattr(gdb.gr, "Dataframe", None)
+            original_dropdown = getattr(gdb.gr, "Dropdown", None)
+            original_render_person_outputs = gdb.render_person_outputs
+            gdb._db_path = lambda world, db_kind: path
+            gdb.gr.Dataframe = lambda **kwargs: kwargs
+            gdb.gr.Dropdown = lambda **kwargs: kwargs
+            gdb.render_person_outputs = lambda world, person_id, **kwargs: (
+                f"person {person_id}",
+                f"share {person_id}",
+            )
+            try:
+                table, status, keys, title_filter = gdb.load_office_title_history_browser(
+                    "test", "All", "All", "", 50
+                )
+                person_sheet, share = gdb.select_office_title_history_from_table(
+                    keys, "test", types.SimpleNamespace(index=0)
+                )
+                count_table, count_status, count_keys, _ = gdb.load_office_title_history_browser(
+                    "test", "Current", "Count", "", 50
+                )
+            finally:
+                gdb._db_path = original_db_path
+                gdb.render_person_outputs = original_render_person_outputs
+                if original_dataframe is not None:
+                    gdb.gr.Dataframe = original_dataframe
+                if original_dropdown is not None:
+                    gdb.gr.Dropdown = original_dropdown
+
+        self.assertEqual(table["headers"], gdb.TITLE_HISTORY_BROWSER_HEADERS)
+        self.assertIn("title holdings", status)
+        self.assertEqual(len(keys), 3)
+        self.assertIn("1000-1004", table["value"][0][0])
+        self.assertIn("Count", table["value"][0][1])
+        self.assertIn("Ada Forge", table["value"][0][2])
+        self.assertIn("Northrealm", table["value"][0][3])
+        self.assertIn("Alderman", {row[1] for row in table["value"]})
+        self.assertEqual(person_sheet, "person 1")
+        self.assertEqual(share, "share 1")
+        self.assertEqual(len(count_keys), 1)
+        self.assertEqual(count_table["value"][0][1], "Count")
+        self.assertEqual(count_table["value"][0][5], "Current")
+        self.assertIn("Bea Forge", count_table["value"][0][2])
+        self.assertIn("title holdings", count_status)
+        self.assertIn("Count", title_filter["choices"])
+        self.assertIn("Alderman", title_filter["choices"])
 
     def test_property_crime_event_cards_use_payload_details(self) -> None:
         con = _memory_save()

@@ -4944,3 +4944,17 @@ completion.
 ### Validation
 
 - `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_outlaw_browser_loads_cases_refuges_and_person_selection`
+
+## 2026-06-27 - Titles Tab (Office History Browser)
+
+### Enhancements
+
+- Added a **Titles** tab to `utils/gradio_data_browser.py` that lists every recorded office holding (Duke, Count, Alderman, etc.) from `simulation_office_holdings` / `simulation_office_history_readable`.
+- Filters: current vs ended holdings, title dropdown populated from save data, free-text search, and row click opens the holder's person sheet.
+- Unified `settlement_alderman` display as **Alderman** across polity sheets and the new browser.
+
+### Validation
+
+- `python -m py_compile utils/gradio_data_browser.py unit_test/test_gradio_data_browser.py`
+- `python -m unittest unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_titles_browser_loads_office_history_and_person_selection unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_polity_sheet_shows_ruler_timeline_and_office_history`
+
