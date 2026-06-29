@@ -40,7 +40,9 @@ from library.geography import (
 )
 
 
-MAP_GEOMETRY_VERSION = "polygonal-v10"
+MAP_GEOMETRY_VERSION = "polygonal-v11"
+MAP_LAYOUT_OCEAN_MARGIN = 0.10
+MAP_CONTINENT_BOX_GAP = 0.048
 Point = tuple[float, float]
 
 
@@ -183,6 +185,7 @@ class WorldMapGeometry:
     rivers: list[RiverPath]
     river_channels: list[RiverChannel] = field(default_factory=list)
     water_cells: list[WaterCell] = field(default_factory=list)
+    continent_hulls: dict[str, list[Point]] = field(default_factory=dict)
 
     def cell_by_region_id(self) -> dict[str, RegionCell]:
         return {c.region_id: c for c in self.cells}
@@ -206,6 +209,10 @@ class WorldMapGeometry:
             "rivers": [asdict(r) for r in self.rivers],
             "river_channels": [asdict(r) for r in self.river_channels],
             "water_cells": [asdict(w) for w in self.water_cells],
+            "continent_hulls": {
+                cid: [[round(x, 6), round(y, 6)] for x, y in hull]
+                for cid, hull in sorted(self.continent_hulls.items())
+            },
         }
 
 
@@ -730,14 +737,28 @@ def _fit_polygon_to_box(
     return [(x + dx, y + dy) for x, y in fit]
 
 
+def _boxes_overlap(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+    *,
+    gap: float = 0.0,
+) -> bool:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return not (ax1 + gap <= bx0 or bx1 + gap <= ax0 or ay1 + gap <= by0 or by1 + gap <= ay0)
+
+
 def _separate_continent_boxes(
     boxes: dict[str, tuple[float, float, float, float]],
     *,
-    gap: float = 0.035,
+    gap: float = MAP_CONTINENT_BOX_GAP,
+    margin: float = MAP_LAYOUT_OCEAN_MARGIN,
 ) -> dict[str, tuple[float, float, float, float]]:
     out = dict(boxes)
     ids = sorted(out)
-    for _ in range(80):
+    lo = margin
+    hi = 1.0 - margin
+    for _ in range(120):
         moved = False
         for i, aid in enumerate(ids):
             for bid in ids[i + 1:]:
@@ -752,17 +773,91 @@ def _separate_continent_boxes(
                 if overlap_x < overlap_y:
                     direction = -1.0 if acx <= bcx else 1.0
                     shift = overlap_x / 2.0 + 0.001
-                    out[aid] = _move_box(out[aid], direction * shift, 0.0)
-                    out[bid] = _move_box(out[bid], -direction * shift, 0.0)
+                    out[aid] = _move_box(out[aid], direction * shift, 0.0, lo=lo, hi=hi)
+                    out[bid] = _move_box(out[bid], -direction * shift, 0.0, lo=lo, hi=hi)
                 else:
                     direction = -1.0 if acy <= bcy else 1.0
                     shift = overlap_y / 2.0 + 0.001
-                    out[aid] = _move_box(out[aid], 0.0, direction * shift)
-                    out[bid] = _move_box(out[bid], 0.0, -direction * shift)
+                    out[aid] = _move_box(out[aid], 0.0, direction * shift, lo=lo, hi=hi)
+                    out[bid] = _move_box(out[bid], 0.0, -direction * shift, lo=lo, hi=hi)
                 moved = True
         if not moved:
             break
     return out
+
+
+def _resolve_continent_box_overlaps(
+    boxes: dict[str, tuple[float, float, float, float]],
+    *,
+    gap: float = MAP_CONTINENT_BOX_GAP,
+    margin: float = MAP_LAYOUT_OCEAN_MARGIN,
+    max_rounds: int = 32,
+) -> dict[str, tuple[float, float, float, float]]:
+    out = _separate_continent_boxes(boxes, gap=gap, margin=margin)
+    lo = margin
+    hi = 1.0 - margin
+    for _ in range(max_rounds):
+        ids = sorted(out)
+        has_overlap = False
+        for i, aid in enumerate(ids):
+            for bid in ids[i + 1:]:
+                if _boxes_overlap(out[aid], out[bid], gap=gap):
+                    has_overlap = True
+                    break
+            if has_overlap:
+                break
+        if not has_overlap:
+            return out
+        for cid in ids:
+            x0, y0, x1, y1 = out[cid]
+            cx, cy = _box_center(out[cid])
+            nw = max(0.08, (x1 - x0) * 0.965)
+            nh = max(0.08, (y1 - y0) * 0.965)
+            nx0 = _clamp(cx - nw / 2.0, lo, hi - nw)
+            ny0 = _clamp(cy - nh / 2.0, lo, hi - nh)
+            out[cid] = (nx0, ny0, nx0 + nw, ny0 + nh)
+        out = _separate_continent_boxes(out, gap=gap, margin=margin)
+    return out
+
+
+def _continent_layout_overlap_pairs(
+    boxes: dict[str, tuple[float, float, float, float]],
+    *,
+    gap: float = MAP_CONTINENT_BOX_GAP,
+) -> list[tuple[str, str]]:
+    ids = sorted(boxes)
+    pairs: list[tuple[str, str]] = []
+    for i, aid in enumerate(ids):
+        for bid in ids[i + 1:]:
+            if _boxes_overlap(boxes[aid], boxes[bid], gap=gap):
+                pairs.append((aid, bid))
+    return pairs
+
+
+def _continent_hull_overlap_pairs(
+    hulls: dict[str, list[Point]],
+    *,
+    min_area: float = 1e-8,
+) -> list[tuple[str, str]]:
+    _require_shapely()
+    polygons: dict[str, object] = {}
+    for cid, hull in hulls.items():
+        if len(hull) < 3:
+            continue
+        poly = ShapelyPolygon(hull)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        polygons[cid] = poly
+    ids = sorted(polygons)
+    pairs: list[tuple[str, str]] = []
+    for i, aid in enumerate(ids):
+        for bid in ids[i + 1:]:
+            inter = polygons[aid].intersection(polygons[bid])
+            if inter.is_empty:
+                continue
+            if float(inter.area) > min_area:
+                pairs.append((aid, bid))
+    return pairs
 
 
 def _continent_layout_boxes(
@@ -771,11 +866,11 @@ def _continent_layout_boxes(
     map_seed: str,
 ) -> dict[str, tuple[float, float, float, float]]:
     size_scale = {
-        "huge": 0.56,
-        "large": 0.46,
-        "medium": 0.35,
-        "small": 0.26,
-        "island": 0.18,
+        "huge": 0.48,
+        "large": 0.40,
+        "medium": 0.32,
+        "small": 0.24,
+        "island": 0.17,
     }
     anchors = {
         "northwest": (0.28, 0.27),
@@ -788,23 +883,15 @@ def _continent_layout_boxes(
         "south": (0.53, 0.75),
         "southeast": (0.73, 0.72),
     }
+    margin = MAP_LAYOUT_OCEAN_MARGIN
     boxes: dict[str, tuple[float, float, float, float]] = {}
-    used_centers: list[Point] = []
     for i, continent in enumerate(continents):
         cid = str(getattr(continent, "continent_id", ""))
         hint = hints.get(cid, _ContinentMapHint())
         rng = random.Random(_stable_seed(MAP_GEOMETRY_VERSION, map_seed, cid, "layout"))
         cx, cy = anchors.get(hint.placement, (0.24 + 0.52 * rng.random(), 0.22 + 0.56 * rng.random()))
-        cx += rng.uniform(-0.055, 0.055)
-        cy += rng.uniform(-0.055, 0.055)
-        for ox, oy in used_centers:
-            dx = cx - ox
-            dy = cy - oy
-            d = max(1e-6, math.hypot(dx, dy))
-            if d < 0.28:
-                push = (0.28 - d) * 0.72
-                cx += dx / d * push
-                cy += dy / d * push
+        cx += rng.uniform(-0.045, 0.045)
+        cy += rng.uniform(-0.045, 0.045)
         scale = size_scale.get(hint.size, size_scale["medium"])
         aspect = rng.uniform(0.78, 1.38)
         if "rift" in hint.shape or "littoral" in hint.shape:
@@ -813,12 +900,29 @@ def _continent_layout_boxes(
             aspect *= 1.08
         w = scale * math.sqrt(aspect)
         h = scale / math.sqrt(aspect) * rng.uniform(0.78, 1.08)
-        cx = _clamp(cx, 0.08 + w / 2, 0.92 - w / 2)
-        cy = _clamp(cy, 0.08 + h / 2, 0.92 - h / 2)
-        used_centers.append((cx, cy))
-        boxes[cid] = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        cx = _clamp(cx, margin + w / 2, 1.0 - margin - w / 2)
+        cy = _clamp(cy, margin + h / 2, 1.0 - margin - h / 2)
+        box = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        for _ in range(64):
+            conflict = False
+            for other in boxes.values():
+                if not _boxes_overlap(box, other, gap=MAP_CONTINENT_BOX_GAP):
+                    continue
+                conflict = True
+                ocx, ocy = _box_center(other)
+                dx = cx - ocx
+                dy = cy - ocy
+                dist = max(1e-6, math.hypot(dx, dy))
+                push = MAP_CONTINENT_BOX_GAP + 0.02
+                cx = _clamp(cx + dx / dist * push, margin + w / 2, 1.0 - margin - w / 2)
+                cy = _clamp(cy + dy / dist * push, margin + h / 2, 1.0 - margin - h / 2)
+                box = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+                break
+            if not conflict:
+                break
+        boxes[cid] = box
         _ = i
-    return _separate_continent_boxes(boxes)
+    return _resolve_continent_box_overlaps(boxes)
 
 
 def _mask_continent_hull(
@@ -3404,6 +3508,14 @@ def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
         for row in river_mouth_distances
         if row["distance_to_coast"] is not None
     ]
+    continent_envelopes = {
+        cid: {
+            "bounds": [round(v, 6) for v in _polygon_bounds(hull)],
+            "area": round(_polygon_area_abs(hull), 8),
+        }
+        for cid, hull in sorted(geometry.continent_hulls.items())
+    }
+    hull_overlap_pairs = _continent_hull_overlap_pairs(geometry.continent_hulls)
     return {
         "world": geometry.world,
         "version": geometry.version,
@@ -3446,7 +3558,10 @@ def build_world_map_debug_data(geometry: WorldMapGeometry) -> dict[str, object]:
             "missing_river_mouth_edges": sum(
                 1 for row in river_mouth_distances if row["distance_to_coast"] is None
             ),
+            "continent_hull_overlaps": len(hull_overlap_pairs),
+            "continent_hull_overlap_pairs": hull_overlap_pairs,
         },
+        "continent_envelopes": continent_envelopes,
         "moisture": {
             "min": round(min((c.moisture for c in geometry.micro_cells), default=0.0), 4),
             "max": round(max((c.moisture for c in geometry.micro_cells), default=0.0), 4),
@@ -3587,5 +3702,6 @@ def build_world_map_geometry(
         rivers=rivers,
         river_channels=river_channels,
         water_cells=water_cells,
+        continent_hulls=hulls,
     )
 

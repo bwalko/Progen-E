@@ -5766,11 +5766,24 @@ _NARRATIVE_MOVEMENT_REASONS = {
 }
 
 
+def _job_assigned_subject_person_id(event: sqlite3.Row) -> object | None:
+    payload = _load_json_object(_row_value(event, "payload_json"))
+    subject_id = payload.get("person_id")
+    if subject_id not in (None, ""):
+        return subject_id
+    primary_id = _row_value(event, "primary_person_id")
+    if primary_id not in (None, ""):
+        return primary_id
+    return None
+
+
 def _person_event_matches_person(event: sqlite3.Row, person_id: object) -> bool:
     event_type = str(_row_value(event, "event_type") or "").strip()
     if event_type == "job_assigned":
-        payload = _load_json_object(_row_value(event, "payload_json"))
-        return _same_person_id(payload.get("person_id"), person_id)
+        subject_id = _job_assigned_subject_person_id(event)
+        if subject_id is None:
+            return True
+        return _same_person_id(subject_id, person_id)
     return True
 
 
@@ -5812,7 +5825,14 @@ def _person_event_rows(
     *,
     include_feed_hidden: bool = False,
 ) -> list[sqlite3.Row]:
-    events_has_world = "world" in _table_columns(con, "simulation_events")
+    event_cols = _table_columns(con, "simulation_events")
+    events_has_world = "world" in event_cols
+    primary_person_col = (
+        ", e.primary_person_id" if "primary_person_id" in event_cols else ""
+    )
+    legacy_primary_person_col = (
+        ", primary_person_id" if "primary_person_id" in event_cols else ""
+    )
     event_people_exists = _has_table(con, "simulation_event_people")
     world_clause = "where world = ? and" if events_has_world else "where"
     prefix_params: list[object] = [world] if events_has_world else []
@@ -5823,7 +5843,7 @@ def _person_event_rows(
             event_people_params.append(world)
         rows = con.execute(
             f"""
-            select e.id as event_id, e.sim_year, e.event_type, e.payload_json
+            select e.id as event_id, e.sim_year, e.event_type, e.payload_json{primary_person_col}
             from simulation_events e
             where exists (
                 select 1
@@ -5847,7 +5867,7 @@ def _person_event_rows(
         ]
     rows = con.execute(
         f"""
-        select id as event_id, sim_year, event_type, payload_json
+        select id as event_id, sim_year, event_type, payload_json{legacy_primary_person_col}
         from simulation_events
         {world_clause} (
             json_extract(payload_json, '$.person_id') = ?
@@ -8079,7 +8099,7 @@ def _settlement_history_entries(
             )
         elif event_type == "orphan_routed_to_largest_settlement":
             open_settlement(payload.get("to_settlement_id"), year, "custody_transfer")
-        elif event_type in {"outlaw_flight", "outlaw_captured"}:
+        elif event_type in {"outlaw_flight", "outlaw_captured", "outlaw_refuge_joined"}:
             close_open(year)
         elif event_type in {"outlaw_returned", "outlaw_forgotten", "outlaw_bought_off"}:
             open_settlement(
@@ -8221,6 +8241,18 @@ def _outlaw_refuge_history_entries(
         year = _event_year(event)
         if event_type in {"outlaw_flight", "outlaw_refuge_joined"}:
             open_refuge(payload, event_type, year)
+        elif event_type == "settlement_moved":
+            payload = _event_move_payload(con, event, payload, person_id)
+            target_year = (
+                _history_int(payload.get("planned_apply_year"))
+                or _history_int(payload.get("apply_year"))
+                or year
+            )
+            close_open(target_year, "returned")
+        elif event_type == "partner_residence_reconciled":
+            close_open(year, "household_move")
+        elif event_type == "orphan_routed_to_largest_settlement":
+            close_open(year, "custody_transfer")
         elif event_type in {
             "outlaw_captured",
             "outlaw_returned",
@@ -8397,6 +8429,50 @@ def _custody_history_entries(
     return entries
 
 
+def _normalize_residence_history_entries(
+    entries: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if len(entries) < 2:
+        return entries
+    normalized = [dict(entry) for entry in entries]
+    ordered = sorted(
+        normalized,
+        key=lambda entry: (
+            _history_int(entry.get("start_year"))
+            if _history_int(entry.get("start_year")) is not None
+            else -10**12,
+            str(entry.get("residence_kind") or ""),
+            str(entry.get("place_id") or entry.get("place_label") or ""),
+        ),
+    )
+    for index, entry in enumerate(ordered):
+        start = _history_int(entry.get("start_year"))
+        end = _history_int(entry.get("end_year"))
+        if start is None or end is None:
+            continue
+        entry_kind = str(entry.get("residence_kind") or "")
+        entry_place = str(entry.get("place_id") or entry.get("place_label") or "")
+        for later in ordered[index + 1 :]:
+            later_start = _history_int(later.get("start_year"))
+            if later_start is None or later_start < start:
+                continue
+            if later_start > end:
+                break
+            if later_start == end:
+                continue
+            if entry_kind == str(later.get("residence_kind") or "") and entry_place == str(
+                later.get("place_id") or later.get("place_label") or ""
+            ):
+                continue
+            capped_end = later_start if later_start == start else later_start - 1
+            if capped_end < start:
+                capped_end = start
+            if capped_end < end:
+                entry["end_year"] = capped_end
+                end = capped_end
+    return ordered
+
+
 def _residence_history_entries(
     settlement_entries: list[dict[str, object]],
     refuge_entries: list[dict[str, object]],
@@ -8407,7 +8483,7 @@ def _residence_history_entries(
         *refuge_entries,
         *custody_entries,
     ]
-    return sorted(
+    entries = sorted(
         entries,
         key=lambda entry: (
             _history_int(entry.get("start_year"))
@@ -8420,6 +8496,7 @@ def _residence_history_entries(
             str(entry.get("place_label") or ""),
         ),
     )
+    return _normalize_residence_history_entries(entries)
 
 
 def _residence_history_label(entry: dict[str, object]) -> str:

@@ -5036,3 +5036,49 @@ completion.
   for 1 year / 1 founder couple; repo-venv
   `python -m unittest unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_murder_tick_skips_stable_low_risk_adults`.
 
+## 2026-06-29 - Gradio Job History Timeline (Compact Events)
+
+- **Root cause:** `_person_event_matches_person` required `payload.person_id` on
+  `job_assigned` events, but schema-v25 compact payloads strip person IDs into
+  `simulation_event_people` / `primary_person_id`. Events were found via the side
+  table, then filtered out before `_job_history_entries` could build the
+  timeline.
+- **Fix:** resolve the job subject from compact payload via `primary_person_id`
+  when `person_id` is absent; include `primary_person_id` in
+  `_person_event_rows` selects when the column exists.
+- **Test:** `unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_compact_job_assigned_events_populate_person_job_history_timeline`.
+
+## 2026-06-29 - Hideout Residency Dates And Repeat Refuge Flights
+
+- **Simulation:** `flee_to_refuge` is now idempotent for active fugitives already
+  at a refuge (stops duplicate annual `outlaw_flight` / `outlaw_refuge_joined`
+  spam). The annual outlaw tick no longer re-flees when a stale refuge id is
+  present but the refuge row is missing. Leaving refuge/custody clears
+  `outlaw_since_year` with `outlaw_refuge_id`.
+- **Gradio read model:** settlement civic intervals close on `outlaw_refuge_joined`;
+  refuge intervals close on `settlement_moved` and other civic-return events;
+  `_normalize_residence_history_entries` caps true cross-kind overlaps without
+  breaking same-year handoffs.
+- **Audit:** `utils/util_audit_residence_intervals.py` flags overlapping
+  residences, open-ended refuge spans after later civic/custody starts, and
+  three or more consecutive `settlement_moved` years.
+- **Tests:** `unit_test.test_simulation_outlaws.TestSimulationOutlaws.test_flee_to_refuge_is_idempotent_for_active_fugitives`,
+  `test_resolve_outlaw_case_clears_refuge_trace_fields`;
+  `unit_test.test_gradio_data_browser.GradioDataBrowserEventTests.test_outlaw_refuge_joined_closes_settlement_before_hideout_interval`,
+  `test_normalize_residence_history_caps_overlapping_intervals`.
+
+## 2026-06-29 - Continent Overlap And Ocean Canvas (polygonal-v11)
+
+- **Root cause:** twelve configured continents were laid out on a tight 0.08-0.92
+  canvas with undersized separation; huge `aeria` and northwest `leuke` layout
+  boxes could still overlap after separation, and hull envelopes inherited that
+  overlap (`test_continent_footprints_do_not_overlap` was failing).
+- **Fix:** `MAP_LAYOUT_OCEAN_MARGIN` / `MAP_CONTINENT_BOX_GAP`, incremental
+  placement nudges, `_resolve_continent_box_overlaps` shrink/re-separate passes,
+  slightly reduced continent size scales, `_continent_hull_overlap_pairs` QA, and
+  `continent_envelopes` + overlap counts in `build_world_map_debug_data`.
+  Version bump: `polygonal-v11`.
+- **Tests:** `test_continent_footprints_do_not_overlap`,
+  `test_map_seed_debug_reports_separated_continent_envelopes`, plus existing debug
+  fixture overlap assertions.
+

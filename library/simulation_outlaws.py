@@ -741,6 +741,7 @@ def _release_outlaw_custody(
         current_settlement_id=sid,
         outlaw_status=OUTLAW_STATUS_RETURNED,
         outlaw_refuge_id=None,
+        outlaw_since_year=None,
         outlaw_custody_id=None,
         outlaw_custody_status=None,
         outlaw_custody_start_year=None,
@@ -802,6 +803,7 @@ def _escape_outlaw_custody(
         outlaw_status=OUTLAW_STATUS_WANTED,
         outlaw_case_key=custody.case_key,
         outlaw_refuge_id=None,
+        outlaw_since_year=None,
         outlaw_custody_id=None,
         outlaw_custody_status=None,
         outlaw_custody_start_year=None,
@@ -1557,6 +1559,12 @@ def flee_to_refuge(
     rec = ctx.id_to_record.get(int(case.accused_person_id))
     if rec is None or int(case.accused_person_id) not in ctx.current_people_ids:
         return None
+    existing_rid = str(rec.person.outlaw_refuge_id or case.refuge_id or "").strip()
+    if str(rec.person.outlaw_status or "").strip().lower() == OUTLAW_STATUS_FUGITIVE:
+        if existing_rid:
+            existing = (getattr(ctx, "outlaw_refuges", {}) or {}).get(existing_rid)
+            if existing is not None:
+                return existing
     last_free = (
         rec.person.current_settlement_id
         or rec.person.last_free_settlement_id
@@ -1754,6 +1762,7 @@ def resolve_outlaw_case(
                 outlaw_status=OUTLAW_STATUS_IMPRISONED,
                 outlaw_case_key=case.case_key,
                 outlaw_refuge_id=None,
+                outlaw_since_year=None,
                 outlaw_custody_id=custody.custody_id,
                 outlaw_custody_status=custody.status,
                 outlaw_custody_start_year=custody.start_year,
@@ -1781,6 +1790,7 @@ def resolve_outlaw_case(
                 outlaw_status=OUTLAW_STATUS_RETURNED,
                 outlaw_case_key=case.case_key,
                 outlaw_refuge_id=None,
+                outlaw_since_year=None,
                 outlaw_custody_id=None,
                 outlaw_custody_status=None,
                 outlaw_custody_start_year=None,
@@ -1806,6 +1816,7 @@ def resolve_outlaw_case(
                 outlaw_status=OUTLAW_STATUS_CLEARED,
                 outlaw_case_key=case.case_key,
                 outlaw_refuge_id=None,
+                outlaw_since_year=None,
                 outlaw_custody_id=None,
                 outlaw_custody_status=None,
                 outlaw_custody_start_year=None,
@@ -1982,8 +1993,12 @@ def simulation_outlaws_annual_tick(ctx: "SimulationContext", year: int) -> None:
                 resolve_outlaw_case(ctx, case.case_key, year=int(year), resolution="forgotten")
                 continue
 
-        refuge = (getattr(ctx, "outlaw_refuges", {}) or {}).get(str(rec.person.outlaw_refuge_id or case.refuge_id or ""))
+        refuge = (getattr(ctx, "outlaw_refuges", {}) or {}).get(
+            str(rec.person.outlaw_refuge_id or case.refuge_id or "")
+        )
         if refuge is None:
+            if rec.person.outlaw_refuge_id or case.refuge_id:
+                continue
             refuge = flee_to_refuge(ctx, case.case_key, year=int(year))
             if refuge is None:
                 continue

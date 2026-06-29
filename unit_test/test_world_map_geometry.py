@@ -20,6 +20,7 @@ from library.settlement_local_geography import (
 from library.simulation_context import SimulationContext
 from library.world_map_geometry import (
     MAP_GEOMETRY_VERSION,
+    _continent_hull_overlap_pairs,
     _continent_hulls,
     _micro_adjacency,
     _micro_boundary_edges,
@@ -161,6 +162,28 @@ class TestWorldMapGeometry(unittest.TestCase):
                     ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0,
                     (aid, bounds[aid], bid, bounds[bid]),
                 )
+        self.assertEqual(_continent_hull_overlap_pairs(hulls), [])
+
+    def test_map_seed_debug_reports_separated_continent_envelopes(self) -> None:
+        for map_seed in ("campaign-a", "campaign-b", "terrain-river-c", "default"):
+            geometry = build_world_map_geometry(
+                world="default",
+                db_path=self.cfg,
+                map_seed=map_seed,
+            )
+            debug = build_world_map_debug_data(geometry)
+            self.assertGreaterEqual(len(debug["continent_envelopes"]), 8)
+            self.assertEqual(debug["qa"]["continent_hull_overlaps"], 0)
+            self.assertEqual(debug["qa"]["continent_hull_overlap_pairs"], [])
+            for cid, envelope in debug["continent_envelopes"].items():
+                x0, y0, x1, y1 = envelope["bounds"]
+                self.assertGreaterEqual(x0, 0.0)
+                self.assertGreaterEqual(y0, 0.0)
+                self.assertLessEqual(x1, 1.0)
+                self.assertLessEqual(y1, 1.0)
+                self.assertGreaterEqual(x0, 0.08, cid)
+                self.assertLessEqual(x1, 0.92, cid)
+                self.assertGreater(envelope["area"], 0.0, cid)
 
     def test_point_in_polygon_preserves_edge_direction(self) -> None:
         poly = [(0.68, 0.36), (0.70, 0.36), (0.69, 0.35)]
@@ -482,6 +505,7 @@ class TestWorldMapGeometry(unittest.TestCase):
             self.assertLessEqual(debug["qa"]["max_coastal_feature_distance"], 0.010)
             self.assertEqual(debug["qa"]["missing_river_mouth_edges"], 0)
             self.assertLessEqual(debug["qa"]["max_river_mouth_distance"], 0.00001)
+            self.assertEqual(debug["qa"]["continent_hull_overlaps"], 0)
             self.assertTrue(debug["coastal_feature_distances"])
             self.assertTrue(debug["river_mouth_distances"])
 

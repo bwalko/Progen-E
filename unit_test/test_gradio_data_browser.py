@@ -2991,6 +2991,99 @@ class GradioDataBrowserEventTests(unittest.TestCase):
             share,
         )
 
+    def test_outlaw_refuge_joined_closes_settlement_before_hideout_interval(self) -> None:
+        con = _memory_outlaw_place_save()
+        _attach_empty_genome_config(con)
+        con.execute("create table world_state (id integer primary key, current_year integer)")
+        con.execute("insert into world_state values (1, 1020)")
+        con.executemany(
+            """
+            insert into simulation_events (world, sim_year, event_type, payload_json)
+            values (?, ?, ?, ?)
+            """,
+            [
+                (
+                    "test",
+                    1008,
+                    "outlaw_refuge_joined",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "outlaw_refuge_id": "outlaw_refuge:r1:1",
+                            "outlaw_refuge_display_name": "The Blackthorn Crag",
+                            "near_settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+                (
+                    "test",
+                    1012,
+                    "outlaw_returned",
+                    json.dumps(
+                        {
+                            "person_id": 1,
+                            "settlement_id": "r1:s1",
+                            "region_id": "r1",
+                        }
+                    ),
+                ),
+            ],
+        )
+        row, person = gdb._lookup_person(con, "test", 1)
+        events = gdb._person_event_rows(con, "test", 1, include_feed_hidden=True)
+        current_year = gdb._current_year(con, "test")
+        settlement = gdb._settlement_history_entries(
+            con, "test", events, 1, person, current_year
+        )
+        refuge = gdb._outlaw_refuge_history_entries(
+            con, "test", events, 1, person, current_year
+        )
+        residence = gdb._residence_history_entries(settlement, refuge, [])
+
+        self.assertEqual(settlement[0]["end_year"], 1008)
+        self.assertEqual(refuge[0]["start_year"], 1008)
+        self.assertEqual(refuge[0]["end_year"], 1012)
+        overlap_pairs = [
+            (left, right)
+            for left_index, left in enumerate(residence)
+            for right in residence[left_index + 1 :]
+            if gdb._history_int(left.get("end_year")) is not None
+            and gdb._history_int(right.get("start_year")) is not None
+            and gdb._history_int(left.get("end_year")) > gdb._history_int(right.get("start_year"))
+            and str(left.get("place_id") or left.get("place_label") or "")
+            != str(right.get("place_id") or right.get("place_label") or "")
+        ]
+        self.assertEqual(overlap_pairs, [])
+
+    def test_normalize_residence_history_caps_overlapping_intervals(self) -> None:
+        normalized = gdb._normalize_residence_history_entries(
+            [
+                {
+                    "residence_kind": "civic",
+                    "place_id": "r1:s1",
+                    "place_label": "Fordham",
+                    "start_year": 0,
+                    "end_year": 1020,
+                },
+                {
+                    "residence_kind": "refuge",
+                    "place_id": "outlaw_refuge:r1:1",
+                    "place_label": "The Blackthorn Crag",
+                    "start_year": 1008,
+                    "end_year": 1020,
+                },
+            ]
+        )
+        civic = next(
+            entry for entry in normalized if entry.get("residence_kind") == "civic"
+        )
+        refuge = next(
+            entry for entry in normalized if entry.get("residence_kind") == "refuge"
+        )
+        self.assertEqual(civic["end_year"], 1007)
+        self.assertEqual(refuge["end_year"], 1020)
+
     def test_relationship_history_caps_open_span_at_other_person_death(self) -> None:
         con = _memory_save()
         _attach_empty_genome_config(con)
@@ -4304,6 +4397,59 @@ class GradioDataBrowserEventTests(unittest.TestCase):
         rows = _person_event_rows(con, "test", 1)
 
         self.assertEqual([r["event_type"] for r in rows], ["job_assigned"])
+
+    def test_compact_job_assigned_events_populate_person_job_history_timeline(self) -> None:
+        con = _test_connect(":memory:")
+        con.row_factory = sqlite3.Row
+        ensure_checkpoint_schema(con)
+        _attach_empty_genome_config(con)
+        con.execute("CREATE TABLE world_state (id INTEGER PRIMARY KEY, current_year INTEGER)")
+        con.execute("INSERT INTO world_state (id, current_year) VALUES (1, 1105)")
+        _insert_compact_person(con, 1, "Ada", "Forge")
+        con.execute(
+            """
+            UPDATE simulation_people
+            SET job = 'scribe', job_assigned_year = 1102, birthyear = 1020
+            WHERE person_id = 1
+            """
+        )
+        append_simulation_event_rows(
+            con,
+            "default",
+            [
+                (1100, "job_assigned", {"person_id": 1, "job": "smith"}),
+                (1102, "job_lost", {"person_id": 1, "old_job": "smith", "new_job": "scribe"}),
+                (
+                    1102,
+                    "job_assigned",
+                    {"person_id": 1, "job": "scribe", "previous_job": "smith"},
+                ),
+            ],
+        )
+        stored = con.execute(
+            """
+            SELECT payload_json, primary_person_id
+            FROM simulation_events
+            ORDER BY sim_year, id
+            """
+        ).fetchall()
+        for row in stored:
+            payload = json.loads(row["payload_json"])
+            self.assertNotIn("person_id", payload)
+        self.assertTrue(all(int(row["primary_person_id"]) == 1 for row in stored))
+
+        history_rows = _person_event_rows(con, "default", 1, include_feed_hidden=True)
+        self.assertEqual(
+            [r["event_type"] for r in history_rows],
+            ["job_assigned", "job_lost", "job_assigned"],
+        )
+
+        row, person = gdb._lookup_person(con, "default", 1)
+        sheet = gdb._render_person_sheet(con, "default", row, person)
+
+        self.assertIn('title="1100-1102 | 2 years | smith"', sheet)
+        self.assertIn('title="1102-1105 | 3 years | scribe"', sheet)
+        self.assertNotIn("No recorded job history", sheet)
 
     def test_settlement_move_event_uses_normalized_move_details(self) -> None:
         con = _test_connect(":memory:")

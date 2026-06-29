@@ -225,6 +225,70 @@ class TestSimulationOutlaws(unittest.TestCase):
                 },
             )
 
+    def test_flee_to_refuge_is_idempotent_for_active_fugitives(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            accused = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=accused,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.55,
+                knownness_01=0.35,
+                source_event_key="test:property:idempotent",
+            )
+            self.assertIsNotNone(case)
+            self.assertIsNotNone(flee_to_refuge(ctx, case.case_key, year=1001))
+            flight_events = [
+                event_type
+                for _year, event_type, _payload in ctx._pending_simulation_events
+                if event_type in {"outlaw_flight", "outlaw_refuge_joined"}
+            ]
+            self.assertEqual(flight_events.count("outlaw_flight"), 1)
+            self.assertEqual(flight_events.count("outlaw_refuge_joined"), 1)
+
+            self.assertIsNotNone(flee_to_refuge(ctx, case.case_key, year=1002))
+            flight_events = [
+                event_type
+                for _year, event_type, _payload in ctx._pending_simulation_events
+                if event_type in {"outlaw_flight", "outlaw_refuge_joined"}
+            ]
+            self.assertEqual(flight_events.count("outlaw_flight"), 1)
+            self.assertEqual(flight_events.count("outlaw_refuge_joined"), 1)
+
+    def test_resolve_outlaw_case_clears_refuge_trace_fields(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            ctx = self._context(Path(td))
+            settlement = ctx.ensure_active_settlement_for_region("aeria_north")
+            accused = self._add_adult(
+                ctx,
+                settlement_id=settlement.settlement_id,
+                region_id=settlement.region_id,
+            )
+            case = open_outlaw_case(
+                ctx,
+                year=1001,
+                accused=accused,
+                offense_type="property_crime",
+                offense_kind="storehouse_robbery",
+                severity_01=0.55,
+                knownness_01=0.35,
+                source_event_key="test:property:clear-refuge-trace",
+            )
+            self.assertIsNotNone(case)
+            flee_to_refuge(ctx, case.case_key, year=1001)
+            self.assertIsNotNone(accused.person.outlaw_since_year)
+            resolve_outlaw_case(ctx, case.case_key, year=1004, resolution="forgotten")
+            self.assertIsNone(accused.person.outlaw_refuge_id)
+            self.assertIsNone(accused.person.outlaw_since_year)
+
     def test_outlaw_property_crime_chance_uses_wanted_and_fugitive_multipliers(self) -> None:
         normal = _outlaw_property_crime_attempt_chance(
             0.45,
