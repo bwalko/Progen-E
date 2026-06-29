@@ -19,6 +19,23 @@ TODO only when there is a specific new generator, consequence ledger,
 prose/report/browser need, measured tuning problem, or performance regression to
 handle.
 
+## Concrete Government Follow-up: Office Eligibility And Gender Skew
+
+- Prevent implausibly young officeholders, especially settlement merit titles
+  like Alderman. Ten-year-olds should not be eligible for aldermanic or similar
+  civic/government titles; office selection and passive-promotion fallback should
+  enforce title-appropriate adult age floors.
+- In normal/default cultures, titleholding should skew strongly male unless the
+  culture, office definition, or future world setting explicitly supports a
+  more egalitarian or matrilineal pattern. This should be a weighted bias rather
+  than an absolute ban, so exceptional women can still appear where the model
+  justifies it.
+- Completion boundary: add focused tests for detailed and passive-promoted
+  office selection proving children are excluded from Alderman-style titles,
+  default-culture title assignment has a strong male skew over a deterministic
+  candidate pool, and any configured culture/office override can relax that skew
+  without weakening the child-age guard.
+
 ## Completed Context: Genome-Driven Events, Lost Records, And Chronicle Prose
 
 The event-system foundation is complete across Workstreams 1-8. `TODONE.md`

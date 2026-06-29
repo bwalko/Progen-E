@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from library.world_save import event_payload_from_row
+from library import simulation_timing
 from library.event_catalog import choose_event_catalog_kind
 from library.event_scoring import (
     EventScoringContext,
@@ -46,6 +46,7 @@ from library.simulation_outlaws import (
     outlaw_case_from_murder,
     outlaw_case_from_property_crime,
 )
+from library.world_save import event_payload_from_row
 
 if TYPE_CHECKING:
     from library.simulation_context import (

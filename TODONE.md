@@ -5025,3 +5025,14 @@ completion.
 - Tests: `unit_test.test_save_checkpoint` round-trip;
   `unit_test.test_gradio_data_browser` history event-id coverage.
 
+## 2026-06-29 - Incident Timing Import Fix
+
+- Added the missing `simulation_timing` import to `library/simulation_incidents.py`
+  so `simulation_incidents_annual_tick` can use annual profiling hooks when
+  called from `SimulationContext.record_year_summary`.
+- Validation:
+  `python -m py_compile library\simulation_incidents.py`;
+  repo-venv temp DB production smoke through `run_population_growth_simulation`
+  for 1 year / 1 founder couple; repo-venv
+  `python -m unittest unit_test.test_simulation_incidents.TestSimulationIncidents.test_forced_murder_tick_skips_stable_low_risk_adults`.
+
