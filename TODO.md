@@ -67,6 +67,19 @@ Future Gradio work should be added as a fresh concrete TODO
 only when there is a specific navigation bug, missing detail surface, lookup
 workflow, visual genealogy requirement, or measured browser performance problem.
 
+## Concrete Gradio Follow-up: Empty Job History Timelines
+
+- The person-detail **Job History** timeline appears to be completely
+  unpopulated for everyone, even when people have current or historical career
+  changes elsewhere in the save/browser surfaces.
+- Diagnose whether the gap is in event recording, save/readable views, person
+  history query filters, compact event payload rehydration, or the Gradio
+  timeline renderer.
+- Completion boundary: pick people with known job assignment/loss/history rows,
+  verify the underlying save rows are present, restore the Job History timeline
+  on person sheets, and add a focused Gradio/read-model regression test that
+  fails when job-history events disappear from the timeline.
+
 ## Polygonal World Map Generation
 
 Context for completed functionality: polygonal map generation and the current
@@ -77,6 +90,21 @@ Future map work should be added as a fresh concrete TODO only when there is a
 specific measured visual/debug gap from generated SVGs, map debug JSON, browser
 behavior, or map-seed comparison fixtures. Do not keep a broad "continue map
 tuning" item open without a concrete symptom and completion boundary.
+
+## Concrete Map Follow-up: Continent Overlap And Ocean Canvas
+
+- Some generated continents appear on top of each other or intersecting with
+  each other. Diagnose whether the issue comes from continent placement,
+  transform scaling, projection into SVG coordinates, or insufficient water
+  canvas around independently generated landmasses.
+- First mitigation to test: make the water canvas/ocean extent larger so
+  continent placement has more room before any landmass can overlap another.
+  Also consider enforcing minimum inter-continent spacing or adding a
+  post-placement collision/intersection check that retries bad seeds/layouts.
+- Completion boundary: add deterministic map-seed comparison fixtures or debug
+  JSON checks that catch overlapping/intersecting continent envelopes, verify
+  rendered SVGs show separated continents with adequate ocean margins, and keep
+  browser map framing usable after the larger water canvas change.
 
 ## Scale Population Simulation Toward Millions
 
@@ -370,6 +398,21 @@ non-detailed move shares. Pre-fix audits on the year-1029 save showed
 `nondetailed_migrant_share_vs_alive_end≈0.95`. Directory migration constants
 were retuned downward in `library/nondetailed_population.py`; see
 [`dev_rules/migration_tuning.md`](dev_rules/migration_tuning.md).
+
+### Concrete Follow-up: Hideout Residency Dates And Repeat Moves
+
+- Some people move to hideouts/refuges, but residency dates are not reliably
+  closed out, especially the end date. This can leave overlapping residence
+  intervals for the same person after they should have left a hideout.
+- The propensity for every-year moves still exists after the recent movement
+  bugfixes. Re-audit detailed and non-detailed movement histories for repeated
+  annual relocation loops rather than assuming the prior migration retune fully
+  solved churn.
+- Completion boundary: add or extend save-backed audits to flag overlapping
+  residencies, open-ended hideout stays after a later residence starts, and
+  people with implausible year-after-year moves; fix the owning residence or
+  outlaw/hideout transition path; add focused regression coverage proving
+  hideout entry/exit dates close cleanly and repeat-move churn stays bounded.
 
 ### Completed Context: Passive-To-Detailed Promotion V1
 
